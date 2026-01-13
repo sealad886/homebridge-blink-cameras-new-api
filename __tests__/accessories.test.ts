@@ -7,7 +7,7 @@ import { BlinkCamerasPlatform } from '../src/platform';
 import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types';
 import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
 
-type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log'>;
+type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api'>;
 
 describe('Accessory handlers', () => {
   const buildPlatform = () => {
@@ -23,6 +23,9 @@ describe('Accessory handlers', () => {
       disableDoorbellMotion: jest.fn(),
       enableOwlMotion: jest.fn(),
       disableOwlMotion: jest.fn(),
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
+      requestOwlThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
+      requestDoorbellThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
     };
 
     const platform: PlatformStub = {
@@ -30,6 +33,7 @@ describe('Accessory handlers', () => {
       Characteristic: hap.Characteristic as unknown as BlinkCamerasPlatform['Characteristic'],
       apiClient: apiClient as unknown as BlinkCamerasPlatform['apiClient'],
       log: log as unknown as BlinkCamerasPlatform['log'],
+      api: { hap } as unknown as BlinkCamerasPlatform['api'],
     };
 
     return { hap, apiClient, platform, log };

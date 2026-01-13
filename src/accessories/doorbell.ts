@@ -5,21 +5,25 @@
  * - Doorbell: Ring notifications via ProgrammableSwitchEvent
  * - Switch: Toggle motion detection enabled/disabled
  * - MotionSensor: Report motion detection events
+ * - Camera: Static snapshots via thumbnail API
  *
  * Source: API Dossier Section 3.5 (Doorbell Operations)
  * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
  */
 
-import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import { CameraController, CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkDoorbell } from '../types';
+import { setTimeout, clearTimeout } from 'timers';
+import { BlinkCameraSource, createSnapshotControllerOptions } from './camera-source';
 
 export class DoorbellAccessory {
   private readonly doorbellService: Service;
   private readonly switchService: Service;
   private readonly motionService: Service;
+  private readonly cameraController: CameraController;
   private motionDetected = false;
-  private motionTimeout: NodeJS.Timeout | null = null;
+  private motionTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly platform: BlinkCamerasPlatform,
@@ -64,6 +68,22 @@ export class DoorbellAccessory {
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .onGet(() => this.device.enabled);
+
+    // Camera controller for snapshot support
+    const cameraSource = new BlinkCameraSource(
+      this.platform.apiClient,
+      this.platform.api.hap,
+      device.network_id,
+      device.id,
+      'doorbell',
+      () => this.device.thumbnail,
+      (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
+    );
+
+    this.cameraController = new this.platform.api.hap.CameraController(
+      createSnapshotControllerOptions(this.platform.api.hap, cameraSource),
+    );
+    this.accessory.configureController(this.cameraController);
   }
 
   /**
@@ -99,7 +119,11 @@ export class DoorbellAccessory {
   }
 
   /**
-   * Update device state from polling
+   * Update device state from polling.
+   * Called by platform when homescreen data is refreshed.
+   * Updates Switch and StatusActive characteristics if enabled state changed.
+   *
+   * @param device - Fresh device data from Blink API homescreen response
    */
   updateState(device: BlinkDoorbell): void {
     const previousEnabled = this.device.enabled;
@@ -122,8 +146,9 @@ export class DoorbellAccessory {
   }
 
   /**
-   * Trigger doorbell ring event
-   * Sends ProgrammableSwitchEvent to HomeKit
+   * Trigger doorbell ring event.
+   * Sends ProgrammableSwitchEvent.SINGLE_PRESS to HomeKit.
+   * Called when a doorbell press is detected in media polling.
    */
   triggerRing(): void {
     const { ProgrammableSwitchEvent } = this.platform.Characteristic;
@@ -136,7 +161,11 @@ export class DoorbellAccessory {
   }
 
   /**
-   * Trigger motion detected event
+   * Trigger motion detected event.
+   * Called when a new motion clip is detected for this doorbell.
+   * Sets MotionDetected characteristic to true, then auto-resets after timeout.
+   *
+   * @param timeoutMs - Duration in milliseconds before resetting motion state (default 30000)
    */
   triggerMotion(timeoutMs = 30000): void {
     if (this.motionTimeout) {
@@ -160,7 +189,9 @@ export class DoorbellAccessory {
   }
 
   /**
-   * Get the doorbell ID for matching with media clips
+   * Get the doorbell ID for matching with media clips.
+   *
+   * @returns The Blink doorbell ID
    */
   getDoorbellId(): number {
     return this.device.id;

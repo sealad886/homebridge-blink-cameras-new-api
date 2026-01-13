@@ -1,0 +1,345 @@
+# Codanna Configuration File
+# https://github.com/bartolli/codanna
+
+# Version of the configuration schema
+version = 1
+
+# Path to the index directory (relative to workspace root)
+index_path = ".codanna/index"
+
+# Workspace root directory (automatically detected)
+workspace_root = "/Users/andrew/zzApps/homebridge-blinkcameras"
+
+
+[indexing]
+# CPU cores to use for indexing (default: all cores)
+# Thread counts for each stage are derived from this value
+parallelism = 12
+
+# Tantivy heap size in megabytes
+# Reduce to 15-25MB if you have permission issues (antivirus, SELinux, containers)
+# Increase to 100-200MB if you have plenty of RAM and no restrictions
+tantivy_heap_mb = 50
+
+# Retry attempts for transient file system errors
+# Exponential backoff: 100ms, 200ms, 400ms delays
+max_retry_attempts = 3
+
+# Additional patterns to ignore during indexing
+ignore_patterns = [
+    "target/**",
+    "node_modules/**",
+    ".git/**",
+    "*.generated.*",
+]
+
+# List of directories to index
+# Add folders using: codanna add-dir <path>
+# Remove folders using: codanna remove-dir <path>
+# List all folders using: codanna list-dirs
+indexed_paths = ["/Users/andrew/zzApps/homebridge-blinkcameras"]
+
+# Items per batch before flushing to index (default: 5000)
+batch_size = 5000
+
+# Number of batches before committing to disk (default: 10)
+batches_per_commit = 10
+
+# Enable detailed pipeline stage tracing
+# Shows timing, throughput, and memory for each stage
+# Requires: logging.modules.pipeline = "info"
+pipeline_tracing = false
+
+# Show progress bars during indexing (default: true)
+# Use --no-progress CLI flag to override
+show_progress = true
+
+
+# Language-specific settings
+
+[languages.gdscript]
+enabled = true
+extensions = ["gd"]
+config_files = []
+
+
+[languages.java]
+enabled = true
+extensions = ["java"]
+config_files = []
+
+
+[languages.c]
+enabled = true
+extensions = [
+    "c",
+    "h",
+]
+config_files = []
+
+
+[languages.php]
+enabled = true
+extensions = [
+    "php",
+    "php3",
+    "php4",
+    "php5",
+    "php7",
+    "php8",
+    "phps",
+    "phtml",
+]
+config_files = []
+
+
+[languages.swift]
+enabled = true
+extensions = ["swift"]
+config_files = []
+
+
+[languages.cpp]
+enabled = true
+extensions = [
+    "cpp",
+    "hpp",
+    "cc",
+    "cxx",
+    "hxx",
+]
+config_files = []
+
+
+[languages.python]
+enabled = true
+extensions = [
+    "py",
+    "pyi",
+]
+config_files = []
+
+
+[languages.kotlin]
+enabled = true
+extensions = [
+    "kt",
+    "kts",
+]
+config_files = []
+
+
+[languages.javascript]
+enabled = true
+extensions = [
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+]
+config_files = []
+
+
+[languages.rust]
+enabled = true
+extensions = ["rs"]
+config_files = []
+
+
+[languages.go]
+enabled = true
+extensions = ["go"]
+config_files = []
+
+
+[languages.csharp]
+enabled = true
+extensions = [
+    "cs",
+    "csx",
+    "cshtml",
+]
+config_files = []
+
+
+[languages.typescript]
+enabled = true
+extensions = [
+    "ts",
+    "tsx",
+    "mts",
+    "cts",
+]
+config_files = []
+
+
+[mcp]
+# Maximum context size in bytes for MCP server
+max_context_size = 100000
+
+
+[semantic_search]
+# Semantic search for natural language code queries
+enabled = true
+
+# Model to use for embeddings
+# Note: Changing models requires re-indexing (codanna index --force)
+# - AllMiniLML6V2: English-only, 384 dimensions (default)
+# - MultilingualE5Small: 94 languages including, 384 dimensions (recommended for multilingual)
+# - MultilingualE5Base: 94 languages, 768 dimensions (better quality)
+# - MultilingualE5Large: 94 languages, 1024 dimensions (best quality)
+# - BGESmallZHV15: Chinese-specialized, 512 dimensions
+# - See documentation for full list of available models
+model = "MultilingualE5Large"
+
+# Similarity threshold for search results (0.0 to 1.0)
+threshold = 0.6
+
+# Number of parallel embedding model instances (default: 3)
+# Each instance uses ~86MB RAM. Higher values = faster indexing.
+# Set to 1 for low-memory systems, 4-6 for high-end machines.
+embedding_threads = 3
+
+
+[file_watch]
+# Enable automatic file watching for indexed files
+# When enabled, the MCP server will automatically re-index files when they change
+# Default: true (enabled for better user experience)
+enabled = true
+
+# Debounce interval in milliseconds
+# How long to wait after a file change before re-indexing
+debounce_ms = 500
+
+
+[server]
+# Server mode: "stdio" (default) or "http"
+# stdio: Lightweight, spawns per request (best for production)
+# http: Persistent server, real-time file watching (best for development)
+mode = "stdio"
+
+# HTTP server bind address (only used when mode = "http" or --http flag)
+bind = "127.0.0.1:8080"
+
+# Watch interval for stdio mode in seconds (how often to check for file changes)
+watch_interval = 5
+
+
+[logging]
+# Logging configuration
+# Levels: "error", "warn" (default/quiet), "info", "debug", "trace"
+# Override with RUST_LOG env var: RUST_LOG=debug codanna index
+default = "warn"
+
+
+[logging.modules]
+# Per-module log level overrides
+# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage
+# External targets (used as-is): cli, tantivy, pipeline, semantic, rag
+# Examples (uncomment to enable):
+# pipeline = "info"   # Code indexing stages and progress
+# semantic = "info"   # Embedding pool and code embeddings
+# rag = "info"        # Document collections and chunks
+# watcher = "debug"   # File watcher events
+# mcp = "debug"       # MCP server operations
+pipeline = "warn"
+tantivy = "warn"
+
+[guidance]
+enabled = true
+
+[guidance.templates.search_symbols]
+no_results = "No symbols match your query. Try 'semantic_search_docs' for natural language search or adjust your pattern."
+single_result = "Found exactly one match. Use 'find_symbol' to get full details about this symbol."
+multiple_results = "Found {result_count} matching symbols. Use 'find_symbol' on specific results for full context or narrow your search with 'kind' parameter."
+
+[guidance.templates.semantic_search_docs]
+no_results = "No results found. Try broader search terms or check if the codebase is indexed."
+single_result = "Found one match. Consider using 'find_symbol' or 'get_calls' to explore this symbol's relationships."
+multiple_results = "Found {result_count} matches. Consider using 'find_symbol' on the most relevant result for detailed analysis, or refine your search query."
+
+[[guidance.templates.semantic_search_docs.custom]]
+min = 10
+template = "Found {result_count} matches. Consider refining your search with more specific terms."
+
+[guidance.templates.analyze_impact]
+no_results = "No impact detected. This symbol appears isolated. Consider using the codanna-navigator agent for comprehensive multi-hop analysis of complex relationships."
+single_result = "Minimal impact radius. This symbol has limited dependencies."
+multiple_results = "Impact analysis shows {result_count} affected symbols. Focus on critical paths or use 'find_symbol' on key dependencies."
+
+[[guidance.templates.analyze_impact.custom]]
+min = 2
+max = 5
+template = "Limited impact radius with {result_count} affected symbols. This change is relatively contained."
+
+[[guidance.templates.analyze_impact.custom]]
+min = 20
+template = "Significant impact with {result_count} affected symbols. Consider breaking this change into smaller parts."
+
+[guidance.templates.get_calls]
+no_results = "No function calls found. This might be a leaf function or data structure."
+single_result = "Found 1 function call. Use 'find_symbol' to explore this dependency."
+multiple_results = "Found {result_count} function calls. Consider using 'find_symbol' on key dependencies or 'analyze_impact' to trace the call chain further."
+
+[guidance.templates.find_symbol]
+no_results = "Symbol not found. Use 'search_symbols' with fuzzy matching or 'semantic_search_docs' for broader search."
+single_result = "Symbol found with full context. Explore 'get_calls' to see what it calls, 'find_callers' to see usage, or 'analyze_impact' to understand change implications."
+multiple_results = "Found {result_count} symbols with that name. Review each to find the one you're looking for."
+
+[guidance.templates.semantic_search_with_context]
+no_results = "No semantic matches found. Try different phrasing or ensure documentation exists for the concepts you're searching."
+single_result = "Found one match with full context. Review the relationships to understand how this fits into the codebase."
+multiple_results = "Rich context provided for {result_count} matches. Investigate specific relationships using targeted tools like 'get_calls' or 'find_callers'."
+
+[guidance.templates.find_callers]
+no_results = "No callers found. This might be an entry point, unused code, or called dynamically."
+single_result = "Found 1 caller. Use 'find_symbol' to explore where this function is used."
+multiple_results = "Found {result_count} callers. Consider 'analyze_impact' for complete dependency graph or investigate specific callers with 'find_symbol'."
+
+[guidance.templates.get_index_info]
+single_result = "Index statistics loaded. Use search tools to explore the codebase."
+
+[guidance.variables]
+project = "codanna"
+
+
+[documents]
+# Document embedding for RAG (Retrieval-Augmented Generation)
+# Index markdown and text files for semantic search
+enabled = true
+
+
+[documents.defaults]
+# Default chunking settings for all collections
+# Chunking strategy: "hybrid" (paragraph-based with size constraints)
+strategy = "hybrid"
+
+# Minimum characters per chunk (small chunks merged)
+min_chunk_chars = 200
+
+# Maximum characters per chunk (large chunks split)
+max_chunk_chars = 1500
+
+# Overlap between chunks when splitting
+overlap_chars = 100
+
+
+[documents.search]
+# Search result display settings
+# Preview mode: "kwic" (Keyword In Context) or "full"
+# kwic: Centers preview around keyword match (recommended)
+# full: Shows entire chunk content
+preview_mode = "kwic"
+
+# Number of characters to show in preview (for kwic mode)
+preview_chars = 600
+
+# Highlight matching keywords with **markers**
+highlight = true
+
+
+[documents.collections]
+# Add document collections to index. Example:
+# [documents.collections.my-docs]
+# paths = ["docs/"]
+# patterns = ["**/*.md"]

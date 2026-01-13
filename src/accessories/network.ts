@@ -122,8 +122,11 @@ export class NetworkAccessory {
   }
 
   /**
-   * Update device state from polling
-   * Called by platform when homescreen data is refreshed
+   * Update device state from polling.
+   * Called by platform when homescreen data is refreshed.
+   * Updates SecuritySystemCurrentState and SecuritySystemTargetState if armed state changed.
+   *
+   * @param device - Fresh device data from Blink API homescreen response
    */
   updateState(device: BlinkNetwork): void {
     const previousArmed = this.device.armed;

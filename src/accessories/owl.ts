@@ -4,6 +4,7 @@
  * Exposes a Blink Mini camera as HomeKit accessories:
  * - Switch: Toggle motion detection enabled/disabled
  * - MotionSensor: Report motion detection events
+ * - Camera: Static snapshots via thumbnail API
  *
  * Note: "Owl" is Blink's internal codename for Mini cameras (WiFi-direct, no sync module)
  *
@@ -11,15 +12,18 @@
  * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
  */
 
-import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import { CameraController, CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkOwl } from '../types';
+import { setTimeout, clearTimeout } from 'timers';
+import { BlinkCameraSource, createSnapshotControllerOptions } from './camera-source';
 
 export class OwlAccessory {
   private readonly switchService: Service;
   private readonly motionService: Service;
+  private readonly cameraController: CameraController;
   private motionDetected = false;
-  private motionTimeout: NodeJS.Timeout | null = null;
+  private motionTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly platform: BlinkCamerasPlatform,
@@ -54,6 +58,22 @@ export class OwlAccessory {
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .onGet(() => this.device.enabled);
+
+    // Camera controller for snapshot support
+    const cameraSource = new BlinkCameraSource(
+      this.platform.apiClient,
+      this.platform.api.hap,
+      device.network_id,
+      device.id,
+      'owl',
+      () => this.device.thumbnail,
+      (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
+    );
+
+    this.cameraController = new this.platform.api.hap.CameraController(
+      createSnapshotControllerOptions(this.platform.api.hap, cameraSource),
+    );
+    this.accessory.configureController(this.cameraController);
   }
 
   /**
@@ -89,7 +109,11 @@ export class OwlAccessory {
   }
 
   /**
-   * Update device state from polling
+   * Update device state from polling.
+   * Called by platform when homescreen data is refreshed.
+   * Updates Switch and StatusActive characteristics if enabled state changed.
+   *
+   * @param device - Fresh device data from Blink API homescreen response
    */
   updateState(device: BlinkOwl): void {
     const previousEnabled = this.device.enabled;
@@ -112,7 +136,11 @@ export class OwlAccessory {
   }
 
   /**
-   * Trigger motion detected event
+   * Trigger motion detected event.
+   * Called when a new motion clip is detected for this Mini camera.
+   * Sets MotionDetected characteristic to true, then auto-resets after timeout.
+   *
+   * @param timeoutMs - Duration in milliseconds before resetting motion state (default 30000)
    */
   triggerMotion(timeoutMs = 30000): void {
     if (this.motionTimeout) {
@@ -136,7 +164,9 @@ export class OwlAccessory {
   }
 
   /**
-   * Get the owl ID for matching with media clips
+   * Get the owl ID for matching with media clips.
+   *
+   * @returns The Blink owl (Mini camera) ID
    */
   getOwlId(): number {
     return this.device.id;

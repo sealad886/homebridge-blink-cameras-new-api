@@ -82,6 +82,46 @@
         "type": "boolean",
         "default": true,
         "required": false
+      },
+      "excludeDevices": {
+        "title": "Excluded Devices",
+        "description": "List of device serial numbers, IDs, or names to exclude from HomeKit. Useful for hiding devices you don't want to control.",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "title": "Device Identifier"
+        },
+        "required": false
+      },
+      "deviceNames": {
+        "title": "Custom Device Names",
+        "description": "Override display names for devices in HomeKit. Key is the device serial number or ID, value is the custom name.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "required": false
+      },
+      "deviceSettings": {
+        "title": "Per-Device Settings",
+        "description": "Override settings for specific devices. Key is the device serial number or ID.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "motionTimeout": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300,
+              "description": "Motion timeout in seconds for this device"
+            },
+            "enableMotion": {
+              "type": "boolean",
+              "description": "Enable/disable motion detection for this device"
+            }
+          }
+        },
+        "required": false
       }
     }
   },
@@ -118,6 +158,21 @@
         "pollInterval",
         "motionTimeout",
         "enableMotionPolling"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Device Customization",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        {
+          "key": "excludeDevices",
+          "type": "array",
+          "buttonText": "Add Device to Exclude"
+        },
+        "deviceNames",
+        "deviceSettings"
       ]
     },
     {

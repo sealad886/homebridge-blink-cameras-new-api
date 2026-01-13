@@ -66,3 +66,4 @@ dist
 *.txt
 homebridge-config.json
 .DS_Store
+.fastembed_cache

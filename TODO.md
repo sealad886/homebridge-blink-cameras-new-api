@@ -6,89 +6,76 @@ Future enhancements and technical debt for homebridge-blinkcameras.
 
 ### Live Streaming (RTSPS → SRTP Transcoding)
 
-The Blink API provides RTSPS streaming URLs for live video. HomeKit requires SRTP streams. Implementation requires:
+The Blink API provides RTSPS streaming URLs for live video. HomeKit requires SRTP streams.
 
-1. **Server-side Transcoding**
-   - FFmpeg or similar to convert RTSPS → SRTP
-   - Handle TLS certificates for RTSPS endpoints
-   - Manage stream lifecycle (start/stop on HomeKit demand)
+**Status**: Not implemented - requires FFmpeg and complex stream management.
 
-2. **HomeKit Camera Service**
-   - Implement `CameraStreamingDelegate` for stream management
-   - Configure resolution/framerate based on device capabilities
-   - Handle bidirectional audio where supported
+**Documentation**: [docs/future/live-streaming.md](docs/future/live-streaming.md)
 
-3. **Evidence References**
-   - API dossier Section 4.2 (Live Video)
-   - `BlinkLiveVideoResponse` interface with `rtsps_uri` field
-   - RTSPS URL format: `rtsps://{host}/{account_id}_{network_id}_{device_id}/{stream_type}?...`
-
-**Complexity**: High - requires external dependency (FFmpeg), persistent process management, and significant HomeKit plumbing.
-
-### Snapshot/Thumbnail Support
-
-The API supports on-demand thumbnail generation:
-
-- `POST v1/accounts/{account}/networks/{network}/cameras/{camera}/thumbnail`
-- `POST v1/accounts/{account}/networks/{network}/owls/{owl}/thumbnail`
-- `POST v1/accounts/{account}/networks/{network}/doorbells/{doorbell}/thumbnail`
-
-Could expose thumbnails as HomeKit camera snapshots via `CameraSource`.
-
-**Complexity**: Medium - API client methods already implemented, need HomeKit camera service.
+**Complexity**: High
 
 ### Event-Based Motion Detection
 
-Current implementation polls the media API for new clips. Could improve with:
+Current implementation polls the media API. Could improve with push notifications or WebSocket.
 
-1. **Websocket/Push Notifications**
-   - Investigate if Blink supports websocket connections for real-time events
-   - FCM tokens seen in APK suggest push notification support
+**Status**: Polling-based implementation complete; real-time events deferred.
 
-2. **Reduced Polling Latency**
-   - Current minimum poll interval: 15 seconds
-   - Could reduce if Blink rate limits allow
+**Documentation**: [docs/future/event-motion.md](docs/future/event-motion.md)
 
-**Complexity**: Medium - requires additional reverse engineering of push notification system.
+**Complexity**: Medium-High
 
 ## Technical Debt
 
 ### Test Coverage
 
-Current coverage is incomplete:
-
-- [ ] Add unit tests for all accessory classes
-- [ ] Add integration tests with mocked Blink responses
-- [ ] Add tests for polling and motion event detection
-- [ ] Test error handling and retry logic
+- [x] Add unit tests for all accessory classes
+- [x] Add integration tests with mocked Blink responses
+- [x] Add tests for polling and motion event detection
+- [x] Test error handling and retry logic
 
 ### Code Quality
 
-- [ ] Add JSDoc comments to all public methods
-- [ ] Add evidence references to remaining code where applicable
+- [x] Add JSDoc comments to all public methods
+- [x] Add evidence references to remaining code where applicable
 - [ ] Consider extracting common accessory logic to base class
 
 ### CI/CD
 
-- [ ] Set up GitHub Actions for automated testing
-- [ ] Add npm publish workflow
-- [ ] Add code coverage reporting
+- [x] Set up GitHub Actions for automated testing
+- [x] Add npm publish workflow
+- [x] Add code coverage reporting
 
 ## Configuration Improvements
 
-- [ ] Validate config options at startup
+- [x] Validate config options at startup
+- [x] Support per-device motion timeout settings
+- [x] Support excluding specific devices from discovery
+- [x] Support custom names for devices in HomeKit
 - [ ] Support per-device motion sensitivity settings
-- [ ] Support excluding specific devices from discovery
-- [ ] Support custom names for devices in HomeKit
 
 ## Documentation
 
 - [x] README with feature documentation
-- [ ] Contributing guide
-- [ ] API dossier reference in docs/
-- [ ] Architecture decision records
+- [x] Contributing guide (CONTRIBUTING.md)
+- [x] Architecture decision records (docs/adr/)
+- [x] Future feature documentation (docs/future/)
+- [x] API dossier reference in docs/
 
 ## Completed
+
+### v2.1.0 (Current Development)
+
+- [x] Snapshot support via HomeKit CameraController
+- [x] Device exclusion (excludeDevices config)
+- [x] Custom device names (deviceNames config)
+- [x] Per-device motion timeout (deviceSettings config)
+- [x] Config validation at startup
+- [x] CI/CD with GitHub Actions
+- [x] Code coverage with Codecov
+- [x] Comprehensive JSDoc documentation
+- [x] CONTRIBUTING.md guide
+- [x] ADRs for key decisions
+- [x] 114 passing tests
 
 ### v2.0.0
 

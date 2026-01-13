@@ -1,7 +1,9 @@
 # homebridge-blinkcameras
 
 [![npm](https://img.shields.io/npm/v/homebridge-blinkcameras.svg)](https://www.npmjs.com/package/homebridge-blinkcameras)
-[![License](https://img.shields.io/github/license/your-username/homebridge-blinkcameras.svg)](LICENSE)
+[![License](https://img.shields.io/github/license/bartdorsey/homebridge-blinkcameras.svg)](LICENSE)
+[![Test](https://github.com/bartdorsey/homebridge-blinkcameras/actions/workflows/test.yml/badge.svg)](https://github.com/bartdorsey/homebridge-blinkcameras/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/bartdorsey/homebridge-blinkcameras/branch/main/graph/badge.svg)](https://codecov.io/gh/bartdorsey/homebridge-blinkcameras)
 
 Modern Blink platform plugin for Homebridge using the official OAuth endpoints. Exposes Blink devices as proper HomeKit accessories:
 

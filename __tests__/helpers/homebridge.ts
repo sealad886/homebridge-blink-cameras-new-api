@@ -1,3 +1,9 @@
+// Create ProgrammableSwitchEvent with both a toString for map key and static values
+const ProgrammableSwitchEvent = Object.assign(
+  () => 'ProgrammableSwitchEvent',
+  { SINGLE_PRESS: 0, DOUBLE_PRESS: 1, LONG_PRESS: 2, toString: () => 'ProgrammableSwitchEvent' }
+);
+
 export const createHap = () => ({
   Service: {
     AccessoryInformation: 'AccessoryInformation',
@@ -25,11 +31,17 @@ export const createHap = () => ({
       DISARM: 3,
     },
     MotionDetected: 'MotionDetected',
-    ProgrammableSwitchEvent: 'ProgrammableSwitchEvent',
+    StatusActive: 'StatusActive',
+    ProgrammableSwitchEvent,
   },
   uuid: {
     generate: jest.fn((value: string) => `uuid-${value}`),
   },
+  // CameraController support for snapshot tests
+  SRTPCryptoSuites: { AES_CM_128_HMAC_SHA1_80: 0 },
+  H264Profile: { BASELINE: 0, MAIN: 1, HIGH: 2 },
+  H264Level: { LEVEL3_1: 0, LEVEL3_2: 1, LEVEL4_0: 2 },
+  CameraController: jest.fn().mockImplementation(() => ({})),
 });
 
 export class MockCharacteristic {
@@ -63,9 +75,17 @@ export class MockService {
 
   constructor(public readonly type: string, public readonly name?: string) {}
 
-  getCharacteristic(type: string | Record<string, number>): MockCharacteristic {
-    // Handle both string keys and enum objects (like SecuritySystemTargetState)
-    const key = typeof type === 'object' ? JSON.stringify(type) : type;
+  getCharacteristic(type: string | Record<string, number> | ((...args: unknown[]) => unknown)): MockCharacteristic {
+    // Handle string keys, enum objects (like SecuritySystemTargetState), and function types
+    let key: string;
+    if (typeof type === 'function') {
+      // For function types (like ProgrammableSwitchEvent), use toString
+      key = type.toString ? type.toString() : String(type);
+    } else if (typeof type === 'object') {
+      key = JSON.stringify(type);
+    } else {
+      key = type;
+    }
     if (!this.characteristics.has(key)) {
       this.characteristics.set(key, new MockCharacteristic());
     }
@@ -89,6 +109,10 @@ export class MockAccessory {
     const service = new MockService(name, displayName);
     this.services.set(name, service);
     return service;
+  }
+
+  configureController(_controller: unknown): void {
+    // Mock implementation for CameraController
   }
 }
 
