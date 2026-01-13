@@ -1,0 +1,239 @@
+/**
+ * Blink API Type Definitions
+ *
+ * All types derived from reverse engineering Blink Home Monitor Android APK v50.1
+ * Source: API Dossier - /base-apk/docs/api_dossier.md
+ */
+
+/**
+ * OAuth token response from Blink authentication API
+ * Source: API Dossier Section 2.1 (OAuth Flow) / OauthApi.smali
+ */
+export interface BlinkOAuthResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  token_type: 'Bearer';
+  scope: string;
+  account_id?: number;
+  client_id?: number;
+  region?: string;
+  tier?: string;
+}
+
+/**
+ * Blink user account information
+ * Source: API Dossier Section 3.9 (homescreen response)
+ */
+export interface BlinkAccount {
+  account_id: number;
+  client_id?: number;
+  country?: string;
+  timezone?: string;
+  region?: string;
+}
+
+/**
+ * Blink network (Sync Module grouping) - represents an armed/disarmed unit
+ * Source: API Dossier Section 3.7 (Network & Arm/Disarm) / NetworkApi.smali
+ */
+export interface BlinkNetwork {
+  id: number;
+  name: string;
+  armed: boolean;
+  timezone?: string;
+  oneways?: boolean;
+  lv_save?: boolean;
+  camera_count?: number;
+}
+
+/**
+ * Blink Sync Module device
+ * Source: API Dossier Section 3.6 (Sync Module & Local Storage) / SyncModuleApi.smali
+ */
+export interface BlinkSyncModule {
+  id: number;
+  network_id: number;
+  status: string;
+  name?: string;
+  serial?: string;
+  fw_version?: string;
+  local_storage_enabled?: boolean;
+  local_storage_compatible?: boolean;
+}
+
+/**
+ * Blink camera device (traditional Blink cameras via Sync Module)
+ * Source: API Dossier Section 3.3 (Camera Operations) / CameraApi.smali
+ */
+export interface BlinkCamera {
+  id: number;
+  network_id: number;
+  name: string;
+  enabled: boolean;
+  status?: string;
+  serial?: string;
+  fw_version?: string;
+  type?: string;
+  thumbnail?: string;
+  created_at?: string;
+  updated_at?: string;
+  battery?: string;
+  signals?: BlinkSignals;
+  motion_detected?: boolean;
+  temperature?: number;
+}
+
+/**
+ * Blink video doorbell device
+ * Source: API Dossier Section 3.5 (Doorbell Operations) / DoorbellApi.smali
+ */
+export interface BlinkDoorbell {
+  id: number;
+  network_id: number;
+  name: string;
+  enabled: boolean;
+  status?: string;
+  serial?: string;
+  fw_version?: string;
+  thumbnail?: string;
+  created_at?: string;
+  updated_at?: string;
+  battery?: string;
+  signals?: BlinkSignals;
+  motion_detected?: boolean;
+  chime_enabled?: boolean;
+}
+
+/**
+ * Blink Owl device (Mini camera - WiFi direct, no Sync Module required)
+ * Source: API Dossier Section 3.4 (Owl Operations) / OwlApi.smali
+ */
+export interface BlinkOwl {
+  id: number;
+  network_id: number;
+  name: string;
+  enabled: boolean;
+  status?: string;
+  serial?: string;
+  fw_version?: string;
+  thumbnail?: string;
+  created_at?: string;
+  updated_at?: string;
+  battery?: string;
+  signals?: BlinkSignals;
+  motion_detected?: boolean;
+}
+
+/**
+ * Device signal strength information
+ */
+export interface BlinkSignals {
+  wifi?: number;
+  lfr?: number;
+  battery?: string;
+  temp?: number;
+}
+
+/**
+ * Homescreen API response containing all account devices
+ * Source: API Dossier Section 3.9 (Media & Video) - GET v4/accounts/{account_id}/homescreen
+ */
+export interface BlinkHomescreen {
+  networks: BlinkNetwork[];
+  sync_modules: BlinkSyncModule[];
+  cameras: BlinkCamera[];
+  owls: BlinkOwl[];
+  doorbells: BlinkDoorbell[];
+  account: BlinkAccount;
+}
+
+/**
+ * Response from arm/disarm and other async commands
+ * Source: API Dossier Section 3.10 (Commands & Polling) / CommandApi.smali
+ */
+export interface BlinkCommandResponse {
+  command_id: number;
+  server?: string;
+  network_id?: number;
+}
+
+/**
+ * Command polling status response
+ * Source: API Dossier Section 3.10 - GET /accounts/{account_id}/networks/{network}/commands/{command}
+ */
+export interface BlinkCommandStatus {
+  complete?: boolean;
+  status?: 'complete' | 'running' | 'queued' | 'failed';
+  status_msg?: string;
+  polling_interval?: number;
+  commands?: BlinkCommandResponse[];
+}
+
+/**
+ * Live video session response
+ * Source: API Dossier Section 4.2 (LiveVideoResponse Model) / LiveVideoResponse.smali
+ */
+export interface BlinkLiveVideoResponse {
+  id: number;
+  parent_id?: number;
+  server: string;
+  duration: number;
+  continue_interval: number;
+  continue_warning: number;
+  poor_connection?: boolean;
+  is_multi_client_live_view?: boolean;
+  type?: string;
+  command_id?: number;
+}
+
+/**
+ * Media clip from motion detection
+ * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/media
+ */
+export interface BlinkMediaClip {
+  id: number;
+  camera_id: number;
+  camera_name: string;
+  network_id: number;
+  network_name?: string;
+  thumbnail: string;
+  media: string;
+  created_at: string;
+  viewed?: boolean;
+  deleted?: boolean;
+  device_type?: 'camera' | 'owl' | 'doorbell';
+}
+
+/**
+ * Media list response
+ * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/media
+ */
+export interface BlinkMediaResponse {
+  media: BlinkMediaClip[];
+  limit?: number;
+  purge_id?: number;
+}
+
+/**
+ * Plugin configuration
+ * Source: API Dossier Section 2.1 (OAuth parameters) and Section 1.1 (Base URLs)
+ */
+export interface BlinkConfig {
+  email: string;
+  password: string;
+  hardwareId: string;
+  clientId?: 'android' | 'amazon';
+  twoFactorCode?: string;
+  tier?: 'prod' | 'sqa1' | 'cemp';
+}
+
+/**
+ * HTTP methods used by the API
+ */
+export type HttpMethod = 'GET' | 'POST' | 'DELETE';
+
+/**
+ * Device types supported by Blink
+ */
+export type BlinkDeviceType = 'camera' | 'owl' | 'doorbell' | 'sync_module';

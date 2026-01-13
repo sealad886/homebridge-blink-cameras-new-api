@@ -61,3 +61,8 @@ typings/
 dist
 
 /scripts
+# IDE and tracking files
+.copilot-tracking/
+*.txt
+homebridge-config.json
+.DS_Store

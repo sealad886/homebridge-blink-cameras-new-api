@@ -1,0 +1,208 @@
+import { PlatformAccessory } from 'homebridge';
+import { CameraAccessory } from '../src/accessories/camera';
+import { DoorbellAccessory } from '../src/accessories/doorbell';
+import { NetworkAccessory } from '../src/accessories/network';
+import { OwlAccessory } from '../src/accessories/owl';
+import { BlinkCamerasPlatform } from '../src/platform';
+import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types';
+import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
+
+type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log'>;
+
+describe('Accessory handlers', () => {
+  const buildPlatform = () => {
+    const hap = createHap();
+    const log = createLogger();
+    const apiClient = {
+      armNetwork: jest.fn().mockResolvedValue({ command_id: 123 }),
+      disarmNetwork: jest.fn().mockResolvedValue({ command_id: 124 }),
+      pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+      enableCameraMotion: jest.fn(),
+      disableCameraMotion: jest.fn(),
+      enableDoorbellMotion: jest.fn(),
+      disableDoorbellMotion: jest.fn(),
+      enableOwlMotion: jest.fn(),
+      disableOwlMotion: jest.fn(),
+    };
+
+    const platform: PlatformStub = {
+      Service: hap.Service as unknown as BlinkCamerasPlatform['Service'],
+      Characteristic: hap.Characteristic as unknown as BlinkCamerasPlatform['Characteristic'],
+      apiClient: apiClient as unknown as BlinkCamerasPlatform['apiClient'],
+      log: log as unknown as BlinkCamerasPlatform['log'],
+    };
+
+    return { hap, apiClient, platform, log };
+  };
+
+  it('toggles network arm state via SecuritySystem', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Network', 'uuid-network', hap);
+    const device: BlinkNetwork = { id: 1, name: 'Network', armed: false };
+
+    const handler = new NetworkAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState);
+    // 1 = AWAY_ARM in HomeKit
+    await characteristic?.onSetHandler?.(1);
+
+    expect(apiClient.armNetwork).toHaveBeenCalledWith(1);
+    expect(device.armed).toBe(true);
+    expect(handler).toBeInstanceOf(NetworkAccessory);
+  });
+
+  it('disarms network via SecuritySystem', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Network', 'uuid-network', hap);
+    const device: BlinkNetwork = { id: 1, name: 'Network', armed: true };
+
+    const handler = new NetworkAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState);
+    // 3 = DISARM in HomeKit
+    await characteristic?.onSetHandler?.(3);
+
+    expect(apiClient.disarmNetwork).toHaveBeenCalledWith(1);
+    expect(device.armed).toBe(false);
+    expect(handler).toBeInstanceOf(NetworkAccessory);
+  });
+
+  it('does not call API when network state is unchanged', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Network', 'uuid-network', hap);
+    const device: BlinkNetwork = { id: 1, name: 'Network', armed: true };
+
+    const handler = new NetworkAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState);
+    // 1 = AWAY_ARM in HomeKit (already armed)
+    await characteristic?.onSetHandler?.(1);
+
+    expect(apiClient.armNetwork).not.toHaveBeenCalled();
+    expect(apiClient.disarmNetwork).not.toHaveBeenCalled();
+    expect(device.armed).toBe(true);
+    expect(handler).toBeInstanceOf(NetworkAccessory);
+  });
+
+  it('enables and disables camera motion', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: false };
+
+    const handler = new CameraAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
+    await characteristic?.onSetHandler?.(true);
+    await characteristic?.onSetHandler?.(false);
+
+    expect(apiClient.enableCameraMotion).toHaveBeenCalledWith(1, 2);
+    expect(apiClient.disableCameraMotion).toHaveBeenCalledWith(1, 2);
+    expect(device.enabled).toBe(false);
+    expect(handler).toBeInstanceOf(CameraAccessory);
+  });
+
+  it('does not call API when camera state is unchanged', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: true };
+
+    const handler = new CameraAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
+    await characteristic?.onSetHandler?.(true);
+
+    expect(apiClient.enableCameraMotion).not.toHaveBeenCalled();
+    expect(apiClient.disableCameraMotion).not.toHaveBeenCalled();
+    expect(device.enabled).toBe(true);
+    expect(handler).toBeInstanceOf(CameraAccessory);
+  });
+
+  it('enables and disables doorbell motion', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Doorbell', 'uuid-doorbell', hap);
+    const device: BlinkDoorbell = { id: 3, network_id: 1, name: 'Doorbell', enabled: true };
+
+    const handler = new DoorbellAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
+    await characteristic?.onSetHandler?.(false);
+
+    expect(apiClient.disableDoorbellMotion).toHaveBeenCalledWith(1, 3);
+    expect(device.enabled).toBe(false);
+    expect(handler).toBeInstanceOf(DoorbellAccessory);
+  });
+
+  it('does not call API when doorbell state is unchanged', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Doorbell', 'uuid-doorbell', hap);
+    const device: BlinkDoorbell = { id: 3, network_id: 1, name: 'Doorbell', enabled: false };
+
+    const handler = new DoorbellAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
+    await characteristic?.onSetHandler?.(false);
+
+    expect(apiClient.enableDoorbellMotion).not.toHaveBeenCalled();
+    expect(apiClient.disableDoorbellMotion).not.toHaveBeenCalled();
+    expect(device.enabled).toBe(false);
+    expect(handler).toBeInstanceOf(DoorbellAccessory);
+  });
+
+  it('enables and disables owl motion', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Owl', 'uuid-owl', hap);
+    const device: BlinkOwl = { id: 4, network_id: 2, name: 'Owl', enabled: false };
+
+    const handler = new OwlAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
+    await characteristic?.onSetHandler?.(true);
+
+    expect(apiClient.enableOwlMotion).toHaveBeenCalledWith(2, 4);
+    expect(device.enabled).toBe(true);
+    expect(handler).toBeInstanceOf(OwlAccessory);
+  });
+
+  it('does not call API when owl state is unchanged', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Owl', 'uuid-owl', hap);
+    const device: BlinkOwl = { id: 4, network_id: 2, name: 'Owl', enabled: true };
+
+    const handler = new OwlAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
+    await characteristic?.onSetHandler?.(true);
+
+    expect(apiClient.enableOwlMotion).not.toHaveBeenCalled();
+    expect(apiClient.disableOwlMotion).not.toHaveBeenCalled();
+    expect(device.enabled).toBe(true);
+    expect(handler).toBeInstanceOf(OwlAccessory);
+  });
+});

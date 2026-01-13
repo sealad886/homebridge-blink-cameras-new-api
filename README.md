@@ -1,48 +1,218 @@
 # homebridge-blinkcameras
 
-## Note on 2 factor authentication
+[![npm](https://img.shields.io/npm/v/homebridge-blinkcameras.svg)](https://www.npmjs.com/package/homebridge-blinkcameras)
+[![License](https://img.shields.io/github/license/your-username/homebridge-blinkcameras.svg)](LICENSE)
 
-Due to two factor authentication being required for Blink login the first time you
-run homebridge after installing this plugin it will pause and wait for you to enter
-your two factor authentication code. You will receive two emails from Blink,
-one with the code and one to "Allow Device". Make sure you Allow Device before
-entering your two factor authentication code.
+Modern Blink platform plugin for Homebridge using the official OAuth endpoints. Exposes Blink devices as proper HomeKit accessories:
 
-If you are upgrading from an old version of this plugin you will have to add
-a "deviceId" and "deviceName" to your platform config. These can be whatever
-you want them to be.
+- **SecuritySystem** for arm/disarm control of networks
+- **MotionSensor** for motion detection events
+- **Doorbell** service for ring notifications
+- **Switch** for enabling/disabling motion detection per device
 
-Also the Platform name of this plugin has changed. It is now `BlinkCameras` instead
-of `BlinkPlatformSecurity`, so update your config file accordingly.
+All API interactions are based on reverse-engineered endpoints from the official Blink Android app (v50.1).
 
-## Homebridge Platform Plugin for Blink Security Cameras.
+## Features
 
-This allows you to arm and disarm your Blink Home Security Cameras using Apple's HomeKit. This is a plugin for the excellent homebridge project https://github.com/nfarina/homebridge.
+- ✅ **Proper HomeKit SecuritySystem** - Arm/disarm networks using the Security System tile in Home app
+- ✅ **Motion Detection** - Receive motion alerts in HomeKit when your cameras detect motion
+- ✅ **Doorbell Support** - Ring notifications appear as HomeKit doorbell events
+- ✅ **Status Polling** - Automatically syncs device states with Blink cloud
+- ✅ **OAuth Authentication** - Modern OAuth 2.0 with automatic token refresh
+- ✅ **2FA Support** - Works with Blink accounts that have two-factor authentication enabled
+- ✅ **Retry Logic** - Automatic retry with exponential backoff for rate limits and server errors
 
-This is built on top of node-blink-security https://github.com/madshall/node-blink-security
+## Requirements
 
-To configure this set it up as a platform in your homebridge config.json file.
+- **Homebridge** 1.6.0 or later
+- **Node.js** 18.0.0 or later (native `fetch` API required)
+- A Blink account with credentials
 
-    "platforms" : [
-      {
-        "platform": "BlinkCameras",
-        "name": "Blink System",
-        "username"   : "<your blink email address>",
-        "password"   : "<your blink password",
-        "deviceId"   : "<a made up device id>",
-        "deviceName" : "<a made up device name>",
-        "discovery" : false,
-        "discoveryInterval": 3600
-      }
-    ]
+## Installation
 
-## Configuration Parameters
+### Via Homebridge UI (Recommended)
 
-- _username_ - Your blink username
-- _password_ - Your blink password
-- _deviceId_ - A made up device id, if you run multiple copies of this plugin use a different id for each one
-- _deviceName - A made up device name, if you run multiple copies of this plugin use a different name for each one
-- _discovery_ - Causes the plugin to look for new cameras (defaults to true)
-- _discoveryInterval_ - How often discovery should run in seconds (default . is 3600 seconds (1 hour)). Be careful setting this too low as too many requests to the Blink API might lock out your account.
+1. Open the Homebridge UI
+2. Navigate to Plugins
+3. Search for "homebridge-blinkcameras"
+4. Click Install
 
-This plugin discovers multiple Blink "Systems" and "Cameras".  You can arm/disarm each system independently of each Camera.  Arming a camera is the same as turning on the "motion detect" toggle in the Blink App.
+### Via npm
+
+```bash
+npm install -g homebridge-blinkcameras
+```
+
+Restart Homebridge after installing.
+
+## Configuration
+
+### Via Homebridge UI
+
+The plugin provides a full configuration UI. Navigate to Plugins → Settings for homebridge-blinkcameras.
+
+### Manual Configuration
+
+Add a platform entry to your Homebridge `config.json`:
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "BlinkCameras",
+      "name": "Blink",
+      "username": "you@example.com",
+      "password": "your-blink-password",
+      "deviceId": "homebridge-blink-01",
+      "pollInterval": 60,
+      "motionTimeout": 30,
+      "enableMotionPolling": true
+    }
+  ]
+}
+```
+
+### Configuration Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `platform` | Yes | - | Must be `BlinkCameras` |
+| `name` | Yes | `Blink` | Platform name shown in logs |
+| `username` | Yes | - | Your Blink account email |
+| `password` | Yes | - | Your Blink account password |
+| `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (hardware_id) |
+| `deviceName` | No | - | Fallback for deviceId |
+| `twoFactorCode` | No | - | 2FA code (only needed during initial setup) |
+| `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, or `cemp` |
+| `pollInterval` | No | `60` | Seconds between state polls (min 15) |
+| `motionTimeout` | No | `30` | Seconds motion stays active |
+| `enableMotionPolling` | No | `true` | Poll for motion events |
+
+## Supported Devices
+
+| Blink Device | HomeKit Service | Features |
+|--------------|-----------------|----------|
+| **Network** | SecuritySystem | Arm/disarm all cameras in network |
+| **Camera** | Switch + MotionSensor | Enable/disable motion, motion events |
+| **Doorbell** | Doorbell + Switch + MotionSensor | Ring events, enable/disable motion |
+| **Owl (Mini)** | Switch + MotionSensor | Enable/disable motion, motion events |
+
+### SecuritySystem Modes
+
+The HomeKit SecuritySystem exposes standard modes:
+
+- **Away Arm** → Network is armed
+- **Stay Arm** → Network is armed (same as Away)
+- **Night Arm** → Network is armed (same as Away)
+- **Disarm** → Network is disarmed
+
+Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's armed state.
+
+## Two-Factor Authentication
+
+When you first connect a new device to your Blink account:
+
+1. Blink sends an email with a verification code
+2. Add the code to `twoFactorCode` in your config
+3. Restart Homebridge
+4. After successful login, **remove the 2FA code** from your config
+5. Restart Homebridge again
+
+Future logins will use refresh tokens and won't require 2FA.
+
+## Troubleshooting
+
+### 401 Unauthorized / 403 Forbidden
+
+- Regenerate a unique `deviceId`
+- Check your email for the Blink device approval prompt
+- Provide a fresh `twoFactorCode` if prompted
+
+### Rate Limits (429)
+
+The plugin automatically backs off and retries. If you're hitting rate limits frequently:
+
+- Increase `pollInterval` to reduce API calls
+- Set `enableMotionPolling` to `false` to reduce calls
+
+### Node.js Version
+
+This plugin requires Node.js 18+ for the native `fetch` API. Check your version:
+
+```bash
+node --version
+```
+
+### Motion Not Detected
+
+- Ensure `enableMotionPolling` is `true`
+- Check that the network is armed (motion events only trigger when armed)
+- Reduce `pollInterval` for faster detection (but more API calls)
+
+## API Documentation
+
+This plugin's API implementation is based on reverse engineering the official Blink Home Monitor Android app (v50.1). Key technical details:
+
+### Authentication
+
+- OAuth 2.0 password grant flow via `api.pdoauth.blink.com`
+- Automatic token refresh when tokens expire
+- Hardware ID required for device identification
+
+### Endpoints
+
+- Homescreen: `GET v4/accounts/{account_id}/homescreen`
+- Arm/Disarm: `POST v1/accounts/{account_id}/networks/{network_id}/state/arm|disarm`
+- Motion Enable/Disable: `POST accounts/{account_id}/networks/{network_id}/cameras/{camera_id}/enable|disable`
+- Media: `GET v4/accounts/{account_id}/media`
+
+For full endpoint documentation, see the API dossier in the source repository.
+
+## Development
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/homebridge-blinkcameras.git
+cd homebridge-blinkcameras
+
+# Install dependencies
+npm install
+
+# Build
+npm run build
+
+# Watch mode
+npm run watch
+
+# Run tests
+npm test
+
+# Lint
+npm run lint
+```
+
+## Changelog
+
+### v2.0.0
+
+- Complete TypeScript rewrite with full API dossier evidence
+- SecuritySystem service for proper HomeKit arm/disarm
+- MotionSensor service for motion detection events
+- Doorbell service for ring notifications
+- Status polling with configurable interval
+- Media API polling for motion event detection
+- OAuth 2.0 authentication with automatic token refresh
+- Comprehensive configuration UI
+
+### v1.x
+
+- Legacy implementation using `node-blink-security`
+
+## License
+
+MIT - see [LICENSE](LICENSE) for details.
+
+## Credits
+
+- API documentation derived from reverse engineering the Blink Android app
+- Homebridge platform plugin architecture

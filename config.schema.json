@@ -1,40 +1,133 @@
 {
-    "pluginAlias": "BlinkCameras",
-    "pluginType": "platform",
-    "singular": true,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "name": {
-                "title": "Name",
-                "description": "Whatever name you want to call your System",
-                "type": "string",
-                "required": true
-            },
-            "username": {
-                "title": "username",
-                "type": "string",
-                "required": true
-            },
-            "password": {
-                "title": "password",
-                "type": "string",
-                "required": true
-            },
-            "deviceId": {
-                "title": "Device ID",
-                "description": "A made up device ID (will be sent to blink)",
-                "type": "string",
-                "required": true
-            },
-            "deviceName": {
-                "title": "Device Name",
-                "description": "A made up device Name (will be sent to blink)",
-                "type": "string",
-                "required": true
-            }
-        }
+  "pluginAlias": "BlinkCameras",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Blink cameras integration for HomeKit via Homebridge. Provides SecuritySystem arm/disarm, motion sensors, and doorbell notifications.",
+  "footerDisplay": "For help, see the [README](https://github.com/your-username/homebridge-blinkcameras#readme).",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "description": "Name for this Blink platform instance",
+        "type": "string",
+        "default": "Blink",
+        "required": true
+      },
+      "username": {
+        "title": "Blink Account Email",
+        "description": "Your Blink account email address",
+        "type": "string",
+        "format": "email",
+        "required": true
+      },
+      "password": {
+        "title": "Blink Account Password",
+        "description": "Your Blink account password",
+        "type": "string",
+        "required": true
+      },
+      "deviceId": {
+        "title": "Device ID",
+        "description": "Unique identifier for this Homebridge instance (sent to Blink as hardware_id)",
+        "type": "string",
+        "default": "homebridge-blink",
+        "required": false
+      },
+      "deviceName": {
+        "title": "Device Name",
+        "description": "Friendly name for this device (fallback for Device ID)",
+        "type": "string",
+        "required": false
+      },
+      "twoFactorCode": {
+        "title": "Two-Factor Code",
+        "description": "2FA code for initial login. Only needed if Blink sends a verification code. Remove after successful login.",
+        "type": "string",
+        "required": false
+      },
+      "tier": {
+        "title": "Blink Environment",
+        "description": "Blink API environment tier. Use 'prod' for production (default).",
+        "type": "string",
+        "default": "prod",
+        "required": false,
+        "oneOf": [
+          { "title": "Production", "enum": ["prod"] },
+          { "title": "Staging (SQA1)", "enum": ["sqa1"] },
+          { "title": "CEMP", "enum": ["cemp"] }
+        ]
+      },
+      "pollInterval": {
+        "title": "Poll Interval (seconds)",
+        "description": "How often to poll Blink for state changes. Minimum 15 seconds.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 15,
+        "maximum": 600,
+        "required": false
+      },
+      "motionTimeout": {
+        "title": "Motion Timeout (seconds)",
+        "description": "How long motion detected state stays active before resetting",
+        "type": "integer",
+        "default": 30,
+        "minimum": 5,
+        "maximum": 300,
+        "required": false
+      },
+      "enableMotionPolling": {
+        "title": "Enable Motion Detection",
+        "description": "Poll for motion events via media API. Disable to reduce API calls.",
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Account Settings",
+      "items": [
+        "name",
+        "username",
+        {
+          "key": "password",
+          "type": "password"
+        },
+        "twoFactorCode"
+      ]
     },
-    "form": null,
-    "display": null
+    {
+      "type": "fieldset",
+      "title": "Device Identification",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "deviceId",
+        "deviceName"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Polling Settings",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "pollInterval",
+        "motionTimeout",
+        "enableMotionPolling"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "tier"
+      ]
+    }
+  ]
 }
