@@ -1,6 +1,6 @@
 {
-    "name": "homebridge-blinkcameras",
-    "version": "1.1.5",
+    "name": "homebridge-blinkcameras-new-api",
+    "version": "0.0.5",
     "description": "Blink Camera plugin for homebridge",
     "license": "ISC",
     "keywords": [
@@ -14,7 +14,7 @@
     ],
     "repository": {
         "type": "git",
-        "url": "git@github.com:bartdorsey/homebridge-blinkcameras.git"
+        "url": "git@github.com:sealad886/homebridge-blinkcameras.git"
     },
     "engines": {
         "node": ">=18.0.0",

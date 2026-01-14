@@ -9,6 +9,9 @@
 import { BlinkConfig, BlinkLogger, BlinkOAuthResponse } from '../types';
 import { getOAuthTokenUrl } from './urls';
 
+// Ensure Response type is available for TypeScript
+type FetchResponse = Awaited<ReturnType<typeof fetch>>;
+
 /**
  * Default client ID for OAuth requests
  * Source: API Dossier Section 2.1 - client_id field
@@ -277,7 +280,7 @@ export class BlinkAuth {
   /**
    * Handle authentication errors with detailed diagnostics
    */
-  private async handleAuthError(operation: 'login' | 'refresh', response: Response): Promise<never> {
+  private async handleAuthError(operation: 'login' | 'refresh', response: FetchResponse): Promise<never> {
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       responseHeaders[key] = value;
