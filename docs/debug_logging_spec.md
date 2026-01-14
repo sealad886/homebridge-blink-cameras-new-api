@@ -17,10 +17,10 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 
 ## HTTP Diagnostics (debugAuth only)
 
-- Log method + URL for each request.
+- Log method + URL for each request with a per-request correlation ID.
 - Log request headers with redaction applied.
 - Log request body (JSON) only when debug is enabled.
-- Log response status + elapsed time.
+- Log response status + elapsed time (include correlation ID).
 - Log response body only in debug mode and truncate to a safe length (current behavior uses 500 chars).
 
 ## Authentication Diagnostics (debugAuth only)

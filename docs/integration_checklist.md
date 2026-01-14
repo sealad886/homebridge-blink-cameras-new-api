@@ -6,6 +6,7 @@ This checklist is derived from APK evidence summarized in `docs/blink_api_dossie
 
 - [ ] REST base uses `https://rest-{tier}.immedia-semi.com/api/` with `{tier}` from account tier (fallback to `prod`).
 - [ ] Shared REST base uses `https://rest-{shared_tier}.immedia-semi.com/api/` for endpoints listed as shared in the dossier.
+- [ ] `sharedTier` override is honored when configured; defaults to `tier` when unset.
 - [ ] OAuth base uses `https://api.{env}oauth.blink.com/` with `{env}` derived from tier (e.g., `sqa1` → staging) or explicit env mapping.
 - [ ] Blink host detection only applies auth headers to Blink hosts (`*.immedia-semi.com`).
 

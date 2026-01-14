@@ -53,6 +53,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   deviceName?: string;
   twoFactorCode?: string;
   tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
+  sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   pollInterval?: number;
   motionTimeout?: number;
   enableMotionPolling?: boolean;
@@ -138,6 +139,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       hardwareId: this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink',
       twoFactorCode: this.config.twoFactorCode,
       tier: this.config.tier,
+      sharedTier: this.config.sharedTier,
       debugAuth: this.config.debugAuth,
       logger: this.log,
     });

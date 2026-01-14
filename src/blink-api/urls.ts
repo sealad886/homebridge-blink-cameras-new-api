@@ -29,6 +29,10 @@ const resolveTier = (tier?: string): string => {
   return DEFAULT_TIER;
 };
 
+const resolveSharedTier = (tier?: string, sharedTier?: string): string => {
+  return resolveTier(sharedTier ?? tier);
+};
+
 /**
  * Build REST API base URL
  * Source: API Dossier Section 1.1 - REST API pattern: https://rest-{tier}.immedia-semi.com/api/
@@ -40,11 +44,28 @@ export const getRestBaseUrl = (config: BlinkConfig): string => {
 };
 
 /**
+ * Build shared REST API base URL
+ * Source: API Dossier Section 1.1 - shared REST base: https://rest-{shared_tier}.immedia-semi.com/api/
+ */
+export const getSharedRestBaseUrl = (config: BlinkConfig): string => {
+  const sharedTier = resolveSharedTier(config.tier, config.sharedTier);
+  return normalizeBase(`https://rest-${sharedTier}.immedia-semi.com/api/`);
+};
+
+/**
  * Build REST root URL (without /api) for resource URLs like thumbnails
  */
 export const getRestRootUrl = (config: BlinkConfig): string => {
   const tier = resolveTier(config.tier);
   return normalizeBase(`https://rest-${tier}.immedia-semi.com/`);
+};
+
+/**
+ * Build shared REST root URL (without /api)
+ */
+export const getSharedRestRootUrl = (config: BlinkConfig): string => {
+  const sharedTier = resolveSharedTier(config.tier, config.sharedTier);
+  return normalizeBase(`https://rest-${sharedTier}.immedia-semi.com/`);
 };
 
 /**

@@ -50,6 +50,7 @@ describe('BlinkHttp', () => {
     const headers = options.headers as Record<string, string>;
     expect(headers['APP-BUILD']).toBe('ANDROID_29426569');
     expect(headers.Authorization).toBe('Bearer token');
+    expect(headers['X-Blink-Time-Zone']).toBeTruthy();
     expect(auth.ensureValidToken).toHaveBeenCalled();
   });
 

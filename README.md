@@ -90,6 +90,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `deviceName` | No | - | Fallback for deviceId |
 | `twoFactorCode` | No | - | 2FA code (only needed during initial setup) |
 | `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` |
+| `sharedTier` | No | - | Override shared REST tier (defaults to `tier`) |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |

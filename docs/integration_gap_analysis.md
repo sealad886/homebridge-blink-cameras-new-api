@@ -10,25 +10,20 @@ This document captures the current parity review against `docs/blink_api_dossier
 
 ## Remaining Gaps / Follow-ups
 
-1. **Shared REST base (`rest-{shared_tier}`)**
-   - APK routes many device endpoints through the shared REST base.
-   - Plugin currently uses only `rest-{tier}` for all endpoints.
-   - Consider adding optional `sharedTier` config or automatic fallback to `tier` with explicit shared-base routing.
-
-2. **Media list method**
-   - APK uses `POST v4/accounts/{account_id}/media` with `MediaPostBody` and optional query params.
-   - Plugin uses a `GET v4/accounts/{account_id}/media?page=` style call.
-   - Confirm if GET is still accepted or update to POST with correct payload model.
-
-3. **EventStream**
+1. **EventStream**
    - APK uses EventStream (`prod.eventstream.immedia-semi.com`, subgroup `blink.mobile.app`).
    - Plugin does not implement EventStream ingestion or telemetry.
    - Decide whether to explicitly scope this out or implement a minimal client (non-payload logging only).
 
-4. **Local Sync Module onboarding**
+2. **Local Sync Module onboarding**
    - Local onboarding endpoints are not in scope; ensure docs and config explicitly state unsupported.
 
 ## References
 
 - `docs/blink_api_dossier.md` (E1–E92)
 - `docs/integration_checklist.md`
+
+## Handoff Notes
+
+- If implementing EventStream, keep payloads out of logs and reuse existing redaction rules.
+- Local onboarding endpoints remain out of scope unless explicitly requested.

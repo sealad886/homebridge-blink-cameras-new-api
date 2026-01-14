@@ -232,7 +232,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       // Build full URL (thumbnails may be relative paths)
       const fullUrl = url.startsWith('http')
         ? url
-        : new URL(url, this.api.getRestRootUrl()).toString();
+        : new URL(url, this.api.getSharedRestRootUrl()).toString();
 
       // Fetch the thumbnail image
       const response = await fetch(fullUrl);

@@ -62,6 +62,21 @@
           { "title": "SRF1", "enum": ["srf1"] }
         ]
       },
+      "sharedTier": {
+        "title": "Blink Shared Tier",
+        "description": "Override shared REST tier (rest-{shared_tier}); defaults to tier when unset.",
+        "type": "string",
+        "required": false,
+        "oneOf": [
+          { "title": "Production", "enum": ["prod"] },
+          { "title": "Staging (SQA1)", "enum": ["sqa1"] },
+          { "title": "CEMP", "enum": ["cemp"] },
+          { "title": "Production (EU)", "enum": ["prde"] },
+          { "title": "Production (APAC)", "enum": ["prsg"] },
+          { "title": "Production (AU)", "enum": ["a001"] },
+          { "title": "SRF1", "enum": ["srf1"] }
+        ]
+      },
       "debugAuth": {
         "title": "Debug Authentication",
         "description": "Enable verbose diagnostic logging for Blink API authentication. Useful for troubleshooting login failures, token issues, and API errors. WARNING: May log sensitive request details.",

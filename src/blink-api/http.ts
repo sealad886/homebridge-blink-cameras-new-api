@@ -9,6 +9,7 @@
 import { BlinkAuth } from './auth';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod } from '../types';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Standard headers for all Blink API requests
@@ -100,15 +101,16 @@ export class BlinkHttpError extends Error {
 }
 
 export class BlinkHttp {
-  private readonly restBaseUrl: string;
+  private readonly baseUrl: string;
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
 
   constructor(
     private readonly auth: BlinkAuth,
     config: BlinkConfig,
+    baseUrlOverride?: string,
   ) {
-    this.restBaseUrl = getRestBaseUrl(config);
+    this.baseUrl = baseUrlOverride ?? getRestBaseUrl(config);
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
   }
@@ -150,6 +152,7 @@ export class BlinkHttp {
     await this.auth.ensureValidToken();
 
     const url = this.buildUrl(path);
+    const requestId = randomUUID();
     const headers: Record<string, string> = {
       ...DEFAULT_HEADERS,
       // X-Blink-Time-Zone required per API Dossier Section 2.3
@@ -159,13 +162,13 @@ export class BlinkHttp {
     };
 
     if (attempt === 0) {
-      this.logDebug(`${method} ${url}`);
-      this.logDebug('Request headers:', redactHeaders(headers));
+      this.logDebug(`[${requestId}] ${method} ${url}`);
+      this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
       if (body) {
-        this.logDebug('Request body:', JSON.stringify(body, null, 2));
+        this.logDebug(`[${requestId}] Request body:`, JSON.stringify(body, null, 2));
       }
     } else {
-      this.logDebug(`${method} ${url} (retry attempt ${attempt})`);
+      this.logDebug(`[${requestId}] ${method} ${url} (retry attempt ${attempt})`);
     }
 
     const startTime = Date.now();
@@ -176,18 +179,18 @@ export class BlinkHttp {
     });
     const elapsed = Date.now() - startTime;
 
-    this.logDebug(`Response: ${response.status} ${response.statusText} (${elapsed}ms)`);
+    this.logDebug(`[${requestId}] Response: ${response.status} ${response.statusText} (${elapsed}ms)`);
 
     // Token expired - refresh and retry
     if (response.status === 401 && attempt < 1) {
-      this.logDebug('Token expired (401), refreshing and retrying...');
+      this.logDebug(`[${requestId}] Token expired (401), refreshing and retrying...`);
       await this.auth.refreshTokens();
       return this.request<T>(method, path, body, attempt + 1);
     }
 
     // Session invalid - re-login and retry
     if (response.status === 403 && attempt < 1) {
-      this.logDebug('Session invalid (403), re-logging in and retrying...');
+      this.logDebug(`[${requestId}] Session invalid (403), re-logging in and retrying...`);
       await this.auth.login();
       return this.request<T>(method, path, body, attempt + 1);
     }
@@ -195,7 +198,7 @@ export class BlinkHttp {
     // Rate limited - exponential backoff
     if (response.status === 429 && attempt < 3) {
       const delay = 1000 * Math.pow(2, attempt);
-      this.logDebug(`Rate limited (429), waiting ${delay}ms before retry...`);
+      this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
       await sleep(delay);
       return this.request<T>(method, path, body, attempt + 1);
     }
@@ -203,7 +206,7 @@ export class BlinkHttp {
     // Server error - linear backoff
     if (response.status >= 500 && attempt < 2) {
       const delay = 500 * (attempt + 1);
-      this.logDebug(`Server error (${response.status}), waiting ${delay}ms before retry...`);
+      this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
       await sleep(delay);
       return this.request<T>(method, path, body, attempt + 1);
     }
@@ -234,7 +237,7 @@ export class BlinkHttp {
 
     if (this.debug) {
       // Only log response body in debug mode (can be verbose)
-      this.logDebug('Response body:', JSON.stringify(responseData, null, 2).slice(0, 500) + '...');
+      this.logDebug(`[${requestId}] Response body:`, JSON.stringify(responseData, null, 2).slice(0, 500) + '...');
     }
 
     return responseData;
@@ -246,6 +249,6 @@ export class BlinkHttp {
    */
   private buildUrl(path: string): string {
     const cleaned = path.startsWith('/') ? path.substring(1) : path;
-    return `${this.restBaseUrl}${cleaned}`;
+    return `${this.baseUrl}${cleaned}`;
   }
 }

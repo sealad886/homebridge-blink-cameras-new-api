@@ -9,28 +9,31 @@
 
 import { BlinkAuth } from './auth';
 import { BlinkHttp } from './http';
-import { getRestRootUrl } from './urls';
+import { getSharedRestBaseUrl, getSharedRestRootUrl } from './urls';
 import {
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
   BlinkHomescreen,
   BlinkMediaResponse,
+  BlinkMediaQuery,
   BlinkLiveVideoResponse,
 } from '../types';
 
 export class BlinkApi {
   private readonly auth: BlinkAuth;
   private readonly http: BlinkHttp;
+  private readonly sharedHttp: BlinkHttp;
   private accountId: number | null = null;
 
   constructor(private readonly config: BlinkConfig) {
     this.auth = new BlinkAuth(config);
     this.http = new BlinkHttp(this.auth, config);
+    this.sharedHttp = new BlinkHttp(this.auth, config, getSharedRestBaseUrl(config));
   }
 
-  getRestRootUrl(): string {
-    return getRestRootUrl(this.config);
+  getSharedRestRootUrl(): string {
+    return getSharedRestRootUrl(this.config);
   }
 
   /**
@@ -53,7 +56,7 @@ export class BlinkApi {
 
     const accountId = await this.ensureAccountId();
 
-    const homescreen = await this.http.get<BlinkHomescreen>(`v4/accounts/${accountId}/homescreen`);
+    const homescreen = await this.sharedHttp.get<BlinkHomescreen>(`v4/accounts/${accountId}/homescreen`);
     this.accountId = homescreen.account?.account_id ?? accountId;
     return homescreen;
   }
@@ -65,7 +68,7 @@ export class BlinkApi {
    */
   async armNetwork(networkId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`);
+    return this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`);
   }
 
   /**
@@ -75,7 +78,7 @@ export class BlinkApi {
    */
   async disarmNetwork(networkId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`);
+    return this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`);
   }
 
   /**
@@ -85,7 +88,7 @@ export class BlinkApi {
    */
   async enableCameraMotion(networkId: number, cameraId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.http.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
+    await this.sharedHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
   }
 
   /**
@@ -95,7 +98,7 @@ export class BlinkApi {
    */
   async disableCameraMotion(networkId: number, cameraId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.http.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
+    await this.sharedHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
   }
 
   /**
@@ -105,7 +108,7 @@ export class BlinkApi {
    */
   async enableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.http.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
+    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
   }
 
   /**
@@ -115,7 +118,7 @@ export class BlinkApi {
    */
   async disableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.http.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
+    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
   }
 
   /**
@@ -125,7 +128,7 @@ export class BlinkApi {
    */
   async enableOwlMotion(networkId: number, owlId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.http.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
+    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
   }
 
   /**
@@ -135,7 +138,7 @@ export class BlinkApi {
    */
   async disableOwlMotion(networkId: number, owlId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.http.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
+    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
   }
 
   /**
@@ -143,9 +146,27 @@ export class BlinkApi {
    * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/media
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/video/VideoApi.smali
    */
-  async getMedia(page = 1): Promise<BlinkMediaResponse> {
+  async getMedia(query: BlinkMediaQuery = {}): Promise<BlinkMediaResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.get<BlinkMediaResponse>(`v4/accounts/${accountId}/media?page=${page}`);
+    const params = new URLSearchParams();
+    if (query.startTime) params.set('start_time', query.startTime);
+    if (query.endTime) params.set('end_time', query.endTime);
+    if (query.paginationKey !== undefined && query.paginationKey !== null) {
+      params.set('pagination_key', String(query.paginationKey));
+    }
+
+    const path = `v4/accounts/${accountId}/media${params.toString() ? `?${params}` : ''}`;
+    const body = query.filters
+      ? {
+          filters: {
+            types: query.filters.types ?? [],
+            device_types: query.filters.deviceTypes ?? [],
+            devices: query.filters.devices ?? undefined,
+          },
+        }
+      : {};
+
+    return this.sharedHttp.post<BlinkMediaResponse>(path, body);
   }
 
   /**
@@ -155,7 +176,7 @@ export class BlinkApi {
    */
   async getUnwatchedMedia(): Promise<BlinkMediaResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.get<BlinkMediaResponse>(`v4/accounts/${accountId}/unwatched_media`);
+    return this.sharedHttp.get<BlinkMediaResponse>(`v4/accounts/${accountId}/unwatched_media`);
   }
 
   /**
@@ -165,7 +186,7 @@ export class BlinkApi {
    */
   async requestCameraThumbnail(networkId: number, cameraId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandResponse>(
+    return this.sharedHttp.post<BlinkCommandResponse>(
       `accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/thumbnail`,
     );
   }
@@ -177,7 +198,7 @@ export class BlinkApi {
    */
   async requestOwlThumbnail(networkId: number, owlId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandResponse>(
+    return this.sharedHttp.post<BlinkCommandResponse>(
       `v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/thumbnail`,
     );
   }
@@ -189,7 +210,7 @@ export class BlinkApi {
    */
   async requestDoorbellThumbnail(networkId: number, doorbellId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandResponse>(
+    return this.sharedHttp.post<BlinkCommandResponse>(
       `v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/thumbnail`,
     );
   }
@@ -211,7 +232,7 @@ export class BlinkApi {
       intent,
       motion_event_start_time: motionEventStartTime ?? null,
     };
-    return this.http.post<BlinkLiveVideoResponse>(
+    return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v6/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/liveview`,
       body,
     );
@@ -233,7 +254,7 @@ export class BlinkApi {
       intent,
       motion_event_start_time: motionEventStartTime ?? null,
     };
-    return this.http.post<BlinkLiveVideoResponse>(
+    return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/owls/${owlId}/liveview`,
       body,
     );
@@ -255,7 +276,7 @@ export class BlinkApi {
       intent,
       motion_event_start_time: motionEventStartTime ?? null,
     };
-    return this.http.post<BlinkLiveVideoResponse>(
+    return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/liveview`,
       body,
     );
@@ -267,7 +288,7 @@ export class BlinkApi {
    */
   async getCommandStatus(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
-    return this.http.get<BlinkCommandStatus>(
+    return this.sharedHttp.get<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
     );
   }
@@ -303,7 +324,7 @@ export class BlinkApi {
    */
   async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandStatus>(
+    return this.sharedHttp.post<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`,
     );
   }
@@ -314,7 +335,7 @@ export class BlinkApi {
    */
   async completeCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
-    return this.http.post<BlinkCommandStatus>(
+    return this.sharedHttp.post<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
     );
   }

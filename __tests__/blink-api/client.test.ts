@@ -16,6 +16,10 @@ type MutableBlinkApi = {
     get: jest.Mock;
     post: jest.Mock;
   };
+  sharedHttp: {
+    get: jest.Mock;
+    post: jest.Mock;
+  };
   accountId: number | null;
 };
 
@@ -32,6 +36,7 @@ describe('BlinkApi', () => {
     api.auth.ensureValidToken = jest.fn().mockResolvedValue(undefined);
     api.auth.getAccountId = jest.fn().mockReturnValue(10);
     api.http = { get: jest.fn(), post: jest.fn() } as MutableBlinkApi['http'];
+    api.sharedHttp = api.http;
     return { api, auth: api.auth, http: api.http };
   };
 

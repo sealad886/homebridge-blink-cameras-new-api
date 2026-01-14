@@ -229,6 +229,22 @@ export interface BlinkMediaClip {
 }
 
 /**
+ * Media filters for POST /media
+ */
+export interface BlinkMediaFilters {
+  types?: string[];
+  deviceTypes?: string[];
+  devices?: Record<string, number[]>;
+}
+
+export interface BlinkMediaQuery {
+  startTime?: string;
+  endTime?: string;
+  paginationKey?: number | null;
+  filters?: BlinkMediaFilters;
+}
+
+/**
  * Media list response
  * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/media
  */
@@ -260,6 +276,7 @@ export interface BlinkConfig {
   clientId?: 'android' | 'amazon';
   twoFactorCode?: string;
   tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
+  sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   /** Enable verbose auth diagnostics */
   debugAuth?: boolean;
   /** Logger for diagnostic output */
