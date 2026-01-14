@@ -9,6 +9,7 @@
 
 import { BlinkAuth } from './auth';
 import { BlinkHttp } from './http';
+import { getRestRootUrl } from './urls';
 import {
   BlinkCommandResponse,
   BlinkCommandStatus,
@@ -26,6 +27,10 @@ export class BlinkApi {
   constructor(private readonly config: BlinkConfig) {
     this.auth = new BlinkAuth(config);
     this.http = new BlinkHttp(this.auth, config);
+  }
+
+  getRestRootUrl(): string {
+    return getRestRootUrl(this.config);
   }
 
   /**

@@ -22,7 +22,7 @@ const resolveTier = (tier?: string): string => {
   }
 
   const normalized = tier.toLowerCase();
-  if (['prod', 'sqa1', 'cemp'].includes(normalized)) {
+  if (['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1'].includes(normalized)) {
     return normalized;
   }
 
@@ -40,6 +40,14 @@ export const getRestBaseUrl = (config: BlinkConfig): string => {
 };
 
 /**
+ * Build REST root URL (without /api) for resource URLs like thumbnails
+ */
+export const getRestRootUrl = (config: BlinkConfig): string => {
+  const tier = resolveTier(config.tier);
+  return normalizeBase(`https://rest-${tier}.immedia-semi.com/`);
+};
+
+/**
  * Build OAuth token endpoint URL
  * Source: API Dossier Section 1.1 - OAuth API: https://api.{env}oauth.blink.com/
  * Source: API Dossier Section 2.1 - POST oauth/token endpoint
@@ -47,7 +55,7 @@ export const getRestBaseUrl = (config: BlinkConfig): string => {
  */
 export const getOAuthTokenUrl = (config: BlinkConfig): string => {
   const tier = resolveTier(config.tier);
-  const env = tier === 'sqa1' ? 'stg' : 'pd';
-  const base = normalizeBase(`https://api.${env}oauth.blink.com/`);
+  const envSubdomain = tier === 'sqa1' ? 'qa.' : '';
+  const base = normalizeBase(`https://api.${envSubdomain}oauth.blink.com/`);
   return `${base}oauth/token`;
 };

@@ -259,7 +259,7 @@ export interface BlinkConfig {
   hardwareId: string;
   clientId?: 'android' | 'amazon';
   twoFactorCode?: string;
-  tier?: 'prod' | 'sqa1' | 'cemp';
+  tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   /** Enable verbose auth diagnostics */
   debugAuth?: boolean;
   /** Logger for diagnostic output */

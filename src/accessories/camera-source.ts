@@ -26,6 +26,7 @@ import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_
 import { randomBytes } from 'node:crypto';
 import dgram from 'node:dgram';
 import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
+import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
 export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
@@ -229,7 +230,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       // Build full URL (thumbnails may be relative paths)
-      const fullUrl = url.startsWith('http') ? url : `https://rest-prod.immedia-semi.com${url}`;
+      const fullUrl = url.startsWith('http')
+        ? url
+        : new URL(url, this.api.getRestRootUrl()).toString();
 
       // Fetch the thumbnail image
       const response = await fetch(fullUrl);

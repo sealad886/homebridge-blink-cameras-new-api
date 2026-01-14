@@ -55,7 +55,11 @@
         "oneOf": [
           { "title": "Production", "enum": ["prod"] },
           { "title": "Staging (SQA1)", "enum": ["sqa1"] },
-          { "title": "CEMP", "enum": ["cemp"] }
+          { "title": "CEMP", "enum": ["cemp"] },
+          { "title": "Production (EU)", "enum": ["prde"] },
+          { "title": "Production (APAC)", "enum": ["prsg"] },
+          { "title": "Production (AU)", "enum": ["a001"] },
+          { "title": "SRF1", "enum": ["srf1"] }
         ]
       },
       "debugAuth": {

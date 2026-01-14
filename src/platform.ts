@@ -52,7 +52,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   deviceId?: string;
   deviceName?: string;
   twoFactorCode?: string;
-  tier?: 'prod' | 'sqa1' | 'cemp';
+  tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   pollInterval?: number;
   motionTimeout?: number;
   enableMotionPolling?: boolean;
