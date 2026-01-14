@@ -83,6 +83,91 @@
         "default": true,
         "required": false
       },
+      "enableStreaming": {
+        "title": "Enable Live Streaming",
+        "description": "Enable HomeKit live video streaming via FFmpeg.",
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "ffmpegPath": {
+        "title": "FFmpeg Path",
+        "description": "Path to the FFmpeg binary. Defaults to ffmpeg in PATH.",
+        "type": "string",
+        "default": "ffmpeg",
+        "required": false
+      },
+      "ffmpegDebug": {
+        "title": "FFmpeg Debug Logging",
+        "description": "Log FFmpeg output for troubleshooting.",
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "rtspTransport": {
+        "title": "RTSP Transport",
+        "description": "RTSP transport mode for Blink live view input.",
+        "type": "string",
+        "default": "tcp",
+        "required": false,
+        "oneOf": [
+          { "title": "TCP (recommended)", "enum": ["tcp"] },
+          { "title": "UDP", "enum": ["udp"] }
+        ]
+      },
+      "maxStreams": {
+        "title": "Max Concurrent Streams",
+        "description": "Maximum number of simultaneous HomeKit streams.",
+        "type": "integer",
+        "default": 1,
+        "minimum": 1,
+        "maximum": 4,
+        "required": false
+      },
+      "enableAudio": {
+        "title": "Enable Audio",
+        "description": "Enable audio streaming from camera to HomeKit.",
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "twoWayAudio": {
+        "title": "Enable Two-Way Audio",
+        "description": "Enable talkback audio from HomeKit to the camera (requires audio enabled).",
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "audioCodec": {
+        "title": "Audio Codec",
+        "description": "Preferred audio codec for HomeKit streaming.",
+        "type": "string",
+        "default": "opus",
+        "required": false,
+        "oneOf": [
+          { "title": "Opus (recommended)", "enum": ["opus"] },
+          { "title": "AAC-ELD", "enum": ["aac-eld"] },
+          { "title": "PCMA", "enum": ["pcma"] },
+          { "title": "PCMU", "enum": ["pcmu"] }
+        ]
+      },
+      "audioBitrate": {
+        "title": "Audio Bitrate (kbps)",
+        "description": "Target audio bitrate for HomeKit streaming.",
+        "type": "integer",
+        "default": 32,
+        "minimum": 8,
+        "maximum": 128,
+        "required": false
+      },
+      "videoBitrate": {
+        "title": "Max Video Bitrate (kbps)",
+        "description": "Cap the video bitrate (leave empty to use HomeKit defaults).",
+        "type": "integer",
+        "minimum": 300,
+        "maximum": 8000,
+        "required": false
+      },
       "excludeDevices": {
         "title": "Excluded Devices",
         "description": "List of device serial numbers, IDs, or names to exclude from HomeKit. Useful for hiding devices you don't want to control.",
@@ -158,6 +243,24 @@
         "pollInterval",
         "motionTimeout",
         "enableMotionPolling"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Streaming",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "enableStreaming",
+        "ffmpegPath",
+        "ffmpegDebug",
+        "rtspTransport",
+        "maxStreams",
+        "enableAudio",
+        "twoWayAudio",
+        "audioCodec",
+        "audioBitrate",
+        "videoBitrate"
       ]
     },
     {

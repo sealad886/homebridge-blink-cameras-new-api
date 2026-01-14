@@ -14,7 +14,7 @@ import { CameraController, CharacteristicValue, PlatformAccessory, Service } fro
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkCamera } from '../types';
 import { setTimeout, clearTimeout } from 'timers';
-import { BlinkCameraSource, createSnapshotControllerOptions } from './camera-source';
+import { BlinkCameraSource, createCameraControllerOptions } from './camera-source';
 
 export class CameraAccessory {
   private readonly switchService: Service;
@@ -67,10 +67,11 @@ export class CameraAccessory {
       'camera',
       () => this.device.thumbnail,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
+      this.platform.streamingConfig,
     );
 
     this.cameraController = new this.platform.api.hap.CameraController(
-      createSnapshotControllerOptions(this.platform.api.hap, cameraSource),
+      createCameraControllerOptions(this.platform.api.hap, cameraSource, this.platform.streamingConfig),
     );
     this.accessory.configureController(this.cameraController);
   }

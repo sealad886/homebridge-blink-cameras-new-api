@@ -68,7 +68,11 @@ Add a platform entry to your Homebridge `config.json`:
       "deviceId": "homebridge-blink-01",
       "pollInterval": 60,
       "motionTimeout": 30,
-      "enableMotionPolling": true
+      "enableMotionPolling": true,
+      "enableStreaming": true,
+      "ffmpegPath": "ffmpeg",
+      "enableAudio": true,
+      "twoWayAudio": true
     }
   ]
 }
@@ -89,6 +93,21 @@ Add a platform entry to your Homebridge `config.json`:
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
+| `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required) |
+| `ffmpegPath` | No | `ffmpeg` | Path to FFmpeg binary |
+| `ffmpegDebug` | No | `false` | Log FFmpeg debug output |
+| `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
+| `maxStreams` | No | `1` | Max concurrent HomeKit streams |
+| `enableAudio` | No | `true` | Enable audio streaming from camera |
+| `twoWayAudio` | No | `true` | Enable talkback audio to camera |
+| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
+| `audioBitrate` | No | `32` | Audio bitrate (kbps) |
+| `videoBitrate` | No | - | Cap video bitrate (kbps) |
+
+## Live Streaming (FFmpeg)
+
+Live streaming uses FFmpeg to transcode Blink's RTSPS stream to HomeKit SRTP. Make sure FFmpeg is installed
+and accessible in your PATH, or set `ffmpegPath` to the full binary location.
 
 ## Supported Devices
 

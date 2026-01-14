@@ -195,10 +195,20 @@ export class BlinkApi {
    * Source: API Dossier Section 4.2 - LiveVideoResponse model
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
    */
-  async startCameraLiveview(networkId: number, cameraId: number): Promise<BlinkLiveVideoResponse> {
+  async startCameraLiveview(
+    networkId: number,
+    cameraId: number,
+    intent = 'liveview',
+    motionEventStartTime?: string | null,
+  ): Promise<BlinkLiveVideoResponse> {
     const accountId = await this.ensureAccountId();
+    const body = {
+      intent,
+      motion_event_start_time: motionEventStartTime ?? null,
+    };
     return this.http.post<BlinkLiveVideoResponse>(
       `v6/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/liveview`,
+      body,
     );
   }
 
@@ -207,10 +217,20 @@ export class BlinkApi {
    * Source: API Dossier Section 3.4 - POST v2/accounts/{account_id}/networks/{networkId}/owls/{owlId}/liveview
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
-  async startOwlLiveview(networkId: number, owlId: number): Promise<BlinkLiveVideoResponse> {
+  async startOwlLiveview(
+    networkId: number,
+    owlId: number,
+    intent = 'liveview',
+    motionEventStartTime?: string | null,
+  ): Promise<BlinkLiveVideoResponse> {
     const accountId = await this.ensureAccountId();
+    const body = {
+      intent,
+      motion_event_start_time: motionEventStartTime ?? null,
+    };
     return this.http.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/owls/${owlId}/liveview`,
+      body,
     );
   }
 
@@ -219,10 +239,31 @@ export class BlinkApi {
    * Source: API Dossier Section 3.5 - POST v2/accounts/{account_id}/networks/{networkId}/doorbells/{doorbellId}/liveview
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
-  async startDoorbellLiveview(networkId: number, doorbellId: number): Promise<BlinkLiveVideoResponse> {
+  async startDoorbellLiveview(
+    networkId: number,
+    doorbellId: number,
+    intent = 'liveview',
+    motionEventStartTime?: string | null,
+  ): Promise<BlinkLiveVideoResponse> {
     const accountId = await this.ensureAccountId();
+    const body = {
+      intent,
+      motion_event_start_time: motionEventStartTime ?? null,
+    };
     return this.http.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/liveview`,
+      body,
+    );
+  }
+
+  /**
+   * Get command status once
+   * Source: API Dossier Section 3.10 - GET /accounts/{account_id}/networks/{network}/commands/{command}
+   */
+  async getCommandStatus(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
+    const accountId = await this.ensureAccountId();
+    return this.http.get<BlinkCommandStatus>(
+      `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
     );
   }
 
@@ -232,12 +273,8 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/command/CommandApi.smali
    */
   async pollCommand(networkId: number, commandId: number, maxAttempts = 10): Promise<BlinkCommandStatus> {
-    const accountId = await this.ensureAccountId();
-
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const status = await this.http.get<BlinkCommandStatus>(
-        `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
-      );
+      const status = await this.getCommandStatus(networkId, commandId);
 
       if (status.complete || status.status === 'complete') {
         return status;
@@ -253,6 +290,28 @@ export class BlinkApi {
     }
 
     throw new Error(`Blink command ${commandId} timed out after ${maxAttempts} attempts`);
+  }
+
+  /**
+   * Update/extend an ongoing command (e.g., live view)
+   * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/update
+   */
+  async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
+    const accountId = await this.ensureAccountId();
+    return this.http.post<BlinkCommandStatus>(
+      `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`,
+    );
+  }
+
+  /**
+   * Mark a command as done (e.g., end live view)
+   * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/done
+   */
+  async completeCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
+    const accountId = await this.ensureAccountId();
+    return this.http.post<BlinkCommandStatus>(
+      `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
+    );
   }
 
   private async ensureAccountId(): Promise<number> {

@@ -31,6 +31,7 @@ import { NetworkAccessory } from './accessories/network';
 import { CameraAccessory } from './accessories/camera';
 import { DoorbellAccessory } from './accessories/doorbell';
 import { OwlAccessory } from './accessories/owl';
+import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
 
 export const PLATFORM_NAME = 'BlinkCameras';
 export const PLUGIN_NAME = 'homebridge-blinkcameras';
@@ -58,6 +59,16 @@ interface BlinkPlatformConfig extends PlatformConfig {
   excludeDevices?: string[];
   deviceNames?: Record<string, string>;
   deviceSettings?: Record<string, DeviceSettings>;
+  enableStreaming?: boolean;
+  ffmpegPath?: string;
+  ffmpegDebug?: boolean;
+  rtspTransport?: 'tcp' | 'udp';
+  maxStreams?: number;
+  enableAudio?: boolean;
+  twoWayAudio?: boolean;
+  audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
+  audioBitrate?: number;
+  videoBitrate?: number;
 }
 
 export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
@@ -65,6 +76,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
   public readonly Characteristic: typeof Characteristic;
   public readonly apiClient: BlinkApi;
+  public readonly streamingConfig: BlinkCameraStreamingConfig;
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastMediaCheck = new Date();
@@ -96,6 +108,23 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     );
     this.motionTimeout = (this.config.motionTimeout ?? DEFAULT_MOTION_TIMEOUT) * 1000;
     this.enableMotionPolling = this.config.enableMotionPolling ?? true;
+
+    this.streamingConfig = resolveStreamingConfig({
+      enabled: this.config.enableStreaming ?? true,
+      ffmpegPath: this.config.ffmpegPath,
+      ffmpegDebug: this.config.ffmpegDebug,
+      rtspTransport: this.config.rtspTransport,
+      maxStreams: this.config.maxStreams,
+      audio: {
+        enabled: this.config.enableAudio,
+        twoWay: this.config.twoWayAudio,
+        codec: this.config.audioCodec,
+        bitrate: this.config.audioBitrate,
+      },
+      video: {
+        maxBitrate: this.config.videoBitrate,
+      },
+    });
 
     this.apiClient = new BlinkApi({
       email: this.config.username,

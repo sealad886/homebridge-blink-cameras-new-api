@@ -6,8 +6,9 @@ import { OwlAccessory } from '../src/accessories/owl';
 import { BlinkCamerasPlatform } from '../src/platform';
 import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types';
 import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
+import { resolveStreamingConfig } from '../src/accessories/camera-source';
 
-type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api'>;
+type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig'>;
 
 describe('Accessory handlers', () => {
   const buildPlatform = () => {
@@ -34,6 +35,7 @@ describe('Accessory handlers', () => {
       apiClient: apiClient as unknown as BlinkCamerasPlatform['apiClient'],
       log: log as unknown as BlinkCamerasPlatform['log'],
       api: { hap } as unknown as BlinkCamerasPlatform['api'],
+      streamingConfig: resolveStreamingConfig({ enabled: false }),
     };
 
     return { hap, apiClient, platform, log };

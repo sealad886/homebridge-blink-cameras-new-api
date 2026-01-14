@@ -41,6 +41,8 @@ export const createHap = () => ({
   SRTPCryptoSuites: { AES_CM_128_HMAC_SHA1_80: 0 },
   H264Profile: { BASELINE: 0, MAIN: 1, HIGH: 2 },
   H264Level: { LEVEL3_1: 0, LEVEL3_2: 1, LEVEL4_0: 2 },
+  AudioStreamingCodecType: { OPUS: 0, AAC_ELD: 1, PCMA: 2, PCMU: 3 },
+  AudioStreamingSamplerate: { KHZ_8: 8, KHZ_16: 16, KHZ_24: 24 },
   CameraController: jest.fn().mockImplementation(() => ({})),
 });
 

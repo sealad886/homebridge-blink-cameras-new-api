@@ -15,7 +15,7 @@ import { CameraController, CharacteristicValue, PlatformAccessory, Service } fro
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkDoorbell } from '../types';
 import { setTimeout, clearTimeout } from 'timers';
-import { BlinkCameraSource, createSnapshotControllerOptions } from './camera-source';
+import { BlinkCameraSource, createCameraControllerOptions } from './camera-source';
 
 export class DoorbellAccessory {
   private readonly doorbellService: Service;
@@ -78,10 +78,11 @@ export class DoorbellAccessory {
       'doorbell',
       () => this.device.thumbnail,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
+      this.platform.streamingConfig,
     );
 
     this.cameraController = new this.platform.api.hap.CameraController(
-      createSnapshotControllerOptions(this.platform.api.hap, cameraSource),
+      createCameraControllerOptions(this.platform.api.hap, cameraSource, this.platform.streamingConfig),
     );
     this.accessory.configureController(this.cameraController);
   }

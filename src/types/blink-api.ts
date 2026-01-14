@@ -175,16 +175,39 @@ export interface BlinkCommandStatus {
  * Source: API Dossier Section 4.2 (LiveVideoResponse Model) / LiveVideoResponse.smali
  */
 export interface BlinkLiveVideoResponse {
-  id: number;
-  parent_id?: number;
+  /** Live view command/session id */
+  command_id?: number;
+  /** Parent command id (multi-client live view) */
+  parent_command_id?: number | null;
+  /** RTSP(S) server URL */
   server: string;
-  duration: number;
-  continue_interval: number;
-  continue_warning: number;
+  /** Video session id */
+  video_id?: number;
+  /** Media id for live view recordings */
+  media_id?: number;
+  /** Polling interval in seconds */
+  polling_interval?: number;
+  /** Session duration in seconds */
+  duration?: number;
+  /** Continue interval in seconds */
+  continue_interval?: number;
+  /** Continue warning in seconds */
+  continue_warning?: number;
+  /** Extended duration in seconds (subscription feature) */
+  extended_duration?: number;
+  /** Multi-client live view flag */
+  is_mclv?: boolean;
+  /** Live view type (e.g., "elv") */
+  type?: string;
+  /** Whether this client started the session */
+  first_joiner?: boolean;
+  /** JWT token for extended live view features */
+  liveview_token?: string | null;
+  /** Legacy fields observed in older responses */
+  id?: number;
+  parent_id?: number;
   poor_connection?: boolean;
   is_multi_client_live_view?: boolean;
-  type?: string;
-  command_id?: number;
 }
 
 /**
