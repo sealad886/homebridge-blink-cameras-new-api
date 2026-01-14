@@ -20,11 +20,12 @@ import {
   StreamRequestCallback,
   StreamingRequest,
 } from 'homebridge';
-import { BlinkApi } from '../blink-api';
+import { BlinkApi } from '../blink-api/client';
 import { Buffer } from 'node:buffer';
 import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import dgram from 'node:dgram';
+import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
 export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
@@ -46,6 +47,14 @@ export interface BlinkCameraStreamingConfig {
   };
 }
 
+export type BlinkCameraStreamingConfigInput = Omit<
+  Partial<BlinkCameraStreamingConfig>,
+  'audio' | 'video'
+> & {
+  audio?: Partial<BlinkCameraStreamingConfig['audio']>;
+  video?: Partial<BlinkCameraStreamingConfig['video']>;
+};
+
 const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
   ffmpegPath: 'ffmpeg',
@@ -62,7 +71,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
 };
 
 export const resolveStreamingConfig = (
-  config?: Partial<BlinkCameraStreamingConfig>,
+  config?: BlinkCameraStreamingConfigInput,
 ): BlinkCameraStreamingConfig => {
   const audio: Partial<BlinkCameraStreamingConfig['audio']> = config?.audio ?? {};
   const video: Partial<BlinkCameraStreamingConfig['video']> = config?.video ?? {};
@@ -190,7 +199,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly deviceType: DeviceType,
     private readonly getThumbnailUrl: () => string | undefined,
     private readonly log: (message: string) => void,
-    streamingConfig?: Partial<BlinkCameraStreamingConfig>,
+    streamingConfig?: BlinkCameraStreamingConfigInput,
   ) {
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
   }
@@ -404,7 +413,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active);
       this.log(`Starting stream ${sessionId} via FFmpeg`);
 
-      const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, { env: process.env });
+      const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
       active.ffmpeg = ffmpeg;
 
       let started = false;
@@ -588,7 +597,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     ];
 
     this.log(`Starting talkback audio for session ${sessionId}`);
-    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, { env: process.env });
+    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
     active.talkback = talkback;
 
     talkback.stderr.on('data', (data) => {
@@ -798,7 +807,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 export function createCameraControllerOptions(
   hap: HAP,
   delegate: CameraStreamingDelegate,
-  streamingConfig?: Partial<BlinkCameraStreamingConfig>,
+  streamingConfig?: BlinkCameraStreamingConfigInput,
 ): CameraControllerOptions {
   const resolved = resolveStreamingConfig(streamingConfig);
   const streamingEnabled = resolved.enabled;
