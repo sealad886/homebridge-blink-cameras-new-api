@@ -33,7 +33,7 @@ Response: { server: "immedia-semi.com", rtsps_uri: "rtsps://..." }
 ```
 
 **Evidence References:**
-- [api_dossier.md](../../base-apk/docs/api_dossier.md) Section 4.2
+- [api_dossier.md](/Users/andrew/zzApps/blink-home-monitor/base-apk/docs/api_dossier.md) Section 4.2
 - BlinkLiveVideoResponse interface in types/blink-api.ts
 
 ### 3. HomeKit CameraStreamingDelegate

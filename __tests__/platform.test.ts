@@ -20,6 +20,8 @@ type MockedBlinkApi = jest.Mocked<{
   getUnwatchedMedia: jest.Mock;
 }>;
 
+type MockAPI = API & { emit: (event: string) => void };
+
 const buildBlinkApi = (): MockedBlinkApi => ({
   login: jest.fn().mockResolvedValue(undefined),
   getHomescreen: jest.fn(),
@@ -36,6 +38,7 @@ const buildBlinkApi = (): MockedBlinkApi => ({
 
 describe('BlinkCamerasPlatform', () => {
   type TestConfig = PlatformConfig & { username: string; password: string; twoFactorCode?: string };
+  let hapApi: MockAPI | null = null;
 
   const config: TestConfig = {
     platform: 'BlinkCameras',
@@ -48,14 +51,17 @@ describe('BlinkCamerasPlatform', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     jest.useFakeTimers();
+    hapApi = null;
   });
 
   afterEach(() => {
+    hapApi?.emit('shutdown');
+    hapApi = null;
     jest.useRealTimers();
   });
 
   it('registers new accessories from homescreen data', async () => {
-    const hapApi = createApi() as unknown as API;
+    hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;
     const blinkApi = buildBlinkApi();
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
@@ -80,7 +86,7 @@ describe('BlinkCamerasPlatform', () => {
   });
 
   it('restores cached accessories without re-registering', () => {
-    const hapApi = createApi() as unknown as API;
+    hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;
     const blinkApi = buildBlinkApi();
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);

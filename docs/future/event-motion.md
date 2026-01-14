@@ -83,9 +83,9 @@ If push notifications aren't feasible, consider:
 
 ## Related Files
 
-- [src/platform.ts](../../src/platform.ts) - Current polling implementation
-- [src/blink-api/client.ts](../../src/blink-api/client.ts) - Media API calls
-- [docs/adr/002-motion-detection.md](../adr/002-motion-detection.md) - Original decision
+- [src/platform.ts](/Users/andrew/zzApps/homebridge-blinkcameras/src/platform.ts) - Current polling implementation
+- [src/blink-api/client.ts](/Users/andrew/zzApps/homebridge-blinkcameras/src/blink-api/client.ts) - Media API calls
+- [docs/adr/002-motion-detection.md](/Users/andrew/zzApps/homebridge-blinkcameras/docs/adr/002-motion-detection.md) - Original decision
 
 ## Estimated Effort
 
