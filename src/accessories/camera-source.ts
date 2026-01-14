@@ -22,7 +22,7 @@ import {
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
 import { Buffer } from 'node:buffer';
-import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import dgram from 'node:dgram';
 import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
@@ -96,6 +96,7 @@ export const resolveStreamingConfig = (
 
 interface PendingStreamSession {
   address: string;
+  addressVersion: 'ipv4' | 'ipv6';
   sessionId: string;
   videoPort: number;
   localVideoPort: number;
@@ -104,7 +105,6 @@ interface PendingStreamSession {
   videoSSRC: number;
   audioPort?: number;
   localAudioPort?: number;
-  localAudioRtcpPort?: number;
   audioCryptoSuite?: number;
   audioSRTP?: Buffer;
   audioSSRC?: number;
@@ -112,7 +112,7 @@ interface PendingStreamSession {
 
 interface ActiveStreamSession extends PendingStreamSession {
   ffmpeg?: ChildProcessWithoutNullStreams;
-  talkback?: ChildProcessWithoutNullStreams;
+  talkback?: ChildProcess;
   commandId?: number;
   liveviewUrl?: string;
   keepAliveTimer?: ReturnType<typeof setInterval> | null;
@@ -166,15 +166,16 @@ const formatAddress = (address: string): string => {
 const buildRtpUrl = (
   address: string,
   port: number,
-  localPort?: number,
+  localRtpPort?: number,
   mtu?: number,
   useSrtp = true,
 ): string => {
   const scheme = useSrtp ? 'srtp' : 'rtp';
   const params = new URLSearchParams();
   params.set('rtcpport', `${port}`);
-  if (localPort) {
-    params.set('localrtcpport', `${localPort}`);
+  if (localRtpPort) {
+    params.set('localrtpport', `${localRtpPort}`);
+    params.set('localrtcpport', `${localRtpPort}`);
   }
   if (mtu) {
     params.set('pkt_size', `${mtu}`);
@@ -299,6 +300,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       const session: PendingStreamSession = {
         address: request.targetAddress,
+        addressVersion: request.addressVersion,
         sessionId,
         videoPort: request.video.port,
         localVideoPort,
@@ -310,10 +312,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (this.streamingConfig.audio.enabled) {
         const audioSSRC = randomBytes(4).readUInt32BE(0);
         const localAudioPort = await allocatePort();
-        const localAudioRtcpPort = await allocatePort();
         session.audioPort = request.audio.port;
         session.localAudioPort = localAudioPort;
-        session.localAudioRtcpPort = localAudioRtcpPort;
         session.audioCryptoSuite = request.audio.srtpCryptoSuite;
         session.audioSRTP = Buffer.concat([request.audio.srtp_key, request.audio.srtp_salt]);
         session.audioSSRC = audioSSRC;
@@ -476,7 +476,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     if (pending) {
       releasePort(pending.localVideoPort);
       releasePort(pending.localAudioPort);
-      releasePort(pending.localAudioRtcpPort);
       this.pendingSessions.delete(sessionId);
     }
 
@@ -506,7 +505,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     releasePort(active.localVideoPort);
     releasePort(active.localAudioPort);
-    releasePort(active.localAudioRtcpPort);
 
     if (active.commandId) {
       try {
@@ -566,6 +564,74 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }, intervalMs);
   }
 
+  private buildTalkbackSdp(
+    audio: { codec: number | string; channel: number; sample_rate: number; pt: number },
+    session: ActiveStreamSession,
+  ): string | undefined {
+    const codec = typeof audio.codec === 'string' ? audio.codec.toUpperCase() : audio.codec;
+    const channels = audio.channel || 1;
+    const sampleRateKhz = this.getAudioSampleRate(audio.sample_rate);
+    const sampleRateHz = sampleRateKhz * 1000;
+    const suiteName = this.getSrtpSuiteName(
+      session.audioCryptoSuite ?? this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+    );
+
+    if (!suiteName || !session.audioSRTP || !session.localAudioPort) {
+      return undefined;
+    }
+
+    let rtpmap: string | undefined;
+    let fmtp: string | undefined;
+
+    switch (codec) {
+      case 'AAC-ELD':
+      case this.hap.AudioStreamingCodecType.AAC_ELD: {
+        if (sampleRateKhz !== 16) {
+          this.log(`Talkback AAC-ELD expected 16 kHz; got ${sampleRateKhz} kHz (using 16 kHz SDP).`);
+        }
+        rtpmap = `MPEG4-GENERIC/16000/${channels}`;
+        fmtp =
+          'profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=F8F0212C00BC00';
+        break;
+      }
+      case 'OPUS':
+      case this.hap.AudioStreamingCodecType.OPUS: {
+        rtpmap = `OPUS/48000/${channels}`;
+        fmtp = `minptime=10;useinbandfec=1;sprop-maxcapturerate=${sampleRateHz}`;
+        break;
+      }
+      case 'PCMA':
+      case this.hap.AudioStreamingCodecType.PCMA:
+        rtpmap = `PCMA/8000/${channels}`;
+        break;
+      case 'PCMU':
+      case this.hap.AudioStreamingCodecType.PCMU:
+        rtpmap = `PCMU/8000/${channels}`;
+        break;
+      default:
+        this.log(`Talkback codec not supported for SDP: ${audio.codec}`);
+        return undefined;
+    }
+
+    const ipVersion = session.addressVersion === 'ipv6' ? 'IP6' : 'IP4';
+    const ipAddress = session.addressVersion === 'ipv6' ? '::' : '0.0.0.0';
+
+    const lines = [
+      'v=0',
+      `o=- 0 0 IN ${ipVersion} ${ipAddress}`,
+      's=HomeKit Talkback',
+      `c=IN ${ipVersion} ${ipAddress}`,
+      't=0 0',
+      `m=audio ${session.localAudioPort} RTP/SAVP ${audio.pt}`,
+      `a=rtpmap:${audio.pt} ${rtpmap}`,
+      fmtp ? `a=fmtp:${audio.pt} ${fmtp}` : '',
+      'a=rtcp-mux',
+      `a=crypto:1 ${suiteName} inline:${toSrtpParams(session.audioSRTP)}`,
+    ].filter(Boolean);
+
+    return `${lines.join('\r\n')}\r\n`;
+  }
+
   private startTalkback(
     sessionId: string,
     request: Extract<StreamingRequest, { type: 'start' }>,
@@ -575,30 +641,32 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
-    const audioParams = toSrtpParams(active.audioSRTP);
-    const suiteName = this.getSrtpSuiteName(active.audioCryptoSuite ?? this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80);
-    if (!suiteName) {
+    const sdp = this.buildTalkbackSdp(request.audio, active);
+    if (!sdp) {
+      this.log(`Talkback SDP generation failed for session ${sessionId}`);
       return;
     }
 
-    const inputUrl = buildRtpUrl('0.0.0.0', active.localAudioPort, undefined, undefined, true);
     const audioArgs = this.buildAudioEncoderArgs(request.audio);
     const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'error',
-      '-protocol_whitelist', 'pipe,udp,rtp,crypto,srtp',
-      '-srtp_in_suite', suiteName,
-      '-srtp_in_params', audioParams,
-      '-i', inputUrl,
+      '-protocol_whitelist', 'pipe,udp,rtp,srtp,crypto,file',
+      '-f', 'sdp',
+      '-i', 'pipe:0',
       '-vn',
       ...audioArgs,
+      '-rtsp_transport', this.streamingConfig.rtspTransport,
       '-f', 'rtsp',
       active.liveviewUrl,
     ];
 
     this.log(`Starting talkback audio for session ${sessionId}`);
-    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
+    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
     active.talkback = talkback;
+    talkback.stdin?.end(sdp);
 
     talkback.stderr.on('data', (data) => {
       if (this.streamingConfig.ffmpegDebug) {
@@ -656,7 +724,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       args.push('-srtp_out_suite', suiteName, '-srtp_out_params', videoParams);
     }
 
-    args.push(buildRtpUrl(session.address, session.videoPort, session.localVideoPort, video.mtu, useSrtp));
+    args.push(buildRtpUrl(session.address, session.videoPort, undefined, video.mtu, useSrtp));
 
     if (this.streamingConfig.audio.enabled && session.audioPort && session.audioSSRC && request.audio) {
       const audio = request.audio;
@@ -677,15 +745,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         args.push('-srtp_out_suite', audioSuiteName, '-srtp_out_params', audioParams);
       }
 
-      args.push(
-        buildRtpUrl(
-          session.address,
-          session.audioPort,
-          session.localAudioRtcpPort,
-          video.mtu,
-          audioUseSrtp,
-        ),
-      );
+      args.push(buildRtpUrl(session.address, session.audioPort, undefined, video.mtu, audioUseSrtp));
     }
 
     return args;
