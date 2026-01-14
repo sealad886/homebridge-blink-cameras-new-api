@@ -18,8 +18,8 @@ import { BlinkConfig, HttpMethod } from '../types';
  * - LOCALE: Device locale
  */
 const DEFAULT_HEADERS = {
-  'APP-BUILD': 'ANDROID_29362618',
-  'User-Agent': 'Blink/49.1 (NodeJS; Homebridge)',
+  'APP-BUILD': 'ANDROID_29426569',
+  'User-Agent': 'Blink/51.0 (NodeJS; Homebridge)',
   LOCALE: 'en_US',
 };
 

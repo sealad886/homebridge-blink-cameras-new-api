@@ -46,7 +46,7 @@ describe('BlinkHttp', () => {
     const [url, options] = (fetch as jest.Mock).mock.calls[0];
     expect(url).toBe('https://rest-prod.immedia-semi.com/api/v1/example');
     const headers = options.headers as Record<string, string>;
-    expect(headers['APP-BUILD']).toBe('ANDROID_29362618');
+    expect(headers['APP-BUILD']).toBe('ANDROID_29426569');
     expect(headers.Authorization).toBe('Bearer token');
     expect(auth.ensureValidToken).toHaveBeenCalled();
   });

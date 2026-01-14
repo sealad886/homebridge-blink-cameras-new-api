@@ -1,7 +1,7 @@
 /**
  * Blink API Type Definitions
  *
- * All types derived from reverse engineering Blink Home Monitor Android APK v50.1
+ * All types derived from reverse engineering Blink Home Monitor Android APK v51.0
  * Source: API Dossier - /base-apk/docs/api_dossier.md
  */
 
