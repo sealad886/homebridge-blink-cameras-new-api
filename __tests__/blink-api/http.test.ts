@@ -22,9 +22,11 @@ describe('BlinkHttp', () => {
 
   const response = (status: number, body: unknown = {}) => ({
     status,
+    statusText: status >= 400 ? 'Bad Request' : 'OK',
     ok: status >= 200 && status < 300,
     json: async () => body,
     text: async () => JSON.stringify(body),
+    headers: new Headers({ 'content-type': 'application/json' }),
   });
 
   beforeEach(() => {
@@ -94,7 +96,7 @@ describe('BlinkHttp', () => {
     const http = new BlinkHttp(auth, mockConfig);
     (fetch as jest.Mock).mockResolvedValue(response(400, { message: 'bad' }));
 
-    await expect(http.get('v1/fail')).rejects.toThrow('Blink HTTP 400');
+    await expect(http.get('v1/fail')).rejects.toThrow('Blink API GET v1/fail failed: 400 Bad Request');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

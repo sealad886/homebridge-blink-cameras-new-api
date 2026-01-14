@@ -58,12 +58,14 @@ describe('BlinkAuth', () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 401,
+      statusText: 'Unauthorized',
       json: async () => ({ error: 'bad credentials' }),
+      text: async () => JSON.stringify({ error: 'bad credentials' }),
       headers: new Headers(),
     });
 
     const auth = new BlinkAuth(baseConfig);
-    await expect(auth.login()).rejects.toThrow('Blink OAuth login failed with status 401');
+    await expect(auth.login()).rejects.toThrow('Blink OAuth login failed: 401 Unauthorized');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

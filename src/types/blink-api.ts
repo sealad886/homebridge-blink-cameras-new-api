@@ -239,6 +239,17 @@ export interface BlinkMediaResponse {
 }
 
 /**
+ * Logger interface for diagnostic output
+ * Compatible with Homebridge Logger
+ */
+export interface BlinkLogger {
+  debug(message: string, ...parameters: unknown[]): void;
+  info(message: string, ...parameters: unknown[]): void;
+  warn(message: string, ...parameters: unknown[]): void;
+  error(message: string, ...parameters: unknown[]): void;
+}
+
+/**
  * Plugin configuration
  * Source: API Dossier Section 2.1 (OAuth parameters) and Section 1.1 (Base URLs)
  */
@@ -249,6 +260,10 @@ export interface BlinkConfig {
   clientId?: 'android' | 'amazon';
   twoFactorCode?: string;
   tier?: 'prod' | 'sqa1' | 'cemp';
+  /** Enable verbose auth diagnostics */
+  debugAuth?: boolean;
+  /** Logger for diagnostic output */
+  logger?: BlinkLogger;
 }
 
 /**

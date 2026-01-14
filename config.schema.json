@@ -58,6 +58,13 @@
           { "title": "CEMP", "enum": ["cemp"] }
         ]
       },
+      "debugAuth": {
+        "title": "Debug Authentication",
+        "description": "Enable verbose diagnostic logging for Blink API authentication. Useful for troubleshooting login failures, token issues, and API errors. WARNING: May log sensitive request details.",
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
       "pollInterval": {
         "title": "Poll Interval (seconds)",
         "description": "How often to poll Blink for state changes. Minimum 15 seconds.",
@@ -284,7 +291,8 @@
       "expandable": true,
       "expanded": false,
       "items": [
-        "tier"
+        "tier",
+        "debugAuth"
       ]
     }
   ]

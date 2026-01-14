@@ -69,6 +69,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
   audioBitrate?: number;
   videoBitrate?: number;
+  debugAuth?: boolean;
 }
 
 export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
@@ -126,12 +127,19 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       },
     });
 
+    // Log debug mode status
+    if (this.config.debugAuth) {
+      this.log.warn('Auth debugging enabled - verbose API logging active');
+    }
+
     this.apiClient = new BlinkApi({
       email: this.config.username,
       password: this.config.password,
       hardwareId: this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink',
       twoFactorCode: this.config.twoFactorCode,
       tier: this.config.tier,
+      debugAuth: this.config.debugAuth,
+      logger: this.log,
     });
 
     this.api.on('didFinishLaunching', () => {
