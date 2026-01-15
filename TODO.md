@@ -1,6 +1,6 @@
 # TODO
 
-Future enhancements and technical debt for homebridge-blinkcameras.
+Future enhancements and technical debt for homebridge-blink-cameras-new-api.
 
 ## Deferred Features
 

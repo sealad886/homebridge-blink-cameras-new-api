@@ -1,9 +1,9 @@
-# homebridge-blinkcameras
+# homebridge-blink-cameras-new-api
 
-[![npm](https://img.shields.io/npm/v/homebridge-blinkcameras.svg)](https://www.npmjs.com/package/homebridge-blinkcameras)
-[![License](https://img.shields.io/github/license/bartdorsey/homebridge-blinkcameras.svg)](LICENSE)
-[![Test](https://github.com/bartdorsey/homebridge-blinkcameras/actions/workflows/test.yml/badge.svg)](https://github.com/bartdorsey/homebridge-blinkcameras/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/bartdorsey/homebridge-blinkcameras/branch/main/graph/badge.svg)](https://codecov.io/gh/bartdorsey/homebridge-blinkcameras)
+[![npm](https://img.shields.io/npm/v/homebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/homebridge-blink-cameras-new-api)
+[![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
+[![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
 
 Modern Blink platform plugin for Homebridge using the official OAuth endpoints. Exposes Blink devices as proper HomeKit accessories:
 
@@ -36,13 +36,13 @@ All API interactions are based on reverse-engineered endpoints from the official
 
 1. Open the Homebridge UI
 2. Navigate to Plugins
-3. Search for "homebridge-blinkcameras"
+3. Search for "homebridge-blink-cameras-new-api"
 4. Click Install
 
 ### Via npm
 
 ```bash
-npm install -g homebridge-blinkcameras
+npm install -g homebridge-blink-cameras-new-api
 ```
 
 Restart Homebridge after installing.
@@ -51,7 +51,7 @@ Restart Homebridge after installing.
 
 ### Via Homebridge UI
 
-The plugin provides a full configuration UI. Navigate to Plugins → Settings for homebridge-blinkcameras.
+The plugin provides a full configuration UI. Navigate to Plugins → Settings for homebridge-blink-cameras-new-api.
 
 ### Manual Configuration
 
@@ -194,8 +194,8 @@ For full endpoint documentation, see the API dossier in the source repository.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/homebridge-blinkcameras.git
-cd homebridge-blinkcameras
+git clone https://github.com/sealad886/homebridge-blink-cameras-new-api.git
+cd homebridge-blink-cameras-new-api
 
 # Install dependencies
 npm install

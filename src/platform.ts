@@ -34,7 +34,7 @@ import { OwlAccessory } from './accessories/owl';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
 
 export const PLATFORM_NAME = 'BlinkCameras';
-export const PLUGIN_NAME = 'homebridge-blinkcameras';
+export const PLUGIN_NAME = 'homebridge-blink-cameras-new-api';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;

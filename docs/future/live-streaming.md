@@ -2,11 +2,12 @@
 
 ## Overview
 
-This document outlines the technical requirements for adding live video streaming to homebridge-blinkcameras.
+This document outlines the technical requirements for adding live video streaming to homebridge-blink-cameras-new-api.
 
 ## Current State
 
 The plugin currently supports:
+
 - Static snapshots via the Blink thumbnail API
 - Motion detection via polling
 
@@ -19,6 +20,7 @@ Live streaming is **not** implemented.
 HomeKit uses SRTP (Secure Real-time Transport Protocol) for video streaming. Blink cameras provide RTSPS (Real Time Streaming Protocol over TLS) streams.
 
 **Required Components:**
+
 - FFmpeg for transcoding
 - Process lifecycle management (spawn/kill)
 - SDP negotiation with HomeKit
@@ -26,13 +28,15 @@ HomeKit uses SRTP (Secure Real-time Transport Protocol) for video streaming. Bli
 ### 2. Blink API Integration
 
 **Live Video Request:**
-```
+
+```text
 POST /api/v3/media/live_view
 Body: { account_id, network_id, camera_id }
 Response: { server: "immedia-semi.com", rtsps_uri: "rtsps://..." }
 ```
 
 **Evidence References:**
+
 - [api_dossier.md](/Users/andrew/zzApps/blink-home-monitor/base-apk/docs/api_dossier.md) Section 4.2
 - BlinkLiveVideoResponse interface in types/blink-api.ts
 
@@ -52,7 +56,7 @@ Currently only `handleSnapshotRequest` is implemented.
 
 ### 4. Stream Lifecycle
 
-```
+```text
                     HomeKit
                        │
                        ▼
@@ -136,6 +140,7 @@ The Scrypted platform has mature RTSP handling that could be integrated.
 ## Estimated Effort
 
 4-6 weeks for a senior developer including:
+
 - 1 week: FFmpeg integration and testing
 - 2 weeks: HomeKit CameraStreamingDelegate implementation
 - 1 week: Multi-stream and resource management

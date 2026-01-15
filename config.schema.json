@@ -3,7 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "headerDisplay": "Blink cameras integration for HomeKit via Homebridge. Provides SecuritySystem arm/disarm, motion sensors, and doorbell notifications.",
-  "footerDisplay": "For help, see the [README](https://github.com/your-username/homebridge-blinkcameras#readme).",
+  "footerDisplay": "For help, see the [README](https://github.com/sealad886/homebridge-blink-cameras-new-api#readme).",
   "schema": {
     "type": "object",
     "properties": {

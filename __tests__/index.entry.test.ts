@@ -9,7 +9,7 @@ describe('plugin entry', () => {
     plugin(api);
 
     expect(registerPlatform).toHaveBeenCalledWith(
-      'homebridge-blinkcameras',
+      'homebridge-blink-cameras-new-api',
       'BlinkCameras',
       expect.any(Function),
     );

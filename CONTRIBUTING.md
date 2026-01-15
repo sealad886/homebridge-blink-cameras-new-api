@@ -1,4 +1,4 @@
-# Contributing to homebridge-blinkcameras
+# Contributing to homebridge-blink-cameras-new-api
 
 Thank you for your interest in contributing! This guide will help you get started.
 
@@ -13,8 +13,8 @@ Thank you for your interest in contributing! This guide will help you get starte
 ### Clone and Install
 
 ```bash
-git clone https://github.com/homebridge-plugins/homebridge-blinkcameras.git
-cd homebridge-blinkcameras
+git clone https://github.com/sealad886/homebridge-blink-cameras-new-api.git
+cd homebridge-blink-cameras-new-api
 npm install
 ```
 
