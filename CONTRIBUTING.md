@@ -56,6 +56,47 @@ npm run test -- --coverage
 
 Coverage reports are generated in `coverage/`.
 
+## Testing in a Real Homebridge Deployment
+
+Homebridge developer guidance recommends linking your plugin into a local
+Homebridge install and running Homebridge in debug mode.
+
+### Link the Plugin into Homebridge
+
+Build the plugin, then link it so your global Homebridge install can discover
+the development version:
+
+```bash
+npm run build
+npm link
+```
+
+### Configure Homebridge
+
+Add the plugin to your Homebridge config (or use Homebridge UI X). This repo
+publishes `config.schema.json`, so the Settings UI will appear in Homebridge UI X
+when the plugin is detected.
+
+### Run Homebridge in Debug Mode
+
+Start Homebridge with debug logging so you can see plugin logs:
+
+```bash
+homebridge -D
+```
+
+If Homebridge is already running, stop it before starting a debug instance to
+avoid conflicts.
+
+### Iterate on Changes
+
+Run TypeScript in watch mode in one terminal, and restart Homebridge when you
+need to load new changes:
+
+```bash
+npm run watch
+```
+
 ## Code Style
 
 ### ESLint
