@@ -49,6 +49,7 @@
         "test": "jest",
         "lint": "eslint \"src/**/*.ts\"",
         "clean": "rm -rf dist",
+        "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
         "update": "ncu -u && npm update && npm install"
     }

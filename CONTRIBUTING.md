@@ -13,7 +13,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 ### Clone and Install
 
 ```bash
-git clone https://github.com/bartdorsey/homebridge-blinkcameras.git
+git clone https://github.com/homebridge-plugins/homebridge-blinkcameras.git
 cd homebridge-blinkcameras
 npm install
 ```
@@ -45,7 +45,7 @@ npm test
 ### Watch Mode
 
 ```bash
-npm run test:watch
+npm test -- --watch
 ```
 
 ### Coverage Report
@@ -93,7 +93,7 @@ npm run lint
 
 Use conventional commit format:
 
-```
+```text
 type(scope): description
 
 [optional body]
@@ -102,6 +102,7 @@ type(scope): description
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 
 Examples:
+
 - `feat(doorbell): add ring notification support`
 - `fix(auth): handle token refresh race condition`
 - `docs(readme): update configuration examples`
@@ -123,26 +124,11 @@ Examples:
 
 ## Release Process
 
-Releases are automated via GitHub Actions.
-
-### Creating a Release
-
-1. Update version in `package.json`
-2. Update CHANGELOG.md
-3. Commit: `git commit -m "chore: release v1.x.x"`
-4. Tag: `git tag v1.x.x`
-5. Push: `git push && git push --tags`
-6. Create GitHub Release - this triggers npm publish
-
-### Version Guidelines
-
-- **Patch** (1.0.x): Bug fixes, documentation
-- **Minor** (1.x.0): New features, backwards compatible
-- **Major** (x.0.0): Breaking changes
+Release instructions live in `docs/RELEASE.md`.
 
 ## Project Structure
 
-```
+```text
 src/
 ├── index.ts           # Plugin entry point
 ├── platform.ts        # Main platform class

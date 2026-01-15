@@ -60,7 +60,8 @@ typings/
 # dist directory (built at publish time)
 dist
 
-/scripts
+/scripts/*
+!/scripts/release.mjs
 # IDE and tracking files
 .copilot-tracking/
 *.txt
