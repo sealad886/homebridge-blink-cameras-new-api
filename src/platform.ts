@@ -77,6 +77,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioBitrate?: number;
   videoBitrate?: number;
   debugAuth?: boolean;
+  debugStreamPath?: string;
 }
 
 export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
@@ -123,6 +124,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       ffmpegDebug: this.config.ffmpegDebug,
       rtspTransport: this.config.rtspTransport,
       maxStreams: this.config.maxStreams,
+      debugStreamPath: this.config.debugStreamPath,
       audio: {
         enabled: this.config.enableAudio,
         twoWay: this.config.twoWayAudio,
