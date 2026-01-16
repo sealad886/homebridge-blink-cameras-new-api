@@ -59,12 +59,17 @@ export class CameraAccessory {
       .onGet(() => this.device.enabled);
 
     // Camera controller for snapshot support
+    // Determine device type from API response - Mini cameras have type 'owl'
+    // and require different API endpoints even when returned in cameras array
+    const deviceType = device.type === 'owl' ? 'owl' : 'camera';
+    this.platform.log.debug(`[${device.name}] Camera type detection: device.type='${device.type}', using deviceType='${deviceType}'`);
+
     const cameraSource = new BlinkCameraSource(
       this.platform.apiClient,
       this.platform.api.hap,
       device.network_id,
       device.id,
-      'camera',
+      deviceType,
       () => this.device.thumbnail,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,

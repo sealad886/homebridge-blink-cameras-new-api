@@ -41,6 +41,7 @@ export class BlinkApi {
   private readonly auth: BlinkAuth;
   private readonly http: BlinkHttp;
   private readonly sharedHttp: BlinkHttp;
+  private readonly sharedRootHttp: BlinkHttp;
   private accountId: number | null = null;
   private clientId: number | null = null;
 
@@ -48,6 +49,7 @@ export class BlinkApi {
     this.auth = new BlinkAuth(config);
     this.http = new BlinkHttp(this.auth, config);
     this.sharedHttp = new BlinkHttp(this.auth, config, getSharedRestBaseUrl(config));
+    this.sharedRootHttp = new BlinkHttp(this.auth, config, getSharedRestRootUrl(config));
   }
 
   getSharedRestRootUrl(): string {
@@ -183,6 +185,7 @@ export class BlinkApi {
   private updateBaseUrls(): void {
     this.http.setBaseUrl(getRestBaseUrl(this.config));
     this.sharedHttp.setBaseUrl(getSharedRestBaseUrl(this.config));
+    this.sharedRootHttp.setBaseUrl(getSharedRestRootUrl(this.config));
   }
 
   private async syncTierInfo(): Promise<BlinkTierInfo | null> {
@@ -338,20 +341,22 @@ export class BlinkApi {
    * Enable motion detection for a camera
    * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/enable
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
+   * Note: No version prefix - uses root URL (without /api/)
    */
   async enableCameraMotion(networkId: number, cameraId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
+    await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
   }
 
   /**
    * Disable motion detection for a camera
    * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/disable
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
+   * Note: No version prefix - uses root URL (without /api/)
    */
   async disableCameraMotion(networkId: number, cameraId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
+    await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
   }
 
   /**
@@ -437,10 +442,11 @@ export class BlinkApi {
    * Request thumbnail capture for a camera
    * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/thumbnail
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
+   * Note: No version prefix - uses root URL (without /api/)
    */
   async requestCameraThumbnail(networkId: number, cameraId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
+    return this.sharedRootHttp.post<BlinkCommandResponse>(
       `accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/thumbnail`,
     );
   }
@@ -539,10 +545,11 @@ export class BlinkApi {
   /**
    * Get command status once
    * Source: API Dossier Section 3.10 - GET /accounts/{account_id}/networks/{network}/commands/{command}
+   * Note: No version prefix - uses root URL (without /api/)
    */
   async getCommandStatus(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.get<BlinkCommandStatus>(
+    return this.sharedRootHttp.get<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
     );
   }
@@ -575,10 +582,11 @@ export class BlinkApi {
   /**
    * Update/extend an ongoing command (e.g., live view)
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/update
+   * Note: No version prefix - uses root URL (without /api/)
    */
   async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandStatus>(
+    return this.sharedRootHttp.post<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`,
     );
   }
@@ -586,10 +594,11 @@ export class BlinkApi {
   /**
    * Mark a command as done (e.g., end live view)
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/done
+   * Note: No version prefix - uses root URL (without /api/)
    */
   async completeCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandStatus>(
+    return this.sharedRootHttp.post<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
     );
   }
