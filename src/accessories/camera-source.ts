@@ -435,13 +435,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.commandId = commandId;
       active.liveviewUrl = originalUrl;
 
-      if (commandId) {
-        await this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5).catch((error) => {
-          this.log(`Live view readiness check failed: ${error}`);
-        });
-        this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval);
-      }
-
+      // CRITICAL: Start FFmpeg IMMEDIATELY after proxy is ready.
+      // HomeKit has a ~10s timeout. waitForLiveViewReady can take up to 30s,
+      // which would cause HomeKit to timeout and send a stop request before
+      // FFmpeg even connects, killing the proxy.
       const ffmpegArgs = this.buildFfmpegArgs(ffmpegInputUrl, request, active);
       this.log(`Starting stream ${sessionId} via FFmpeg with URL: ${ffmpegInputUrl}`);
       if (this.streamingConfig.ffmpegDebug) {
@@ -496,8 +493,25 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         void this.stopStream(sessionId);
       });
 
-      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay) {
+      // Start keep-alive and liveview polling in the BACKGROUND (non-blocking)
+      // This must happen AFTER FFmpeg is spawned to avoid HomeKit timeout
+      if (commandId) {
+        // Fire-and-forget: poll for liveview readiness in background
+        this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
+          .catch((error) => {
+            this.log(`Live view readiness check failed: ${error}`);
+          });
+        // Start keep-alive immediately
+        this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval);
+      }
+
+      // Talkback (two-way audio) is only supported for RTSP streams.
+      // IMMIS protocol streams use a proprietary format that doesn't support audio upload via FFmpeg.
+      const isImmisStream = originalUrl.startsWith('immis://');
+      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay && !isImmisStream) {
         this.startTalkback(sessionId, request, active);
+      } else if (isImmisStream && this.streamingConfig.audio.twoWay) {
+        this.log(`Two-way audio not supported for IMMIS protocol streams`);
       }
     } catch (error) {
       this.log(`Failed to start stream ${sessionId}: ${error}`);
