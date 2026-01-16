@@ -93,26 +93,28 @@ export class BlinkApi {
       accountInfo = await this.getAccountInfo();
     } catch (error) {
       this.config.logger?.warn(
-        `Failed to fetch Blink account info: ${(error as Error).message}. Continuing with cached tokens.`,
+        `Failed to fetch Blink account info: ${(error as Error).message}. Continuing with fallback tier info.`,
       );
-      return;
     }
-    if (!accountInfo) {
-      this.config.logger?.warn('Blink account info unavailable. Continuing with cached tokens.');
-      return;
+
+    if (accountInfo) {
+      this.accountId = accountInfo.account_id ?? this.accountId;
+      this.clientId = accountInfo.client_id ?? this.clientId;
+      this.auth.setAccountId(this.accountId);
+      this.auth.setClientId(this.clientId);
     }
-    this.accountId = accountInfo.account_id ?? this.accountId;
-    this.clientId = accountInfo.client_id ?? this.clientId;
-    this.auth.setAccountId(this.accountId);
-    this.auth.setClientId(this.clientId);
 
-    await this.syncTierInfo();
+    const tierInfo = await this.syncTierInfo();
+    if (tierInfo?.account_id && !this.accountId) {
+      this.accountId = tierInfo.account_id;
+      this.auth.setAccountId(this.accountId);
+    }
 
-    if (accountInfo.client_verification_required) {
+    if (accountInfo?.client_verification_required) {
       await this.handleClientVerification(accountInfo);
     }
 
-    if (accountInfo.phone_verification_required || accountInfo.account_verification_required) {
+    if (accountInfo?.phone_verification_required || accountInfo?.account_verification_required) {
       await this.handleAccountVerification(accountInfo);
     }
   }
@@ -175,17 +177,17 @@ export class BlinkApi {
     this.sharedHttp.setBaseUrl(getSharedRestBaseUrl(this.config));
   }
 
-  private async syncTierInfo(): Promise<void> {
+  private async syncTierInfo(): Promise<BlinkTierInfo | null> {
     const log = this.config.logger;
     try {
       const tierInfo = await this.getTierInfo();
       if (!tierInfo?.tier) {
-        return;
+        return tierInfo ?? null;
       }
       const normalizedTier = normalizeTier(tierInfo.tier);
       if (!normalizedTier) {
         log?.warn(`Blink tier_info returned unsupported tier "${tierInfo.tier}". Using ${this.config.tier ?? 'prod'}.`);
-        return;
+        return tierInfo;
       }
 
       const previousTier = this.config.tier ?? 'prod';
@@ -199,8 +201,10 @@ export class BlinkApi {
         this.updateBaseUrls();
         log?.info(`Blink tier updated from ${previousTier} to ${normalizedTier}.`);
       }
+      return tierInfo;
     } catch (error) {
       log?.debug?.(`Failed to fetch Blink tier info: ${(error as Error).message}`);
+      return null;
     }
   }
 
