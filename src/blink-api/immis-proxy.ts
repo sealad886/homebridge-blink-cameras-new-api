@@ -37,6 +37,12 @@ export interface ImmisProxyConfig {
   debug?: boolean;
   /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
   saveStreamPath?: string;
+  /**
+   * Promise that resolves when the Blink command is ready.
+   * The proxy will wait for this before connecting to the immis server.
+   * This prevents connection failures when the camera hasn't finished initializing.
+   */
+  waitForReady?: Promise<void>;
 }
 
 export interface ImmisProxyEvents {
@@ -78,7 +84,7 @@ const CONN_ID_MAX_LENGTH = 16;
  * header, and proxies the decoded MPEG-TS stream to the client.
  */
 export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
-  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath'>> & Pick<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath'>;
+  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath' | 'waitForReady'>;
   private readonly parsedUrl: URL;
 
   private server: net.Server | null = null;
@@ -89,6 +95,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private isRunning = false;
   private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
   private keepAliveSequence = 0;
+  private isCommandReady = false;
+  private pendingClients: net.Socket[] = [];
 
   /** Buffer for accumulating incoming data from the immis server */
   private receiveBuffer = Buffer.alloc(0);
@@ -106,7 +114,26 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       log: config.log,
       saveStreamPath: config.saveStreamPath,
       debug: config.debug,
+      waitForReady: config.waitForReady,
     };
+
+    // If a waitForReady promise is provided, set up the ready state handler
+    if (this.config.waitForReady) {
+      this.config.waitForReady.then(() => {
+        this.log('Blink command is ready, enabling immis connections');
+        this.isCommandReady = true;
+        // Process any pending clients that were waiting
+        this.processPendingClients();
+      }).catch((error) => {
+        this.log(`Blink command ready check failed: ${error}`);
+        // Still allow connections even if ready check fails
+        this.isCommandReady = true;
+        this.processPendingClients();
+      });
+    } else {
+      // No waitForReady provided, assume ready immediately
+      this.isCommandReady = true;
+    }
   }
 
   /**
@@ -240,6 +267,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     clientSocket.on('close', () => {
       this.debug('Client disconnected');
       this.clients = this.clients.filter((c) => c !== clientSocket);
+      this.pendingClients = this.pendingClients.filter((c) => c !== clientSocket);
 
       // Stop everything if no clients remain
       if (this.clients.length === 0) {
@@ -252,10 +280,36 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       this.debug(`Client error: ${error.message}`);
     });
 
+    // If the Blink command isn't ready yet, queue this client
+    if (!this.isCommandReady) {
+      this.debug('Blink command not ready yet, queueing client');
+      this.pendingClients.push(clientSocket);
+      return;
+    }
+
     // Start the connection to the immis server if not already connected
     if (!this.targetSocket) {
       this.connectToImmisServer();
     }
+  }
+
+  /**
+   * Process pending clients once the Blink command is ready
+   */
+  private processPendingClients(): void {
+    if (this.pendingClients.length === 0) {
+      return;
+    }
+
+    this.debug(`Processing ${this.pendingClients.length} pending clients`);
+
+    // Start the connection to the immis server if not already connected
+    if (!this.targetSocket) {
+      this.connectToImmisServer();
+    }
+
+    // Clear the pending queue
+    this.pendingClients = [];
   }
 
   /**

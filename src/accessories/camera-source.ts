@@ -413,11 +413,22 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         throw new Error('Live view did not return a server URL');
       }
 
+      const commandId = liveview.command_id ?? liveview.id;
+      active.commandId = commandId;
+      active.liveviewUrl = originalUrl;
+
       let ffmpegInputUrl: string;
 
       // Handle immis:// protocol using our proxy server
       if (originalUrl.startsWith('immis://')) {
         this.log(`Starting IMMIS proxy for proprietary stream protocol`);
+
+        // Create a promise that resolves when the Blink command is ready.
+        // This prevents the proxy from connecting to the immis server before
+        // the camera has finished initializing, which would cause immediate disconnect.
+        const readyPromise = commandId
+          ? this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
+          : Promise.resolve();
 
         const immisProxy = new ImmisProxyServer({
           immisUrl: originalUrl,
@@ -425,6 +436,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           log: (msg) => this.log(msg),
           debug: this.streamingConfig.ffmpegDebug,
           saveStreamPath: this.streamingConfig.debugStreamPath,
+          waitForReady: readyPromise,
         });
 
         active.immisProxy = immisProxy;
@@ -434,10 +446,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         // Standard RTSPS URL - use directly
         ffmpegInputUrl = originalUrl;
       }
-
-      const commandId = liveview.command_id ?? liveview.id;
-      active.commandId = commandId;
-      active.liveviewUrl = originalUrl;
 
       // CRITICAL: Start FFmpeg IMMEDIATELY after proxy is ready.
       // HomeKit has a ~10s timeout. waitForLiveViewReady can take up to 30s,
@@ -499,19 +507,22 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       // Start keep-alive and liveview polling in the BACKGROUND (non-blocking)
       // This must happen AFTER FFmpeg is spawned to avoid HomeKit timeout
+      const isImmisStream = originalUrl.startsWith('immis://');
       if (commandId) {
-        // Fire-and-forget: poll for liveview readiness in background
-        this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
-          .catch((error) => {
-            this.log(`Live view readiness check failed: ${error}`);
-          });
+        // For IMMIS streams, waitForLiveViewReady is already handled via the proxy's waitForReady promise
+        // For non-IMMIS streams, poll for readiness in background
+        if (!isImmisStream) {
+          this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
+            .catch((error) => {
+              this.log(`Live view readiness check failed: ${error}`);
+            });
+        }
         // Start keep-alive immediately
         this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval);
       }
 
       // Talkback (two-way audio) is only supported for RTSP streams.
       // IMMIS protocol streams use a proprietary format that doesn't support audio upload via FFmpeg.
-      const isImmisStream = originalUrl.startsWith('immis://');
       if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay && !isImmisStream) {
         this.startTalkback(sessionId, request, active);
       } else if (isImmisStream && this.streamingConfig.audio.twoWay) {

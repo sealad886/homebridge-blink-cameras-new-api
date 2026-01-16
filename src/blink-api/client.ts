@@ -595,12 +595,24 @@ export class BlinkApi {
    * Mark a command as done (e.g., end live view)
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/done
    * Note: No version prefix - uses root URL (without /api/)
+   *
+   * @deprecated This endpoint was deprecated by Blink around late 2025. The method now silently
+   * ignores 404 errors as the server no longer supports this endpoint.
    */
-  async completeCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
+  async completeCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus | null> {
     const accountId = await this.ensureAccountId();
-    return this.sharedRootHttp.post<BlinkCommandStatus>(
-      `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
-    );
+    try {
+      return await this.sharedRootHttp.post<BlinkCommandStatus>(
+        `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
+      );
+    } catch (error) {
+      // The /done endpoint was deprecated by Blink and now returns 404
+      // Silently ignore this error as the endpoint is no longer functional
+      if (error instanceof Error && error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   private async ensureAccountId(): Promise<number> {
