@@ -73,7 +73,19 @@ export class BlinkApi {
    * Fetch account info and handle any first-time verification requirements.
    */
   private async syncAccountInfoAndVerify(): Promise<void> {
-    const accountInfo = await this.getAccountInfo();
+    let accountInfo: BlinkAccountInfo | null = null;
+    try {
+      accountInfo = await this.getAccountInfo();
+    } catch (error) {
+      this.config.logger?.warn(
+        `Failed to fetch Blink account info: ${(error as Error).message}. Continuing with cached tokens.`,
+      );
+      return;
+    }
+    if (!accountInfo) {
+      this.config.logger?.warn('Blink account info unavailable. Continuing with cached tokens.');
+      return;
+    }
     this.accountId = accountInfo.account_id ?? this.accountId;
     this.clientId = accountInfo.client_id ?? this.clientId;
     this.auth.setAccountId(this.accountId);
@@ -152,6 +164,9 @@ export class BlinkApi {
     const log = this.config.logger;
     try {
       const tierInfo = await this.getTierInfo();
+      if (!tierInfo?.tier) {
+        return;
+      }
       const normalizedTier = normalizeTier(tierInfo.tier);
       if (!normalizedTier) {
         log?.warn(`Blink tier_info returned unsupported tier "${tierInfo.tier}". Using ${this.config.tier ?? 'prod'}.`);
