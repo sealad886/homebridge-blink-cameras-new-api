@@ -426,8 +426,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         // Create a promise that resolves when the Blink command is ready.
         // This prevents the proxy from connecting to the immis server before
         // the camera has finished initializing, which would cause immediate disconnect.
+        // For IMMIS streams, use aggressive polling (2s intervals, 30 attempts = 60s max)
+        // because HomeKit has a ~10s timeout expectation for initial stream data.
         const readyPromise = commandId
-          ? this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
+          ? this.waitForLiveViewReady(commandId, 2, 30)
           : Promise.resolve();
 
         const immisProxy = new ImmisProxyServer({
@@ -602,8 +604,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
   }
 
-  private async waitForLiveViewReady(commandId: number, pollingInterval: number): Promise<void> {
-    const maxAttempts = 6;
+  private async waitForLiveViewReady(
+    commandId: number,
+    pollingInterval: number,
+    maxAttempts: number = 6,
+  ): Promise<void> {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const status = await this.api.getCommandStatus(this.networkId, commandId);
       if (status.complete || status.status === 'complete' || status.status === 'running') {
@@ -612,7 +617,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (status.status === 'failed') {
         throw new Error(`Live view command ${commandId} failed`);
       }
-      const delayMs = (status.polling_interval ?? pollingInterval ?? 5) * 1000;
+      // Use the provided pollingInterval unless the response explicitly specifies one
+      const delayMs = pollingInterval * 1000;
       await sleep(delayMs);
     }
   }
