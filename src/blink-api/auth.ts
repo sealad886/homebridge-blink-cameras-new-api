@@ -10,7 +10,7 @@ import { BlinkAuthState, BlinkAuthStorage, BlinkConfig, BlinkLogger, BlinkOAuthR
 import { buildDefaultHeaders, APP_BUILD, APP_VERSION } from './headers';
 import { getOAuthTokenUrl } from './urls';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
+import * as path from 'node:path';
 
 // Ensure Response type is available for TypeScript
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;

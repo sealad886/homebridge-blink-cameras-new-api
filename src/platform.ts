@@ -194,10 +194,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (this.config.persistAuth === false) {
       return undefined;
     }
+    const persistRoot = this.api?.user?.persistPath?.();
+    if (!persistRoot) {
+      return undefined;
+    }
     const deviceId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
     const keySource = `${this.config.username}|${deviceId}`;
     const key = createHash('sha1').update(keySource).digest('hex');
-    return path.join(this.api.user.persistPath(), 'blink-auth', `${key}.json`);
+    return path.join(persistRoot, 'blink-auth', `${key}.json`);
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {

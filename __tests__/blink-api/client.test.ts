@@ -81,7 +81,7 @@ describe('BlinkApi', () => {
     await api.armNetwork(5);
     await api.disarmNetwork(5);
 
-    expect(auth.login).toHaveBeenCalled();
+    expect(auth.ensureValidToken).toHaveBeenCalled();
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/arm');
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/disarm');
   });
