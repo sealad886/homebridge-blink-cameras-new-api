@@ -11,6 +11,9 @@ type MutableBlinkApi = {
     login: jest.Mock;
     ensureValidToken: jest.Mock;
     getAccountId: jest.Mock;
+    getClientId: jest.Mock;
+    is2FAPending: jest.Mock;
+    complete2FA: jest.Mock;
   };
   http: {
     get: jest.Mock;
@@ -35,6 +38,9 @@ describe('BlinkApi', () => {
     api.auth.login = jest.fn().mockResolvedValue(undefined);
     api.auth.ensureValidToken = jest.fn().mockResolvedValue(undefined);
     api.auth.getAccountId = jest.fn().mockReturnValue(10);
+    api.auth.getClientId = jest.fn().mockReturnValue(12345);
+    api.auth.is2FAPending = jest.fn().mockReturnValue(false);
+    api.auth.complete2FA = jest.fn().mockResolvedValue(undefined);
     api.http = { get: jest.fn(), post: jest.fn() } as MutableBlinkApi['http'];
     api.sharedHttp = api.http;
     return { api, auth: api.auth, http: api.http };
@@ -48,9 +54,9 @@ describe('BlinkApi', () => {
     const { api, auth } = createApi();
     auth.getAccountId.mockReturnValue(99);
 
-    await api.login('123456');
+    await api.login();
 
-    expect(auth.login).toHaveBeenCalledWith('123456');
+    expect(auth.ensureValidToken).toHaveBeenCalled();
     expect((api as unknown as { accountId: number | null }).accountId).toBe(99);
   });
 

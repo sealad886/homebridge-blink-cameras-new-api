@@ -55,15 +55,30 @@ export class BlinkApi {
   }
 
   /**
-   * Authenticate with Blink API
-   * Source: API Dossier Section 2.1 (OAuth Flow)
+   * Authenticate with Blink API using OAuth 2.0 Authorization Code Flow with PKCE
+   * 
+   * @param twoFaCode - Optional 2FA code (if provided, will be used to complete pending 2FA)
+   * @throws Blink2FARequiredError if 2FA is required but no code provided
    */
   async login(twoFaCode?: string): Promise<void> {
-    if (twoFaCode ?? this.config.twoFactorCode) {
-      await this.auth.login(twoFaCode ?? this.config.twoFactorCode);
+    // If 2FA code provided and 2FA is pending, complete it
+    if ((twoFaCode ?? this.config.twoFactorCode) && this.auth.is2FAPending()) {
+      await this.auth.complete2FA(twoFaCode ?? this.config.twoFactorCode!);
     } else {
       await this.auth.ensureValidToken();
     }
+    this.accountId = this.auth.getAccountId();
+    this.clientId = this.auth.getClientId();
+    await this.syncAccountInfoAndVerify();
+  }
+
+  /**
+   * Complete 2FA verification (call after login() throws Blink2FARequiredError)
+   * 
+   * @param pin - The 2FA PIN received via email/SMS
+   */
+  async complete2FA(pin: string): Promise<void> {
+    await this.auth.complete2FA(pin);
     this.accountId = this.auth.getAccountId();
     this.clientId = this.auth.getClientId();
     await this.syncAccountInfoAndVerify();

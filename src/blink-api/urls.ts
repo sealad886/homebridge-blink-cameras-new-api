@@ -69,14 +69,48 @@ export const getSharedRestRootUrl = (config: BlinkConfig): string => {
 };
 
 /**
- * Build OAuth token endpoint URL
- * Source: API Dossier Section 1.1 - OAuth API: https://api.{env}oauth.blink.com/
- * Source: API Dossier Section 2.1 - POST oauth/token endpoint
- * Evidence: smali_classes9/com/immediasemi/blink/common/account/auth/OauthApi.smali
+ * Build OAuth base URL
+ * Source: blinkpy - OAUTH_HOST = "api.oauth.blink.com"
+ * Evidence: Production uses empty subdomain, QA uses "qa."
  */
-export const getOAuthTokenUrl = (config: BlinkConfig): string => {
+const getOAuthBaseUrl = (config: BlinkConfig): string => {
   const tier = resolveTier(config.tier);
   const envSubdomain = tier === 'sqa1' ? 'qa.' : '';
-  const base = normalizeBase(`https://api.${envSubdomain}oauth.blink.com/`);
-  return `${base}oauth/token`;
+  return normalizeBase(`https://api.${envSubdomain}oauth.blink.com/`);
+};
+
+/**
+ * Build OAuth token endpoint URL
+ * Source: blinkpy - OAUTH_TOKEN_URL = f"https://{OAUTH_HOST}/oauth/token"
+ * Evidence: Used for both authorization_code and refresh_token grants
+ */
+export const getOAuthTokenUrl = (config: BlinkConfig): string => {
+  return `${getOAuthBaseUrl(config)}oauth/token`;
+};
+
+/**
+ * Build OAuth v2 authorize endpoint URL
+ * Source: blinkpy - OAUTH_AUTHORIZE_URL = f"https://{OAUTH_HOST}/oauth/v2/authorize"
+ * Evidence: Initiates Authorization Code + PKCE flow
+ */
+export const getOAuthAuthorizeUrl = (config: BlinkConfig): string => {
+  return `${getOAuthBaseUrl(config)}oauth/v2/authorize`;
+};
+
+/**
+ * Build OAuth v2 signin page URL
+ * Source: blinkpy - OAUTH_SIGNIN_URL = f"https://{OAUTH_HOST}/oauth/v2/signin"
+ * Evidence: Web-based credential submission with CSRF token
+ */
+export const getOAuthSigninUrl = (config: BlinkConfig): string => {
+  return `${getOAuthBaseUrl(config)}oauth/v2/signin`;
+};
+
+/**
+ * Build OAuth v2 2FA verification URL
+ * Source: blinkpy - OAUTH_2FA_VERIFY_URL = f"https://{OAUTH_HOST}/oauth/v2/2fa/verify"
+ * Evidence: Used when 2FA PIN is required
+ */
+export const getOAuth2FAVerifyUrl = (config: BlinkConfig): string => {
+  return `${getOAuthBaseUrl(config)}oauth/v2/2fa/verify`;
 };

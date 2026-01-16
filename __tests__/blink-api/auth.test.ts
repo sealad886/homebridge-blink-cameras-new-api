@@ -1,12 +1,25 @@
-import { BlinkAuth } from '../../src/blink-api/auth';
+import { BlinkAuth, Blink2FARequiredError } from '../../src/blink-api/auth';
 import { BlinkConfig } from '../../src/types';
+import { URL } from 'node:url';
 
-describe('BlinkAuth', () => {
+// RequestInit is a global type in Node.js 18+ but may need explicit typing in tests
+type FetchOptions = Parameters<typeof fetch>[1];
+
+/**
+ * Tests for OAuth 2.0 Authorization Code Flow with PKCE
+ *
+ * The new authentication flow involves multiple HTTP requests:
+ * 1. GET /oauth/v2/authorize - Initialize OAuth session
+ * 2. GET /oauth/v2/signin - Fetch signin page, extract CSRF token
+ * 3. POST /oauth/v2/signin - Submit credentials
+ * 4. GET /oauth/v2/authorize - Get authorization code from redirect
+ * 5. POST /oauth/token - Exchange code for tokens
+ */
+describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
   const baseConfig: BlinkConfig = {
     email: 'user@example.com',
     password: 'password',
     hardwareId: 'hardware-id',
-    twoFactorCode: '246810',
   };
 
   const mockFetch = () => {
@@ -15,138 +28,344 @@ describe('BlinkAuth', () => {
     return fn;
   };
 
+  const createMockHeaders = (headers: Record<string, string> = {}): Headers => {
+    const h = new Headers(headers);
+    // Mock getSetCookie for cookie handling
+    (h as unknown as { getSetCookie: () => string[] }).getSetCookie = () =>
+      headers['set-cookie'] ? [headers['set-cookie']] : [];
+    return h;
+  };
+
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('logs in and stores tokens with token-auth header', async () => {
-    const fetchMock = mockFetch();
-    const responseBody = {
-      access_token: 'access-token',
-      refresh_token: 'refresh-token',
-      expires_in: 3600,
-      token_type: 'Bearer' as const,
-      scope: 'client',
-      account_id: 42,
-    };
+  describe('successful login flow', () => {
+    it('completes full OAuth flow and stores tokens', async () => {
+      const fetchMock = mockFetch();
 
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => responseBody,
-      headers: new Headers({ 'TOKEN-AUTH': 'token-auth-header' }),
-    });
+      // Step 1: GET /oauth/v2/authorize
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders({ 'set-cookie': 'session=abc123' }),
+      });
 
-    const auth = new BlinkAuth(baseConfig);
-    await auth.login('135790');
+      // Step 2: GET /oauth/v2/signin
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<html><input name="_token" value="csrf_token_123"></html>',
+        headers: createMockHeaders({ 'set-cookie': 'csrf=xyz789' }),
+      });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const options = fetchMock.mock.calls[0][1] as RequestInit;
-    const headers = options.headers as Headers;
-    expect(headers.get('2fa-code')).toBe('135790');
-    expect(headers.get('hardware_id')).toBe(baseConfig.hardwareId);
+      // Step 3: POST /oauth/v2/signin (success - redirects with code)
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders({
+          location: 'immedia-blink://applinks.blink.com/signin/callback?code=auth_code_456',
+        }),
+      });
 
-    expect(auth.getAuthHeaders()).toEqual({
-      Authorization: 'Bearer access-token',
-      'TOKEN-AUTH': 'token-auth-header',
-    });
-    expect(auth.getAccountId()).toBe(42);
-  });
-
-  it('throws when login fails', async () => {
-    const fetchMock = mockFetch();
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-      json: async () => ({ error: 'bad credentials' }),
-      text: async () => JSON.stringify({ error: 'bad credentials' }),
-      headers: new Headers(),
-    });
-
-    const auth = new BlinkAuth(baseConfig);
-    await expect(auth.login()).rejects.toThrow('Blink OAuth login failed: 401 Unauthorized');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('refreshes tokens after login', async () => {
-    const fetchMock = mockFetch();
-    fetchMock
-      .mockResolvedValueOnce({
+      // Step 5: POST /oauth/token
+      fetchMock.mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: async () => ({
-          access_token: 'access-token',
-          refresh_token: 'refresh-token',
+          access_token: 'access-token-jwt',
+          refresh_token: 'refresh-token-123',
           expires_in: 3600,
           token_type: 'Bearer' as const,
-          scope: 'client',
+          account_id: 42,
+          client_id: 100,
         }),
-        headers: new Headers(),
-      })
-      .mockResolvedValueOnce({
+        headers: createMockHeaders({ 'token-auth': 'token-auth-header' }),
+      });
+
+      const auth = new BlinkAuth(baseConfig);
+      await auth.login();
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+
+      // Verify token exchange request
+      const tokenExchangeCall = fetchMock.mock.calls[3];
+      const tokenUrl = tokenExchangeCall[0] as string;
+      expect(tokenUrl).toContain('oauth/token');
+
+      const tokenOptions = tokenExchangeCall[1] as FetchOptions;
+      const tokenBody = new URLSearchParams(tokenOptions!.body as string);
+      expect(tokenBody.get('grant_type')).toBe('authorization_code');
+      expect(tokenBody.get('code')).toBe('auth_code_456');
+      expect(tokenBody.get('client_id')).toBe('ios');
+
+      // Verify captured tokens
+      expect(auth.getAuthHeaders()).toEqual({
+        Authorization: 'Bearer access-token-jwt',
+        'TOKEN-AUTH': 'token-auth-header',
+      });
+      expect(auth.getAccountId()).toBe(42);
+      expect(auth.getClientId()).toBe(100);
+    });
+
+    it('uses PKCE with S256 code challenge method', async () => {
+      const fetchMock = mockFetch();
+
+      // Step 1: GET /oauth/v2/authorize
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders(),
+      });
+
+      // Step 2: GET /oauth/v2/signin
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<input name="_token" value="csrf">',
+        headers: createMockHeaders(),
+      });
+
+      // Step 3: POST /oauth/v2/signin
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders({ location: 'callback?code=abc' }),
+      });
+
+      // Step 5: POST /oauth/token
+      fetchMock.mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: async () => ({
-          access_token: 'new-access',
-          refresh_token: 'new-refresh',
+          access_token: 'token',
+          refresh_token: 'refresh',
+          expires_in: 3600,
+          token_type: 'Bearer' as const,
+        }),
+        headers: createMockHeaders(),
+      });
+
+      const auth = new BlinkAuth(baseConfig);
+      await auth.login();
+
+      // Verify authorize request has PKCE parameters
+      const authorizeCall = fetchMock.mock.calls[0];
+      const authorizeUrl = new URL(authorizeCall[0] as string);
+      expect(authorizeUrl.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(authorizeUrl.searchParams.get('code_challenge')).toBeTruthy();
+      expect(authorizeUrl.searchParams.get('client_id')).toBe('ios');
+      expect(authorizeUrl.searchParams.get('response_type')).toBe('code');
+
+      // Verify token exchange includes code_verifier
+      const tokenCall = fetchMock.mock.calls[3];
+      const tokenBody = new URLSearchParams((tokenCall[1] as FetchOptions)!.body as string);
+      expect(tokenBody.get('code_verifier')).toBeTruthy();
+      expect(tokenBody.get('grant_type')).toBe('authorization_code');
+    });
+  });
+
+  describe('2FA flow', () => {
+    it('throws Blink2FARequiredError when 2FA is needed', async () => {
+      const fetchMock = mockFetch();
+
+      // Step 1: GET /oauth/v2/authorize
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders(),
+      });
+
+      // Step 2: GET /oauth/v2/signin
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<input name="_token" value="csrf">',
+        headers: createMockHeaders(),
+      });
+
+      // Step 3: POST /oauth/v2/signin - indicates 2FA required
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<html>Please enter your 2FA verification code</html>',
+        headers: createMockHeaders(),
+      });
+
+      const auth = new BlinkAuth(baseConfig);
+      await expect(auth.login()).rejects.toThrow(Blink2FARequiredError);
+      expect(auth.is2FAPending()).toBe(true);
+    });
+
+    it('auto-uses 2FA code from config', async () => {
+      const fetchMock = mockFetch();
+      const configWith2FA = { ...baseConfig, twoFactorCode: '123456' };
+
+      // Step 1: GET /oauth/v2/authorize
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders(),
+      });
+
+      // Step 2: GET /oauth/v2/signin
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<input name="_token" value="csrf">',
+        headers: createMockHeaders(),
+      });
+
+      // Step 3: POST /oauth/v2/signin - indicates 2FA required
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<input name="_token" value="csrf2">2FA verification code',
+        headers: createMockHeaders(),
+      });
+
+      // Step 4: POST /oauth/v2/2fa/verify
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders({ location: '/oauth/v2/authorize' }),
+      });
+
+      // Step 5: GET /oauth/v2/authorize (get code)
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        headers: createMockHeaders({ location: 'callback?code=abc' }),
+      });
+
+      // Step 6: POST /oauth/token
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          access_token: 'token',
+          refresh_token: 'refresh',
+          expires_in: 3600,
+          token_type: 'Bearer' as const,
+        }),
+        headers: createMockHeaders(),
+      });
+
+      const auth = new BlinkAuth(configWith2FA);
+      await auth.login();
+
+      // Verify 2FA verification was called with the PIN
+      const verifyCall = fetchMock.mock.calls[3];
+      const verifyBody = new URLSearchParams((verifyCall[1] as FetchOptions)!.body as string);
+      expect(verifyBody.get('pin')).toBe('123456');
+    });
+  });
+
+  describe('token refresh', () => {
+    it('refreshes tokens using refresh_token grant', async () => {
+      const fetchMock = mockFetch();
+
+      // Setup: Complete initial login first
+      // Step 1-4 for initial login...
+      fetchMock
+        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '<input name="_token" value="csrf">',
+          headers: createMockHeaders(),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 302,
+          headers: createMockHeaders({ location: 'callback?code=abc' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'original-token',
+            refresh_token: 'original-refresh',
+            expires_in: 3600,
+            token_type: 'Bearer' as const,
+          }),
+          headers: createMockHeaders(),
+        });
+
+      const auth = new BlinkAuth(baseConfig);
+      await auth.login();
+
+      // Now test refresh
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          access_token: 'new-access-token',
+          refresh_token: 'new-refresh-token',
           expires_in: 7200,
           token_type: 'Bearer' as const,
-          scope: 'client',
         }),
-        headers: new Headers({ 'TOKEN-AUTH': 'new-token-auth' }),
+        headers: createMockHeaders({ 'token-auth': 'new-token-auth' }),
       });
 
-    const auth = new BlinkAuth(baseConfig);
-    await auth.login();
-    await auth.refreshTokens();
+      await auth.refreshTokens();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(auth.getAuthHeaders()).toEqual({
-      Authorization: 'Bearer new-access',
-      'TOKEN-AUTH': 'new-token-auth',
+      // Verify refresh request
+      const refreshCall = fetchMock.mock.calls[4];
+      const refreshBody = new URLSearchParams((refreshCall[1] as FetchOptions)!.body as string);
+      expect(refreshBody.get('grant_type')).toBe('refresh_token');
+      expect(refreshBody.get('refresh_token')).toBe('original-refresh');
+      expect(refreshBody.get('client_id')).toBe('ios');
+
+      // Verify new tokens
+      expect(auth.getAuthHeaders()).toEqual({
+        Authorization: 'Bearer new-access-token',
+        'TOKEN-AUTH': 'new-token-auth',
+      });
     });
   });
 
-  it('ensures token validity by refreshing when nearing expiry', async () => {
-    const fetchMock = mockFetch();
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          access_token: 'access-token',
-          refresh_token: 'refresh-token',
-          expires_in: 1,
-          token_type: 'Bearer' as const,
-          scope: 'client',
-        }),
-        headers: new Headers(),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          access_token: 'refreshed-token',
-          refresh_token: 'refreshed-refresh',
-          expires_in: 3600,
-          token_type: 'Bearer' as const,
-          scope: 'client',
-        }),
-        headers: new Headers(),
-      });
+  describe('error handling', () => {
+    it('throws error when signin page fails to load', async () => {
+      const fetchMock = mockFetch();
 
-    const auth = new BlinkAuth(baseConfig);
-    await auth.login();
-    (auth as unknown as { tokenExpiry: Date }).tokenExpiry = new Date(Date.now() + 500);
-    await auth.ensureValidToken();
+      fetchMock
+        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: createMockHeaders(),
+        });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(auth.getAuthHeaders().Authorization).toBe('Bearer refreshed-token');
-  });
+      const auth = new BlinkAuth(baseConfig);
+      await expect(auth.login()).rejects.toThrow('Failed to fetch signin page');
+    });
 
-  it('getAuthHeaders throws if not logged in', () => {
-    const auth = new BlinkAuth(baseConfig);
-    expect(() => auth.getAuthHeaders()).toThrow('Access token not set. Call login first.');
+    it('throws error when CSRF token cannot be extracted', async () => {
+      const fetchMock = mockFetch();
+
+      fetchMock
+        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '<html>No CSRF token here</html>',
+          headers: createMockHeaders(),
+        });
+
+      const auth = new BlinkAuth(baseConfig);
+      await expect(auth.login()).rejects.toThrow('Could not extract CSRF token');
+    });
+
+    it('throws when getAuthHeaders called before login', () => {
+      const auth = new BlinkAuth(baseConfig);
+      expect(() => auth.getAuthHeaders()).toThrow('Access token not set. Call login first.');
+    });
+
+    it('throws when refreshing without prior login', async () => {
+      const auth = new BlinkAuth(baseConfig);
+      await expect(auth.refreshTokens()).rejects.toThrow('Cannot refresh token before login');
+    });
   });
 });

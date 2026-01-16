@@ -388,3 +388,88 @@ export type HttpMethod = 'GET' | 'POST' | 'DELETE';
  * Device types supported by Blink
  */
 export type BlinkDeviceType = 'camera' | 'owl' | 'doorbell' | 'sync_module';
+
+/**
+ * OAuth v2 session state for Authorization Code + PKCE flow
+ * Persisted during 2FA flow to allow resumption
+ * Source: blinkpy/auth.py - _oauth_login_flow state management
+ */
+export interface BlinkOAuthSessionState {
+  /** PKCE code verifier (needed for token exchange) */
+  codeVerifier: string;
+  /** PKCE code challenge (sent in authorize request) */
+  codeChallenge: string;
+  /** OAuth state parameter for CSRF protection */
+  state: string;
+  /** CSRF token from signin page */
+  csrfToken?: string;
+  /** Session cookies from OAuth flow */
+  cookies?: string;
+  /** Authorization code (after successful signin) */
+  authorizationCode?: string;
+  /** Timestamp when session was created */
+  createdAt: string;
+  /** Whether 2FA verification is required */
+  requires2FA?: boolean;
+  /** Phone number last 4 digits (for 2FA display) */
+  phoneLastFour?: string;
+}
+
+/**
+ * OAuth v2 token response
+ * Different from legacy password grant response
+ * Source: blinkpy - oauth_exchange_code_for_token response
+ */
+export interface BlinkOAuthV2TokenResponse {
+  /** JWT access token */
+  access_token: string;
+  /** Refresh token for token renewal */
+  refresh_token?: string;
+  /** Token type (always "Bearer") */
+  token_type: 'Bearer';
+  /** Token lifetime in seconds */
+  expires_in: number;
+  /** OpenID scope (if requested) */
+  scope?: string;
+  /** ID token (OpenID Connect) */
+  id_token?: string;
+  /** Account ID */
+  account_id?: number;
+  /** Client ID */
+  client_id?: number;
+  /** Region code */
+  region?: string;
+  /** Tier environment */
+  tier?: string;
+}
+
+/**
+ * Error response when 2FA is required
+ * Source: blinkpy - 2FA detection in signin flow
+ */
+export interface Blink2FARequiredResponse {
+  /** Indicates 2FA is needed */
+  two_factor_required: boolean;
+  /** Message to display */
+  message?: string;
+  /** Phone number last 4 digits */
+  phone_number_last_four?: string;
+  /** Email for verification */
+  email?: string;
+  /** Time until PIN can be resent */
+  allow_resend_seconds?: number;
+}
+
+/**
+ * Response from 2FA verification
+ * Source: blinkpy - oauth_verify_2fa response
+ */
+export interface Blink2FAVerifyResponse {
+  /** Whether verification succeeded */
+  success: boolean;
+  /** Message */
+  message?: string;
+  /** Error code if failed */
+  code?: number;
+}
+
