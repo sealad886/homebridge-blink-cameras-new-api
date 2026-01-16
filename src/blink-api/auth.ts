@@ -6,8 +6,11 @@
  * Evidence: smali_classes9/com/immediasemi/blink/common/account/auth/OauthApi.smali
  */
 
-import { BlinkConfig, BlinkLogger, BlinkOAuthResponse } from '../types';
+import { BlinkAuthState, BlinkAuthStorage, BlinkConfig, BlinkLogger, BlinkOAuthResponse } from '../types';
+import { buildDefaultHeaders, APP_BUILD, APP_VERSION } from './headers';
 import { getOAuthTokenUrl } from './urls';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 
 // Ensure Response type is available for TypeScript
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;
@@ -24,11 +27,6 @@ const DEFAULT_CLIENT_ID = 'android';
  */
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
 
-/**
- * App version info for diagnostics
- */
-const APP_VERSION = '51.0';
-const APP_BUILD = '29426569';
 
 /**
  * Null logger that discards all output
@@ -39,6 +37,38 @@ const nullLogger: BlinkLogger = {
   warn: () => {},
   error: () => {},
 };
+
+class FileAuthStorage implements BlinkAuthStorage {
+  constructor(private readonly filePath: string) {}
+
+  async load(): Promise<BlinkAuthState | null> {
+    try {
+      const contents = await fs.readFile(this.filePath, 'utf8');
+      const parsed = JSON.parse(contents) as BlinkAuthState;
+      return parsed ?? null;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async save(state: BlinkAuthState): Promise<void> {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    await fs.writeFile(this.filePath, JSON.stringify(state, null, 2), 'utf8');
+  }
+
+  async clear(): Promise<void> {
+    try {
+      await fs.unlink(this.filePath);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+}
 
 /**
  * Redact sensitive values for safe logging
@@ -145,12 +175,23 @@ export class BlinkAuth {
   private tokenExpiry: Date | null = null;
   private tokenAuth: string | null = null;
   private accountId: number | null = null;
+  private clientId: number | null = null;
+  private region: string | null = null;
+  private tier: string | null = null;
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
+  private readonly storage?: BlinkAuthStorage;
+  private stateLoaded = false;
+  private stateLoadPromise: Promise<void> | null = null;
 
   constructor(private readonly config: BlinkConfig) {
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
+    if (config.authStorage) {
+      this.storage = config.authStorage;
+    } else if (config.authStoragePath) {
+      this.storage = new FileAuthStorage(config.authStoragePath);
+    }
   }
 
   /**
@@ -159,6 +200,77 @@ export class BlinkAuth {
   private logDebug(message: string, ...args: unknown[]): void {
     if (this.debug) {
       this.log.info(`[Auth Debug] ${message}`, ...args);
+    }
+  }
+
+  private async ensureStateLoaded(): Promise<void> {
+    if (this.stateLoaded) {
+      return;
+    }
+    if (this.stateLoadPromise) {
+      await this.stateLoadPromise;
+      return;
+    }
+    this.stateLoadPromise = this.loadStateFromStorage();
+    await this.stateLoadPromise;
+    this.stateLoadPromise = null;
+  }
+
+  private async loadStateFromStorage(): Promise<void> {
+    if (!this.storage) {
+      this.stateLoaded = true;
+      return;
+    }
+    try {
+      const state = await this.storage.load();
+      if (state) {
+        this.applyState(state);
+        this.logDebug('Loaded persisted auth state');
+      }
+    } catch (error) {
+      this.log.warn(`Failed to load persisted auth state: ${(error as Error).message}`);
+    } finally {
+      this.stateLoaded = true;
+    }
+  }
+
+  private applyState(state: BlinkAuthState): void {
+    this.accessToken = state.accessToken ?? this.accessToken;
+    this.refreshToken = state.refreshToken ?? this.refreshToken;
+    this.tokenAuth = state.tokenAuth ?? this.tokenAuth;
+    this.accountId = state.accountId ?? this.accountId;
+    this.clientId = state.clientId ?? this.clientId;
+    this.region = state.region ?? this.region;
+    this.tier = state.tier ?? this.tier;
+    if (state.tokenExpiry) {
+      const parsed = new Date(state.tokenExpiry);
+      if (!Number.isNaN(parsed.getTime())) {
+        this.tokenExpiry = parsed;
+      }
+    }
+  }
+
+  private async persistState(): Promise<void> {
+    if (!this.storage || !this.accessToken) {
+      return;
+    }
+    const state: BlinkAuthState = {
+      accessToken: this.accessToken,
+      refreshToken: this.refreshToken,
+      tokenAuth: this.tokenAuth,
+      tokenExpiry: this.tokenExpiry?.toISOString() ?? null,
+      accountId: this.accountId,
+      clientId: this.clientId,
+      region: this.region,
+      tier: this.tier,
+      email: this.config.email ?? null,
+      hardwareId: this.config.hardwareId ?? null,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await this.storage.save(state);
+    } catch (error) {
+      this.log.warn(`Failed to persist auth state: ${(error as Error).message}`);
     }
   }
 
@@ -189,6 +301,7 @@ export class BlinkAuth {
     });
 
     const headers = new Headers({
+      ...buildDefaultHeaders(),
       'Content-Type': 'application/x-www-form-urlencoded',
       hardware_id: String(this.config.hardwareId ?? ''),
     });
@@ -231,6 +344,7 @@ export class BlinkAuth {
    * Evidence: smali_classes9/com/immediasemi/blink/common/account/auth/OauthApi.smali
    */
   async refreshTokens(): Promise<void> {
+    await this.ensureStateLoaded();
     if (!this.refreshToken) {
       this.logDebug('Cannot refresh: no refresh token available');
       throw new Error('Cannot refresh token before login');
@@ -251,6 +365,7 @@ export class BlinkAuth {
     });
 
     const headers = new Headers({
+      ...buildDefaultHeaders(),
       'Content-Type': 'application/x-www-form-urlencoded',
       hardware_id: String(this.config.hardwareId ?? ''),
     });
@@ -354,6 +469,7 @@ export class BlinkAuth {
   }
 
   async ensureValidToken(): Promise<void> {
+    await this.ensureStateLoaded();
     if (!this.accessToken) {
       this.logDebug('No access token, initiating login...');
       await this.login();
@@ -410,16 +526,35 @@ export class BlinkAuth {
     return this.accountId;
   }
 
+  getClientId(): number | null {
+    return this.clientId;
+  }
+
+  setAccountId(accountId: number | null): void {
+    this.accountId = accountId ?? this.accountId;
+  }
+
+  setClientId(clientId: number | null): void {
+    this.clientId = clientId ?? this.clientId;
+  }
+
   private captureTokens(body: BlinkOAuthResponse, tokenAuthHeader: string | null): void {
     this.accessToken = body.access_token;
     this.refreshToken = body.refresh_token;
     this.tokenExpiry = new Date(Date.now() + body.expires_in * 1000);
     this.tokenAuth = tokenAuthHeader;
     this.accountId = body.account_id ?? this.accountId;
+    this.clientId = body.client_id ?? this.clientId;
+    this.region = body.region ?? this.region;
+    this.tier = body.tier ?? this.tier;
 
     this.logDebug('Tokens captured successfully');
     this.logDebug(`  Access token: ${redact(this.accessToken)}`);
     this.logDebug(`  Refresh token: ${redact(this.refreshToken ?? '')}`);
     this.logDebug(`  Expiry: ${this.tokenExpiry.toISOString()}`);
+    if (this.clientId) {
+      this.logDebug(`  Client ID: ${this.clientId}`);
+    }
+    void this.persistState();
   }
 }

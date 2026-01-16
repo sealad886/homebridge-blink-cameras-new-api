@@ -22,6 +22,32 @@ export interface BlinkOAuthResponse {
 }
 
 /**
+ * Persisted authentication state for Blink sessions.
+ */
+export interface BlinkAuthState {
+  accessToken: string;
+  refreshToken?: string | null;
+  tokenAuth?: string | null;
+  tokenExpiry?: string | null;
+  accountId?: number | null;
+  clientId?: number | null;
+  region?: string | null;
+  tier?: string | null;
+  email?: string | null;
+  hardwareId?: string | null;
+  updatedAt?: string | null;
+}
+
+/**
+ * Storage adapter for persisting auth state across restarts.
+ */
+export interface BlinkAuthStorage {
+  load(): Promise<BlinkAuthState | null>;
+  save(state: BlinkAuthState): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/**
  * Blink user account information
  * Source: API Dossier Section 3.9 (homescreen response)
  */
@@ -31,6 +57,24 @@ export interface BlinkAccount {
   country?: string;
   timezone?: string;
   region?: string;
+}
+
+/**
+ * Account info response from v2/users/info.
+ * Includes verification flags for first-time device login.
+ */
+export interface BlinkAccountInfo {
+  account_id: number;
+  client_id?: number;
+  email?: string;
+  region?: string;
+  tier?: string;
+  account_verification_required?: boolean;
+  phone_verification_required?: boolean;
+  client_verification_required?: boolean;
+  trust_device_enabled?: boolean;
+  allow_pin_resend_seconds?: number;
+  verification_channel?: string;
 }
 
 /**
@@ -255,6 +299,21 @@ export interface BlinkMediaResponse {
 }
 
 /**
+ * Response for resend/verification PIN flows.
+ */
+export interface BlinkResendPinResponse {
+  message?: string;
+  code?: number;
+  allow_pin_resend_seconds?: number;
+}
+
+export interface BlinkPinVerificationResponse {
+  message?: string;
+  code?: number;
+  verified?: boolean;
+}
+
+/**
  * Logger interface for diagnostic output
  * Compatible with Homebridge Logger
  */
@@ -274,7 +333,12 @@ export interface BlinkConfig {
   password: string;
   hardwareId: string;
   clientId?: 'android' | 'amazon';
+  clientName?: string;
   twoFactorCode?: string;
+  clientVerificationCode?: string;
+  trustDevice?: boolean;
+  authStoragePath?: string;
+  authStorage?: BlinkAuthStorage;
   tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   /** Enable verbose auth diagnostics */

@@ -9,6 +9,8 @@
  * Source: API Dossier - /base-apk/docs/api_dossier.md
  */
 import { setInterval, clearInterval } from 'timers';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
 import {
   API,
   Characteristic,
@@ -52,6 +54,9 @@ interface BlinkPlatformConfig extends PlatformConfig {
   deviceId?: string;
   deviceName?: string;
   twoFactorCode?: string;
+  clientVerificationCode?: string;
+  persistAuth?: boolean;
+  trustDevice?: boolean;
   tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   pollInterval?: number;
@@ -133,11 +138,18 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.log.warn('Auth debugging enabled - verbose API logging active');
     }
 
+    const hardwareId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
+    const authStoragePath = this.buildAuthStoragePath();
+
     this.apiClient = new BlinkApi({
       email: this.config.username,
       password: this.config.password,
-      hardwareId: this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink',
+      hardwareId,
+      clientName: this.config.deviceName,
       twoFactorCode: this.config.twoFactorCode,
+      clientVerificationCode: this.config.clientVerificationCode,
+      trustDevice: this.config.trustDevice,
+      authStoragePath,
       tier: this.config.tier,
       sharedTier: this.config.sharedTier,
       debugAuth: this.config.debugAuth,
@@ -174,6 +186,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (this.config.motionTimeout !== undefined && this.config.motionTimeout < MIN_MOTION_TIMEOUT) {
       this.log.warn(`motionTimeout of ${this.config.motionTimeout}s is very short and may cause flickering`);
     }
+  }
+
+  private buildAuthStoragePath(): string | undefined {
+    if (this.config.persistAuth === false) {
+      return undefined;
+    }
+    const deviceId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
+    const keySource = `${this.config.username}|${deviceId}`;
+    const key = createHash('sha1').update(keySource).digest('hex');
+    return path.join(this.api.user.persistPath(), 'blink-auth', `${key}.json`);
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {

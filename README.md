@@ -89,6 +89,9 @@ Add a platform entry to your Homebridge `config.json`:
 | `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (hardware_id) |
 | `deviceName` | No | - | Fallback for deviceId |
 | `twoFactorCode` | No | - | 2FA code (only needed during initial setup) |
+| `clientVerificationCode` | No | - | New-device verification PIN (only when prompted) |
+| `persistAuth` | No | `true` | Persist auth tokens across restarts |
+| `trustDevice` | No | `true` | Trust this device during client verification |
 | `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` |
 | `sharedTier` | No | - | Override shared REST tier (defaults to `tier`) |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
@@ -142,6 +145,18 @@ When you first connect a new device to your Blink account:
 
 Future logins will use refresh tokens and won't require 2FA.
 
+## Client Verification (New Device Approval)
+
+Blink may require a one-time **client verification** for new devices, which is separate from 2FA:
+
+1. The plugin will request a verification code on first login.
+2. Check your email/SMS for the code.
+3. Add the code to `clientVerificationCode` in your config.
+4. Restart Homebridge.
+5. After successful verification, **remove the code** from your config.
+
+If you keep seeing verification prompts, ensure `persistAuth` is enabled and your `deviceId` is unique.
+
 ## Troubleshooting
 
 ### 401 Unauthorized / 403 Forbidden
@@ -177,9 +192,10 @@ This plugin's API implementation is based on reverse engineering the official Bl
 
 ### Authentication
 
-- OAuth 2.0 password grant flow via `api.pdoauth.blink.com`
+- OAuth 2.0 password grant flow via `api.oauth.blink.com` (production)
 - Automatic token refresh when tokens expire
 - Hardware ID required for device identification
+- Client verification PIN flow for new device approval
 
 ### Endpoints
 

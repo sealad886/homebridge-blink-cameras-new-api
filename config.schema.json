@@ -46,6 +46,12 @@
         "type": "string",
         "required": false
       },
+      "clientVerificationCode": {
+        "title": "Client Verification Code",
+        "description": "Verification code sent for new device approval. Only needed if Blink asks to verify this client. Remove after successful verification.",
+        "type": "string",
+        "required": false
+      },
       "tier": {
         "title": "Blink Environment",
         "description": "Blink API environment tier. Use 'prod' for production (default).",
@@ -82,6 +88,20 @@
         "description": "Enable verbose diagnostic logging for Blink API authentication. Useful for troubleshooting login failures, token issues, and API errors. WARNING: May log sensitive request details.",
         "type": "boolean",
         "default": false,
+        "required": false
+      },
+      "persistAuth": {
+        "title": "Persist Auth Tokens",
+        "description": "Persist OAuth tokens across restarts to avoid repeated logins and verification prompts.",
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "trustDevice": {
+        "title": "Trust This Device",
+        "description": "Mark this Homebridge instance as a trusted device during client verification.",
+        "type": "boolean",
+        "default": true,
         "required": false
       },
       "pollInterval": {
@@ -247,7 +267,8 @@
           "key": "password",
           "type": "password"
         },
-        "twoFactorCode"
+        "twoFactorCode",
+        "clientVerificationCode"
       ]
     },
     {
@@ -311,7 +332,9 @@
       "expanded": false,
       "items": [
         "tier",
-        "debugAuth"
+        "debugAuth",
+        "persistAuth",
+        "trustDevice"
       ]
     }
   ]

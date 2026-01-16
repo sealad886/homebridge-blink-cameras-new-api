@@ -7,6 +7,7 @@
  */
 
 import { BlinkAuth } from './auth';
+import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod } from '../types';
 import { randomUUID } from 'node:crypto';
@@ -18,11 +19,6 @@ import { randomUUID } from 'node:crypto';
  * - User-Agent: Custom UA string
  * - LOCALE: Device locale
  */
-const DEFAULT_HEADERS = {
-  'APP-BUILD': 'ANDROID_29426569',
-  'User-Agent': 'Blink/51.0 (NodeJS; Homebridge)',
-  LOCALE: 'en_US',
-};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -154,9 +150,7 @@ export class BlinkHttp {
     const url = this.buildUrl(path);
     const requestId = randomUUID();
     const headers: Record<string, string> = {
-      ...DEFAULT_HEADERS,
-      // X-Blink-Time-Zone required per API Dossier Section 2.3
-      'X-Blink-Time-Zone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ...buildDefaultHeaders(),
       'Content-Type': 'application/json',
       ...this.auth.getAuthHeaders(),
     };

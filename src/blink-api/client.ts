@@ -11,6 +11,7 @@ import { BlinkAuth } from './auth';
 import { BlinkHttp } from './http';
 import { getSharedRestBaseUrl, getSharedRestRootUrl } from './urls';
 import {
+  BlinkAccountInfo,
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
@@ -18,6 +19,8 @@ import {
   BlinkMediaResponse,
   BlinkMediaQuery,
   BlinkLiveVideoResponse,
+  BlinkPinVerificationResponse,
+  BlinkResendPinResponse,
 } from '../types';
 
 export class BlinkApi {
@@ -25,6 +28,7 @@ export class BlinkApi {
   private readonly http: BlinkHttp;
   private readonly sharedHttp: BlinkHttp;
   private accountId: number | null = null;
+  private clientId: number | null = null;
 
   constructor(private readonly config: BlinkConfig) {
     this.auth = new BlinkAuth(config);
@@ -41,8 +45,101 @@ export class BlinkApi {
    * Source: API Dossier Section 2.1 (OAuth Flow)
    */
   async login(twoFaCode?: string): Promise<void> {
-    await this.auth.login(twoFaCode ?? this.config.twoFactorCode);
+    if (twoFaCode ?? this.config.twoFactorCode) {
+      await this.auth.login(twoFaCode ?? this.config.twoFactorCode);
+    } else {
+      await this.auth.ensureValidToken();
+    }
     this.accountId = this.auth.getAccountId();
+    this.clientId = this.auth.getClientId();
+    await this.syncAccountInfoAndVerify();
+  }
+
+  /**
+   * Fetch account info and handle any first-time verification requirements.
+   */
+  private async syncAccountInfoAndVerify(): Promise<void> {
+    const accountInfo = await this.getAccountInfo();
+    this.accountId = accountInfo.account_id ?? this.accountId;
+    this.clientId = accountInfo.client_id ?? this.clientId;
+    this.auth.setAccountId(this.accountId);
+    this.auth.setClientId(this.clientId);
+
+    if (accountInfo.client_verification_required) {
+      await this.handleClientVerification(accountInfo);
+    }
+
+    if (accountInfo.phone_verification_required || accountInfo.account_verification_required) {
+      const log = this.config.logger;
+      log?.warn('Blink account requires additional verification (phone/email).');
+      log?.warn('Complete verification in the Blink app, then restart Homebridge.');
+      throw new Error('Blink account verification required');
+    }
+  }
+
+  private async handleClientVerification(accountInfo: BlinkAccountInfo): Promise<void> {
+    const log = this.config.logger;
+    const code = this.config.clientVerificationCode;
+
+    if (!code) {
+      await this.requestClientVerificationPin();
+      log?.warn('Blink client verification required. A verification code has been sent.');
+      log?.warn('Add "clientVerificationCode" to your Homebridge config and restart.');
+      throw new Error('Blink client verification required');
+    }
+
+    const trustDevice = this.config.trustDevice ?? true;
+    const trustDeviceEnabled = accountInfo.trust_device_enabled ?? true;
+    await this.verifyClientVerificationPin(code, trustDeviceEnabled, trustDevice);
+    log?.info('Blink client verification successful.');
+  }
+
+  /**
+   * Get account info with verification flags.
+   * Source: API Dossier Section 3.9 - GET v2/users/info
+   */
+  async getAccountInfo(): Promise<BlinkAccountInfo> {
+    await this.auth.ensureValidToken();
+    const info = await this.http.get<BlinkAccountInfo>('v2/users/info');
+    if (info?.account_id) {
+      this.accountId = info.account_id;
+    }
+    if (info?.client_id) {
+      this.clientId = info.client_id;
+    }
+    return info;
+  }
+
+  /**
+   * Trigger a client verification PIN email/SMS.
+   */
+  async requestClientVerificationPin(): Promise<BlinkResendPinResponse> {
+    const clientId = await this.ensureClientId();
+    return this.http.post<BlinkResendPinResponse>(`v5/clients/${clientId}/client_verification/pin/resend`);
+  }
+
+  /**
+   * Verify client verification PIN and optionally trust this device.
+   */
+  async verifyClientVerificationPin(
+    pin: string,
+    trustDeviceEnabled = true,
+    trustDevice = true,
+  ): Promise<BlinkPinVerificationResponse> {
+    const clientId = await this.ensureClientId();
+    if (trustDeviceEnabled) {
+      return this.http.post<BlinkPinVerificationResponse>(`v5/clients/${clientId}/client_verification/pin/verify`, {
+        pin,
+        trusted: trustDevice,
+      });
+    }
+
+    return this.http.post<BlinkPinVerificationResponse>(`v4/clients/${clientId}/pin/verify`, {
+      pin,
+      email: this.config.email,
+      device_identifier: this.config.hardwareId,
+      client_name: this.config.clientName ?? 'homebridge-blink',
+    });
   }
 
   /**
@@ -350,6 +447,21 @@ export class BlinkApi {
       throw new Error('Blink account id is not set');
     }
 
+    this.auth.setAccountId(accountId);
     return accountId;
+  }
+
+  private async ensureClientId(): Promise<number> {
+    if (!this.clientId) {
+      await this.getAccountInfo();
+    }
+
+    const clientId = this.clientId ?? this.auth.getClientId();
+    if (!clientId) {
+      throw new Error('Blink client id is not set');
+    }
+
+    this.auth.setClientId(clientId);
+    return clientId;
   }
 }
