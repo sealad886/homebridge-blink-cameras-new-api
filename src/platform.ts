@@ -201,7 +201,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const deviceId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
     const keySource = `${this.config.username}|${deviceId}`;
     const key = createHash('sha1').update(keySource).digest('hex');
-    return path.join(persistRoot, 'blink-auth', `${key}.json`);
+
+    // Avoid writing inside Homebridge's HAP persist directory (node-persist cannot
+    // handle subdirectories there and will crash Homebridge on startup).
+    const persistBase = path.dirname(persistRoot);
+    return path.join(persistBase, 'blink-auth', `${key}.json`);
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
