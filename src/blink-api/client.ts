@@ -55,6 +55,14 @@ export class BlinkApi {
   }
 
   /**
+   * Get authentication headers for external requests (e.g., thumbnail image fetches).
+   * Includes Bearer token and TOKEN-AUTH header if available.
+   */
+  getAuthHeaders(): Record<string, string> {
+    return this.auth.getAuthHeaders();
+  }
+
+  /**
    * Authenticate with Blink API using OAuth 2.0 Authorization Code Flow with PKCE
    * 
    * @param twoFaCode - Optional 2FA code (if provided, will be used to complete pending 2FA)

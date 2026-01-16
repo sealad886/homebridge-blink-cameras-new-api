@@ -97,11 +97,17 @@ export class NetworkAccessory {
     try {
       if (shouldArm) {
         const response = await this.platform.apiClient.armNetwork(this.device.id);
-        await this.platform.apiClient.pollCommand(this.device.id, response.command_id);
+        const commandId = response.id ?? response.command_id;
+        if (commandId) {
+          await this.platform.apiClient.pollCommand(this.device.id, commandId);
+        }
         this.platform.log.info(`Armed network: ${this.device.name}`);
       } else {
         const response = await this.platform.apiClient.disarmNetwork(this.device.id);
-        await this.platform.apiClient.pollCommand(this.device.id, response.command_id);
+        const commandId = response.id ?? response.command_id;
+        if (commandId) {
+          await this.platform.apiClient.pollCommand(this.device.id, commandId);
+        }
         this.platform.log.info(`Disarmed network: ${this.device.name}`);
       }
 

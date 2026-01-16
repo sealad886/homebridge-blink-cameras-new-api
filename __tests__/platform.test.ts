@@ -103,7 +103,7 @@ describe('BlinkCamerasPlatform', () => {
     (platform as unknown as { registerNetwork: (net: typeof network) => void }).registerNetwork(network);
 
     expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
-    expect(cachedAccessory.context.handler).toBeDefined();
+    // Handler is stored in Map, not in context (to avoid circular JSON serialization)
     expect(cachedAccessory.context.device).toBe(network);
   });
 });

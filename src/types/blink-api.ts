@@ -204,11 +204,18 @@ export interface BlinkHomescreen {
 /**
  * Response from arm/disarm and other async commands
  * Source: API Dossier Section 3.10 (Commands & Polling) / CommandApi.smali
+ * Note: arm/disarm returns 'id' while other commands return 'command_id'
  */
 export interface BlinkCommandResponse {
-  command_id: number;
+  /** Command ID - used by thumbnail and other commands */
+  command_id?: number;
+  /** Command ID - used by arm/disarm responses */
+  id?: number;
   server?: string;
   network_id?: number;
+  command?: string;
+  state?: string;
+  commands?: BlinkCommandResponse[];
 }
 
 /**

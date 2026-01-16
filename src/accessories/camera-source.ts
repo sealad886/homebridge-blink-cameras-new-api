@@ -234,8 +234,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         ? url
         : new URL(url, this.api.getSharedRestRootUrl()).toString();
 
-      // Fetch the thumbnail image
-      const response = await fetch(fullUrl);
+      // Fetch the thumbnail image with auth headers
+      const response = await fetch(fullUrl, {
+        headers: this.api.getAuthHeaders(),
+      });
       if (!response.ok) {
         throw new Error(`Failed to fetch thumbnail: ${response.status}`);
       }
@@ -270,8 +272,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       // Poll for command completion
-      if (response?.command_id) {
-        await this.api.pollCommand(this.networkId, response.command_id);
+      if (response) {
+        const commandId = response.id ?? response.command_id;
+        if (commandId) {
+          await this.api.pollCommand(this.networkId, commandId);
+        }
       }
     } catch (error) {
       // Log but don't fail - we may still have a cached thumbnail

@@ -313,14 +313,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       existing.displayName = displayName;
       existing.context.device = network;
       const handler = new NetworkAccessory(this, existing, network);
-      existing.context.handler = handler;
       this.networkAccessories.set(network.id, handler);
       this.log.info('Restored Blink network from cache:', displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = network;
       const handler = new NetworkAccessory(this, accessory, network);
-      accessory.context.handler = handler;
       this.networkAccessories.set(network.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
@@ -337,14 +335,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       existing.displayName = displayName;
       existing.context.device = camera;
       const handler = new CameraAccessory(this, existing, camera);
-      existing.context.handler = handler;
       this.cameraAccessories.set(camera.id, handler);
       this.log.info('Restored Blink camera from cache:', displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = camera;
       const handler = new CameraAccessory(this, accessory, camera);
-      accessory.context.handler = handler;
       this.cameraAccessories.set(camera.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
@@ -361,14 +357,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       existing.displayName = displayName;
       existing.context.device = doorbell;
       const handler = new DoorbellAccessory(this, existing, doorbell);
-      existing.context.handler = handler;
       this.doorbellAccessories.set(doorbell.id, handler);
       this.log.info('Restored Blink doorbell from cache:', displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = doorbell;
       const handler = new DoorbellAccessory(this, accessory, doorbell);
-      accessory.context.handler = handler;
       this.doorbellAccessories.set(doorbell.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
@@ -385,14 +379,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       existing.displayName = displayName;
       existing.context.device = owl;
       const handler = new OwlAccessory(this, existing, owl);
-      existing.context.handler = handler;
       this.owlAccessories.set(owl.id, handler);
       this.log.info('Restored Blink owl from cache:', displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = owl;
       const handler = new OwlAccessory(this, accessory, owl);
-      accessory.context.handler = handler;
       this.owlAccessories.set(owl.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
