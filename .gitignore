@@ -225,3 +225,4 @@ vite.config.ts.timestamp-*
 
 # Built Visual Studio Code Extensions
 *.vsix
+scripts/deploy-to-pi.sh
