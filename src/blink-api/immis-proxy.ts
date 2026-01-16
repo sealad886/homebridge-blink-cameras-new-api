@@ -15,7 +15,9 @@
 
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
 import * as net from 'node:net';
+import * as path from 'node:path';
 import { setInterval, clearInterval } from 'node:timers';
 import * as tls from 'node:tls';
 import { URL } from 'node:url';
@@ -33,6 +35,8 @@ export interface ImmisProxyConfig {
   log?: (message: string) => void;
   /** Debug logging enabled */
   debug?: boolean;
+  /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
+  saveStreamPath?: string;
 }
 
 export interface ImmisProxyEvents {
@@ -74,11 +78,13 @@ const CONN_ID_MAX_LENGTH = 16;
  * header, and proxies the decoded MPEG-TS stream to the client.
  */
 export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
-  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'debug'>> & Pick<ImmisProxyConfig, 'log' | 'debug'>;
+  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath'>> & Pick<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath'>;
   private readonly parsedUrl: URL;
 
   private server: net.Server | null = null;
   private clients: net.Socket[] = [];
+  private streamFile: fs.WriteStream | null = null;
+  private streamBytesWritten = 0;
   private targetSocket: tls.TLSSocket | null = null;
   private isRunning = false;
   private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
@@ -98,6 +104,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       host: config.host ?? '127.0.0.1',
       port: config.port ?? 0,
       log: config.log,
+      saveStreamPath: config.saveStreamPath,
       debug: config.debug,
     };
   }
@@ -147,10 +154,57 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.isRunning = true;
         const url = `tcp://${address.address}:${address.port}`;
         this.log(`Proxy server listening on ${url}`);
+
+        // Create stream recording file if saveStreamPath is configured
+        if (this.config.saveStreamPath) {
+          this.startStreamRecording();
+        }
+
         this.emit('ready', url);
         resolve(url);
       });
     });
+  }
+
+  /**
+   * Start recording the stream to a file
+   */
+  private startStreamRecording(): void {
+    if (!this.config.saveStreamPath) {
+      return;
+    }
+
+    try {
+      // Create directory if it doesn't exist
+      fs.mkdirSync(this.config.saveStreamPath, { recursive: true });
+
+      // Create timestamped filename
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = path.join(this.config.saveStreamPath, `blink-stream-${this.config.serial}-${timestamp}.ts`);
+
+      this.streamFile = fs.createWriteStream(filename);
+      this.streamBytesWritten = 0;
+
+      this.log(`Recording stream to: ${filename}`);
+
+      this.streamFile.on('error', (error) => {
+        this.log(`Stream recording error: ${error.message}`);
+        this.stopStreamRecording();
+      });
+    } catch (error) {
+      this.log(`Failed to start stream recording: ${error}`);
+    }
+  }
+
+  /**
+   * Stop recording the stream
+   */
+  private stopStreamRecording(): void {
+    if (this.streamFile) {
+      this.streamFile.end();
+      this.log(`Stream recording stopped. Total bytes written: ${this.streamBytesWritten}`);
+      this.streamFile = null;
+    }
   }
 
   /**
@@ -356,6 +410,12 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private forwardToClients(data: Buffer): void {
     this.emit('data', data);
 
+    // Write to recording file if active
+    if (this.streamFile && !this.streamFile.destroyed) {
+      this.streamFile.write(data);
+      this.streamBytesWritten += data.length;
+    }
+
     for (const client of this.clients) {
       if (!client.destroyed) {
         client.write(data);
@@ -431,6 +491,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     this.isRunning = false;
     this.log('Stopping proxy server');
+
+    // Stop stream recording
+    this.stopStreamRecording();
 
     // Stop keep-alive timer
     if (this.keepAliveInterval) {

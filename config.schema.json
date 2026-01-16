@@ -156,6 +156,13 @@
         "default": false,
         "required": false
       },
+      "debugStreamPath": {
+        "title": "Debug Stream Recording Path",
+        "description": "Path to save raw MPEG-TS stream recordings for debugging. Leave empty to disable. Files are saved as blink-stream-{serial}-{timestamp}.ts",
+        "type": "string",
+        "required": false,
+        "placeholder": "/tmp/blink-streams"
+      },
       "rtspTransport": {
         "title": "RTSP Transport",
         "description": "RTSP transport mode for Blink live view input.",

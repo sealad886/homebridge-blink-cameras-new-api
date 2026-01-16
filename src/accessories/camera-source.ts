@@ -47,6 +47,8 @@ export interface BlinkCameraStreamingConfig {
   video: {
     maxBitrate?: number;
   };
+  /** Path to save debug stream recordings (MPEG-TS files) */
+  debugStreamPath?: string;
 }
 
 export type BlinkCameraStreamingConfigInput = Omit<
@@ -84,6 +86,7 @@ export const resolveStreamingConfig = (
     ffmpegDebug: config?.ffmpegDebug ?? DEFAULT_STREAMING_CONFIG.ffmpegDebug,
     rtspTransport: config?.rtspTransport ?? DEFAULT_STREAMING_CONFIG.rtspTransport,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
+    debugStreamPath: config?.debugStreamPath,
     audio: {
       enabled: audio.enabled ?? DEFAULT_STREAMING_CONFIG.audio.enabled,
       twoWay: audio.twoWay ?? DEFAULT_STREAMING_CONFIG.audio.twoWay,
@@ -421,6 +424,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           serial: this.serial,
           log: (msg) => this.log(msg),
           debug: this.streamingConfig.ffmpegDebug,
+          saveStreamPath: this.streamingConfig.debugStreamPath,
         });
 
         active.immisProxy = immisProxy;
