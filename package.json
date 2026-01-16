@@ -37,7 +37,8 @@
         "npm-check-updates": "^19.3.1",
         "prettier": "^3.7.4",
         "ts-jest": "^29.4.6",
-        "typescript": "^5.9.3"
+        "typescript": "^5.9.3",
+        "jest-util": "*"
     },
     "peerDependencies": {
         "homebridge": ">=1.11.1"
