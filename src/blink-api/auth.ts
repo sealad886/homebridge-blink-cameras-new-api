@@ -315,15 +315,33 @@ export class BlinkAuth {
 
   /**
    * Extract CSRF token from HTML response
-   * Looks for: <input type="hidden" name="_token" value="...">
+   * Looks for: 
+   * - JSON in <script id="oauth-args">{"csrf-token":"..."}</script>
+   * - <input type="hidden" name="_token" value="...">
+   * - <meta name="csrf-token" content="...">
    */
   private extractCsrfToken(html: string): string | null {
-    // Try multiple patterns
+    // First, try to extract from oauth-args JSON (Blink's new SPA format)
+    const oauthArgsMatch = html.match(/<script\s+id="oauth-args"[^>]*type="application\/json"[^>]*>([^<]+)<\/script>/i);
+    if (oauthArgsMatch?.[1]) {
+      try {
+        const oauthArgs = JSON.parse(oauthArgsMatch[1]) as { 'csrf-token'?: string };
+        if (oauthArgs['csrf-token']) {
+          this.logDebug(`Found CSRF token in oauth-args JSON: ${redact(oauthArgs['csrf-token'])}`);
+          return oauthArgs['csrf-token'];
+        }
+      } catch {
+        this.logDebug('Failed to parse oauth-args JSON');
+      }
+    }
+
+    // Fallback to traditional HTML patterns
     const patterns = [
       /<input[^>]*name="_token"[^>]*value="([^"]+)"/i,
       /<input[^>]*value="([^"]+)"[^>]*name="_token"/i,
       /name="_token"[^>]*value="([^"]+)"/i,
       /<meta[^>]*name="csrf-token"[^>]*content="([^"]+)"/i,
+      /"csrf-token"\s*:\s*"([^"]+)"/i, // JSON format in scripts
     ];
 
     for (const pattern of patterns) {
@@ -384,13 +402,20 @@ export class BlinkAuth {
     };
 
     const authorizeUrl = new URL(getOAuthAuthorizeUrl(this.config));
+    // Required OAuth parameters
     authorizeUrl.searchParams.set('client_id', OAUTH_CLIENT_ID);
     authorizeUrl.searchParams.set('redirect_uri', OAUTH_REDIRECT_URI);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('code_challenge', codeChallenge);
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');
     authorizeUrl.searchParams.set('scope', OAUTH_SCOPE);
-    authorizeUrl.searchParams.set('state', state);
+    // App/device info (matching blinkpy)
+    authorizeUrl.searchParams.set('app_brand', 'blink');
+    authorizeUrl.searchParams.set('app_version', '50.1');
+    authorizeUrl.searchParams.set('device_brand', 'Apple');
+    authorizeUrl.searchParams.set('device_model', 'iPhone16,1');
+    authorizeUrl.searchParams.set('device_os_version', '26.1');
+    authorizeUrl.searchParams.set('hardware_id', this.config.hardwareId);
 
     this.logDebug(`OAuth authorize request: ${authorizeUrl.toString()}`);
 
@@ -458,20 +483,31 @@ export class BlinkAuth {
   /**
    * Step 3: Submit credentials
    * POST /oauth/v2/signin
+   * 
+   * Returns:
+   * - true: Login successful, authorization code available
+   * - false: 2FA required, need to call oauthVerify2FA
+   * 
+   * Status codes:
+   * - 302: Success (redirect to authorize)
+   * - 412: 2FA required (JSON body with phone, user_id, etc.)
    */
   private async oauthSignin(csrfToken: string): Promise<boolean> {
     const signinUrl = getOAuthSigninUrl(this.config);
     this.logDebug(`Submitting credentials to: ${signinUrl}`);
 
+    // Use same field names as blinkpy: username, password, csrf-token
     const formData = new URLSearchParams({
-      email: this.config.email,
+      username: this.config.email,
       password: this.config.password,
-      _token: csrfToken,
+      'csrf-token': csrfToken,
     });
 
     const headers = new Headers({
       ...buildOAuthHeaders(),
       'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://api.oauth.blink.com',
+      'Referer': getOAuthSigninUrl(this.config),
     });
 
     if (this.sessionCookies) {
@@ -487,6 +523,35 @@ export class BlinkAuth {
 
     this.extractAndMergeCookies(response);
     this.logDebug(`Signin response: ${response.status}`);
+
+    // Status 412 = 2FA required (returns JSON with phone, user_id, etc.)
+    if (response.status === 412) {
+      this.logDebug('Status 412: 2FA required');
+      try {
+        const twoFaData = await response.json() as {
+          phone?: string;
+          user_id?: number;
+          tsv_state?: string;
+          next_time_in_secs?: number;
+        };
+        if (this.oauthSession) {
+          this.oauthSession.requires2FA = true;
+          // Extract last 4 digits of phone if available
+          if (twoFaData.phone) {
+            const phoneMatch = twoFaData.phone.match(/(\d{2})$/);
+            this.oauthSession.phoneLastFour = phoneMatch?.[1];
+          }
+        }
+        this.logDebug(`  Phone: ${twoFaData.phone}`);
+        this.logDebug(`  User ID: ${twoFaData.user_id}`);
+      } catch {
+        // JSON parse failed, still mark as 2FA required
+        if (this.oauthSession) {
+          this.oauthSession.requires2FA = true;
+        }
+      }
+      return false; // 2FA required
+    }
 
     // Check for redirect (success or 2FA required)
     const location = response.headers.get('location');
@@ -538,6 +603,15 @@ export class BlinkAuth {
   /**
    * Step 4: Submit 2FA PIN
    * POST /oauth/v2/2fa/verify
+   * 
+   * Field names verified against working flow:
+   * - 2fa_code: The verification code
+   * - csrf-token: The CSRF token from signin page
+   * - remember_me: Whether to remember device
+   * 
+   * Response:
+   * - 201: Success, body contains {"status":"auth-completed"}
+   * - 302: Success, redirect to authorize
    */
   private async oauthVerify2FA(pin: string): Promise<boolean> {
     if (!this.oauthSession?.csrfToken) {
@@ -547,14 +621,18 @@ export class BlinkAuth {
     const verifyUrl = getOAuth2FAVerifyUrl(this.config);
     this.logDebug(`Verifying 2FA at: ${verifyUrl}`);
 
+    // Field names match blinkpy: 2fa_code, csrf-token, remember_me
     const formData = new URLSearchParams({
-      pin,
-      _token: this.oauthSession.csrfToken,
+      '2fa_code': pin,
+      'csrf-token': this.oauthSession.csrfToken,
+      'remember_me': 'false',
     });
 
     const headers = new Headers({
       ...buildOAuthHeaders(),
       'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://api.oauth.blink.com',
+      'Referer': getOAuthSigninUrl(this.config),
     });
 
     if (this.sessionCookies) {
@@ -570,6 +648,12 @@ export class BlinkAuth {
 
     this.extractAndMergeCookies(response);
     this.logDebug(`2FA verify response: ${response.status}`);
+
+    // Status 201 means auth-completed (success)
+    if (response.status === 201) {
+      this.logDebug('2FA verification successful (201)');
+      return true;
+    }
 
     const location = response.headers.get('location');
     if (location) {
@@ -590,7 +674,10 @@ export class BlinkAuth {
 
   /**
    * Step 5: Get authorization code from redirect
-   * GET /oauth/v2/authorize (follow redirect to capture code)
+   * 
+   * CRITICAL: After 2FA, use bare /oauth/v2/authorize URL WITHOUT params.
+   * The server session remembers the original OAuth request parameters.
+   * Sending params again causes redirect back to signin.
    */
   private async oauthGetAuthorizationCode(): Promise<string> {
     if (!this.oauthSession) {
@@ -602,16 +689,10 @@ export class BlinkAuth {
       return this.oauthSession.authorizationCode;
     }
 
-    const authorizeUrl = new URL(getOAuthAuthorizeUrl(this.config));
-    authorizeUrl.searchParams.set('client_id', OAUTH_CLIENT_ID);
-    authorizeUrl.searchParams.set('redirect_uri', OAUTH_REDIRECT_URI);
-    authorizeUrl.searchParams.set('response_type', 'code');
-    authorizeUrl.searchParams.set('code_challenge', this.oauthSession.codeChallenge);
-    authorizeUrl.searchParams.set('code_challenge_method', 'S256');
-    authorizeUrl.searchParams.set('scope', OAUTH_SCOPE);
-    authorizeUrl.searchParams.set('state', this.oauthSession.state);
+    // Use bare authorize URL - session remembers the original OAuth request
+    const authorizeUrl = getOAuthAuthorizeUrl(this.config);
 
-    this.logDebug(`Getting authorization code: ${authorizeUrl.toString()}`);
+    this.logDebug(`Getting authorization code (bare URL): ${authorizeUrl}`);
 
     const headers = new Headers({
       ...buildOAuthHeaders(),
@@ -621,7 +702,7 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(authorizeUrl.toString(), {
+    const response = await fetch(authorizeUrl, {
       method: 'GET',
       headers,
       redirect: 'manual',
@@ -645,6 +726,16 @@ export class BlinkAuth {
   /**
    * Step 6: Exchange authorization code for tokens
    * POST /oauth/token with grant_type=authorization_code
+   * 
+   * Parameters validated against working flow:
+   * - grant_type: authorization_code
+   * - code: the authorization code
+   * - code_verifier: PKCE verifier
+   * - client_id: ios
+   * - redirect_uri: the app callback URI
+   * - scope: 'client' (CRITICAL - must match authorize request)
+   * - hardware_id: device identifier
+   * - app_brand: blink
    */
   private async oauthExchangeCode(authorizationCode: string): Promise<void> {
     if (!this.oauthSession) {
@@ -658,8 +749,11 @@ export class BlinkAuth {
       grant_type: 'authorization_code',
       code: authorizationCode,
       code_verifier: this.oauthSession.codeVerifier,
-      redirect_uri: OAUTH_REDIRECT_URI,
       client_id: OAUTH_CLIENT_ID,
+      redirect_uri: OAUTH_REDIRECT_URI,
+      scope: OAUTH_SCOPE,
+      hardware_id: this.config.hardwareId,
+      app_brand: 'blink',
     });
 
     const headers = new Headers({

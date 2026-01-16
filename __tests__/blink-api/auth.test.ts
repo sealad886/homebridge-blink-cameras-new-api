@@ -257,7 +257,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       // Verify 2FA verification was called with the PIN
       const verifyCall = fetchMock.mock.calls[3];
       const verifyBody = new URLSearchParams((verifyCall[1] as FetchOptions)!.body as string);
-      expect(verifyBody.get('pin')).toBe('123456');
+      expect(verifyBody.get('2fa_code')).toBe('123456');
     });
   });
 

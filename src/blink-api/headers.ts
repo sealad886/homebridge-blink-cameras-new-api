@@ -27,12 +27,12 @@ export const OAUTH_REDIRECT_URI = 'immedia-blink://applinks.blink.com/signin/cal
 // iOS Safari User-Agent for OAuth v2 web flow
 // Source: blinkpy - OAUTH_USER_AGENT (mimics iOS Safari)
 export const OAUTH_USER_AGENT =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
-  'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) ' +
+  'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1';
 
 // OAuth v2 scope
-// Source: blinkpy - scope used in authorize request
-export const OAUTH_SCOPE = 'openid profile email offline_access';
+// Source: blinkpy - OAUTH_SCOPE (note: for v2 flow, blinkpy still uses "client")
+export const OAUTH_SCOPE = 'client';
 
 /**
  * Build default headers for REST API requests
