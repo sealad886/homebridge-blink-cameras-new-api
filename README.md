@@ -109,6 +109,10 @@ Add a platform entry to your Homebridge `config.json`:
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 
+When `persistAuth` is enabled, auth tokens are stored in a sibling folder to Homebridge's HAP
+storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the HAP
+persist directory.
+
 ## Live Streaming (FFmpeg)
 
 Live streaming uses FFmpeg to transcode Blink's RTSPS stream to HomeKit SRTP. Make sure FFmpeg is installed
