@@ -55,6 +55,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   deviceName?: string;
   twoFactorCode?: string;
   clientVerificationCode?: string;
+  accountVerificationCode?: string;
   persistAuth?: boolean;
   trustDevice?: boolean;
   tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
@@ -148,6 +149,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       clientName: this.config.deviceName,
       twoFactorCode: this.config.twoFactorCode,
       clientVerificationCode: this.config.clientVerificationCode,
+      accountVerificationCode: this.config.accountVerificationCode,
       trustDevice: this.config.trustDevice,
       authStoragePath,
       tier: this.config.tier,

@@ -75,6 +75,15 @@ export interface BlinkAccountInfo {
   trust_device_enabled?: boolean;
   allow_pin_resend_seconds?: number;
   verification_channel?: string;
+  phone_verification_channel?: string;
+}
+
+/**
+ * Tier info response from v1/users/tier_info.
+ */
+export interface BlinkTierInfo {
+  account_id: number;
+  tier: string;
 }
 
 /**
@@ -314,6 +323,28 @@ export interface BlinkPinVerificationResponse {
 }
 
 /**
+ * Account/phone verification PIN resend response.
+ */
+export interface BlinkGeneratePinResponse {
+  allow_pin_resend_seconds?: number;
+  verification_channel?: string;
+  phone_verification_channel?: string;
+  message?: string;
+  code?: number;
+}
+
+/**
+ * Account/phone verification PIN verification response.
+ */
+export interface BlinkVerifyPinResponse {
+  valid: boolean;
+  token?: string | null;
+  require_new_pin: boolean;
+  code: number;
+  message: string;
+}
+
+/**
  * Logger interface for diagnostic output
  * Compatible with Homebridge Logger
  */
@@ -336,6 +367,7 @@ export interface BlinkConfig {
   clientName?: string;
   twoFactorCode?: string;
   clientVerificationCode?: string;
+  accountVerificationCode?: string;
   trustDevice?: boolean;
   authStoragePath?: string;
   authStorage?: BlinkAuthStorage;

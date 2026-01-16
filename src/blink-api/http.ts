@@ -97,7 +97,7 @@ export class BlinkHttpError extends Error {
 }
 
 export class BlinkHttp {
-  private readonly baseUrl: string;
+  private baseUrl: string;
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
 
@@ -109,6 +109,11 @@ export class BlinkHttp {
     this.baseUrl = baseUrlOverride ?? getRestBaseUrl(config);
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
+  }
+
+  setBaseUrl(baseUrl: string): void {
+    this.baseUrl = baseUrl;
+    this.logDebug(`Updated base URL to ${baseUrl}`);
   }
 
   /**

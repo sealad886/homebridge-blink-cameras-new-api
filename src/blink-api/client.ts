@@ -9,19 +9,33 @@
 
 import { BlinkAuth } from './auth';
 import { BlinkHttp } from './http';
-import { getSharedRestBaseUrl, getSharedRestRootUrl } from './urls';
+import { getRestBaseUrl, getSharedRestBaseUrl, getSharedRestRootUrl } from './urls';
 import {
   BlinkAccountInfo,
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
+  BlinkGeneratePinResponse,
   BlinkHomescreen,
   BlinkMediaResponse,
   BlinkMediaQuery,
   BlinkLiveVideoResponse,
   BlinkPinVerificationResponse,
   BlinkResendPinResponse,
+  BlinkTierInfo,
+  BlinkVerifyPinResponse,
 } from '../types';
+
+const KNOWN_TIERS = ['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1'] as const;
+type KnownTier = (typeof KNOWN_TIERS)[number];
+
+const normalizeTier = (tier?: string | null): KnownTier | null => {
+  if (!tier) {
+    return null;
+  }
+  const normalized = tier.toLowerCase();
+  return KNOWN_TIERS.includes(normalized as KnownTier) ? (normalized as KnownTier) : null;
+};
 
 export class BlinkApi {
   private readonly auth: BlinkAuth;
@@ -65,15 +79,14 @@ export class BlinkApi {
     this.auth.setAccountId(this.accountId);
     this.auth.setClientId(this.clientId);
 
+    await this.syncTierInfo();
+
     if (accountInfo.client_verification_required) {
       await this.handleClientVerification(accountInfo);
     }
 
     if (accountInfo.phone_verification_required || accountInfo.account_verification_required) {
-      const log = this.config.logger;
-      log?.warn('Blink account requires additional verification (phone/email).');
-      log?.warn('Complete verification in the Blink app, then restart Homebridge.');
-      throw new Error('Blink account verification required');
+      await this.handleAccountVerification(accountInfo);
     }
   }
 
@@ -94,6 +107,73 @@ export class BlinkApi {
     log?.info('Blink client verification successful.');
   }
 
+  private async handleAccountVerification(accountInfo: BlinkAccountInfo): Promise<void> {
+    const log = this.config.logger;
+    const code = this.config.accountVerificationCode;
+    const requiredLabels: string[] = [];
+    if (accountInfo.phone_verification_required) {
+      requiredLabels.push('phone');
+    }
+    if (accountInfo.account_verification_required) {
+      requiredLabels.push('account');
+    }
+    const requirement = requiredLabels.length > 0 ? requiredLabels.join(' & ') : 'account';
+
+    if (!code) {
+      const response = await this.requestAccountVerificationPin();
+      const channel = response.phone_verification_channel ?? response.verification_channel;
+      if (channel) {
+        log?.warn(`Blink verification code sent via ${channel}.`);
+      }
+      log?.warn(`Blink requires ${requirement} verification (phone/email).`);
+      log?.warn('Add "accountVerificationCode" to your Homebridge config and restart.');
+      throw new Error('Blink account verification required');
+    }
+
+    const response = await this.verifyAccountVerificationPin(code);
+    if (!response.valid) {
+      log?.warn('Blink account verification failed. Request a new code and try again.');
+      throw new Error('Blink account verification failed');
+    }
+    if (response.require_new_pin) {
+      log?.warn('Blink requires a new verification PIN. Request another code and retry.');
+      throw new Error('Blink account verification requires a new PIN');
+    }
+
+    log?.info('Blink account verification successful.');
+  }
+
+  private updateBaseUrls(): void {
+    this.http.setBaseUrl(getRestBaseUrl(this.config));
+    this.sharedHttp.setBaseUrl(getSharedRestBaseUrl(this.config));
+  }
+
+  private async syncTierInfo(): Promise<void> {
+    const log = this.config.logger;
+    try {
+      const tierInfo = await this.getTierInfo();
+      const normalizedTier = normalizeTier(tierInfo.tier);
+      if (!normalizedTier) {
+        log?.warn(`Blink tier_info returned unsupported tier "${tierInfo.tier}". Using ${this.config.tier ?? 'prod'}.`);
+        return;
+      }
+
+      const previousTier = this.config.tier ?? 'prod';
+      const previousSharedTier = this.config.sharedTier;
+
+      if (normalizedTier !== previousTier) {
+        this.config.tier = normalizedTier;
+        if (!previousSharedTier || previousSharedTier === previousTier) {
+          this.config.sharedTier = normalizedTier;
+        }
+        this.updateBaseUrls();
+        log?.info(`Blink tier updated from ${previousTier} to ${normalizedTier}.`);
+      }
+    } catch (error) {
+      log?.debug?.(`Failed to fetch Blink tier info: ${(error as Error).message}`);
+    }
+  }
+
   /**
    * Get account info with verification flags.
    * Source: API Dossier Section 3.9 - GET v2/users/info
@@ -108,6 +188,34 @@ export class BlinkApi {
       this.clientId = info.client_id;
     }
     return info;
+  }
+
+  /**
+   * Get tier info for the current account.
+   * Source: API Dossier Section 3.9 - GET v1/users/tier_info
+   */
+  async getTierInfo(): Promise<BlinkTierInfo> {
+    await this.auth.ensureValidToken();
+    return this.http.get<BlinkTierInfo>('v1/users/tier_info');
+  }
+
+  /**
+   * Trigger account/phone verification PIN resend.
+   */
+  async requestAccountVerificationPin(): Promise<BlinkGeneratePinResponse> {
+    return this.http.post<BlinkGeneratePinResponse>('v4/users/pin/resend');
+  }
+
+  /**
+   * Verify account/phone verification PIN.
+   */
+  async verifyAccountVerificationPin(pin: string): Promise<BlinkVerifyPinResponse> {
+    return this.http.post<BlinkVerifyPinResponse>('v4/users/pin/verify', {
+      pin,
+      email: this.config.email,
+      device_identifier: this.config.hardwareId,
+      client_name: this.config.clientName ?? 'homebridge-blink',
+    });
   }
 
   /**

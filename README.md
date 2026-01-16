@@ -90,6 +90,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `deviceName` | No | - | Fallback for deviceId |
 | `twoFactorCode` | No | - | 2FA code (only needed during initial setup) |
 | `clientVerificationCode` | No | - | New-device verification PIN (only when prompted) |
+| `accountVerificationCode` | No | - | Account/phone verification PIN (only when prompted) |
 | `persistAuth` | No | `true` | Persist auth tokens across restarts |
 | `trustDevice` | No | `true` | Trust this device during client verification |
 | `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` |
@@ -156,6 +157,16 @@ Blink may require a one-time **client verification** for new devices, which is s
 5. After successful verification, **remove the code** from your config.
 
 If you keep seeing verification prompts, ensure `persistAuth` is enabled and your `deviceId` is unique.
+
+## Account/Phone Verification
+
+Some accounts require an additional **account or phone verification** step:
+
+1. The plugin will request a verification code when required.
+2. Check your email/SMS for the code.
+3. Add the code to `accountVerificationCode` in your config.
+4. Restart Homebridge.
+5. After successful verification, **remove the code** from your config.
 
 ## Troubleshooting
 

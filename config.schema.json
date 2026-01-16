@@ -52,6 +52,12 @@
         "type": "string",
         "required": false
       },
+      "accountVerificationCode": {
+        "title": "Account Verification Code",
+        "description": "Verification code sent for account/phone verification. Only needed if Blink requests account verification. Remove after successful verification.",
+        "type": "string",
+        "required": false
+      },
       "tier": {
         "title": "Blink Environment",
         "description": "Blink API environment tier. Use 'prod' for production (default).",
