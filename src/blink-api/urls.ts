@@ -17,16 +17,12 @@ const normalizeBase = (base: string): string => (base.endsWith('/') ? base : `${
  * Evidence: smali_classes9/com/immediasemi/blink/core/api/RestApiKt.smali
  */
 const resolveTier = (tier?: string): string => {
-  if (!tier) {
+  const normalized = tier?.trim().toLowerCase();
+  if (!normalized) {
     return DEFAULT_TIER;
   }
 
-  const normalized = tier.toLowerCase();
-  if (['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1'].includes(normalized)) {
-    return normalized;
-  }
-
-  return DEFAULT_TIER;
+  return normalized;
 };
 
 const resolveSharedTier = (tier?: string, sharedTier?: string): string => {

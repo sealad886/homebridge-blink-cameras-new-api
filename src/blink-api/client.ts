@@ -29,12 +29,11 @@ import {
 const KNOWN_TIERS = ['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1'] as const;
 type KnownTier = (typeof KNOWN_TIERS)[number];
 
-const normalizeTier = (tier?: string | null): KnownTier | null => {
+const normalizeTier = (tier?: string | null): string | null => {
   if (!tier) {
     return null;
   }
-  const normalized = tier.toLowerCase();
-  return KNOWN_TIERS.includes(normalized as KnownTier) ? (normalized as KnownTier) : null;
+  return tier.toLowerCase();
 };
 
 export class BlinkApi {
@@ -186,12 +185,18 @@ export class BlinkApi {
       }
       const normalizedTier = normalizeTier(tierInfo.tier);
       if (!normalizedTier) {
-        log?.warn(`Blink tier_info returned unsupported tier "${tierInfo.tier}". Using ${this.config.tier ?? 'prod'}.`);
-        return tierInfo;
+        return tierInfo ?? null;
       }
 
       const previousTier = this.config.tier ?? 'prod';
       const previousSharedTier = this.config.sharedTier;
+      const isKnownTier = KNOWN_TIERS.includes(normalizedTier as KnownTier);
+
+      if (!isKnownTier) {
+        log?.warn(
+          `Blink tier_info returned unrecognized tier "${tierInfo.tier}". Using reported tier for routing.`,
+        );
+      }
 
       if (normalizedTier !== previousTier) {
         this.config.tier = normalizedTier;

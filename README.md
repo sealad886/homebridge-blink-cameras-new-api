@@ -93,7 +93,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `accountVerificationCode` | No | - | Account/phone verification PIN (only when prompted) |
 | `persistAuth` | No | `true` | Persist auth tokens across restarts |
 | `trustDevice` | No | `true` | Trust this device during client verification |
-| `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` |
+| `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` (auto-detected tiers from Blink are honored for routing) |
 | `sharedTier` | No | - | Override shared REST tier (defaults to `tier`) |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
@@ -179,6 +179,7 @@ Some accounts require an additional **account or phone verification** step:
 - Regenerate a unique `deviceId`
 - Check your email for the Blink device approval prompt
 - Provide a fresh `twoFactorCode` if prompted
+- If logs show `tier_info` with a different tier, restart after the plugin auto-updates routing
 
 ### Rate Limits (429)
 

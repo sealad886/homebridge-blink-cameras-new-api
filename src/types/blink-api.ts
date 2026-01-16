@@ -371,8 +371,8 @@ export interface BlinkConfig {
   trustDevice?: boolean;
   authStoragePath?: string;
   authStorage?: BlinkAuthStorage;
-  tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
-  sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
+  tier?: string;
+  sharedTier?: string;
   /** Enable verbose auth diagnostics */
   debugAuth?: boolean;
   /** Logger for diagnostic output */
