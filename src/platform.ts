@@ -466,13 +466,31 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   /**
    * Check for new motion events via media API
-   * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/media
+   * Source: API Dossier - GET v4/accounts/{account_id}/unwatched_media + POST v4/accounts/{account_id}/media
    */
   private async checkMotionEvents(): Promise<void> {
     try {
-      const response = await this.apiClient.getUnwatchedMedia();
+      // First check if there are any unwatched clips (quick count endpoint)
+      const unwatchedResponse = await this.apiClient.getUnwatchedMedia();
 
-      for (const clip of response.media) {
+      if (unwatchedResponse.unwatched_clips === 0) {
+        // No new clips, nothing to do
+        return;
+      }
+
+      this.log.debug(`Found ${unwatchedResponse.unwatched_clips} unwatched clip(s), fetching details...`);
+
+      // Fetch actual media clips to process
+      const mediaResponse = await this.apiClient.getMedia({
+        startTime: this.lastMediaCheck.toISOString(),
+      });
+
+      if (!mediaResponse.media || !Array.isArray(mediaResponse.media)) {
+        this.log.debug('No media clips returned from API');
+        return;
+      }
+
+      for (const clip of mediaResponse.media) {
         const clipDate = new Date(clip.created_at);
 
         // Only process clips newer than our last check

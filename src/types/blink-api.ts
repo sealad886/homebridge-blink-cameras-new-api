@@ -299,12 +299,22 @@ export interface BlinkMediaQuery {
 
 /**
  * Media list response
- * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/media
+ * Source: API Dossier Section 3.9 - POST v4/accounts/{account_id}/media
  */
 export interface BlinkMediaResponse {
   media: BlinkMediaClip[];
   limit?: number;
   purge_id?: number;
+}
+
+/**
+ * Unwatched media count response
+ * Source: API Dossier - GET v4/accounts/{account_id}/unwatched_media
+ * Note: Returns only a count, not actual clips. Use getMedia() to fetch clips.
+ */
+export interface BlinkUnwatchedMediaResponse {
+  unwatched_clips: number;
+  unwatched_video_stats?: number;
 }
 
 /**

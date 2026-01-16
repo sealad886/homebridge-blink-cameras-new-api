@@ -23,6 +23,7 @@ import {
   BlinkPinVerificationResponse,
   BlinkResendPinResponse,
   BlinkTierInfo,
+  BlinkUnwatchedMediaResponse,
   BlinkVerifyPinResponse,
 } from '../types';
 
@@ -414,13 +415,14 @@ export class BlinkApi {
   }
 
   /**
-   * Get unwatched media clips (new motion events)
-   * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/unwatched_media
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/video/VideoApi.smali
+   * Get unwatched media count (check for new motion events)
+   * Source: API Dossier - GET v4/accounts/{account_id}/unwatched_media
+   * Evidence: jadx-out UnwatchedMediaResponse.java
+   * Note: Returns only a count. Use getMedia() to fetch actual clips.
    */
-  async getUnwatchedMedia(): Promise<BlinkMediaResponse> {
+  async getUnwatchedMedia(): Promise<BlinkUnwatchedMediaResponse> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.get<BlinkMediaResponse>(`v4/accounts/${accountId}/unwatched_media`);
+    return this.sharedHttp.get<BlinkUnwatchedMediaResponse>(`v4/accounts/${accountId}/unwatched_media`);
   }
 
   /**
