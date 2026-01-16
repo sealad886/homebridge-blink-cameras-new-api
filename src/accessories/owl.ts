@@ -66,6 +66,7 @@ export class OwlAccessory {
       device.network_id,
       device.id,
       'owl',
+      device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,

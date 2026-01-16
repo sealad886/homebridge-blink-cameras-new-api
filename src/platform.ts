@@ -10,7 +10,7 @@
  */
 import { setInterval, clearInterval } from 'timers';
 import { createHash } from 'node:crypto';
-import path from 'node:path';
+import * as path from 'node:path';
 import {
   API,
   Characteristic,

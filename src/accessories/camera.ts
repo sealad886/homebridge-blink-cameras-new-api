@@ -70,6 +70,7 @@ export class CameraAccessory {
       device.network_id,
       device.id,
       deviceType,
+      device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,

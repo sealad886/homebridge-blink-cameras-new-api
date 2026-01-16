@@ -76,6 +76,7 @@ export class DoorbellAccessory {
       device.network_id,
       device.id,
       'doorbell',
+      device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,

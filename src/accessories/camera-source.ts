@@ -21,6 +21,7 @@ import {
   StreamingRequest,
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
+import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -118,6 +119,7 @@ interface ActiveStreamSession extends PendingStreamSession {
   liveviewUrl?: string;
   keepAliveTimer?: ReturnType<typeof setInterval> | null;
   stopped?: boolean;
+  immisProxy?: ImmisProxyServer;
 }
 
 const usedPorts = new Set<number>();
@@ -199,6 +201,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly networkId: number,
     private readonly deviceId: number,
     private readonly deviceType: DeviceType,
+    private readonly serial: string,
     private readonly getThumbnailUrl: () => string | undefined,
     private readonly log: (message: string) => void,
     streamingConfig?: BlinkCameraStreamingConfigInput,
@@ -402,14 +405,35 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     try {
       const liveview = await this.requestLiveView();
-      const liveviewUrl = liveview.server;
-      if (!liveviewUrl) {
+      const originalUrl = liveview.server;
+      if (!originalUrl) {
         throw new Error('Live view did not return a server URL');
+      }
+
+      let ffmpegInputUrl: string;
+
+      // Handle immis:// protocol using our proxy server
+      if (originalUrl.startsWith('immis://')) {
+        this.log(`Starting IMMIS proxy for proprietary stream protocol`);
+
+        const immisProxy = new ImmisProxyServer({
+          immisUrl: originalUrl,
+          serial: this.serial,
+          log: (msg) => this.log(msg),
+          debug: this.streamingConfig.ffmpegDebug,
+        });
+
+        active.immisProxy = immisProxy;
+        ffmpegInputUrl = await immisProxy.start();
+        this.log(`IMMIS proxy ready at ${ffmpegInputUrl}`);
+      } else {
+        // Standard RTSPS URL - use directly
+        ffmpegInputUrl = originalUrl;
       }
 
       const commandId = liveview.command_id ?? liveview.id;
       active.commandId = commandId;
-      active.liveviewUrl = liveviewUrl;
+      active.liveviewUrl = originalUrl;
 
       if (commandId) {
         await this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5).catch((error) => {
@@ -418,8 +442,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval);
       }
 
-      const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active);
-      this.log(`Starting stream ${sessionId} via FFmpeg`);
+      const ffmpegArgs = this.buildFfmpegArgs(ffmpegInputUrl, request, active);
+      this.log(`Starting stream ${sessionId} via FFmpeg with URL: ${ffmpegInputUrl}`);
+      if (this.streamingConfig.ffmpegDebug) {
+        this.log(`FFmpeg args: ${ffmpegArgs.join(' ')}`);
+      }
 
       const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
       active.ffmpeg = ffmpeg;
@@ -509,6 +536,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.talkback?.kill('SIGKILL');
     } catch (error) {
       this.log(`Error stopping talkback FFmpeg for session ${sessionId}: ${error}`);
+    }
+
+    // Stop the IMMIS proxy if it was used
+    if (active.immisProxy) {
+      try {
+        active.immisProxy.stop();
+      } catch (error) {
+        this.log(`Error stopping IMMIS proxy for session ${sessionId}: ${error}`);
+      }
     }
 
     releasePort(active.localVideoPort);
@@ -710,8 +746,24 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const args = [
       '-hide_banner',
       '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'error',
-      '-rtsp_transport', this.streamingConfig.rtspTransport,
-      '-i', liveviewUrl,
+    ];
+
+    // Configure input based on URL type
+    if (liveviewUrl.startsWith('tcp://')) {
+      // MPEG-TS stream from our IMMIS proxy
+      args.push(
+        '-f', 'mpegts',
+        '-i', liveviewUrl,
+      );
+    } else {
+      // Standard RTSPS stream
+      args.push(
+        '-rtsp_transport', this.streamingConfig.rtspTransport,
+        '-i', liveviewUrl,
+      );
+    }
+
+    args.push(
       '-map', '0:v:0',
       '-vcodec', 'libx264',
       '-pix_fmt', 'yuv420p',
@@ -726,7 +778,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       '-payload_type', `${video.pt}`,
       '-ssrc', `${session.videoSSRC}`,
       '-f', 'rtp',
-    ];
+    );
 
     if (suiteName && videoParams) {
       args.push('-srtp_out_suite', suiteName, '-srtp_out_params', videoParams);
