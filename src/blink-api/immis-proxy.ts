@@ -18,7 +18,7 @@ import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
-import { setInterval, clearInterval } from 'node:timers';
+import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
 import * as tls from 'node:tls';
 import { URL } from 'node:url';
 
@@ -97,6 +97,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private keepAliveSequence = 0;
   private isCommandReady = false;
   private pendingClients: net.Socket[] = [];
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** Buffer for accumulating incoming data from the immis server */
   private receiveBuffer = Buffer.alloc(0);
@@ -280,11 +281,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       this.debug(`Client error: ${error.message}`);
     });
 
-    // If the Blink command isn't ready yet, queue this client
+    // If the Blink command isn't ready yet, still attempt the immis connection.
+    // The immis server may close early; we'll retry until the command is ready.
     if (!this.isCommandReady) {
-      this.debug('Blink command not ready yet, queueing client');
-      this.pendingClients.push(clientSocket);
-      return;
+      this.debug('Blink command not ready yet; attempting immis connection and will retry until ready');
     }
 
     // Start the connection to the immis server if not already connected
@@ -356,7 +356,24 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     this.targetSocket.on('close', () => {
       this.debug('Immis connection closed');
-      this.stop();
+      // Clear current socket reference
+      this.targetSocket = null;
+      // If clients are still connected, retry connecting after a short delay
+      if (this.isRunning && this.clients.length > 0) {
+        if (this.reconnectTimeout) {
+          clearTimeout(this.reconnectTimeout);
+        }
+        this.reconnectTimeout = setTimeout(() => {
+          // Avoid multiple retries if a connection was established in the meantime
+          if (!this.targetSocket && this.isRunning && this.clients.length > 0) {
+            this.log('Retrying immis connection...');
+            this.connectToImmisServer();
+          }
+        }, 2000);
+      } else {
+        // No clients or not running, stop the proxy entirely
+        this.stop();
+      }
     });
   }
 
@@ -481,13 +498,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Start the keep-alive timer
    */
   private startKeepAlive(): void {
-    // Send keep-alive and latency stats every 10 seconds
-    this.keepAliveInterval = setInterval(() => {
-      this.sendKeepAlive();
-      this.sendLatencyStats();
-    }, 1000);
-
-    // Counter for 10-second intervals
+    // Send latency stats every second and keep-alive every 10 seconds
     let secondCounter = 0;
     this.keepAliveInterval = setInterval(() => {
       secondCounter++;
@@ -553,6 +564,12 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     if (this.keepAliveInterval) {
       clearInterval(this.keepAliveInterval);
       this.keepAliveInterval = null;
+    }
+
+    // Cancel any pending reconnect
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
     }
 
     // Close target connection
