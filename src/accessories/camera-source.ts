@@ -127,6 +127,19 @@ interface ActiveStreamSession extends PendingStreamSession {
 
 const usedPorts = new Set<number>();
 
+/**
+ * Convert unsigned 32-bit SSRC to signed 32-bit for FFmpeg.
+ * FFmpeg's RTP muxer expects signed int32 (-2147483648 to 2147483647).
+ * HomeKit provides/expects unsigned uint32 (0 to 4294967295).
+ * Values above INT32_MAX (2147483647) need to be converted to negative.
+ */
+const ssrcToSigned = (ssrc: number): number => {
+  if (ssrc > 0x7FFFFFFF) {
+    return ssrc - 0x100000000;
+  }
+  return ssrc;
+};
+
 const allocatePort = async (): Promise<number> => {
   for (let attempt = 0; attempt < 20; attempt++) {
     const port = await new Promise<number>((resolve, reject) => {
@@ -811,7 +824,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       '-preset', 'veryfast',
       '-tune', 'zerolatency',
       '-payload_type', `${video.pt}`,
-      '-ssrc', `${session.videoSSRC}`,
+      '-ssrc', `${ssrcToSigned(session.videoSSRC)}`,
       '-f', 'rtp',
     );
 
@@ -832,7 +845,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         '-map', '0:a:0?',
         ...audioArgs,
         '-payload_type', `${audio.pt}`,
-        '-ssrc', `${session.audioSSRC}`,
+        '-ssrc', `${ssrcToSigned(session.audioSSRC)}`,
         '-f', 'rtp',
       );
 
