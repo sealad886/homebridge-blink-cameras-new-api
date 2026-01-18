@@ -767,7 +767,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const audioArgs = this.buildAudioEncoderArgs(request.audio);
     const ffmpegArgs = [
       '-hide_banner',
-      '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'warning',
+      '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'info',
       '-protocol_whitelist', 'pipe,udp,rtp,srtp,crypto,file',
       '-f', 'sdp',
       '-i', 'pipe:0',
@@ -816,13 +816,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const profileName = this.getH264ProfileName(video.profile);
     const levelName = this.getH264LevelName(video.level);
 
+    // Use 'info' loglevel to ensure FFmpeg outputs stream info at startup.
+    // This triggers the stderr 'data' event, signaling HomeKit that the stream is ready.
+    // Without immediate stderr output, HomeKit times out waiting for video data.
     const args = [
       '-hide_banner',
-      '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'warning',
-      // Always output progress to stderr so we know when encoding starts.
-      // This is needed because with -loglevel error, there's no stderr output
-      // on successful startup, causing HomeKit to timeout waiting for stream.
-      '-progress', 'pipe:2',
+      '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'info',
     ];
 
     // Configure input based on URL type
