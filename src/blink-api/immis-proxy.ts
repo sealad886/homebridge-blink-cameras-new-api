@@ -62,6 +62,14 @@ const enum ImmisMessageType {
   KEEPALIVE = 0x0a,
   /** Latency statistics */
   LATENCY_STATS = 0x12,
+  /** Inline command (device control) */
+  INLINE_COMMAND = 0x14,
+  /** Accessory message */
+  ACCESSORY_MESSAGE = 0x15,
+  /** Session command (e.g., Start/Stop audio) */
+  SESSION_COMMAND = 0x17,
+  /** Session message (ACKs/updates) */
+  SESSION_MESSAGE = 0x18,
 }
 
 /**
@@ -469,6 +477,17 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         } else if (payloadLength > 0) {
           this.debug(`Skipping video payload missing MPEG-TS sync byte`);
         }
+      } else if (msgtype === ImmisMessageType.SESSION_MESSAGE) {
+        // Session messages are control-plane updates/ACKs.
+        // We don't parse the payload yet; log for telemetry.
+        this.debug(`Received SESSION_MESSAGE (sequence=${sequence}, len=${payloadLength})`);
+      } else if (msgtype === ImmisMessageType.SESSION_COMMAND) {
+        // Rare: server-originated session commands (mirror or multi-client scenarios)
+        this.debug(`Received SESSION_COMMAND (sequence=${sequence}, len=${payloadLength})`);
+      } else if (msgtype === ImmisMessageType.INLINE_COMMAND) {
+        this.debug(`Received INLINE_COMMAND (sequence=${sequence}, len=${payloadLength})`);
+      } else if (msgtype === ImmisMessageType.ACCESSORY_MESSAGE) {
+        this.debug(`Received ACCESSORY_MESSAGE (sequence=${sequence}, len=${payloadLength})`);
       } else {
         this.debug(`Skipping non-video msgtype: ${msgtype}`);
       }
@@ -544,6 +563,45 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     this.debug('Sending latency stats');
     this.targetSocket.write(packet);
+  }
+
+  /**
+   * Send a SESSION_COMMAND to the immis server.
+   * Note: Payload structure is not yet confirmed for Start/Stop audio; send empty payload for scaffolding.
+   * @param commandId Numeric command ID (e.g., 3 = StartAudio, 4 = StopAudio)
+   * @param payload Optional payload buffer (default: empty)
+   */
+  private sendSessionCommand(commandId: number, payload?: Buffer): void {
+    if (!this.targetSocket || this.targetSocket.destroyed) {
+      return;
+    }
+
+    const body = payload ?? Buffer.alloc(0);
+    // Build 9-byte header for SESSION_COMMAND
+    const packet = Buffer.alloc(9 + body.length);
+    packet.writeUInt8(ImmisMessageType.SESSION_COMMAND, 0);
+    // Sequence can reuse keepAliveSequence for monotonicity
+    packet.writeUInt32BE(++this.keepAliveSequence, 1);
+    packet.writeUInt32BE(body.length, 5);
+    if (body.length) {
+      body.copy(packet, 9);
+    }
+
+    this.debug(`Sending SESSION_COMMAND (id=${commandId}, len=${body.length})`);
+    this.targetSocket.write(packet);
+  }
+
+  /** Request to start two-way audio (scaffold). */
+  startAudio(): void {
+    // Known command IDs: StartAudio = 3
+    // Payload structure TBD; send empty body for now and rely on device to complete via microphone request.
+    this.sendSessionCommand(3);
+  }
+
+  /** Request to stop two-way audio (scaffold). */
+  stopAudio(): void {
+    // Known command IDs: StopAudio = 4
+    this.sendSessionCommand(4);
   }
 
   /**
