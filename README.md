@@ -118,6 +118,12 @@ persist directory.
 Live streaming uses FFmpeg to transcode Blink's RTSPS stream to HomeKit SRTP. Make sure FFmpeg is installed
 and accessible in your PATH, or set `ffmpegPath` to the full binary location.
 
+If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
+
+```bash
+brew install 'ffmpeg@8'
+```
+
 ## Supported Devices
 
 | Blink Device | HomeKit Service | Features |
