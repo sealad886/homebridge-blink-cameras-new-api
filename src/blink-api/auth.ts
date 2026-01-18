@@ -1076,6 +1076,15 @@ export class BlinkAuth {
   }
 
   /**
+   * Ensure state is loaded and return the persisted tier for config sync.
+   * This allows callers to update config.tier BEFORE making HTTP requests.
+   */
+  async getPersistedTier(): Promise<string | null> {
+    await this.ensureStateLoaded();
+    return this.tier;
+  }
+
+  /**
    * Check if 2FA is pending
    */
   is2FAPending(): boolean {

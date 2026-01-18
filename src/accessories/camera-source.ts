@@ -25,7 +25,7 @@ import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import dgram from 'node:dgram';
+import * as dgram from 'node:dgram';
 import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
 import { URL } from 'node:url';
 

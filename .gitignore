@@ -198,6 +198,9 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# Beads local state
+.beads/
+
 # yarn v3
 .pnp.*
 .yarn/*

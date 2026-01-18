@@ -27,7 +27,7 @@ import {
   BlinkVerifyPinResponse,
 } from '../types';
 
-const KNOWN_TIERS = ['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1'] as const;
+const KNOWN_TIERS = ['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1', 'e006', 'e001', 'e002', 'e003', 'e004', 'e005'] as const;
 type KnownTier = (typeof KNOWN_TIERS)[number];
 
 const normalizeTier = (tier?: string | null): string | null => {
@@ -71,6 +71,10 @@ export class BlinkApi {
    * @throws Blink2FARequiredError if 2FA is required but no code provided
    */
   async login(twoFaCode?: string): Promise<void> {
+    // Sync persisted tier to config BEFORE any HTTP requests
+    // This ensures we use the correct base URL from the start
+    await this.syncPersistedTierToConfig();
+
     // If 2FA code provided and 2FA is pending, complete it
     if ((twoFaCode ?? this.config.twoFactorCode) && this.auth.is2FAPending()) {
       await this.auth.complete2FA(twoFaCode ?? this.config.twoFactorCode!);
@@ -80,6 +84,23 @@ export class BlinkApi {
     this.accountId = this.auth.getAccountId();
     this.clientId = this.auth.getClientId();
     await this.syncAccountInfoAndVerify();
+  }
+
+  /**
+   * Sync persisted tier from auth storage to config and update base URLs.
+   * Called before any HTTP requests to ensure correct region routing.
+   */
+  private async syncPersistedTierToConfig(): Promise<void> {
+    const persistedTier = await this.auth.getPersistedTier();
+    if (persistedTier && persistedTier !== this.config.tier) {
+      const previousTier = this.config.tier ?? 'prod';
+      this.config.tier = persistedTier;
+      if (!this.config.sharedTier || this.config.sharedTier === previousTier) {
+        this.config.sharedTier = persistedTier;
+      }
+      this.updateBaseUrls();
+      this.config.logger?.info(`Restored persisted tier: ${persistedTier} (was ${previousTier})`);
+    }
   }
 
   /**

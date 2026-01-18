@@ -42,6 +42,10 @@ export const buildDefaultHeaders = (): Record<string, string> => ({
   'APP-BUILD': APP_BUILD_HEADER,
   'User-Agent': USER_AGENT,
   LOCALE: DEFAULT_LOCALE,
+  // Explicitly request JSON to avoid 406 Not Acceptable responses on some tiers
+  Accept: 'application/json',
+  // Mirror browser-like language negotiation alongside LOCALE header
+  'Accept-Language': 'en-US,en;q=0.9',
   'X-Blink-Time-Zone': Intl.DateTimeFormat().resolvedOptions().timeZone,
 });
 

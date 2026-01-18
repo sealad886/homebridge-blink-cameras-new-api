@@ -1,5 +1,5 @@
-import plugin from '../src';
 import { API } from 'homebridge';
+import plugin = require('../src');
 
 describe('plugin entry', () => {
   it('registers the platform', () => {
