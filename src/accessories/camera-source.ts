@@ -558,11 +558,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       // Talkback (two-way audio) is only supported for RTSP streams.
-      // IMMIS protocol streams use a proprietary format that doesn't support audio upload via FFmpeg.
+      // IMMIS protocol streams use a proprietary binary format handled by Blink's
+      // native "Walnut" library. Audio upload requires sending SESSION_COMMAND packets
+      // (type=23) with StartAudio (id=3) / StopAudio (id=4) commands, which is not
+      // implementable without reverse-engineering the Walnut protocol. See:
+      // https://github.com/fronzbot/blinkpy/pull/1078
       if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay && !isImmisStream) {
         this.startTalkback(sessionId, request, active);
       } else if (isImmisStream && this.streamingConfig.audio.twoWay) {
-        this.log(`Two-way audio not supported for IMMIS protocol streams`);
+        this.log(`Two-way audio not supported for IMMIS protocol streams (requires native Walnut library)`);
       }
     } catch (error) {
       this.log(`Failed to start stream ${sessionId}: ${error}`);
