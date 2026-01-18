@@ -1,7 +1,7 @@
 {
     "name": "homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "description": "Blink Camera plugin for homebridge",
     "author": { "name": "sealad886" , "email": "dev@andrewcox.doctor" },
     "license": "MIT",
@@ -33,8 +33,7 @@
     "types": "dist/index.d.ts",
     "files": [
         "dist",
-        "config.schema.json",
-        "homebridge-ui"
+        "config.schema.json"
     ],
     "repository": {
         "type": "git",
@@ -70,12 +69,12 @@
     },
     "scripts": {
         "build": "tsc && npm run copy-ui-assets",
-        "copy-ui-assets": "mkdir -p homebridge-ui/public && cp -r src/homebridge-ui/public/* homebridge-ui/public/ && cp dist/homebridge-ui/server.js homebridge-ui/server.js 2>/dev/null || true",
+        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
         "watch": "tsc --watch",
         "prepublishOnly": "npm run build",
         "test": "jest",
         "lint": "eslint \"src/**/*.ts\"",
-        "clean": "rm -rf dist homebridge-ui",
+        "clean": "rm -rf dist",
         "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
         "update": "ncu -u && npm update && npm install"
