@@ -51,6 +51,7 @@ export interface ImmisProxyEvents {
   data: [chunk: Buffer];
   error: [error: Error];
   close: [];
+  sessionMessage: [payload: Buffer];
 }
 
 /**
@@ -484,6 +485,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         // Session messages are control-plane updates/ACKs.
         // We don't parse the payload yet; log for telemetry.
         this.debug(`Received SESSION_MESSAGE (sequence=${sequence}, len=${payloadLength})`);
+        this.emit('sessionMessage', payload);
       } else if (msgtype === ImmisMessageType.SESSION_COMMAND) {
         // Rare: server-originated session commands (mirror or multi-client scenarios)
         this.debug(`Received SESSION_COMMAND (sequence=${sequence}, len=${payloadLength})`);

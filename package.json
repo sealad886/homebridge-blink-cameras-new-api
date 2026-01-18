@@ -1,11 +1,8 @@
 {
     "name": "homebridge-blink-cameras-new-api",
-    "version": "0.1.14",
+    "version": "0.2.0",
     "description": "Blink Camera plugin for homebridge",
-    "author": {
-        "name": "sealad886",
-        "url": "https://github.com/sealad886"
-    },
+    "author": "sealad886",
     "license": "ISC",
     "keywords": [
         "homebridge-plugin",

@@ -5,6 +5,8 @@
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
 
+> Important: This plugin uses Blink's new (OAuth-based) API and has been validated to work in at least one European locale. It has not yet been tested in the United States. Feedback from multiple locales is welcome—the new API requires region-aware resolution.
+
 Modern Blink platform plugin for Homebridge using the official OAuth endpoints. Exposes Blink devices as proper HomeKit accessories:
 
 - **SecuritySystem** for arm/disarm control of networks
@@ -13,6 +15,10 @@ Modern Blink platform plugin for Homebridge using the official OAuth endpoints. 
 - **Switch** for enabling/disabling motion detection per device
 
 All API interactions are based on reverse-engineered endpoints from the official Blink Android app (v50.1).
+
+## Two-Way Talk Status
+
+Two-way talk is actively being implemented and is currently experimental. The control-plane signaling is in place and audio uplink is being integrated; behavior may vary by device and locale while we finalize payload framing. If enabled via configuration, expect iterative improvements across releases.
 
 ## Features
 
@@ -66,6 +72,8 @@ Add a platform entry to your Homebridge `config.json`:
       "username": "you@example.com",
       "password": "your-blink-password",
       "deviceId": "homebridge-blink-01",
+      "persistAuth": true,
+      "trustDevice": true,
       "pollInterval": 60,
       "motionTimeout": 30,
       "enableMotionPolling": true,
@@ -112,6 +120,22 @@ Add a platform entry to your Homebridge `config.json`:
 When `persistAuth` is enabled, auth tokens are stored in a sibling folder to Homebridge's HAP
 storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the HAP
 persist directory.
+
+## Quick Start: Login & Authorization
+
+On first setup, Blink may prompt for up to three codes. Provide only the one being requested at the time, then remove it after successful login/verification. Keep `persistAuth: true` so you won’t be prompted again.
+
+1. Start with your `username`, `password`, unique `deviceId`, and `persistAuth: true`.
+2. If prompted for a two-factor code, set `twoFactorCode` temporarily and restart Homebridge.
+3. If prompted for client verification (new device approval), set `clientVerificationCode` temporarily and restart.
+4. If prompted for account/phone verification, set `accountVerificationCode` temporarily and restart.
+5. After successful login/verification, remove any `*Code` values from your config and restart Homebridge.
+
+Tips:
+
+- Ensure `deviceId` is unique per Homebridge instance.
+- Leave `trustDevice: true` so future sessions are approved automatically.
+- If you keep seeing verification prompts, confirm that `persistAuth` is enabled and the Homebridge process can write to the auth directory.
 
 ## Live Streaming (FFmpeg)
 
@@ -178,6 +202,21 @@ Some accounts require an additional **account or phone verification** step:
 4. Restart Homebridge.
 5. After successful verification, **remove the code** from your config.
 
+### Example: Temporary Codes in Config
+
+Add only one code at a time when requested by Blink:
+
+```json
+{
+  "platform": "BlinkCameras",
+  "username": "you@example.com",
+  "password": "your-blink-password",
+  "deviceId": "homebridge-blink-01",
+  "persistAuth": true,
+  "twoFactorCode": "123456" // remove after success, then restart
+}
+```
+
 ## Troubleshooting
 
 ### 401 Unauthorized / 403 Forbidden
@@ -218,6 +257,7 @@ This plugin's API implementation is based on reverse engineering the official Bl
 - Automatic token refresh when tokens expire
 - Hardware ID required for device identification
 - Client verification PIN flow for new device approval
+- Region-aware routing based on tier and locale; behavior may differ by country
 
 ### Endpoints
 
@@ -276,3 +316,4 @@ MIT - see [LICENSE](LICENSE) for details.
 
 - API documentation derived from reverse engineering the Blink Android app
 - Homebridge platform plugin architecture
+- Community feedback on locale-specific behavior (EU validated; US pending)

@@ -52,6 +52,29 @@
 
 - `src/blink-api/immis-proxy.ts`
 
+### Two-Way Talk Status & Guardrails
+
+**Status:** STRONGLY RECOMMENDED
+
+**Scope:** Audio talkback features and configuration.
+
+**Rule:** Treat two-way talk as experimental until payload framing and ACK handling are finalized. Gate feature behind explicit config and surface clear logs for start/stop lifecycle.
+
+**Rationale (Why this exists):**
+
+- Device and locale differences affect IMMIS uplink behavior; robust ACK parsing is still in progress.
+- Clear runtime telemetry prevents silent failures and aids reverse engineering.
+
+**Examples:**
+
+- Good: `twoWayAudio: true` with logs showing `SESSION_COMMAND start/stop` and incoming `SESSION_MESSAGE` entries.
+- Bad: Enable talkback without telemetry or centralized command wrappers.
+
+**Related Files / Modules:**
+
+- `src/accessories/camera-source.ts`
+- `src/blink-api/immis-proxy.ts`
+
 ## 3. Rationale and Examples
 
 - See individual conventions above.
@@ -63,3 +86,4 @@
 ## 5. Change History (Human-Readable)
 
 - 2026-01-17: Added convention clarifying npm registry requirement for publisher handle in Homebridge UI.
+- 2026-01-18: Added two-way talk status guardrails and experimental designation.
