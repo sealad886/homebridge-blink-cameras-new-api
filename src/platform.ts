@@ -78,6 +78,8 @@ interface BlinkPlatformConfig extends PlatformConfig {
   videoBitrate?: number;
   debugAuth?: boolean;
   debugStreamPath?: string;
+  /** Snapshot cache TTL in seconds. Set to 0 to always request fresh snapshots. Default: 60 */
+  snapshotCacheTTL?: number;
 }
 
 export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
@@ -125,6 +127,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       rtspTransport: this.config.rtspTransport,
       maxStreams: this.config.maxStreams,
       debugStreamPath: this.config.debugStreamPath,
+      snapshotCacheTTL: this.config.snapshotCacheTTL,
       audio: {
         enabled: this.config.enableAudio,
         twoWay: this.config.twoWayAudio,

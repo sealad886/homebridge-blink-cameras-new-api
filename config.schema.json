@@ -169,6 +169,15 @@
         "required": false,
         "placeholder": "/tmp/blink-streams"
       },
+      "snapshotCacheTTL": {
+        "title": "Snapshot Cache Duration (seconds)",
+        "description": "How long to cache camera snapshots before requesting a fresh one from Blink. Set to 0 to always request fresh snapshots (uses more battery). Default: 60 seconds.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 0,
+        "maximum": 300,
+        "required": false
+      },
       "rtspTransport": {
         "title": "RTSP Transport",
         "description": "RTSP transport mode for Blink live view input.",
