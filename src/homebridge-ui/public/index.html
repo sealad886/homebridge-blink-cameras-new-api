@@ -593,6 +593,9 @@
 
     showStep('success');
     homebridge.toast.success('Successfully authenticated with Blink!', 'Success');
+    
+    // Automatically show the schema form after successful auth so user can configure all settings
+    homebridge.showSchemaForm();
   }
 
   // Show schema form button
@@ -603,15 +606,38 @@
   });
 
   // Check for existing auth on load
-  try {
-    const status = await homebridge.request('/status');
-    if (status.authenticated) {
-      savedUsername = document.getElementById('username').value || 'Unknown';
-      savedTier = document.getElementById('tier').value;
-      handleAuthSuccess(status);
+  // If already configured (has username), show schema form immediately
+  // The login wizard is only needed for initial setup or re-authentication
+  if (pluginConfig.length > 0 && pluginConfig[0].username) {
+    // Already configured - show schema form by default
+    homebridge.showSchemaForm();
+    
+    // Also check auth status to show appropriate UI state
+    try {
+      const status = await homebridge.request('/status');
+      if (status.authenticated) {
+        // Show success state but keep schema form visible
+        savedUsername = pluginConfig[0].username;
+        savedTier = pluginConfig[0].tier || 'prod';
+        document.getElementById('successEmail').textContent = savedUsername;
+        document.getElementById('successTier').textContent = document.getElementById('tier').options[document.getElementById('tier').selectedIndex]?.text || savedTier;
+        showStep('success');
+      }
+    } catch (e) {
+      // Auth status check failed, but config exists - show login wizard in case re-auth needed
     }
-  } catch (e) {
-    // Ignore - start fresh
+  } else {
+    // No config yet - user needs to authenticate first
+    try {
+      const status = await homebridge.request('/status');
+      if (status.authenticated) {
+        savedUsername = document.getElementById('username').value || 'Unknown';
+        savedTier = document.getElementById('tier').value;
+        handleAuthSuccess(status);
+      }
+    } catch (e) {
+      // Ignore - start fresh with login wizard
+    }
   }
 })();
 </script>
