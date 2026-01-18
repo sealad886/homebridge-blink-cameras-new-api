@@ -1,9 +1,24 @@
 {
     "name": "homebridge-blink-cameras-new-api",
-    "version": "0.2.0",
+    "displayName": "Homebridge Blink Cameras (New API)",
+    "version": "0.3.0",
     "description": "Blink Camera plugin for homebridge",
-    "author": "sealad886",
-    "license": "ISC",
+    "author": { "name": "sealad886" , "email": "dev@andrewcox.doctor" },
+    "license": "MIT",
+    "homepage": "https://github.com/sealad886/homebridge-blink-cameras-new-api",
+    "bugs": {
+        "url": "https://github.com/sealad886/homebridge-blink-cameras-new-api/issues"
+    },
+    "funding": [
+        {
+            "type": "github",
+            "url": "https://github.com/sponsors/sealad886"
+        },
+        {
+            "type": "buymeacoffee",
+            "url": "https://www.buymeacoffee.com/sealad886"
+        }
+    ],
     "keywords": [
         "homebridge-plugin",
         "blink-home-security",
@@ -18,7 +33,8 @@
     "types": "dist/index.d.ts",
     "files": [
         "dist",
-        "config.schema.json"
+        "config.schema.json",
+        "homebridge-ui"
     ],
     "repository": {
         "type": "git",
@@ -29,6 +45,7 @@
         "homebridge": ">=1.11.1"
     },
     "dependencies": {
+        "@homebridge/plugin-ui-utils": "^2.0.2",
         "async-lock": "^1.4.1"
     },
     "devDependencies": {
@@ -52,12 +69,13 @@
         "homebridge": ">=1.11.1"
     },
     "scripts": {
-        "build": "tsc",
+        "build": "tsc && npm run copy-ui-assets",
+        "copy-ui-assets": "mkdir -p homebridge-ui/public && cp -r src/homebridge-ui/public/* homebridge-ui/public/ && cp dist/homebridge-ui/server.js homebridge-ui/server.js 2>/dev/null || true",
         "watch": "tsc --watch",
         "prepublishOnly": "npm run build",
         "test": "jest",
         "lint": "eslint \"src/**/*.ts\"",
-        "clean": "rm -rf dist",
+        "clean": "rm -rf dist homebridge-ui",
         "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
         "update": "ncu -u && npm update && npm install"
