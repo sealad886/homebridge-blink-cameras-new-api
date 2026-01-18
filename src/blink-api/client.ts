@@ -604,12 +604,23 @@ export class BlinkApi {
    * Update/extend an ongoing command (e.g., live view)
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/update
    * Note: No version prefix - uses root URL (without /api/)
+   *
+   * Returns null if the command no longer exists (404) - this happens when the stream
+   * has already ended but the keep-alive timer hasn't been cleared yet.
    */
-  async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
+  async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus | null> {
     const accountId = await this.ensureAccountId();
-    return this.sharedRootHttp.post<BlinkCommandStatus>(
-      `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`,
-    );
+    try {
+      return await this.sharedRootHttp.post<BlinkCommandStatus>(
+        `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`,
+      );
+    } catch (error) {
+      // The command may have already ended - this is normal when stream closes
+      if (error instanceof Error && error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**

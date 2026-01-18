@@ -320,6 +320,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
     } catch (error) {
       // Log but don't fail - we may still have a cached thumbnail
+      // 409 Conflict means camera is busy (e.g., during live view) - this is expected
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('409')) {
+        // Camera busy - don't log as error, just skip this refresh
+        return;
+      }
       this.log(`Thumbnail request failed: ${error}`);
     }
   }
@@ -662,7 +668,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const intervalMs = Math.max(5, intervalSeconds - 2) * 1000;
     active.keepAliveTimer = setInterval(async () => {
       try {
-        await this.api.updateCommand(this.networkId, commandId);
+        const result = await this.api.updateCommand(this.networkId, commandId);
+        // If result is null, command no longer exists - stop the keep-alive
+        if (result === null) {
+          if (active.keepAliveTimer) {
+            clearInterval(active.keepAliveTimer);
+            active.keepAliveTimer = null;
+          }
+        }
       } catch (error) {
         this.log(`Failed to extend live view command ${commandId}: ${error}`);
       }
