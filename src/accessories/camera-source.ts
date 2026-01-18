@@ -26,7 +26,7 @@ import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
-import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
+import { setInterval, clearInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
@@ -496,30 +496,20 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
       active.ffmpeg = ffmpeg;
 
-      let started = false;
-      let startTimeout: ReturnType<typeof setTimeout> | null = null;
-      const finalizeCallback = (error?: Error) => {
-        if (!started) {
-          started = true;
-          if (startTimeout) {
-            clearTimeout(startTimeout);
-            startTimeout = null;
-          }
-          callback(error);
-        }
-      };
-      startTimeout = setTimeout(() => {
-        if (!started) {
-          this.log(`FFmpeg start timeout for session ${sessionId}; continuing`);
-          finalizeCallback();
-        }
-      }, 10000);
+      // CRITICAL FIX: Call the callback IMMEDIATELY after FFmpeg spawns.
+      // The callback signals to HomeKit that we are ready to receive RTP data,
+      // not that video has started playing. Previously we waited for stderr output
+      // which only works with -loglevel debug. Without debug output, HomeKit would
+      // timeout and SIGKILL FFmpeg after ~8 seconds before it even started encoding.
+      //
+      // The ffmpeg 'spawn' event confirms the process started successfully.
+      // HomeKit will then wait for actual video frames on the RTP socket.
+      ffmpeg.on('spawn', () => {
+        this.log(`FFmpeg spawned for session ${sessionId}, signaling stream ready`);
+        callback();
+      });
 
       ffmpeg.stderr.on('data', (data) => {
-        if (!started) {
-          this.log(`FFmpeg stream ready for session ${sessionId}`);
-          finalizeCallback();
-        }
         if (this.streamingConfig.ffmpegDebug) {
           this.log(`FFmpeg(${sessionId}): ${data.toString('utf8').trim()}`);
         }
@@ -527,17 +517,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       ffmpeg.on('error', (error) => {
         this.log(`FFmpeg failed to start for session ${sessionId}: ${error.message}`);
-        finalizeCallback(error);
+        // Note: If spawn failed, the spawn event won't fire so callback wasn't called yet.
+        // We rely on HomeKit to handle the error gracefully when RTP data doesn't arrive.
       });
 
       ffmpeg.on('exit', (code, signal) => {
-        if (code !== 0) {
+        if (code !== 0 || signal) {
           this.log(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
         }
-        if (!started) {
-          finalizeCallback(new Error(`FFmpeg exited with code ${code ?? 'unknown'}`));
-          return;
-        }
+        // Clean up the session - HomeKit will detect the stream ended via RTP timeout
         void this.stopStream(sessionId);
       });
 
