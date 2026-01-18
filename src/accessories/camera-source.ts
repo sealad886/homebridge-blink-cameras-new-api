@@ -551,16 +551,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval);
       }
 
-      // Talkback (two-way audio) is only supported for RTSP streams.
-      // IMMIS protocol streams use a proprietary binary format handled by Blink's
-      // native "Walnut" library. Audio upload requires sending SESSION_COMMAND packets
-      // (type=23) with StartAudio (id=3) / StopAudio (id=4) commands, which is not
-      // implementable without reverse-engineering the Walnut protocol. See:
-      // https://github.com/fronzbot/blinkpy/pull/1078
-      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay && !isImmisStream) {
-        this.startTalkback(sessionId, request, active);
-      } else if (isImmisStream && this.streamingConfig.audio.twoWay) {
-        this.log(`Two-way audio not supported for IMMIS protocol streams (requires native Walnut library)`);
+      // Two-way audio handling
+      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay) {
+        if (!isImmisStream) {
+          // Standard RTSP talkback
+          this.startTalkback(sessionId, request, active);
+        } else if (isImmisStream && active.immisProxy) {
+          // IMMIS talkback via proxy using AAC-LATM uplink (experimental)
+          this.startImmisTalkback(sessionId, request, active);
+        }
       }
     } catch (error) {
       this.log(`Failed to start stream ${sessionId}: ${error}`);
@@ -599,6 +598,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.talkback?.kill('SIGKILL');
     } catch (error) {
       this.log(`Error stopping talkback FFmpeg for session ${sessionId}: ${error}`);
+    }
+
+    // Signal IMMIS audio stop if applicable
+    try {
+      active.immisProxy?.stopAudio?.();
+    } catch (error) {
+      this.log(`Error sending IMMIS stopAudio for session ${sessionId}: ${error}`);
     }
 
     // Stop the IMMIS proxy if it was used
@@ -801,6 +807,87 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         this.log(`Talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
     });
+  }
+
+  private startImmisTalkback(
+    sessionId: string,
+    request: Extract<StreamingRequest, { type: 'start' }>,
+    active: ActiveStreamSession,
+  ): void {
+    if (!active.audioPort || !active.audioSRTP || !active.localAudioPort || !active.immisProxy) {
+      return;
+    }
+
+    const sdp = this.buildTalkbackSdp(request.audio, active);
+    if (!sdp) {
+      this.log(`IMMIS talkback SDP generation failed for session ${sessionId}`);
+      return;
+    }
+
+    const latmArgs = this.buildLatmEncoderArgs(request.audio);
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'info',
+      '-protocol_whitelist', 'pipe,udp,rtp,srtp,crypto,file',
+      '-f', 'sdp',
+      '-i', 'pipe:0',
+      '-vn',
+      ...latmArgs,
+      '-f', 'latm',
+      '-muxdelay', '0',
+      '-muxpreload', '0',
+      'pipe:1',
+    ];
+
+    this.log(`Starting IMMIS talkback (LATM uplink) for session ${sessionId}`);
+    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    active.talkback = talkback;
+    talkback.stdin?.end(sdp);
+
+    // Attach FFmpeg stdout (LATM frames) to immis proxy
+    try {
+      active.immisProxy.attachAudioInput(talkback.stdout!);
+      active.immisProxy.startAudio();
+    } catch (error) {
+      this.log(`Failed to attach IMMIS audio input: ${error}`);
+    }
+
+    talkback.stderr.on('data', (data) => {
+      if (this.streamingConfig.ffmpegDebug) {
+        this.log(`FFmpeg-immis-talkback(${sessionId}): ${data.toString('utf8').trim()}`);
+      }
+    });
+
+    talkback.on('error', (error) => {
+      this.log(`IMMIS talkback FFmpeg error for session ${sessionId}: ${error.message}`);
+    });
+
+    talkback.on('exit', (code, signal) => {
+      if (code !== 0) {
+        this.log(`IMMIS talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
+      }
+      try {
+        active.immisProxy?.stopAudio();
+      } catch (err) {
+        this.log(`IMMIS stopAudio error for session ${sessionId}: ${err}`);
+      }
+    });
+  }
+
+  private buildLatmEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; }): string[] {
+    // Blink IMMIS expects AAC-LATM (LOAS/LATM)
+    const channels = audio.channel || 1;
+    const sampleRateKhz = this.getAudioSampleRate(audio.sample_rate);
+    const bitrate = this.getAudioBitrate(audio.max_bit_rate);
+    const sampleRateHz = sampleRateKhz * 1000;
+    return [
+      '-acodec', 'aac',
+      '-ar', `${sampleRateHz}`,
+      '-ac', `${channels}`,
+      '-b:a', `${bitrate}k`,
+    ];
   }
 
   private buildFfmpegArgs(

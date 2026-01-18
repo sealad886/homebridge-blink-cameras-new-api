@@ -29,6 +29,29 @@
 - `package.json` (version and metadata)
 - `scripts/deploy-to-pi.sh` (local tarball installs bypass registry metadata)
 
+### IMMIS Control-Plane Handling
+
+**Status:** STRONGLY RECOMMENDED
+
+**Scope:** All IMMIS transport interactions within `src/blink-api/*`.
+
+**Rule:** Enumerate and log control-plane message types (`INLINE_COMMAND`, `ACCESSORY_MESSAGE`, `SESSION_COMMAND`, `SESSION_MESSAGE`) alongside `VIDEO`. Use wrapper methods for session lifecycle (`startAudio()`, `stopAudio()`) and centralize command emission via `sendSessionCommand()`.
+
+**Rationale (Why this exists):**
+
+- Control-plane observability is essential while reverse-engineering payloads and sequencing; logging avoids silent drops of important messages.
+- Wrapper methods provide a single source of truth for Start/Stop audio semantics while payload structure is being finalized.
+- Centralized emission keeps header construction consistent and reduces duplication during future protocol evolution.
+
+**Examples:**
+
+- Good: Use `startAudio()` to request two-way audio; `handleImmisData()` logs incoming `SESSION_MESSAGE` acks.
+- Bad: Manually craft ad-hoc buffers in multiple modules for session commands; drop control-plane messages without telemetry.
+
+**Related Files / Modules:**
+
+- `src/blink-api/immis-proxy.ts`
+
 ## 3. Rationale and Examples
 
 - See individual conventions above.

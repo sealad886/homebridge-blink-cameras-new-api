@@ -14,6 +14,7 @@
  */
 
 import { Buffer } from 'node:buffer';
+import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
@@ -109,6 +110,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
   /** Buffer for accumulating incoming data from the immis server */
   private receiveBuffer = Buffer.alloc(0);
+  /** Attached upstream audio source stream (LATM) */
+  private audioInput: Readable | null = null;
 
   constructor(config: ImmisProxyConfig) {
     super();
@@ -602,6 +605,62 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   stopAudio(): void {
     // Known command IDs: StopAudio = 4
     this.sendSessionCommand(4);
+  }
+
+  /**
+   * Attach a readable stream that provides AAC-LATM frames to be uplinked.
+   * This method will read chunks and forward them to the immis server using
+   * proprietary framing. The exact payload structure is not fully known, so
+   * we currently encapsulate raw LATM chunks as SESSION_MESSAGE payloads.
+   *
+   * @param stream Readable stream producing LATM frames
+   */
+  attachAudioInput(stream: Readable): void {
+    if (this.audioInput === stream) {
+      return;
+    }
+    this.audioInput = stream;
+    this.debug('Attached upstream audio input stream (LATM)');
+
+    let totalBytes = 0;
+    stream.on('data', (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      // Forward LATM chunk to immis server
+      try {
+        this.sendLatmChunk(chunk);
+      } catch (error) {
+        this.debug(`Failed to send LATM chunk: ${(error as Error).message}`);
+      }
+    });
+
+    stream.on('error', (error) => {
+      this.debug(`Audio input stream error: ${error.message}`);
+    });
+
+    stream.on('close', () => {
+      this.debug(`Audio input stream closed after ${totalBytes} bytes`);
+      if (this.audioInput === stream) {
+        this.audioInput = null;
+      }
+    });
+  }
+
+  /**
+   * Forward a single LATM chunk to the immis server.
+   * NOTE: Payload structure is provisional. We encapsulate raw LATM data
+   * inside a SESSION_MESSAGE (type=0x18) packet. Sequence uses keepAliveSequence.
+   */
+  private sendLatmChunk(latm: Buffer): void {
+    if (!this.targetSocket || this.targetSocket.destroyed) {
+      return;
+    }
+    const header = Buffer.alloc(9);
+    header.writeUInt8(ImmisMessageType.SESSION_MESSAGE, 0);
+    header.writeUInt32BE(++this.keepAliveSequence, 1);
+    header.writeUInt32BE(latm.length, 5);
+    const packet = Buffer.concat([header, latm]);
+    this.targetSocket.write(packet);
+    this.debug(`Sent LATM chunk (${latm.length} bytes)`);
   }
 
   /**
