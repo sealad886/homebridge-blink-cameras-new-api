@@ -1,4 +1,4 @@
-export * from './network';
-export * from './camera';
-export * from './doorbell';
-export * from './owl';
+export { CameraAccessory } from './camera';
+export { DoorbellAccessory } from './doorbell';
+export { NetworkAccessory } from './network';
+export { OwlAccessory } from './owl';

@@ -29,14 +29,9 @@ import {
   BlinkNetwork,
   BlinkOwl,
 } from './types';
-import { NetworkAccessory } from './accessories/network';
-import { CameraAccessory } from './accessories/camera';
-import { DoorbellAccessory } from './accessories/doorbell';
-import { OwlAccessory } from './accessories/owl';
+import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
-
-export const PLATFORM_NAME = 'BlinkCameras';
-export const PLUGIN_NAME = 'homebridge-blink-cameras-new-api';
+import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
