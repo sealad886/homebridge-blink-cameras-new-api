@@ -144,6 +144,10 @@
     margin-left: 0;
   }
 
+  .status-error {
+    margin-top: 0.75rem;
+  }
+
   .btn-group-vertical {
     display: flex;
     flex-direction: column;
@@ -302,8 +306,13 @@
             <dt>Region</dt>
             <dd id="successTier">-</dd>
             <dt>Status</dt>
-            <dd><span class="badge badge-success">Authenticated</span></dd>
+            <dd><span class="badge badge-success" id="authStatusBadge">Authenticated</span></dd>
           </dl>
+
+          <div class="status-error alert alert-warning py-2 px-3 hidden" id="statusError" role="alert">
+            <span id="statusErrorMessage">Unable to reach the plugin backend.</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary ml-2" id="statusRetry">Retry</button>
+          </div>
         </div>
 
         <div class="mt-4">
@@ -369,6 +378,12 @@
   const toggleLogs = document.getElementById('toggleLogs');
   const toggleDeviceId = document.getElementById('toggleDeviceId');
   const deviceIdSection = document.getElementById('deviceIdSection');
+  const successEmail = document.getElementById('successEmail');
+  const successTier = document.getElementById('successTier');
+  const authStatusBadge = document.getElementById('authStatusBadge');
+  const statusError = document.getElementById('statusError');
+  const statusErrorMessage = document.getElementById('statusErrorMessage');
+  const statusRetry = document.getElementById('statusRetry');
 
   // Load existing config
   const pluginConfig = await homebridge.getPluginConfig();
@@ -414,6 +429,72 @@
     errorAlert.classList.add('hidden');
   }
 
+  function resolveUsername(data) {
+    return savedUsername || pluginConfig[0]?.username || data?.email || '';
+  }
+
+  function resolveTier(data) {
+    return savedTier || pluginConfig[0]?.tier || data?.tier || '';
+  }
+
+  function setAuthBadge(state, text) {
+    authStatusBadge.classList.remove('badge-success', 'badge-warning', 'badge-danger');
+    if (state === 'success') authStatusBadge.classList.add('badge-success');
+    if (state === 'warning') authStatusBadge.classList.add('badge-warning');
+    if (state === 'danger') authStatusBadge.classList.add('badge-danger');
+    authStatusBadge.textContent = text;
+  }
+
+  function setAccountLoading() {
+    successEmail.textContent = 'Loading...';
+    setAuthBadge('warning', 'Checking');
+  }
+
+  function updateAccountDisplay(authenticated, data) {
+    const username = resolveUsername(data);
+    const tier = resolveTier(data);
+    const tierLabel = document.getElementById('tier').options[document.getElementById('tier').selectedIndex]?.text;
+
+    if (authenticated) {
+      successEmail.textContent = username || 'Unknown account';
+      setAuthBadge('success', 'Authenticated');
+    } else {
+      successEmail.textContent = 'Not signed in';
+      setAuthBadge('warning', 'Not signed in');
+    }
+
+    successTier.textContent = tierLabel || tier || '-';
+  }
+
+  function showStatusError(message) {
+    statusErrorMessage.textContent = message;
+    statusError.classList.remove('hidden');
+  }
+
+  function hideStatusError() {
+    statusError.classList.add('hidden');
+  }
+
+  async function refreshAuthStatus() {
+    hideStatusError();
+    setAccountLoading();
+    try {
+      const status = await homebridge.request('/status');
+      const authenticated = !!status?.authenticated;
+      updateAccountDisplay(authenticated, status);
+      if (authenticated) {
+        savedUsername = resolveUsername(status);
+        savedTier = resolveTier(status);
+        showStep('success');
+      }
+      return status;
+    } catch (e) {
+      updateAccountDisplay(false, {});
+      showStatusError('Unable to reach the plugin backend. Check Homebridge logs for details.');
+      return null;
+    }
+  }
+
   // Logging
   function addLog(level, message) {
     const entry = document.createElement('div');
@@ -457,6 +538,10 @@
     const isVisible = logContainer.classList.contains('visible');
     logContainer.classList.toggle('visible');
     toggleLogs.textContent = isVisible ? 'Show Debug Logs' : 'Hide Debug Logs';
+  });
+
+  statusRetry.addEventListener('click', async () => {
+    await refreshAuthStatus();
   });
 
   // Login form submission
@@ -565,12 +650,31 @@
 
   // Handle successful authentication
   async function handleAuthSuccess(data) {
+    hideStatusError();
     // Update config with credentials
     let config = pluginConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
 
-    config.username = savedUsername;
-    config.password = document.getElementById('password').value;
-    config.deviceId = document.getElementById('deviceId').value || 'homebridge-blink';
+    const resolvedUsername = resolveUsername(data);
+    const passwordValue = document.getElementById('password').value;
+    const deviceIdValue = document.getElementById('deviceId').value;
+    const tierValue = document.getElementById('tier').value;
+
+    if (resolvedUsername) {
+      savedUsername = resolvedUsername;
+      config.username = resolvedUsername;
+    }
+
+    if (passwordValue) {
+      config.password = passwordValue;
+    }
+
+    if (deviceIdValue) {
+      config.deviceId = deviceIdValue;
+    } else if (!config.deviceId) {
+      config.deviceId = 'homebridge-blink';
+    }
+
+    savedTier = savedTier || tierValue || config.tier || 'prod';
     config.tier = savedTier;
     config.persistAuth = true;
 
@@ -588,8 +692,7 @@
     await homebridge.updatePluginConfig(pluginConfig);
 
     // Update success display
-    document.getElementById('successEmail').textContent = savedUsername;
-    document.getElementById('successTier').textContent = document.getElementById('tier').options[document.getElementById('tier').selectedIndex].text;
+    updateAccountDisplay(true, data);
 
     showStep('success');
     homebridge.toast.success('Successfully authenticated with Blink!', 'Success');
@@ -613,30 +716,14 @@
     homebridge.showSchemaForm();
     
     // Also check auth status to show appropriate UI state
-    try {
-      const status = await homebridge.request('/status');
-      if (status.authenticated) {
-        // Show success state but keep schema form visible
-        savedUsername = pluginConfig[0].username;
-        savedTier = pluginConfig[0].tier || 'prod';
-        document.getElementById('successEmail').textContent = savedUsername;
-        document.getElementById('successTier').textContent = document.getElementById('tier').options[document.getElementById('tier').selectedIndex]?.text || savedTier;
-        showStep('success');
-      }
-    } catch (e) {
-      // Auth status check failed, but config exists - show login wizard in case re-auth needed
-    }
+    await refreshAuthStatus();
   } else {
     // No config yet - user needs to authenticate first
-    try {
-      const status = await homebridge.request('/status');
-      if (status.authenticated) {
-        savedUsername = document.getElementById('username').value || 'Unknown';
-        savedTier = document.getElementById('tier').value;
-        handleAuthSuccess(status);
-      }
-    } catch (e) {
-      // Ignore - start fresh with login wizard
+    const status = await refreshAuthStatus();
+    if (status?.authenticated) {
+      savedUsername = resolveUsername(status) || 'Unknown';
+      savedTier = resolveTier(status) || document.getElementById('tier').value;
+      handleAuthSuccess(status);
     }
   }
 })();
