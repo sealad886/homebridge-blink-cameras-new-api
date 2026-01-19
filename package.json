@@ -1,7 +1,7 @@
 {
     "name": "homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.3.3",
+    "version": "0.3.5",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",

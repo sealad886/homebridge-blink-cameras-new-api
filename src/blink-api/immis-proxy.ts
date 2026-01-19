@@ -624,7 +624,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
   /**
    * Send a SESSION_COMMAND to the immis server.
-   * Note: Payload structure is not yet confirmed for Start/Stop audio; send empty payload for scaffolding.
+   * Note: Payload structure is not yet confirmed for Start/Stop audio; we always prefix
+   * the payload with the command ID to ensure the server can route the request.
    * @param commandId Numeric command ID (e.g., 3 = StartAudio, 4 = StopAudio)
    * @param payload Optional payload buffer (default: empty)
    */
@@ -634,17 +635,19 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     }
 
     const body = payload ?? Buffer.alloc(0);
+    const commandPrefix = Buffer.from([commandId & 0xff]);
+    const fullPayload = body.length > 0 ? Buffer.concat([commandPrefix, body]) : commandPrefix;
     // Build 9-byte header for SESSION_COMMAND
-    const packet = Buffer.alloc(9 + body.length);
+    const packet = Buffer.alloc(9 + fullPayload.length);
     packet.writeUInt8(ImmisMessageType.SESSION_COMMAND, 0);
     // Sequence can reuse keepAliveSequence for monotonicity
     packet.writeUInt32BE(++this.keepAliveSequence, 1);
-    packet.writeUInt32BE(body.length, 5);
-    if (body.length) {
-      body.copy(packet, 9);
+    packet.writeUInt32BE(fullPayload.length, 5);
+    if (fullPayload.length) {
+      fullPayload.copy(packet, 9);
     }
 
-    this.debug(`Sending SESSION_COMMAND (id=${commandId}, len=${body.length})`);
+    this.debug(`Sending SESSION_COMMAND (id=${commandId}, len=${fullPayload.length})`);
     this.targetSocket.write(packet);
   }
 
