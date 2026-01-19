@@ -20,6 +20,10 @@ All API interactions are based on reverse-engineered endpoints from the official
 
 Two-way talk is actively being implemented and is currently experimental. The control-plane signaling is in place and audio uplink is being integrated; behavior may vary by device and locale while we finalize payload framing. If enabled via configuration, expect iterative improvements across releases.
 
+Current IMMIS talkback behavior:
+- AAC-LATM (LOAS) framing is enforced before uplink.
+- Each LOAS frame is sent as a discrete session message with monotonically increasing sequence numbers.
+
 ## Features
 
 - ✅ **Proper HomeKit SecuritySystem** - Arm/disarm networks using the Security System tile in Home app

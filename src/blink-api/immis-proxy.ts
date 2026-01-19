@@ -78,6 +78,56 @@ const enum ImmisMessageType {
  * MPEG-TS sync byte - all MPEG-TS packets start with this
  */
 const MPEGTS_SYNC_BYTE = 0x47;
+const LOAS_SYNCWORD_BYTE_0 = 0x56;
+const LOAS_SYNCWORD_MASK = 0xe0;
+const LOAS_SYNCWORD_VALUE = 0xe0;
+const LOAS_HEADER_LENGTH = 3;
+const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
+
+export interface LatmParseResult {
+  frames: Buffer[];
+  remainder: Buffer;
+  discardedBytes: number;
+}
+
+/**
+ * Extract LOAS/LATM frames from a buffer.
+ *
+ * LOAS header format:
+ * - 11-bit syncword (0x2B7) => 0x56 + top 3 bits (0xE0)
+ * - 13-bit frame length (audioMuxElement length, excludes 3-byte header)
+ */
+export function parseLatmFrames(buffer: Buffer): LatmParseResult {
+  const frames: Buffer[] = [];
+  let offset = 0;
+  let discardedBytes = 0;
+
+  const length = buffer.length;
+  while (offset + LOAS_HEADER_LENGTH <= length) {
+    if (
+      buffer[offset] !== LOAS_SYNCWORD_BYTE_0 ||
+      (buffer[offset + 1] & LOAS_SYNCWORD_MASK) !== LOAS_SYNCWORD_VALUE
+    ) {
+      offset += 1;
+      discardedBytes += 1;
+      continue;
+    }
+
+    const framePayloadLength =
+      ((buffer[offset + 1] & 0x1f) << 8) | buffer[offset + 2];
+    const frameLength = framePayloadLength + LOAS_HEADER_LENGTH;
+
+    if (offset + frameLength > length) {
+      break;
+    }
+
+    frames.push(Buffer.from(buffer.subarray(offset, offset + frameLength)));
+    offset += frameLength;
+  }
+
+  const remainder = Buffer.from(buffer.subarray(offset));
+  return { frames, remainder, discardedBytes };
+}
 
 /**
  * Auth header constants
@@ -113,6 +163,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private receiveBuffer = Buffer.alloc(0);
   /** Attached upstream audio source stream (LATM) */
   private audioInput: Readable | null = null;
+  /** Buffer for assembling LOAS/LATM frames from audio input */
+  private audioBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 
   constructor(config: ImmisProxyConfig) {
     super();
@@ -600,6 +652,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   startAudio(): void {
     // Known command IDs: StartAudio = 3
     // Payload structure TBD; send empty body for now and rely on device to complete via microphone request.
+    this.audioBuffer = Buffer.alloc(0);
     this.sendSessionCommand(3);
   }
 
@@ -607,15 +660,15 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   stopAudio(): void {
     // Known command IDs: StopAudio = 4
     this.sendSessionCommand(4);
+    this.audioBuffer = Buffer.alloc(0);
   }
 
   /**
-   * Attach a readable stream that provides AAC-LATM frames to be uplinked.
-   * This method will read chunks and forward them to the immis server using
-   * proprietary framing. The exact payload structure is not fully known, so
-   * we currently encapsulate raw LATM chunks as SESSION_MESSAGE payloads.
+   * Attach a readable stream that provides AAC-LATM (LOAS/LATM) frames to be uplinked.
+   * Chunks are re-framed into complete LOAS frames before being sent as SESSION_MESSAGE
+   * payloads to preserve frame boundaries and sequencing.
    *
-   * @param stream Readable stream producing LATM frames
+   * @param stream Readable stream producing LOAS/LATM frames
    */
   attachAudioInput(stream: Readable): void {
     if (this.audioInput === stream) {
@@ -627,11 +680,24 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     let totalBytes = 0;
     stream.on('data', (chunk: Buffer) => {
       totalBytes += chunk.length;
-      // Forward LATM chunk to immis server
-      try {
-        this.sendLatmChunk(chunk);
-      } catch (error) {
-        this.debug(`Failed to send LATM chunk: ${(error as Error).message}`);
+      this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
+      if (this.audioBuffer.length > MAX_AUDIO_BUFFER_BYTES) {
+        this.debug(`Audio buffer exceeded ${MAX_AUDIO_BUFFER_BYTES} bytes; dropping buffered audio`);
+        this.audioBuffer = Buffer.alloc(0);
+      }
+
+      const { frames, remainder, discardedBytes } = parseLatmFrames(this.audioBuffer);
+      if (discardedBytes > 0) {
+        this.debug(`Discarded ${discardedBytes} bytes before LOAS sync`);
+      }
+      this.audioBuffer = remainder;
+
+      for (const frame of frames) {
+        try {
+          this.sendLatmFrame(frame);
+        } catch (error) {
+          this.debug(`Failed to send LATM frame: ${(error as Error).message}`);
+        }
       }
     });
 
@@ -644,15 +710,19 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       if (this.audioInput === stream) {
         this.audioInput = null;
       }
+      if (this.audioBuffer.length > 0) {
+        this.debug(`Dropping ${this.audioBuffer.length} buffered bytes after stream close`);
+        this.audioBuffer = Buffer.alloc(0);
+      }
     });
   }
 
   /**
-   * Forward a single LATM chunk to the immis server.
-   * NOTE: Payload structure is provisional. We encapsulate raw LATM data
-   * inside a SESSION_MESSAGE (type=0x18) packet. Sequence uses keepAliveSequence.
+   * Forward a single LOAS/LATM frame to the immis server.
+   * NOTE: Payload structure is provisional. We encapsulate LOAS frames
+   * inside a SESSION_MESSAGE (type=0x18) packet with monotonically increasing sequence numbers.
    */
-  private sendLatmChunk(latm: Buffer): void {
+  private sendLatmFrame(latm: Buffer): void {
     if (!this.targetSocket || this.targetSocket.destroyed) {
       return;
     }
@@ -662,7 +732,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     header.writeUInt32BE(latm.length, 5);
     const packet = Buffer.concat([header, latm]);
     this.targetSocket.write(packet);
-    this.debug(`Sent LATM chunk (${latm.length} bytes)`);
+    this.debug(`Sent LATM frame (${latm.length} bytes)`);
   }
 
   /**

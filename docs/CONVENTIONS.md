@@ -68,6 +68,7 @@
 **Examples:**
 
 - Good: `twoWayAudio: true` with logs showing `SESSION_COMMAND start/stop` and incoming `SESSION_MESSAGE` entries.
+- Good: LOAS/LATM frames are parsed and uplinked as discrete session messages with monotonically increasing sequences.
 - Bad: Enable talkback without telemetry or centralized command wrappers.
 
 **Related Files / Modules:**
