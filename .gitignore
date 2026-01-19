@@ -1,3 +1,6 @@
+*.png
+*.code-workspace
+
 # Logs
 logs
 *.log
@@ -59,6 +62,8 @@ typings/
 
 # dist directory (built at publish time)
 dist
+homebridge-ui/server.js
+homebridge-ui/server.js.map
 
 /scripts/*
 !/scripts/release.mjs
@@ -224,7 +229,6 @@ vite.config.ts.timestamp-*
 !.vscode/launch.json
 !.vscode/extensions.json
 !.vscode/*.code-snippets
-!*.code-workspace
 
 # Built Visual Studio Code Extensions
 *.vsix

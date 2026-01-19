@@ -1,0 +1,15 @@
+{
+  "watch": [
+    "src",
+    "homebridge-ui/public"
+  ],
+  "ext": "ts,html,css,js",
+  "ignore": [
+    "dist"
+  ],
+  "exec": "npm run build && homebridge -U ./test/hbConfig -D",
+  "signal": "SIGTERM",
+  "env": {
+    "NODE_OPTIONS": "--trace-warnings"
+  }
+}
