@@ -159,6 +159,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
 
       this.authStatus = {
         authenticated: true,
+        email: username,
         accountId: accountId,
         tier: config.tier,
         message: 'Successfully authenticated with Blink',
@@ -279,6 +280,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
 
       this.authStatus = {
         authenticated: true,
+        email: this.pendingConfig.email,
         accountId: accountId,
         tier: this.pendingConfig.tier,
         message: 'Verification successful! Authentication complete.',
@@ -377,4 +379,3 @@ class BlinkUiServer extends HomebridgePluginUiServer {
 
 // Start the server
 (() => new BlinkUiServer())();
-
