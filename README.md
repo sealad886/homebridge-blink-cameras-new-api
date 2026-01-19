@@ -32,7 +32,7 @@ Two-way talk is actively being implemented and is currently experimental. The co
 
 ## Requirements
 
-- **Homebridge** 1.6.0 or later
+- **Homebridge** 1.11.1 or later
 - **Node.js** 18.0.0 or later (native `fetch` API required)
 - A Blink account with credentials
 
@@ -103,6 +103,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `trustDevice` | No | `true` | Trust this device during client verification |
 | `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` (auto-detected tiers from Blink are honored for routing) |
 | `sharedTier` | No | - | Override shared REST tier (defaults to `tier`) |
+| `debugAuth` | No | `false` | Enable verbose authentication logging |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
@@ -116,6 +117,11 @@ Add a platform entry to your Homebridge `config.json`:
 | `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
+| `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings for debugging |
+| `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); 0 always fetches new snapshots |
+| `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
+| `deviceNames` | No | - | Map of device IDs/serials to custom display names |
+| `deviceSettings` | No | - | Per-device overrides (e.g., motion timeout/enable) |
 
 When `persistAuth` is enabled, auth tokens are stored in a sibling folder to Homebridge's HAP
 storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the HAP
@@ -281,8 +287,11 @@ npm install
 # Build
 npm run build
 
-# Watch mode
+# Watch mode (TypeScript only)
 npm run watch
+
+# Watch + Homebridge (uses test/hbConfig)
+npm run watch:homebridge
 
 # Run tests
 npm test
@@ -290,6 +299,14 @@ npm test
 # Lint
 npm run lint
 ```
+
+### How to verify (local)
+
+1. `npm run build`
+2. `npm test`
+3. `npm run lint`
+4. `npm pack` and confirm the tarball includes `dist/`, `config.schema.json`, and `homebridge-ui/`
+5. `npm run watch:homebridge` and confirm the plugin boots with `test/hbConfig/config.json`
 
 ## Changelog
 
