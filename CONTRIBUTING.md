@@ -31,11 +31,11 @@ This compiles TypeScript to the `dist/` directory.
 For development, you can use either:
 
 ```bash
-# TypeScript-only rebuilds
+# Rebuild + run Homebridge against test/hbConfig
 npm run watch
 
-# Rebuild + run Homebridge against test/hbConfig
-npm run watch:homebridge
+# TypeScript-only rebuilds
+npm run watch:ts
 ```
 
 ## Running Tests
@@ -80,7 +80,7 @@ npm link
 Add the plugin to your Homebridge config (or use Homebridge UI X). This repo
 publishes `config.schema.json`, so the Settings UI will appear in Homebridge UI X
 when the plugin is detected. For local dev, the repo also includes
-`test/hbConfig/config.json` for `npm run watch:homebridge`.
+`test/hbConfig/config.json` for `npm run watch`.
 
 ### Run Homebridge in Debug Mode
 

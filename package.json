@@ -75,8 +75,9 @@
     "scripts": {
         "build": "tsc && npm run copy-ui-assets",
         "copy-ui-assets": "mkdir -p dist/homebridge-ui/public homebridge-ui && cp -r homebridge-ui/public/* dist/homebridge-ui/public/ && cp -f dist/homebridge-ui/server.js homebridge-ui/server.js && cp -f dist/homebridge-ui/server.js.map homebridge-ui/server.js.map",
-        "watch": "tsc --watch",
-        "watch:homebridge": "npm run build && nodemon",
+        "watch": "npm run build && nodemon",
+        "watch:homebridge": "npm run watch",
+        "watch:ts": "tsc --watch",
         "prepublishOnly": "npm run build",
         "test": "jest",
         "lint": "eslint \"src/**/*.ts\"",

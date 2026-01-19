@@ -287,11 +287,11 @@ npm install
 # Build
 npm run build
 
-# Watch mode (TypeScript only)
+# Watch + Homebridge (uses test/hbConfig)
 npm run watch
 
-# Watch + Homebridge (uses test/hbConfig)
-npm run watch:homebridge
+# TypeScript-only rebuilds
+npm run watch:ts
 
 # Run tests
 npm test
@@ -306,7 +306,7 @@ npm run lint
 2. `npm test`
 3. `npm run lint`
 4. `npm pack` and confirm the tarball includes `dist/`, `config.schema.json`, and `homebridge-ui/`
-5. `npm run watch:homebridge` and confirm the plugin boots with `test/hbConfig/config.json`
+5. `npm run watch` and confirm the plugin boots with `test/hbConfig/config.json`
 
 ## Changelog
 
