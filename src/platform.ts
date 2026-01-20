@@ -134,6 +134,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       },
     });
 
+    if (this.config.twoWayAudio) {
+      this.log.warn('Two-way talk UI is disabled until uplink framing is verified; ignoring twoWayAudio setting.');
+    }
+
     // Log debug mode status
     if (this.config.debugAuth) {
       this.log.warn('Auth debugging enabled - verbose API logging active');

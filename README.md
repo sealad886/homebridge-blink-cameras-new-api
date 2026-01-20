@@ -1,6 +1,6 @@
-# homebridge-blink-cameras-new-api
+# @sealad886/homebridge-blink-cameras-new-api
 
-[![npm](https://img.shields.io/npm/v/homebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/homebridge-blink-cameras-new-api)
+[![npm](https://img.shields.io/npm/v/%40sealad886%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api)
 [![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
@@ -18,11 +18,7 @@ All API interactions are based on reverse-engineered endpoints from the official
 
 ## Two-Way Talk Status
 
-Two-way talk is actively being implemented and is currently experimental. The control-plane signaling is in place and audio uplink is being integrated; behavior may vary by device and locale while we finalize payload framing. If enabled via configuration, expect iterative improvements across releases.
-
-Current IMMIS talkback behavior:
-- AAC-LATM (LOAS) framing is enforced before uplink.
-- Each LOAS frame is sent as a discrete session message with monotonically increasing sequence numbers.
+Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden and the plugin forces `twoWayAudio` off until IMMIS uplink framing is validated. Even if you previously enabled talkback, the setting is ignored for now. We will re-enable the UI once payload sequencing and ACK handling are confirmed stable.
 
 ## Features
 
@@ -46,13 +42,13 @@ Current IMMIS talkback behavior:
 
 1. Open the Homebridge UI
 2. Navigate to Plugins
-3. Search for "homebridge-blink-cameras-new-api"
+3. Search for "@sealad886/homebridge-blink-cameras-new-api"
 4. Click Install
 
 ### Via npm
 
 ```bash
-npm install -g homebridge-blink-cameras-new-api
+npm install -g @sealad886/homebridge-blink-cameras-new-api
 ```
 
 Restart Homebridge after installing.
@@ -61,7 +57,7 @@ Restart Homebridge after installing.
 
 ### Via Homebridge UI
 
-The plugin provides a full configuration UI. Navigate to Plugins → Settings for homebridge-blink-cameras-new-api.
+The plugin provides a full configuration UI. Navigate to Plugins → Settings for @sealad886/homebridge-blink-cameras-new-api.
 
 ### Manual Configuration
 
@@ -83,8 +79,7 @@ Add a platform entry to your Homebridge `config.json`:
       "enableMotionPolling": true,
       "enableStreaming": true,
       "ffmpegPath": "ffmpeg",
-      "enableAudio": true,
-      "twoWayAudio": true
+      "enableAudio": true
     }
   ]
 }
@@ -93,7 +88,7 @@ Add a platform entry to your Homebridge `config.json`:
 ### Configuration Options
 
 | Option | Required | Default | Description |
-|--------|----------|---------|-------------|
+| ------ | -------- | ------- | ----------- |
 | `platform` | Yes | - | Must be `BlinkCameras` |
 | `name` | Yes | `Blink` | Platform name shown in logs |
 | `username` | Yes | - | Your Blink account email |
@@ -117,7 +112,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams |
 | `enableAudio` | No | `true` | Enable audio streaming from camera |
-| `twoWayAudio` | No | `true` | Enable talkback audio to camera |
+| `twoWayAudio` | No | `false` (forced off) | Talkback is disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
 | `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
@@ -161,7 +156,7 @@ brew install 'ffmpeg@8'
 ## Supported Devices
 
 | Blink Device | HomeKit Service | Features |
-|--------------|-----------------|----------|
+| ------------ | --------------- | -------- |
 | **Network** | SecuritySystem | Arm/disarm all cameras in network |
 | **Camera** | Switch + MotionSensor | Enable/disable motion, motion events |
 | **Doorbell** | Doorbell + Switch + MotionSensor | Ring events, enable/disable motion |

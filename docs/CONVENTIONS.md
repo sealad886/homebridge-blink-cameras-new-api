@@ -21,8 +21,8 @@
 
 **Examples:**
 
-- Good: Publish to npm (e.g., `npm publish`) and install via `npm install homebridge-blink-cameras-new-api`; the UI shows the publisher handle.
-- Bad: Install via `hb-service add ./homebridge-blink-cameras-new-api-0.1.x.tgz`; the UI shows `@` because registry metadata is unavailable.
+- Good: Publish to npm (e.g., `npm publish`) and install via `npm install @sealad886/homebridge-blink-cameras-new-api`; the UI shows the publisher handle.
+- Bad: Install via `hb-service add ./sealad886-homebridge-blink-cameras-new-api-0.1.x.tgz`; the UI shows `@` because registry metadata is unavailable.
 
 **Related Files / Modules:**
 
@@ -54,22 +54,23 @@
 
 ### Two-Way Talk Status & Guardrails
 
-**Status:** STRONGLY RECOMMENDED
+**Status:** REQUIRED
 
 **Scope:** Audio talkback features and configuration.
 
-**Rule:** Treat two-way talk as experimental until payload framing and ACK handling are finalized. Gate feature behind explicit config and surface clear logs for start/stop lifecycle.
+**Rule:** Two-way talk is disabled until IMMIS uplink framing and ACK handling are validated. Always force `twoWayAudio` off, hide the HomeKit microphone UI, and log a warning if users attempt to enable it.
 
 **Rationale (Why this exists):**
 
 - Device and locale differences affect IMMIS uplink behavior; robust ACK parsing is still in progress.
-- Clear runtime telemetry prevents silent failures and aids reverse engineering.
+- Exposing the HomeKit microphone advertises a feature that is not yet reliable.
+- Clear runtime messaging avoids user confusion while the feature is gated.
 
 **Examples:**
 
-- Good: `twoWayAudio: true` with logs showing `SESSION_COMMAND start/stop` and incoming `SESSION_MESSAGE` entries.
-- Good: LOAS/LATM frames are parsed and uplinked as discrete session messages with monotonically increasing sequences.
-- Bad: Enable talkback without telemetry or centralized command wrappers.
+- Good: Config contains `twoWayAudio: true` but logs warn that talk is disabled and microphone UI stays hidden.
+- Good: LOAS/LATM framing work continues behind the scenes without advertising talkback to HomeKit.
+- Bad: Surfacing the microphone tile or passing through `twoWayAudio` to streaming delegates.
 
 **Related Files / Modules:**
 
@@ -86,5 +87,6 @@
 
 ## 5. Change History (Human-Readable)
 
+- 2026-01-20: Two-way talk is now forced off; HomeKit microphone UI is hidden and any config attempts log warnings.
 - 2026-01-17: Added convention clarifying npm registry requirement for publisher handle in Homebridge UI.
 - 2026-01-18: Added two-way talk status guardrails and experimental designation.

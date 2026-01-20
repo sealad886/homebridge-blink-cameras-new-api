@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the technical requirements for adding live video streaming to homebridge-blink-cameras-new-api.
+This document outlines the technical requirements for adding live video streaming to @sealad886/homebridge-blink-cameras-new-api.
 
 ## Current State
 

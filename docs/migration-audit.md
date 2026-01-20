@@ -68,7 +68,7 @@
 | `rtspTransport` | `src/platform.ts`, `src/accessories/camera-source.ts` | RTSP transport mode. |
 | `maxStreams` | `src/platform.ts`, `src/accessories/camera-source.ts` | Max concurrent streams. |
 | `enableAudio` | `src/platform.ts`, `src/accessories/camera-source.ts` | Enable audio. |
-| `twoWayAudio` | `src/platform.ts`, `src/accessories/camera-source.ts` | Enable talkback. |
+| `twoWayAudio` | `src/platform.ts`, `src/accessories/camera-source.ts` | Talkback flag (currently forced off/ignored). |
 | `audioCodec` | `src/platform.ts`, `src/accessories/camera-source.ts` | Preferred codec. |
 | `audioBitrate` | `src/platform.ts`, `src/accessories/camera-source.ts` | Audio bitrate. |
 | `videoBitrate` | `src/platform.ts`, `src/accessories/camera-source.ts` | Max video bitrate. |

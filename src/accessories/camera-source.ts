@@ -69,7 +69,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   maxStreams: 1,
   audio: {
     enabled: true,
-    twoWay: true,
+    twoWay: false,
     codec: 'opus',
     bitrate: 32,
   },
@@ -82,6 +82,8 @@ export const resolveStreamingConfig = (
 ): BlinkCameraStreamingConfig => {
   const audio: Partial<BlinkCameraStreamingConfig['audio']> = config?.audio ?? {};
   const video: Partial<BlinkCameraStreamingConfig['video']> = config?.video ?? {};
+  // Two-way talkback is intentionally disabled until uplink framing is validated.
+  const twoWay = false;
 
   return {
     enabled: config?.enabled ?? DEFAULT_STREAMING_CONFIG.enabled,
@@ -93,7 +95,7 @@ export const resolveStreamingConfig = (
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     audio: {
       enabled: audio.enabled ?? DEFAULT_STREAMING_CONFIG.audio.enabled,
-      twoWay: audio.twoWay ?? DEFAULT_STREAMING_CONFIG.audio.twoWay,
+      twoWay,
       codec: audio.codec ?? DEFAULT_STREAMING_CONFIG.audio.codec,
       bitrate: audio.bitrate ?? DEFAULT_STREAMING_CONFIG.audio.bitrate,
     },

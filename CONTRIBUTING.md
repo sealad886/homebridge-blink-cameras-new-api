@@ -1,4 +1,4 @@
-# Contributing to homebridge-blink-cameras-new-api
+# Contributing to @sealad886/homebridge-blink-cameras-new-api
 
 Thank you for your interest in contributing! This guide will help you get started.
 
@@ -26,7 +26,7 @@ npm run build
 
 This compiles TypeScript to the `dist/` directory.
 
-### Watch Mode
+### Watch Mode (build)
 
 For development, you can use either:
 

@@ -209,9 +209,9 @@
       },
       "twoWayAudio": {
         "title": "Enable Two-Way Audio",
-        "description": "Enable talkback audio from HomeKit to the camera (requires audio enabled).",
+        "description": "Temporarily disabled: talkback UI is hidden until uplink framing is finalized.",
         "type": "boolean",
-        "default": true,
+        "default": false,
         "required": false
       },
       "audioCodec": {
@@ -334,7 +334,6 @@
         "rtspTransport",
         "maxStreams",
         "enableAudio",
-        "twoWayAudio",
         "audioCodec",
         "audioBitrate",
         "videoBitrate"
