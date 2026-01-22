@@ -1,7 +1,7 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.4.4",
+    "version": "0.4.5",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
@@ -36,9 +36,14 @@
     "types": "dist/index.d.ts",
     "files": [
         "dist",
-        "config.schema.json",
-        "homebridge-ui"
+        "config.schema.json"
     ],
+        "homebridge": {
+            "pluginAlias": "BlinkCameras",
+            "pluginType": "platform",
+            "schema": "config.schema.json",
+            "customUi": "dist/homebridge-ui/server.js"
+        },
     "repository": {
         "type": "git",
         "url": "git+ssh://git@github.com/sealad886/homebridge-blink-cameras-new-api.git"
@@ -77,14 +82,14 @@
     },
     "scripts": {
         "build": "tsc && npm run copy-ui-assets",
-        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/ && cp -r src/homebridge-ui/public/* homebridge-ui/public/ && cp -f dist/homebridge-ui/server.js homebridge-ui/server.js && cp -f dist/homebridge-ui/server.js.map homebridge-ui/server.js.map",
+        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
         "watch": "npm run build && nodemon",
         "watch:homebridge": "npm run watch",
         "watch:ts": "tsc --watch",
         "prepublishOnly": "npm run build",
         "test": "jest",
         "lint": "eslint \"src/**/*.ts\"",
-        "clean": "rm -rf dist homebridge-ui/server.js homebridge-ui/server.js.map",
+        "clean": "rm -rf dist",
         "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
         "update": "ncu -u && npm update && npm install"
