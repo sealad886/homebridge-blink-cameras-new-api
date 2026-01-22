@@ -41,7 +41,7 @@
     ],
     "repository": {
         "type": "git",
-        "url": "git@github.com:sealad886/homebridge-blink-cameras-new-api.git"
+        "url": "git+ssh://git@github.com/sealad886/homebridge-blink-cameras-new-api.git"
     },
     "publishConfig": {
         "access": "public"
