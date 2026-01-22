@@ -280,11 +280,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       const buffer = Buffer.from(await response.arrayBuffer());
-      
+
       // Cache the snapshot
       this.cachedSnapshot = buffer;
       this.cachedSnapshotTime = Date.now();
-      
+
       this.log(`Snapshot returned (${buffer.length} bytes)`);
       callback(undefined, buffer);
     } catch (error) {

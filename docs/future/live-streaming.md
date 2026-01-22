@@ -67,7 +67,7 @@ Currently only `handleSnapshotRequest` is implemented.
                        ▼
               ┌────────────────┐
               │handleStreamReq │  Start FFmpeg process
-              │  (type: START) │  
+              │  (type: START) │
               └────────────────┘
                        │
                        ▼
