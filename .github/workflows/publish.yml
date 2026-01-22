@@ -44,6 +44,22 @@ jobs:
         if: steps.version_check.outputs.publish == 'true'
         run: npm test
 
+      - name: Ensure npm token present
+        if: steps.version_check.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not configured; set repository secret NPM_TOKEN to publish." >&2
+            exit 1
+          fi
+
+      - name: Configure npm auth
+        if: steps.version_check.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+
       - name: Publish to npm
         if: steps.version_check.outputs.publish == 'true'
         env:
