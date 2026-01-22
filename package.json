@@ -1,7 +1,7 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.4.1",
+    "version": "0.4.2",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
@@ -51,7 +51,7 @@
         "homebridge": ">=1.11.1"
     },
     "dependencies": {
-        "@homebridge/plugin-ui-utils": "^2.0.2",
+        "@homebridge/plugin-ui-utils": "^2.1.2",
         "async-lock": "^1.4.1"
     },
     "devDependencies": {
@@ -59,15 +59,15 @@
         "@oznu/homebridge-types": "*",
         "@types/async-lock": "^1.4.2",
         "@types/jest": "^30.0.0",
-        "@types/node": "^25.0.8",
-        "@typescript-eslint/eslint-plugin": "^8.53.0",
-        "@typescript-eslint/parser": "^8.53.0",
+        "@types/node": "^25.0.9",
+        "@typescript-eslint/eslint-plugin": "^8.53.1",
+        "@typescript-eslint/parser": "^8.53.1",
         "eslint": "^9.39.2",
         "homebridge": "^1.11.1",
         "jest": "^30.2.0",
         "nodemon": "^3.1.11",
         "npm-check-updates": "^19.3.1",
-        "prettier": "^3.7.4",
+        "prettier": "^3.8.0",
         "ts-jest": "^29.4.6",
         "typescript": "^5.9.3",
         "jest-util": "*"
@@ -77,7 +77,7 @@
     },
     "scripts": {
         "build": "tsc && npm run copy-ui-assets",
-        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public homebridge-ui && cp -r homebridge-ui/public/* dist/homebridge-ui/public/ && cp -f dist/homebridge-ui/server.js homebridge-ui/server.js && cp -f dist/homebridge-ui/server.js.map homebridge-ui/server.js.map",
+        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/ && cp -r src/homebridge-ui/public/* homebridge-ui/public/ && cp -f dist/homebridge-ui/server.js homebridge-ui/server.js && cp -f dist/homebridge-ui/server.js.map homebridge-ui/server.js.map",
         "watch": "npm run build && nodemon",
         "watch:homebridge": "npm run watch",
         "watch:ts": "tsc --watch",

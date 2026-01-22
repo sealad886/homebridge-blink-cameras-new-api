@@ -77,6 +77,33 @@
 - `src/accessories/camera-source.ts`
 - `src/blink-api/immis-proxy.ts`
 
+### Custom UI Packaging Path
+
+**Status:** REQUIRED
+
+**Scope:** Custom UI build, publish, and runtime packaging.
+
+**Rule:** Source assets live in `src/homebridge-ui/public` and must be copied to `homebridge-ui/public` (runtime path) and `dist/homebridge-ui/public` during `npm run build`; `config.schema.json` expects `customUiPath: "./homebridge-ui"`, so publish must include that folder.
+
+**Rationale (Why this exists):**
+
+- Homebridge Custom UI loads assets from `customUiPath`; if the folder is empty, the config modal spins forever with 404s instead of rendering the form.
+- The build step must succeed in a clean checkout; copying from the wrong source path (`homebridge-ui/public`) fails and yields an empty npm tarball.
+- Publishing relies on `prepublishOnly` to build; ensuring the correct source path prevents regressions when cutting releases.
+
+**Examples:**
+
+- Good:
+	- `npm run build` copies `src/homebridge-ui/public` → `dist/homebridge-ui/public` and `homebridge-ui/public`, then publishes including those assets.
+- Bad:
+	- Copying from `homebridge-ui/public` (nonexistent in a clean repo) causes `cp: homebridge-ui/public/*: No such file or directory`, leaving the custom UI missing from the package and causing an infinite spinner in Homebridge UI.
+
+**Related Files / Modules:**
+
+- `config.schema.json`
+- `package.json` (`copy-ui-assets` script)
+- `src/homebridge-ui/public/index.html`
+
 ## 3. Rationale and Examples
 
 - See individual conventions above.

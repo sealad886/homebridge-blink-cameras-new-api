@@ -1,0 +1,730 @@
+<!-- Blink Cameras Plugin Custom UI -->
+<!-- Interactive login wizard with 2FA and verification support -->
+
+<style>
+  .blink-ui {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  .blink-logo {
+    text-align: center;
+    margin-bottom: 1.5rem;
+  }
+
+  .blink-logo svg {
+    width: 64px;
+    height: 64px;
+    fill: var(--primary);
+  }
+
+  .step-indicator {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 1.5rem;
+    gap: 0.5rem;
+  }
+
+  .step {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: var(--secondary);
+    transition: all 0.3s ease;
+  }
+
+  .step.active {
+    background-color: var(--primary);
+    transform: scale(1.2);
+  }
+
+  .step.completed {
+    background-color: var(--success);
+  }
+
+  .auth-step {
+    display: none;
+  }
+
+  .auth-step.active {
+    display: block;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: 2rem;
+    font-size: 0.875rem;
+    margin-bottom: 1rem;
+  }
+
+  .status-badge.success {
+    background-color: rgba(var(--success-rgb, 40, 167, 69), 0.1);
+    color: var(--success);
+  }
+
+  .status-badge.warning {
+    background-color: rgba(var(--warning-rgb, 255, 193, 7), 0.1);
+    color: var(--warning);
+  }
+
+  .status-badge.error {
+    background-color: rgba(var(--danger-rgb, 220, 53, 69), 0.1);
+    color: var(--danger);
+  }
+
+  .status-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .log-container {
+    max-height: 150px;
+    overflow-y: auto;
+    background: var(--bg-secondary, #f8f9fa);
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    font-family: monospace;
+    font-size: 0.75rem;
+    margin-top: 1rem;
+    display: none;
+  }
+
+  .log-container.visible {
+    display: block;
+  }
+
+  .log-entry {
+    margin-bottom: 0.25rem;
+    word-break: break-word;
+  }
+
+  .log-entry.debug { color: var(--secondary); }
+  .log-entry.info { color: var(--info, #17a2b8); }
+  .log-entry.warn { color: var(--warning); }
+  .log-entry.error { color: var(--danger); }
+
+  .verification-hint {
+    background: rgba(var(--info-rgb, 23, 162, 184), 0.1);
+    border-left: 3px solid var(--info, #17a2b8);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    border-radius: 0.25rem;
+  }
+
+  .verification-hint strong {
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .success-details {
+    background: rgba(var(--success-rgb, 40, 167, 69), 0.05);
+    border: 1px solid rgba(var(--success-rgb, 40, 167, 69), 0.2);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-top: 1rem;
+  }
+
+  .success-details dt {
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+  }
+
+  .success-details dd {
+    margin-bottom: 0.75rem;
+    margin-left: 0;
+  }
+
+  .status-error {
+    margin-top: 0.75rem;
+  }
+
+  .btn-group-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .device-id-toggle {
+    cursor: pointer;
+    color: var(--primary);
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+  }
+
+  .device-id-toggle:hover {
+    text-decoration: underline;
+  }
+
+  .hidden {
+    display: none !important;
+  }
+</style>
+
+<div class="blink-ui">
+  <!-- Logo -->
+  <div class="blink-logo">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+    </svg>
+    <h4 class="mt-2 mb-0">Blink Cameras</h4>
+    <small class="text-muted">OAuth Authentication</small>
+  </div>
+
+  <!-- Step Indicator -->
+  <div class="step-indicator">
+    <div class="step active" id="step1-dot"></div>
+    <div class="step" id="step2-dot"></div>
+    <div class="step" id="step3-dot"></div>
+  </div>
+
+  <!-- Step 1: Login -->
+  <div class="auth-step active" id="step-login">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Sign in to Blink</h5>
+        <p class="card-text text-muted">Enter your Blink account credentials to authenticate.</p>
+
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="username">Email Address</label>
+            <input type="email" class="form-control" id="username" placeholder="you@example.com" required>
+          </div>
+
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" class="form-control" id="password" placeholder="Your Blink password" required>
+          </div>
+
+          <div class="form-group">
+            <label for="tier">Region</label>
+            <select class="form-control" id="tier">
+              <option value="prod">Production (Default)</option>
+              <option value="prde">Europe (EU)</option>
+              <option value="prsg">Asia Pacific (APAC)</option>
+              <option value="a001">Australia (AU)</option>
+              <option value="e001">Production (e001)</option>
+              <option value="e002">Production (e002)</option>
+              <option value="e003">Production (e003)</option>
+              <option value="e004">Production (e004)</option>
+              <option value="e005">Production (e005)</option>
+              <option value="e006">Production (e006)</option>
+            </select>
+            <small class="form-text text-muted">Select your region. Most users should use "Production (Default)".</small>
+          </div>
+
+          <div id="deviceIdSection" class="hidden">
+            <div class="form-group">
+              <label for="deviceId">Device ID</label>
+              <input type="text" class="form-control" id="deviceId" placeholder="homebridge-blink-01">
+              <small class="form-text text-muted">Unique identifier for this Homebridge instance.</small>
+            </div>
+          </div>
+
+          <div class="device-id-toggle" id="toggleDeviceId">
+            ▶ Advanced Options
+          </div>
+
+          <div class="text-center mt-4">
+            <button type="submit" class="btn btn-primary btn-block" id="loginBtn">
+              Sign In
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Verification -->
+  <div class="auth-step" id="step-verify">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title" id="verifyTitle">Verification Required</h5>
+
+        <div class="verification-hint" id="verifyHint">
+          <strong>Check your email or phone</strong>
+          <span id="verifyHintText">A verification code has been sent to your registered email/phone.</span>
+        </div>
+
+        <form id="verifyForm">
+          <div class="form-group">
+            <label for="verifyCode">Verification Code</label>
+            <input type="text" class="form-control" id="verifyCode"
+                   placeholder="Enter 6-digit code" maxlength="10"
+                   pattern="[0-9]*" inputmode="numeric" required>
+          </div>
+
+          <div class="form-check mb-3" id="trustDeviceCheck">
+            <input type="checkbox" class="form-check-input" id="trustDevice" checked>
+            <label class="form-check-label" for="trustDevice">
+              Trust this device (won't ask for verification again)
+            </label>
+          </div>
+
+          <input type="hidden" id="verifyType" value="2fa">
+
+          <div class="btn-group-vertical">
+            <button type="submit" class="btn btn-primary" id="verifyBtn">
+              Verify Code
+            </button>
+            <button type="button" class="btn btn-outline-secondary" id="backToLogin">
+              ← Back to Login
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Success -->
+  <div class="auth-step" id="step-success">
+    <div class="card">
+      <div class="card-body text-center">
+        <div class="status-badge success mx-auto">
+          <svg class="status-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+          </svg>
+          Authentication Successful
+        </div>
+
+        <h5 class="card-title">Connected to Blink!</h5>
+        <p class="card-text text-muted">Your Homebridge is now authenticated with your Blink account.</p>
+
+        <div class="success-details text-left">
+          <dl class="mb-0">
+            <dt>Account</dt>
+            <dd id="successEmail">-</dd>
+            <dt>Region</dt>
+            <dd id="successTier">-</dd>
+            <dt>Status</dt>
+            <dd><span class="badge badge-success" id="authStatusBadge">Authenticated</span></dd>
+          </dl>
+
+          <div class="status-error alert alert-warning py-2 px-3 hidden" id="statusError" role="alert">
+            <span id="statusErrorMessage">Unable to reach the plugin backend.</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary ml-2" id="statusRetry">Retry</button>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <p class="text-muted small">
+            Your credentials have been saved. You can now configure your camera settings below.
+          </p>
+          <button type="button" class="btn btn-outline-primary" id="showSchemaForm">
+            Configure Camera Settings
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Display -->
+  <div id="errorAlert" class="alert alert-danger mt-3 hidden" role="alert">
+    <strong>Error:</strong> <span id="errorMessage"></span>
+  </div>
+
+  <!-- Log Output (Debug) -->
+  <div class="log-container" id="logContainer">
+    <strong class="d-block mb-2">Debug Log:</strong>
+    <div id="logOutput"></div>
+  </div>
+
+  <div class="text-center mt-3">
+    <small class="text-muted">
+      <a href="#" id="toggleLogs">Show Debug Logs</a>
+    </small>
+  </div>
+</div>
+
+<script>
+(async () => {
+  // State
+  let currentStep = 'login';
+  let verifyType = '2fa';
+  let savedUsername = '';
+  let savedTier = 'prod';
+
+  // DOM Elements
+  const steps = {
+    login: document.getElementById('step-login'),
+    verify: document.getElementById('step-verify'),
+    success: document.getElementById('step-success')
+  };
+
+  const dots = {
+    1: document.getElementById('step1-dot'),
+    2: document.getElementById('step2-dot'),
+    3: document.getElementById('step3-dot')
+  };
+
+  const loginForm = document.getElementById('loginForm');
+  const verifyForm = document.getElementById('verifyForm');
+  const loginBtn = document.getElementById('loginBtn');
+  const verifyBtn = document.getElementById('verifyBtn');
+  const backBtn = document.getElementById('backToLogin');
+  const errorAlert = document.getElementById('errorAlert');
+  const errorMessage = document.getElementById('errorMessage');
+  const logContainer = document.getElementById('logContainer');
+  const logOutput = document.getElementById('logOutput');
+  const toggleLogs = document.getElementById('toggleLogs');
+  const toggleDeviceId = document.getElementById('toggleDeviceId');
+  const deviceIdSection = document.getElementById('deviceIdSection');
+  const successEmail = document.getElementById('successEmail');
+  const successTier = document.getElementById('successTier');
+  const authStatusBadge = document.getElementById('authStatusBadge');
+  const statusError = document.getElementById('statusError');
+  const statusErrorMessage = document.getElementById('statusErrorMessage');
+  const statusRetry = document.getElementById('statusRetry');
+
+  // Load existing config
+  const pluginConfig = await homebridge.getPluginConfig();
+  if (pluginConfig.length > 0) {
+    const config = pluginConfig[0];
+    if (config.username) document.getElementById('username').value = config.username;
+    if (config.deviceId) document.getElementById('deviceId').value = config.deviceId;
+    if (config.tier) document.getElementById('tier').value = config.tier;
+  }
+
+  // Step navigation
+  function showStep(step) {
+    currentStep = step;
+    Object.values(steps).forEach(s => s.classList.remove('active'));
+    steps[step].classList.add('active');
+
+    // Update dots
+    Object.values(dots).forEach(d => {
+      d.classList.remove('active', 'completed');
+    });
+
+    if (step === 'login') {
+      dots[1].classList.add('active');
+    } else if (step === 'verify') {
+      dots[1].classList.add('completed');
+      dots[2].classList.add('active');
+    } else if (step === 'success') {
+      dots[1].classList.add('completed');
+      dots[2].classList.add('completed');
+      dots[3].classList.add('active');
+    }
+
+    hideError();
+  }
+
+  // Error handling
+  function showError(message) {
+    errorMessage.textContent = message;
+    errorAlert.classList.remove('hidden');
+  }
+
+  function hideError() {
+    errorAlert.classList.add('hidden');
+  }
+
+  function resolveUsername(data) {
+    return savedUsername || pluginConfig[0]?.username || data?.email || '';
+  }
+
+  function resolveTier(data) {
+    return savedTier || pluginConfig[0]?.tier || data?.tier || '';
+  }
+
+  function setAuthBadge(state, text) {
+    authStatusBadge.classList.remove('badge-success', 'badge-warning', 'badge-danger');
+    if (state === 'success') authStatusBadge.classList.add('badge-success');
+    if (state === 'warning') authStatusBadge.classList.add('badge-warning');
+    if (state === 'danger') authStatusBadge.classList.add('badge-danger');
+    authStatusBadge.textContent = text;
+  }
+
+  function setAccountLoading() {
+    successEmail.textContent = 'Loading...';
+    setAuthBadge('warning', 'Checking');
+  }
+
+  function updateAccountDisplay(authenticated, data) {
+    const username = resolveUsername(data);
+    const tier = resolveTier(data);
+    const tierLabel = document.getElementById('tier').options[document.getElementById('tier').selectedIndex]?.text;
+
+    if (authenticated) {
+      successEmail.textContent = username || 'Unknown account';
+      setAuthBadge('success', 'Authenticated');
+    } else {
+      successEmail.textContent = 'Not signed in';
+      setAuthBadge('warning', 'Not signed in');
+    }
+
+    successTier.textContent = tierLabel || tier || '-';
+  }
+
+  function showStatusError(message) {
+    statusErrorMessage.textContent = message;
+    statusError.classList.remove('hidden');
+  }
+
+  function hideStatusError() {
+    statusError.classList.add('hidden');
+  }
+
+  async function refreshAuthStatus() {
+    hideStatusError();
+    setAccountLoading();
+    try {
+      const status = await homebridge.request('/status');
+      const authenticated = !!status?.authenticated;
+      updateAccountDisplay(authenticated, status);
+      if (authenticated) {
+        savedUsername = resolveUsername(status);
+        savedTier = resolveTier(status);
+        showStep('success');
+      }
+      return status;
+    } catch (e) {
+      updateAccountDisplay(false, {});
+      showStatusError('Unable to reach the plugin backend. Check Homebridge logs for details.');
+      return null;
+    }
+  }
+
+  // Logging
+  function addLog(level, message) {
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${level}`;
+    entry.textContent = `[${level.toUpperCase()}] ${message}`;
+    logOutput.appendChild(entry);
+    logOutput.scrollTop = logOutput.scrollHeight;
+  }
+
+  // Listen for server events
+  homebridge.addEventListener('log', (event) => {
+    addLog(event.data.level, event.data.message);
+  });
+
+  homebridge.addEventListener('auth-success', (event) => {
+    handleAuthSuccess(event.data);
+  });
+
+  homebridge.addEventListener('auth-2fa-required', (event) => {
+    handleVerificationRequired('2fa', event.data);
+  });
+
+  homebridge.addEventListener('auth-client-verification-required', (event) => {
+    handleVerificationRequired('client', event.data);
+  });
+
+  homebridge.addEventListener('auth-account-verification-required', (event) => {
+    handleVerificationRequired('account', event.data);
+  });
+
+  // Toggle device ID section
+  toggleDeviceId.addEventListener('click', () => {
+    const isHidden = deviceIdSection.classList.contains('hidden');
+    deviceIdSection.classList.toggle('hidden');
+    toggleDeviceId.textContent = isHidden ? '▼ Advanced Options' : '▶ Advanced Options';
+  });
+
+  // Toggle logs
+  toggleLogs.addEventListener('click', (e) => {
+    e.preventDefault();
+    const isVisible = logContainer.classList.contains('visible');
+    logContainer.classList.toggle('visible');
+    toggleLogs.textContent = isVisible ? 'Show Debug Logs' : 'Hide Debug Logs';
+  });
+
+  statusRetry.addEventListener('click', async () => {
+    await refreshAuthStatus();
+  });
+
+  // Login form submission
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hideError();
+
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    const deviceId = document.getElementById('deviceId').value;
+    const tier = document.getElementById('tier').value;
+
+    savedUsername = username;
+    savedTier = tier;
+
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Signing in...';
+    homebridge.showSpinner();
+
+    try {
+      const response = await homebridge.request('/login', {
+        username,
+        password,
+        deviceId: deviceId || undefined,
+        tier
+      });
+
+      if (response.authenticated) {
+        handleAuthSuccess(response);
+      }
+      // Other cases handled via events
+    } catch (e) {
+      showError(e.message || 'Login failed');
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.innerHTML = 'Sign In';
+      homebridge.hideSpinner();
+    }
+  });
+
+  // Verify form submission
+  verifyForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hideError();
+
+    const code = document.getElementById('verifyCode').value;
+    const trustDevice = document.getElementById('trustDevice').checked;
+
+    verifyBtn.disabled = true;
+    verifyBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Verifying...';
+    homebridge.showSpinner();
+
+    try {
+      const response = await homebridge.request('/verify', {
+        code,
+        type: verifyType,
+        trustDevice
+      });
+
+      if (response.authenticated) {
+        handleAuthSuccess(response);
+      }
+      // Other cases handled via events
+    } catch (e) {
+      showError(e.message || 'Verification failed');
+    } finally {
+      verifyBtn.disabled = false;
+      verifyBtn.innerHTML = 'Verify Code';
+      homebridge.hideSpinner();
+    }
+  });
+
+  // Back button
+  backBtn.addEventListener('click', () => {
+    showStep('login');
+  });
+
+  // Handle verification required
+  function handleVerificationRequired(type, data) {
+    verifyType = type;
+    document.getElementById('verifyType').value = type;
+
+    const verifyTitle = document.getElementById('verifyTitle');
+    const verifyHintText = document.getElementById('verifyHintText');
+    const trustDeviceCheck = document.getElementById('trustDeviceCheck');
+
+    if (type === '2fa') {
+      verifyTitle.textContent = 'Two-Factor Authentication';
+      verifyHintText.textContent = data.phoneLastFour
+        ? `A code has been sent to your phone ending in ${data.phoneLastFour}.`
+        : 'A verification code has been sent to your registered email/phone.';
+      trustDeviceCheck.classList.add('hidden');
+    } else if (type === 'client') {
+      verifyTitle.textContent = 'New Device Verification';
+      verifyHintText.textContent = 'Blink needs to verify this new device. Check your email for a verification code.';
+      trustDeviceCheck.classList.remove('hidden');
+    } else if (type === 'account') {
+      verifyTitle.textContent = 'Account Verification';
+      verifyHintText.textContent = 'Blink requires additional account verification. Check your email or phone for a code.';
+      trustDeviceCheck.classList.add('hidden');
+    }
+
+    document.getElementById('verifyCode').value = '';
+    showStep('verify');
+  }
+
+  // Handle successful authentication
+  async function handleAuthSuccess(data) {
+    hideStatusError();
+    // Update config with credentials
+    let config = pluginConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
+
+    const resolvedUsername = resolveUsername(data);
+    const passwordValue = document.getElementById('password').value;
+    const deviceIdValue = document.getElementById('deviceId').value;
+    const tierValue = document.getElementById('tier').value;
+
+    if (resolvedUsername) {
+      savedUsername = resolvedUsername;
+      config.username = resolvedUsername;
+    }
+
+    if (passwordValue) {
+      config.password = passwordValue;
+    }
+
+    if (deviceIdValue) {
+      config.deviceId = deviceIdValue;
+    } else if (!config.deviceId) {
+      config.deviceId = 'homebridge-blink';
+    }
+
+    savedTier = savedTier || tierValue || config.tier || 'prod';
+    config.tier = savedTier;
+    config.persistAuth = true;
+
+    // Remove temporary verification codes from config
+    delete config.twoFactorCode;
+    delete config.clientVerificationCode;
+    delete config.accountVerificationCode;
+
+    if (pluginConfig.length === 0) {
+      pluginConfig.push(config);
+    } else {
+      pluginConfig[0] = config;
+    }
+
+    await homebridge.updatePluginConfig(pluginConfig);
+
+    // Update success display
+    updateAccountDisplay(true, data);
+
+    showStep('success');
+    homebridge.toast.success('Successfully authenticated with Blink!', 'Success');
+    
+    // Automatically show the schema form after successful auth so user can configure all settings
+    homebridge.showSchemaForm();
+  }
+
+  // Show schema form button
+  document.getElementById('showSchemaForm').addEventListener('click', async () => {
+    // Save config before showing schema form
+    await homebridge.savePluginConfig();
+    homebridge.showSchemaForm();
+  });
+
+  // Check for existing auth on load
+  // If already configured (has username), show schema form immediately
+  // The login wizard is only needed for initial setup or re-authentication
+  if (pluginConfig.length > 0 && pluginConfig[0].username) {
+    // Already configured - show schema form by default
+    homebridge.showSchemaForm();
+    
+    // Also check auth status to show appropriate UI state
+    await refreshAuthStatus();
+  } else {
+    // No config yet - user needs to authenticate first
+    const status = await refreshAuthStatus();
+    if (status?.authenticated) {
+      savedUsername = resolveUsername(status) || 'Unknown';
+      savedTier = resolveTier(status) || document.getElementById('tier').value;
+      handleAuthSuccess(status);
+    }
+  }
+})();
+</script>
