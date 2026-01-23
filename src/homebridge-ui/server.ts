@@ -1,3 +1,4 @@
+/* global console, process */
 /**
  * Homebridge Plugin UI Server
  *
@@ -72,19 +73,26 @@ class BlinkUiServer extends HomebridgePluginUiServer {
   private pendingConfig: BlinkConfig | null = null;
   private authStatus: AuthStatus = { authenticated: false };
   private lastAccountId: number | null = null;
+  private readonly debugEnabled: boolean;
 
   constructor() {
     super();
 
+    this.debugEnabled = this.resolveDebugEnabled();
+    this.logDebug('Custom UI server starting.');
+    this.logDebug(`Storage path: ${this.homebridgeStoragePath ?? 'unknown'}`);
+    this.logDebug(`Config path: ${this.homebridgeConfigPath ?? 'unknown'}`);
+
     // Register request handlers
-    this.onRequest('/login', this.handleLogin.bind(this));
-    this.onRequest('/verify', this.handleVerify.bind(this));
-    this.onRequest('/status', this.handleStatus.bind(this));
-    this.onRequest('/logout', this.handleLogout.bind(this));
-    this.onRequest('/test-connection', this.handleTestConnection.bind(this));
+    this.registerRequest('/login', this.handleLogin.bind(this));
+    this.registerRequest('/verify', this.handleVerify.bind(this));
+    this.registerRequest('/status', this.handleStatus.bind(this));
+    this.registerRequest('/logout', this.handleLogout.bind(this));
+    this.registerRequest('/test-connection', this.handleTestConnection.bind(this));
 
     // Signal ready
     this.ready();
+    this.logDebug('Custom UI server ready.');
   }
 
   /**
@@ -92,6 +100,40 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    */
   pushLog(level: string, message: string): void {
     this.pushEvent('log', { level, message, timestamp: new Date().toISOString() });
+  }
+
+  private resolveDebugEnabled(): boolean {
+    const env = process.env.HOMEBRIDGE_DEBUG;
+    if (env && ['1', 'true', 'yes'].includes(env.toLowerCase())) {
+      return true;
+    }
+    const debug = process.env.DEBUG ?? '';
+    return /blink|homebridge/i.test(debug);
+  }
+
+  private logDebug(message: string): void {
+    if (!this.debugEnabled) {
+      return;
+    }
+    console.log(`[Blink UI] ${message}`);
+  }
+
+  private registerRequest<TPayload, TResult>(
+    path: string,
+    handler: (payload: TPayload) => Promise<TResult>,
+  ): void {
+    this.onRequest(path, async (payload: unknown) => {
+      this.logDebug(`Request received: ${path}`);
+      try {
+        const result = await handler(payload as TPayload);
+        this.logDebug(`Request completed: ${path}`);
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        this.logDebug(`Request failed: ${path} (${message})`);
+        throw error;
+      }
+    });
   }
 
   /**
