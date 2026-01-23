@@ -171,6 +171,11 @@
 </style>
 
 <div class="blink-ui">
+  <div id="bootError" class="alert alert-danger mb-3 hidden" role="alert">
+    <strong>Unable to load the plugin UI.</strong>
+    <span id="bootErrorMessage" class="ml-1">Please close and reopen this screen.</span>
+  </div>
+
   <!-- Logo -->
   <div class="blink-logo">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -347,6 +352,51 @@
 
 <script>
 (async () => {
+  const bootError = document.getElementById('bootError');
+  const bootErrorMessage = document.getElementById('bootErrorMessage');
+  let bootFailed = false;
+
+  function showBootError(message, error) {
+    if (bootFailed) return;
+    bootFailed = true;
+    if (bootErrorMessage) {
+      bootErrorMessage.textContent = message;
+    }
+    if (bootError) {
+      bootError.classList.remove('hidden');
+    }
+    try {
+      window.homebridge?.hideSpinner?.();
+    } catch {
+      // ignore
+    }
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error('[Blink UI] Boot error:', error);
+    }
+  }
+
+  window.addEventListener('error', (event) => {
+    showBootError(
+      'The UI failed to load. Close and reopen the settings. If it persists, check Homebridge logs.',
+      event.error
+    );
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    showBootError(
+      'The UI failed to load. Close and reopen the settings. If it persists, check Homebridge logs.',
+      event.reason
+    );
+  });
+
+  if (!window.homebridge) {
+    showBootError('Homebridge UI API is unavailable. Close and reopen the settings screen.');
+    return;
+  }
+
+  const homebridge = window.homebridge;
+
   // State
   let currentStep = 'login';
   let verifyType = '2fa';
@@ -386,7 +436,16 @@
   const statusRetry = document.getElementById('statusRetry');
 
   // Load existing config
-  const pluginConfig = await homebridge.getPluginConfig();
+  let pluginConfig = [];
+  try {
+    pluginConfig = await homebridge.getPluginConfig();
+  } catch (error) {
+    showBootError(
+      'Unable to load the plugin configuration. Close and reopen the settings, then check Homebridge logs.',
+      error
+    );
+    return;
+  }
   if (pluginConfig.length > 0) {
     const config = pluginConfig[0];
     if (config.username) document.getElementById('username').value = config.username;
@@ -689,7 +748,14 @@
       pluginConfig[0] = config;
     }
 
-    await homebridge.updatePluginConfig(pluginConfig);
+    try {
+      await homebridge.updatePluginConfig(pluginConfig);
+    } catch (error) {
+      showError('Failed to save config. Check Homebridge logs and try again.');
+      // eslint-disable-next-line no-console
+      console.error('[Blink UI] Config save failed:', error);
+      return;
+    }
 
     // Update success display
     updateAccountDisplay(true, data);
@@ -704,8 +770,14 @@
   // Show schema form button
   document.getElementById('showSchemaForm').addEventListener('click', async () => {
     // Save config before showing schema form
-    await homebridge.savePluginConfig();
-    homebridge.showSchemaForm();
+    try {
+      await homebridge.savePluginConfig();
+      homebridge.showSchemaForm();
+    } catch (error) {
+      showError('Failed to save config. Check Homebridge logs and try again.');
+      // eslint-disable-next-line no-console
+      console.error('[Blink UI] Config save failed:', error);
+    }
   });
 
   // Check for existing auth on load
