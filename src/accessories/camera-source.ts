@@ -146,6 +146,19 @@ const ssrcToSigned = (ssrc: number): number => {
   return ssrc;
 };
 
+const redactFfmpegArgs = (args: string[]): string[] => {
+  const redacted = [...args];
+  for (let i = 0; i < redacted.length; i++) {
+    const flag = redacted[i];
+    if (flag === '-srtp_out_params' || flag === '-srtp_in_params') {
+      if (i + 1 < redacted.length) {
+        redacted[i + 1] = '<redacted>';
+      }
+    }
+  }
+  return redacted;
+};
+
 const allocatePort = async (): Promise<number> => {
   for (let attempt = 0; attempt < 20; attempt++) {
     const port = await new Promise<number>((resolve, reject) => {
@@ -395,7 +408,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         };
       }
 
-      this.log(`Prepared stream session ${sessionId}`);
+      const audioDetails = this.streamingConfig.audio.enabled && session.audioPort && session.localAudioPort
+        ? ` audio target=${session.audioPort} local=${session.localAudioPort}`
+        : '';
+      this.log(
+        `Prepared stream session ${sessionId} target=${request.targetAddress} (${request.addressVersion}) ` +
+        `video target=${request.video.port} local=${localVideoPort}${audioDetails}`,
+      );
       callback(undefined, response);
     } catch (error) {
       this.log(`Stream preparation failed: ${error}`);
@@ -424,6 +443,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         callback();
         break;
       case 'stop':
+        this.log(`Stream stop requested for session ${sessionId}`);
         void this.stopStream(sessionId).finally(() => callback());
         break;
     }
@@ -498,7 +518,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       const ffmpegArgs = this.buildFfmpegArgs(ffmpegInputUrl, request, active);
       this.log(`Starting stream ${sessionId} via FFmpeg with URL: ${ffmpegInputUrl}`);
       if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg args: ${ffmpegArgs.join(' ')}`);
+        const safeArgs = redactFfmpegArgs(ffmpegArgs);
+        this.log(`FFmpeg args: ${safeArgs.join(' ')}`);
       }
 
       const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
@@ -950,7 +971,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       args.push('-srtp_out_suite', suiteName, '-srtp_out_params', videoParams);
     }
 
-    args.push(buildRtpUrl(session.address, session.videoPort, undefined, video.mtu, useSrtp));
+    args.push(buildRtpUrl(session.address, session.videoPort, session.localVideoPort, video.mtu, useSrtp));
 
     if (this.streamingConfig.audio.enabled && session.audioPort && session.audioSSRC && request.audio) {
       const audio = request.audio;
@@ -971,7 +992,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         args.push('-srtp_out_suite', audioSuiteName, '-srtp_out_params', audioParams);
       }
 
-      args.push(buildRtpUrl(session.address, session.audioPort, undefined, video.mtu, audioUseSrtp));
+      args.push(buildRtpUrl(session.address, session.audioPort, session.localAudioPort, video.mtu, audioUseSrtp));
     }
 
     return args;

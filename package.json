@@ -1,7 +1,7 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.4.6",
+    "version": "0.4.7",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
@@ -38,12 +38,12 @@
         "dist",
         "config.schema.json"
     ],
-        "homebridge": {
-            "pluginAlias": "BlinkCameras",
-            "pluginType": "platform",
-            "schema": "config.schema.json",
-            "customUi": "dist/homebridge-ui/server.js"
-        },
+    "homebridge": {
+        "pluginAlias": "BlinkCameras",
+        "pluginType": "platform",
+        "schema": "config.schema.json",
+        "customUi": "dist/homebridge-ui/server.js"
+    },
     "repository": {
         "type": "git",
         "url": "git+ssh://git@github.com/sealad886/homebridge-blink-cameras-new-api.git"

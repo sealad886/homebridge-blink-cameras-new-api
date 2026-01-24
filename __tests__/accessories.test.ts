@@ -1,4 +1,4 @@
-import { PlatformAccessory } from 'homebridge';
+import { HAP, PlatformAccessory } from 'homebridge';
 import { CameraAccessory } from '../src/accessories/camera';
 import { DoorbellAccessory } from '../src/accessories/doorbell';
 import { NetworkAccessory } from '../src/accessories/network';
@@ -6,7 +6,9 @@ import { OwlAccessory } from '../src/accessories/owl';
 import { BlinkCamerasPlatform } from '../src/platform';
 import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types';
 import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
-import { resolveStreamingConfig } from '../src/accessories/camera-source';
+import { BlinkCameraSource, resolveStreamingConfig } from '../src/accessories/camera-source';
+import { BlinkApi } from '../src/blink-api';
+import { Buffer } from 'node:buffer';
 
 type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig'>;
 
@@ -14,6 +16,7 @@ describe('Accessory handlers', () => {
   const buildPlatform = () => {
     const hap = createHap();
     const log = createLogger();
+    const logFn = jest.fn();
     const apiClient = {
       armNetwork: jest.fn().mockResolvedValue({ command_id: 123 }),
       disarmNetwork: jest.fn().mockResolvedValue({ command_id: 124 }),
@@ -210,5 +213,73 @@ describe('Accessory handlers', () => {
     expect(apiClient.disableOwlMotion).not.toHaveBeenCalled();
     expect(device.enabled).toBe(true);
     expect(handler).toBeInstanceOf(OwlAccessory);
+  });
+
+  it('includes local RTP ports in SRTP output URLs', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      jest.fn(),
+      logFn,
+    );
+
+    const session = {
+      address: '192.168.1.50',
+      addressVersion: 'ipv4',
+      sessionId: 'session',
+      videoPort: 5000,
+      localVideoPort: 5100,
+      videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      videoSRTP: Buffer.alloc(30, 1),
+      videoSSRC: 1234,
+      audioPort: 5001,
+      localAudioPort: 5101,
+      audioCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      audioSRTP: Buffer.alloc(30, 2),
+      audioSSRC: 5678,
+    };
+
+    const request = {
+      type: 'start',
+      sessionID: 'session',
+      video: {
+        fps: 15,
+        width: 640,
+        height: 480,
+        max_bit_rate: 300,
+        profile: hap.H264Profile.BASELINE,
+        level: hap.H264Level.LEVEL3_1,
+        pt: 99,
+        mtu: 1378,
+      },
+      audio: {
+        codec: hap.AudioStreamingCodecType.OPUS,
+        channel: 1,
+        sample_rate: hap.AudioStreamingSamplerate.KHZ_24,
+        max_bit_rate: 24,
+        pt: 110,
+      },
+    };
+
+    const args = (source as any).buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
+    const argString = args.join(' ');
+
+    expect(argString).toContain('localrtpport=5100');
+    expect(argString).toContain('localrtcpport=5100');
+    expect(argString).toContain('localrtpport=5101');
+    expect(argString).toContain('localrtcpport=5101');
   });
 });
