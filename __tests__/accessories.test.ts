@@ -242,11 +242,13 @@ describe('Accessory handlers', () => {
       sessionId: 'session',
       videoPort: 5000,
       localVideoPort: 5100,
+      localVideoRtcpPort: 5102,
       videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
       videoSRTP: Buffer.alloc(30, 1),
       videoSSRC: 1234,
       audioPort: 5001,
       localAudioPort: 5101,
+      localAudioRtcpPort: 5103,
       audioCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
       audioSRTP: Buffer.alloc(30, 2),
       audioSSRC: 5678,
@@ -278,8 +280,8 @@ describe('Accessory handlers', () => {
     const argString = args.join(' ');
 
     expect(argString).toContain('localrtpport=5100');
-    expect(argString).toContain('localrtcpport=5100');
+    expect(argString).toContain('localrtcpport=5102');
     expect(argString).toContain('localrtpport=5101');
-    expect(argString).toContain('localrtcpport=5101');
+    expect(argString).toContain('localrtcpport=5103');
   });
 });

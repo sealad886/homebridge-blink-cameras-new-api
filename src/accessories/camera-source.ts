@@ -111,11 +111,13 @@ interface PendingStreamSession {
   sessionId: string;
   videoPort: number;
   localVideoPort: number;
+  localVideoRtcpPort?: number;
   videoCryptoSuite: number;
   videoSRTP: Buffer;
   videoSSRC: number;
   audioPort?: number;
   localAudioPort?: number;
+  localAudioRtcpPort?: number;
   audioCryptoSuite?: number;
   audioSRTP?: Buffer;
   audioSSRC?: number;
@@ -205,6 +207,7 @@ const buildRtpUrl = (
   address: string,
   port: number,
   localRtpPort?: number,
+  localRtcpPort?: number,
   mtu?: number,
   useSrtp = true,
 ): string => {
@@ -213,7 +216,9 @@ const buildRtpUrl = (
   params.set('rtcpport', `${port}`);
   if (localRtpPort) {
     params.set('localrtpport', `${localRtpPort}`);
-    params.set('localrtcpport', `${localRtpPort}`);
+  }
+  if (localRtcpPort) {
+    params.set('localrtcpport', `${localRtcpPort}`);
   }
   if (mtu) {
     params.set('pkt_size', `${mtu}`);
@@ -373,6 +378,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         sessionId,
         videoPort: request.video.port,
         localVideoPort,
+        localVideoRtcpPort: await allocatePort(),
         videoCryptoSuite: request.video.srtpCryptoSuite,
         videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
         videoSSRC,
@@ -381,8 +387,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (this.streamingConfig.audio.enabled) {
         const audioSSRC = randomBytes(4).readUInt32BE(0);
         const localAudioPort = await allocatePort();
+        const localAudioRtcpPort = await allocatePort();
         session.audioPort = request.audio.port;
         session.localAudioPort = localAudioPort;
+        session.localAudioRtcpPort = localAudioRtcpPort;
         session.audioCryptoSuite = request.audio.srtpCryptoSuite;
         session.audioSRTP = Buffer.concat([request.audio.srtp_key, request.audio.srtp_salt]);
         session.audioSSRC = audioSSRC;
@@ -409,11 +417,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       const audioDetails = this.streamingConfig.audio.enabled && session.audioPort && session.localAudioPort
-        ? ` audio target=${session.audioPort} local=${session.localAudioPort}`
+        ? ` audio target=${session.audioPort} local=${session.localAudioPort}/${session.localAudioRtcpPort ?? 'n/a'}`
         : '';
       this.log(
         `Prepared stream session ${sessionId} target=${request.targetAddress} (${request.addressVersion}) ` +
-        `video target=${request.video.port} local=${localVideoPort}${audioDetails}`,
+        `video target=${request.video.port} local=${localVideoPort}/${session.localVideoRtcpPort ?? 'n/a'}${audioDetails}`,
       );
       callback(undefined, response);
     } catch (error) {
@@ -595,7 +603,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const pending = this.pendingSessions.get(sessionId);
     if (pending) {
       releasePort(pending.localVideoPort);
+      releasePort(pending.localVideoRtcpPort);
       releasePort(pending.localAudioPort);
+      releasePort(pending.localAudioRtcpPort);
       this.pendingSessions.delete(sessionId);
     }
 
@@ -640,7 +650,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     releasePort(active.localVideoPort);
+    releasePort(active.localVideoRtcpPort);
     releasePort(active.localAudioPort);
+    releasePort(active.localAudioRtcpPort);
 
     if (active.commandId) {
       try {
@@ -971,7 +983,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       args.push('-srtp_out_suite', suiteName, '-srtp_out_params', videoParams);
     }
 
-    args.push(buildRtpUrl(session.address, session.videoPort, session.localVideoPort, video.mtu, useSrtp));
+    args.push(buildRtpUrl(
+      session.address,
+      session.videoPort,
+      session.localVideoPort,
+      session.localVideoRtcpPort ?? session.localVideoPort,
+      video.mtu,
+      useSrtp,
+    ));
 
     if (this.streamingConfig.audio.enabled && session.audioPort && session.audioSSRC && request.audio) {
       const audio = request.audio;
@@ -992,7 +1011,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         args.push('-srtp_out_suite', audioSuiteName, '-srtp_out_params', audioParams);
       }
 
-      args.push(buildRtpUrl(session.address, session.audioPort, session.localAudioPort, video.mtu, audioUseSrtp));
+      args.push(buildRtpUrl(
+        session.address,
+        session.audioPort,
+        session.localAudioPort,
+        session.localAudioRtcpPort ?? session.localAudioPort,
+        video.mtu,
+        audioUseSrtp,
+      ));
     }
 
     return args;
