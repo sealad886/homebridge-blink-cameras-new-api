@@ -509,7 +509,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     let excludedCount = 0;
 
     for (const network of homescreen.networks) {
-      if (!this.isDeviceExcluded(network)) {
+      if (!this.isDeviceExcluded(network, true)) {
         this.registerNetwork(network);
       } else {
         excludedCount++;
@@ -517,7 +517,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
 
     for (const camera of homescreen.cameras) {
-      if (!this.isDeviceExcluded(camera)) {
+      if (!this.isDeviceExcluded(camera, true)) {
         this.registerCamera(camera);
       } else {
         excludedCount++;
@@ -525,7 +525,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
 
     for (const doorbell of homescreen.doorbells) {
-      if (!this.isDeviceExcluded(doorbell)) {
+      if (!this.isDeviceExcluded(doorbell, true)) {
         this.registerDoorbell(doorbell);
       } else {
         excludedCount++;
@@ -533,7 +533,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
 
     for (const owl of homescreen.owls) {
-      if (!this.isDeviceExcluded(owl)) {
+      if (!this.isDeviceExcluded(owl, true)) {
         this.registerOwl(owl);
       } else {
         excludedCount++;
