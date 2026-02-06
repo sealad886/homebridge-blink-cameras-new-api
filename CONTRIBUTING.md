@@ -147,6 +147,12 @@ type(scope): description
 
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 
+Commit messages are enforced in CI using commitlint. You can check locally with:
+
+```bash
+npm run lint:commits
+```
+
 Examples:
 
 - `feat(doorbell): add ring notification support`
@@ -170,7 +176,13 @@ Examples:
 
 ## Release Process
 
-Release instructions live in `docs/RELEASE.md`.
+Releases are automated with release-please:
+
+1. Merge changes to `main` using Conventional Commits.
+2. release-please opens a release PR with version bump + changelog.
+3. Merge the release PR to publish to npm automatically.
+
+Release details and expectations live in `docs/RELEASE.md`.
 
 ## Project Structure
 
