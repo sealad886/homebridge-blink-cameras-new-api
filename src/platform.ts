@@ -321,8 +321,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (!settings) {
       return undefined;
     }
-    const deviceKey = device.serial ?? `${device.id}`;
-    return settings[deviceKey] ?? settings[`${device.id}`];
+    // Prefer serial number (unique hardware ID), fall back to device ID
+    if (device.serial && settings[device.serial]) {
+      return settings[device.serial];
+    }
+    return settings[`${device.id}`];
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
