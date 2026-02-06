@@ -23,8 +23,7 @@ export class OwlAccessory extends MotionCameraAccessoryBase<BlinkOwl> {
     protected readonly accessory: PlatformAccessory,
     protected device: BlinkOwl,
   ) {
-    super(platform, accessory, device, {
-      cameraType: 'owl',
+    super(platform, accessory, device, 'owl', {
       motionServiceName: device.name,
       switchServiceName: `${device.name} Motion`,
       logName: 'Mini',

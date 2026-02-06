@@ -24,8 +24,7 @@ export class DoorbellAccessory extends MotionCameraAccessoryBase<BlinkDoorbell> 
     protected readonly accessory: PlatformAccessory,
     protected device: BlinkDoorbell,
   ) {
-    super(platform, accessory, device, {
-      cameraType: 'doorbell',
+    super(platform, accessory, device, 'doorbell', {
       motionServiceName: `${device.name} Motion`,
       switchServiceName: `${device.name} Motion`,
       logName: 'doorbell',

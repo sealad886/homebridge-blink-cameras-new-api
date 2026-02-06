@@ -22,8 +22,7 @@ export class CameraAccessory extends MotionCameraAccessoryBase<BlinkCamera> {
     protected device: BlinkCamera,
   ) {
     const deviceType = device.type === 'owl' ? 'owl' : 'camera';
-    super(platform, accessory, device, {
-      cameraType: deviceType,
+    super(platform, accessory, device, deviceType, {
       motionServiceName: device.name,
       switchServiceName: `${device.name} Motion`,
       logName: 'camera',

@@ -22,7 +22,6 @@ export interface MotionDevice {
 }
 
 export interface MotionAccessoryOptions {
-  cameraType: 'camera' | 'doorbell' | 'owl';
   motionServiceName: string;
   switchServiceName: string;
   logName: string;
@@ -42,6 +41,7 @@ export abstract class MotionCameraAccessoryBase<TDevice extends MotionDevice> {
     protected readonly platform: BlinkCamerasPlatform,
     protected readonly accessory: PlatformAccessory,
     protected device: TDevice,
+    cameraType: 'camera' | 'doorbell' | 'owl',
     options: MotionAccessoryOptions,
   ) {
     this.logName = options.logName;
@@ -76,7 +76,7 @@ export abstract class MotionCameraAccessoryBase<TDevice extends MotionDevice> {
       this.platform.api.hap,
       this.device.network_id,
       this.device.id,
-      options.cameraType,
+      cameraType,
       options.serial,
       () => this.getThumbnail(),
       (msg) => this.platform.log.debug(`[${this.device.name}] ${msg}`),
