@@ -278,7 +278,11 @@
             },
             "enableMotion": {
               "type": "boolean",
-              "description": "Enable/disable motion detection for this device"
+              "description": "Enable/disable motion detection for this device (effective when the system is armed)"
+            },
+            "motionSensitivity": {
+              "type": "integer",
+              "description": "Motion sensitivity level for this device (effective when the system is armed)"
             }
           }
         },

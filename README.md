@@ -120,7 +120,9 @@ Add a platform entry to your Homebridge `config.json`:
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); 0 always fetches new snapshots |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
 | `deviceNames` | No | - | Map of device IDs/serials to custom display names |
-| `deviceSettings` | No | - | Per-device overrides (e.g., motion timeout/enable) |
+| `deviceSettings` | No | - | Per-device overrides (e.g., motion timeout/enable/sensitivity) |
+
+Note: Per-device motion enable/sensitivity overrides only take effect when the Blink system is armed.
 
 When `persistAuth` is enabled, auth tokens are stored in a sibling folder to Homebridge's HAP
 storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the HAP

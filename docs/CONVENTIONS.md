@@ -83,7 +83,7 @@
 
 **Scope:** Custom UI build, publish, and runtime packaging.
 
-**Rule:** Source assets live in `src/homebridge-ui/public` and must be copied to `homebridge-ui/public` (runtime path) and `dist/homebridge-ui/public` during `npm run build`; `config.schema.json` expects `customUiPath: "./homebridge-ui"`, so publish must include that folder.
+**Rule:** Source assets live in `src/homebridge-ui/public` and must be copied to `dist/homebridge-ui/public` during `npm run build`; `config.schema.json` expects `customUiPath: "./dist/homebridge-ui"`.
 
 **Rationale (Why this exists):**
 
@@ -94,7 +94,7 @@
 **Examples:**
 
 - Good:
-	- `npm run build` copies `src/homebridge-ui/public` → `dist/homebridge-ui/public` and `homebridge-ui/public`, then publishes including those assets.
+	- `npm run build` copies `src/homebridge-ui/public` → `dist/homebridge-ui/public`, then publishes including those assets.
 - Bad:
 	- Copying from `homebridge-ui/public` (nonexistent in a clean repo) causes `cp: homebridge-ui/public/*: No such file or directory`, leaving the custom UI missing from the package and causing an infinite spinner in Homebridge UI.
 

@@ -31,6 +31,7 @@ import {
   BlinkMediaClip,
   BlinkNetwork,
   BlinkOwl,
+  BlinkCameraConfigUpdate,
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
@@ -45,6 +46,7 @@ const MIN_MOTION_TIMEOUT = 5;
 interface DeviceSettings {
   motionTimeout?: number;
   enableMotion?: boolean;
+  motionSensitivity?: number;
 }
 
 interface BlinkPlatformConfig extends PlatformConfig {
@@ -281,7 +283,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
+  private isDeviceExcluded(device: { id: number; name: string; serial?: string }, log = true): boolean {
     const excludeList = this.config.excludeDevices ?? [];
     const excluded = excludeList.some(
       (entry) =>
@@ -289,7 +291,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         entry === `${device.id}` ||
         (device.serial && entry === device.serial),
     );
-    if (excluded) {
+    if (excluded && log) {
       this.log.info(`Excluding device: ${device.name} (matched exclusion list)`);
     }
     return excluded;
@@ -307,15 +309,20 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   public getDeviceMotionTimeout(device: { id: number; serial?: string }): number {
-    const settings = this.config.deviceSettings;
-    if (settings) {
-      const deviceKey = device.serial ?? `${device.id}`;
-      const deviceSettings = settings[deviceKey] ?? settings[`${device.id}`];
-      if (deviceSettings?.motionTimeout !== undefined) {
-        return deviceSettings.motionTimeout * 1000;
-      }
+    const deviceSettings = this.getDeviceSettings(device);
+    if (deviceSettings?.motionTimeout !== undefined) {
+      return deviceSettings.motionTimeout * 1000;
     }
     return this.motionTimeout;
+  }
+
+  private getDeviceSettings(device: { id: number; serial?: string }): DeviceSettings | undefined {
+    const settings = this.config.deviceSettings;
+    if (!settings) {
+      return undefined;
+    }
+    const deviceKey = device.serial ?? `${device.id}`;
+    return settings[deviceKey] ?? settings[`${device.id}`];
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
@@ -327,9 +334,174 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);
+      void this.applyDeviceSettings(homescreen).catch((error) => {
+        this.log.warn(`Failed to apply device settings: ${(error as Error).message}`);
+      });
       this.startPolling();
     } catch (error) {
       this.log.error('Device discovery failed', error);
+    }
+  }
+
+  private async applyDeviceSettings(homescreen: BlinkHomescreen): Promise<void> {
+    if (!this.config.deviceSettings) {
+      return;
+    }
+
+    const networksById = new Map(homescreen.networks.map((network) => [network.id, network]));
+
+    for (const camera of homescreen.cameras) {
+      if (this.isDeviceExcluded(camera, false)) {
+        continue;
+      }
+      const deviceSettings = this.getDeviceSettings(camera);
+      if (!deviceSettings) {
+        continue;
+      }
+      await this.applyMotionSettings({
+        device: camera,
+        deviceSettings,
+        deviceType: 'camera',
+        networkName: networksById.get(camera.network_id)?.name,
+        networkArmed: networksById.get(camera.network_id)?.armed ?? false,
+        networkId: camera.network_id,
+        updateConfig: (update) => this.apiClient.updateCameraConfig(camera.network_id, camera.id, update),
+        setMotionEnabled: (enabled) =>
+          enabled
+            ? this.apiClient.enableCameraMotion(camera.network_id, camera.id)
+            : this.apiClient.disableCameraMotion(camera.network_id, camera.id),
+        updateHandler: () => {
+          const handler = this.cameraAccessories.get(camera.id);
+          if (handler) {
+            handler.updateState({ ...camera, enabled: deviceSettings.enableMotion ?? camera.enabled });
+          }
+        },
+      });
+    }
+
+    for (const doorbell of homescreen.doorbells) {
+      if (this.isDeviceExcluded(doorbell, false)) {
+        continue;
+      }
+      const deviceSettings = this.getDeviceSettings(doorbell);
+      if (!deviceSettings) {
+        continue;
+      }
+      await this.applyMotionSettings({
+        device: doorbell,
+        deviceSettings,
+        deviceType: 'doorbell',
+        networkName: networksById.get(doorbell.network_id)?.name,
+        networkArmed: networksById.get(doorbell.network_id)?.armed ?? false,
+        networkId: doorbell.network_id,
+        updateConfig: (update) => this.apiClient.updateDoorbellConfig(doorbell.network_id, doorbell.id, update),
+        setMotionEnabled: (enabled) =>
+          enabled
+            ? this.apiClient.enableDoorbellMotion(doorbell.network_id, doorbell.id)
+            : this.apiClient.disableDoorbellMotion(doorbell.network_id, doorbell.id),
+        updateHandler: () => {
+          const handler = this.doorbellAccessories.get(doorbell.id);
+          if (handler) {
+            handler.updateState({ ...doorbell, enabled: deviceSettings.enableMotion ?? doorbell.enabled });
+          }
+        },
+      });
+    }
+
+    for (const owl of homescreen.owls) {
+      if (this.isDeviceExcluded(owl, false)) {
+        continue;
+      }
+      const deviceSettings = this.getDeviceSettings(owl);
+      if (!deviceSettings) {
+        continue;
+      }
+      await this.applyMotionSettings({
+        device: owl,
+        deviceSettings,
+        deviceType: 'owl',
+        networkName: networksById.get(owl.network_id)?.name,
+        networkArmed: networksById.get(owl.network_id)?.armed ?? false,
+        networkId: owl.network_id,
+        updateConfig: (update) => this.apiClient.updateOwlConfig(owl.network_id, owl.id, update),
+        setMotionEnabled: (enabled) =>
+          enabled
+            ? this.apiClient.enableOwlMotion(owl.network_id, owl.id)
+            : this.apiClient.disableOwlMotion(owl.network_id, owl.id),
+        updateHandler: () => {
+          const handler = this.owlAccessories.get(owl.id);
+          if (handler) {
+            handler.updateState({ ...owl, enabled: deviceSettings.enableMotion ?? owl.enabled });
+          }
+        },
+      });
+    }
+  }
+
+  private async applyMotionSettings(options: {
+    device: { id: number; name: string; enabled: boolean };
+    deviceSettings: DeviceSettings;
+    deviceType: 'camera' | 'doorbell' | 'owl';
+    networkName?: string;
+    networkArmed: boolean;
+    networkId: number;
+    updateConfig: (update: BlinkCameraConfigUpdate) => Promise<unknown>;
+    setMotionEnabled: (enabled: boolean) => Promise<void>;
+    updateHandler: () => void;
+  }): Promise<void> {
+    const {
+      device,
+      deviceSettings,
+      deviceType,
+      networkName,
+      networkArmed,
+      networkId,
+      updateConfig,
+      setMotionEnabled,
+      updateHandler,
+    } = options;
+
+    if (deviceSettings.enableMotion !== undefined && deviceSettings.enableMotion !== device.enabled) {
+      try {
+        await setMotionEnabled(deviceSettings.enableMotion);
+        this.log.info(
+          `Applied motion ${deviceSettings.enableMotion ? 'enable' : 'disable'} for ${deviceType} ${device.name}`,
+        );
+        if (!networkArmed) {
+          this.log.debug(
+            `Network ${networkName ?? networkId} is disarmed; ${deviceType} ${device.name} motion will activate when armed.`,
+          );
+        }
+        updateHandler();
+      } catch (error) {
+        this.log.warn(
+          `Failed to apply motion enable for ${deviceType} ${device.name}: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    if (deviceSettings.motionSensitivity !== undefined) {
+      if (!Number.isFinite(deviceSettings.motionSensitivity) || !Number.isInteger(deviceSettings.motionSensitivity)) {
+        this.log.warn(
+          `Invalid motionSensitivity for ${deviceType} ${device.name}: ${deviceSettings.motionSensitivity}`,
+        );
+      } else {
+        try {
+          await updateConfig({ motion_sensitivity: deviceSettings.motionSensitivity });
+          this.log.info(
+            `Applied motion sensitivity ${deviceSettings.motionSensitivity} for ${deviceType} ${device.name}`,
+          );
+          if (!networkArmed) {
+            this.log.debug(
+              `Network ${networkName ?? networkId} is disarmed; ${deviceType} ${device.name} sensitivity applies when armed.`,
+            );
+          }
+        } catch (error) {
+          this.log.warn(
+            `Failed to apply motion sensitivity for ${deviceType} ${device.name}: ${(error as Error).message}`,
+          );
+        }
+      }
     }
   }
 

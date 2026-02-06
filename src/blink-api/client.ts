@@ -15,6 +15,7 @@ import {
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
+  BlinkCameraConfigUpdate,
   BlinkGeneratePinResponse,
   BlinkHomescreen,
   BlinkMediaResponse,
@@ -418,6 +419,57 @@ export class BlinkApi {
   async disableOwlMotion(networkId: number, owlId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
     await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
+  }
+
+  /**
+   * Update camera configuration (e.g., motion sensitivity).
+   * Source: API Dossier Section 3.3 - POST v2/accounts/{account_id}/networks/{networkId}/cameras/{cameraId}/config
+   * Evidence: UpdateCameraBody includes motion_sensitivity (Android app)
+   */
+  async updateCameraConfig(
+    networkId: number,
+    cameraId: number,
+    update: BlinkCameraConfigUpdate,
+  ): Promise<BlinkCommandResponse> {
+    const accountId = await this.ensureAccountId();
+    return this.sharedHttp.post<BlinkCommandResponse>(
+      `v2/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/config`,
+      update,
+    );
+  }
+
+  /**
+   * Update doorbell configuration (e.g., motion sensitivity).
+   * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{networkId}/doorbells/{doorbellId}/config
+   * Evidence: UpdateLotusBody includes motion_sensitivity (Android app)
+   */
+  async updateDoorbellConfig(
+    networkId: number,
+    doorbellId: number,
+    update: BlinkCameraConfigUpdate,
+  ): Promise<BlinkCommandResponse> {
+    const accountId = await this.ensureAccountId();
+    return this.sharedHttp.post<BlinkCommandResponse>(
+      `v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/config`,
+      update,
+    );
+  }
+
+  /**
+   * Update owl (Mini camera) configuration (e.g., motion sensitivity).
+   * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/config
+   * Evidence: UpdateOwlBody includes motion_sensitivity (Android app)
+   */
+  async updateOwlConfig(
+    networkId: number,
+    owlId: number,
+    update: BlinkCameraConfigUpdate,
+  ): Promise<BlinkCommandResponse> {
+    const accountId = await this.ensureAccountId();
+    return this.sharedHttp.post<BlinkCommandResponse>(
+      `v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/config`,
+      update,
+    );
   }
 
   /**

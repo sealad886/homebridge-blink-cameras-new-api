@@ -179,6 +179,18 @@ export interface BlinkOwl {
 }
 
 /**
+ * Camera configuration update payload.
+ * Source: Android UpdateCameraBody (motion_sensitivity)
+ * Evidence: blink-home-monitor/jadx-out/.../UpdateCameraBody.java
+ */
+export interface BlinkCameraConfigUpdate {
+  motion_sensitivity?: number;
+  motion_alert?: boolean;
+  alert_interval?: number;
+  early_notification?: boolean;
+}
+
+/**
  * Device signal strength information
  */
 export interface BlinkSignals {
@@ -489,4 +501,3 @@ export interface Blink2FAVerifyResponse {
   /** Error code if failed */
   code?: number;
 }
-
