@@ -538,12 +538,19 @@ export class BlinkAuth {
           this.oauthSession.requires2FA = true;
           // Extract last 4 digits of phone if available
           if (twoFaData.phone) {
-            const phoneMatch = twoFaData.phone.match(/(\d{2})$/);
+            const phoneMatch = twoFaData.phone.match(/(\d{2,4})$/);
             this.oauthSession.phoneLastFour = phoneMatch?.[1];
           }
         }
-        this.logDebug(`  Phone: ${twoFaData.phone}`);
-        this.logDebug(`  User ID: ${twoFaData.user_id}`);
+        if (twoFaData.phone) {
+          this.logDebug(`  Phone: ${redact(twoFaData.phone, 2)}`);
+        }
+        if (twoFaData.user_id !== undefined) {
+          this.logDebug(`  User ID: ${redact(String(twoFaData.user_id), 1)}`);
+        }
+        if (twoFaData.next_time_in_secs !== undefined) {
+          this.logDebug(`  Resend available in: ${twoFaData.next_time_in_secs}s`);
+        }
       } catch {
         // JSON parse failed, still mark as 2FA required
         if (this.oauthSession) {

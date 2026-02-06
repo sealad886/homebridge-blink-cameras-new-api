@@ -10,6 +10,9 @@
  */
 import { setInterval, clearInterval } from 'timers';
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import process from 'node:process';
 import * as path from 'node:path';
 import {
   API,
@@ -32,6 +35,7 @@ import {
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
+import packageJson from '../package.json';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -138,13 +142,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.log.warn('Two-way talk UI is disabled until uplink framing is verified; ignoring twoWayAudio setting.');
     }
 
+    const hardwareId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
+    const authStoragePath = this.buildAuthStoragePath();
+
     // Log debug mode status
     if (this.config.debugAuth) {
       this.log.warn('Auth debugging enabled - verbose API logging active');
+      this.logAuthDebugContext(hardwareId, authStoragePath);
     }
-
-    const hardwareId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
-    const authStoragePath = this.buildAuthStoragePath();
 
     this.apiClient = new BlinkApi({
       email: this.config.username,
@@ -210,6 +215,70 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // handle subdirectories there and will crash Homebridge on startup).
     const persistBase = path.dirname(persistRoot);
     return path.join(persistBase, 'blink-auth', `${key}.json`);
+  }
+
+  private logAuthDebugContext(hardwareId: string, authStoragePath?: string): void {
+    const pluginVersion = packageJson.version ?? 'unknown';
+    const homebridgeVersion = this.api.serverVersion ?? 'unknown';
+    const apiVersion = this.api.version ?? 'unknown';
+    const osInfo = `${os.type()} ${os.release()} (${os.platform()}/${os.arch()})`;
+
+    this.log.info(`[Auth Debug] Plugin: ${PLUGIN_NAME}@${pluginVersion}`);
+    this.log.info(`[Auth Debug] Homebridge: ${homebridgeVersion} (API ${apiVersion})`);
+    this.log.info(`[Auth Debug] Node: ${process.version}`);
+    this.log.info(`[Auth Debug] OS: ${osInfo}`);
+
+    const deviceName = this.config.deviceName;
+    this.log.info(
+      `[Auth Debug] Device: id=${this.redactValue(hardwareId)} name=${deviceName ? this.redactValue(deviceName) : '<empty>'}`,
+    );
+
+    const tier = this.config.tier ?? 'prod';
+    const sharedTier = this.config.sharedTier ?? '<auto>';
+    this.log.info(`[Auth Debug] Tier: ${tier} (shared=${sharedTier})`);
+
+    const persistAuth = this.config.persistAuth !== false;
+    const trustDevice = this.config.trustDevice ?? true;
+    this.log.info(`[Auth Debug] Auth options: persistAuth=${persistAuth} trustDevice=${trustDevice}`);
+    this.log.info(
+      `[Auth Debug] Codes present: twoFactor=${Boolean(this.config.twoFactorCode)} ` +
+      `clientVerification=${Boolean(this.config.clientVerificationCode)} ` +
+      `accountVerification=${Boolean(this.config.accountVerificationCode)}`,
+    );
+    this.log.info(`[Auth Debug] Auth storage: ${this.describeAuthStorage(authStoragePath)}`);
+  }
+
+  private redactValue(value: string | undefined | null, showChars = 4): string {
+    if (!value) return '<empty>';
+    if (value.length <= showChars * 2) return '***';
+    return `${value.slice(0, showChars)}...${value.slice(-showChars)}`;
+  }
+
+  private describeAuthStorage(authStoragePath?: string): string {
+    if (!authStoragePath) {
+      return 'disabled';
+    }
+
+    const storageDir = path.dirname(authStoragePath);
+    const parentDir = path.dirname(storageDir);
+    const storageDirExists = fs.existsSync(storageDir);
+    const parentWritable = this.checkWritable(parentDir);
+    const dirWritable = storageDirExists ? this.checkWritable(storageDir) : 'missing';
+
+    return `${authStoragePath} (dir ${storageDirExists ? 'exists' : 'missing'}, ` +
+      `dir writable=${dirWritable}, parent writable=${parentWritable})`;
+  }
+
+  private checkWritable(dir: string): 'yes' | 'no' | 'missing' {
+    if (!fs.existsSync(dir)) {
+      return 'missing';
+    }
+    try {
+      fs.accessSync(dir, fs.constants.W_OK);
+      return 'yes';
+    } catch {
+      return 'no';
+    }
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
