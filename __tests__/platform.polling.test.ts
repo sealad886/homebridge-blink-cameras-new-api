@@ -90,7 +90,7 @@ describe('Platform Polling', () => {
       blinkApi.getHomescreen.mockResolvedValue(homescreen);
 
       const platform = new BlinkCamerasPlatform(log, baseConfig, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
 
@@ -109,11 +109,11 @@ describe('Platform Polling', () => {
 
       const config = { ...baseConfig, pollInterval: 45 };
       new BlinkCamerasPlatform(log, config, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
       await Promise.resolve();
-      
+
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining('Starting status polling'));
     });
 
@@ -129,13 +129,13 @@ describe('Platform Polling', () => {
       // Set poll interval below minimum
       const config = { ...baseConfig, pollInterval: 5 };
       const platform = new BlinkCamerasPlatform(log, config, hapApi);
-      
+
       expect(platform).toBeDefined();
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
       await Promise.resolve();
-      
+
       // Polling message should show at least 15 seconds
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining('15 seconds'));
     });
@@ -153,7 +153,7 @@ describe('Platform Polling', () => {
 
       const config = { ...baseConfig, motionTimeout: 10 };
       const platform = new BlinkCamerasPlatform(log, config, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
 
@@ -171,10 +171,10 @@ describe('Platform Polling', () => {
 
       const config = { ...baseConfig, enableMotionPolling: false };
       const platform = new BlinkCamerasPlatform(log, config, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
-      
+
       expect(platform).toBeDefined();
     });
   });
@@ -190,13 +190,13 @@ describe('Platform Polling', () => {
       blinkApi.getHomescreen.mockResolvedValue(homescreen);
 
       new BlinkCamerasPlatform(log, baseConfig, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
 
       expect(blinkApi.login).toHaveBeenCalledTimes(1);
       expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
-      
+
       const loginOrder = blinkApi.login.mock.invocationCallOrder[0];
       const homescreenOrder = blinkApi.getHomescreen.mock.invocationCallOrder[0];
       expect(loginOrder).toBeLessThan(homescreenOrder);
@@ -222,7 +222,7 @@ describe('Platform Polling', () => {
       blinkApi.getHomescreen.mockResolvedValue(homescreen);
 
       const platform = new BlinkCamerasPlatform(log, baseConfig, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
       await Promise.resolve();
@@ -241,7 +241,7 @@ describe('Platform Polling', () => {
       blinkApi.login.mockRejectedValue(new Error('Invalid credentials'));
 
       new BlinkCamerasPlatform(log, baseConfig, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
       await Promise.resolve();
@@ -261,7 +261,7 @@ describe('Platform Polling', () => {
       blinkApi.getHomescreen.mockRejectedValue(new Error('Network Error'));
 
       new BlinkCamerasPlatform(log, baseConfig, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
       await Promise.resolve();
@@ -346,7 +346,7 @@ describe('Platform Polling', () => {
       blinkApi.getHomescreen.mockResolvedValue(homescreen);
 
       new BlinkCamerasPlatform(log, baseConfig, hapApi);
-      
+
       hapApi.emit('didFinishLaunching');
       await Promise.resolve();
 

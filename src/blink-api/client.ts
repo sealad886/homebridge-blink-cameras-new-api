@@ -106,7 +106,7 @@ export class BlinkApi {
 
   /**
    * Authenticate with Blink API using OAuth 2.0 Authorization Code Flow with PKCE
-   * 
+   *
    * @param twoFaCode - Optional 2FA code (if provided, will be used to complete pending 2FA)
    * @throws Blink2FARequiredError if 2FA is required but no code provided
    */
@@ -145,7 +145,7 @@ export class BlinkApi {
 
   /**
    * Complete 2FA verification (call after login() throws Blink2FARequiredError)
-   * 
+   *
    * @param pin - The 2FA PIN received via email/SMS
    */
   async complete2FA(pin: string): Promise<void> {
