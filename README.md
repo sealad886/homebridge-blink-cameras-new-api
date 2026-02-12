@@ -36,6 +36,18 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 - **Node.js** 18.0.0 or later (native `fetch` API required)
 - A Blink account with credentials
 
+- You MUST have `ffmpeg`  and `ffprobe` executables installed and with proper permissions set for use by the **homebridge** user (if you installed Homebridge using, for example, the [Debian or Ubuntu Linux instructions](https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Debian-or-Ubuntu-Linux) then this is probably not your own user). My recommendation, simply for simplicity, is to install with [Homebrew](http://brew.sh), which is available for MacOS and (some) Linux distros.
+
+> [!NOTE]
+> If you have another version of ffmpeg installed, don't worry that this may be installed as keg-only, as you can specify the path to the executable in config
+
+```bash
+# once Homebrew is installed
+brew install 'ffmpeg@8'     # or 'ffmpeg-full@8' for more features
+```
+
+I do not recommend ffmpeg<6 as APIs have changed and I frankly haven't tested them. Snapshots and/or live streaming may not work.
+
 ## Installation
 
 ### Via Homebridge UI (Recommended)
