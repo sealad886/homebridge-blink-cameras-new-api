@@ -311,7 +311,8 @@
           "type": "password"
         },
         "twoFactorCode",
-        "clientVerificationCode"
+        "clientVerificationCode",
+        "accountVerificationCode"
       ]
     },
     {

@@ -115,4 +115,34 @@ describe('BlinkHttp', () => {
     await expect(http.get('v1/hangs')).rejects.toMatchObject({ name: 'AbortError' });
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+
+  it('redacts sensitive fields from debug request body logs', async () => {
+    const auth = mockAuth();
+    const logger = {
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+    const http = new BlinkHttp(auth, {
+      ...mockConfig,
+      debugAuth: true,
+      logger,
+    });
+    (fetch as jest.Mock).mockResolvedValue(response(200, { ok: true }));
+
+    await http.post('v1/verify', {
+      pin: '123456',
+      email: 'user@example.com',
+      nested: {
+        refresh_token: 'refresh-token-value',
+      },
+    });
+
+    const debugOutput = logger.info.mock.calls.map((call) => call.map((entry) => String(entry)).join(' ')).join('\n');
+    expect(debugOutput).toContain('Request body');
+    expect(debugOutput).not.toContain('123456');
+    expect(debugOutput).not.toContain('user@example.com');
+    expect(debugOutput).not.toContain('refresh-token-value');
+  });
 });

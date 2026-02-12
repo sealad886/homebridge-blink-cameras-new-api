@@ -281,6 +281,68 @@ describe('Platform Polling', () => {
     });
   });
 
+  describe('recovery and concurrency', () => {
+    it('retries discovery after transient startup failure', async () => {
+      jest.useFakeTimers();
+      try {
+        hapApi = createMockApi();
+        const log = createLogger() as unknown as Logger;
+        const blinkApi = buildBlinkApi();
+        (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+
+        const homescreen = createHomescreen();
+        blinkApi.login
+          .mockRejectedValueOnce(new Error('Temporary auth outage'))
+          .mockResolvedValueOnce(undefined);
+        blinkApi.getHomescreen.mockResolvedValue(homescreen);
+
+        const platform = new BlinkCamerasPlatform(log, baseConfig, hapApi);
+        const startPollingSpy = jest.spyOn(platform as unknown as { startPolling: () => void }, 'startPolling');
+
+        hapApi.emit('didFinishLaunching');
+        await Promise.resolve();
+        expect(blinkApi.login).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(5000);
+        await Promise.resolve();
+
+        expect(blinkApi.login).toHaveBeenCalledTimes(2);
+        expect(startPollingSpy).toHaveBeenCalledTimes(1);
+        expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('retrying in'));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('coalesces overlapping poll ticks into a single queued poll', async () => {
+      hapApi = createMockApi();
+      const log = createLogger() as unknown as Logger;
+      const blinkApi = buildBlinkApi();
+      (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+
+      const homescreen = createHomescreen();
+      blinkApi.getHomescreen.mockResolvedValue(homescreen);
+
+      const platform = new BlinkCamerasPlatform(log, baseConfig, hapApi);
+
+      let pollCalls = 0;
+      jest.spyOn(platform as unknown as { pollDeviceStates: () => Promise<void> }, 'pollDeviceStates')
+        .mockImplementation(async () => {
+          pollCalls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+
+      await Promise.all([
+        (platform as unknown as { runPollCycle: () => Promise<void> }).runPollCycle(),
+        (platform as unknown as { runPollCycle: () => Promise<void> }).runPollCycle(),
+        (platform as unknown as { runPollCycle: () => Promise<void> }).runPollCycle(),
+      ]);
+
+      expect(pollCalls).toBe(2);
+      expect(log.debug).toHaveBeenCalledWith(expect.stringContaining('Skipping overlapping poll tick'));
+    });
+  });
+
   describe('shutdown', () => {
     it('should handle shutdown event', async () => {
       hapApi = createMockApi();

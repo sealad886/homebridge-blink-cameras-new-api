@@ -368,6 +368,24 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       await expect(auth.refreshTokens()).rejects.toThrow('Cannot refresh token before login');
     });
 
+    it('times out OAuth requests when remote endpoint hangs', async () => {
+      const fetchMock = mockFetch();
+      fetchMock.mockImplementation((_url: string, options?: FetchOptions) => {
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        });
+      });
+
+      const auth = new BlinkAuth({
+        ...baseConfig,
+        requestTimeoutMs: 25,
+      });
+
+      await expect(auth.login()).rejects.toThrow('timed out');
+    });
+
     it('redacts sensitive fields in auth error logs', () => {
       const error = new BlinkAuthenticationError('Auth failed', {
         status: 401,

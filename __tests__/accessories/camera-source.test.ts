@@ -456,6 +456,89 @@ describe('BlinkCameraSource', () => {
         });
       });
     });
+
+    it('sanitizes liveview URL query parameters in startup logs', async () => {
+      mockApi.startCameraLiveview.mockResolvedValueOnce({
+        server: 'rtsps://127.0.0.1:554/live?token=super-secret-token&expires=123456',
+        command_id: 202,
+        polling_interval: 5,
+        continue_interval: 10,
+      });
+
+      const source = new BlinkCameraSource(
+        mockApi as unknown as BlinkApi,
+        mockHap as unknown as HAP,
+        12345,
+        67890,
+        'camera',
+        'TEST_SERIAL',
+        getThumbnailUrl,
+        mockLogger,
+        { ffmpegPath: '/definitely/not/a/real/ffmpeg/path' },
+      );
+
+      const prepareRequest = {
+        sessionID: 'session-sanitized-url',
+        targetAddress: '127.0.0.1',
+        addressVersion: 'ipv4',
+        sourceAddress: '127.0.0.1',
+        video: {
+          port: 5000,
+          srtpCryptoSuite: 0,
+          srtp_key: Buffer.alloc(16),
+          srtp_salt: Buffer.alloc(14),
+        },
+        audio: {
+          port: 5001,
+          srtpCryptoSuite: 0,
+          srtp_key: Buffer.alloc(16),
+          srtp_salt: Buffer.alloc(14),
+        },
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        source.prepareStream(prepareRequest as any, (prepareError) => {
+          if (prepareError) {
+            reject(prepareError);
+            return;
+          }
+          resolve();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        const request = {
+          type: 'start',
+          sessionID: 'session-sanitized-url',
+          video: {
+            fps: 15,
+            width: 640,
+            height: 480,
+            max_bit_rate: 300,
+            profile: mockHap.H264Profile!.BASELINE,
+            level: mockHap.H264Level!.LEVEL3_1,
+            pt: 99,
+            mtu: 1378,
+          },
+          audio: {
+            codec: mockHap.AudioStreamingCodecType!.OPUS,
+            channel: 1,
+            sample_rate: mockHap.AudioStreamingSamplerate!.KHZ_16,
+            max_bit_rate: 24,
+            pt: 110,
+          },
+        };
+
+        source.handleStreamRequest(request as any, () => {
+          setTimeout(resolve, 50);
+        });
+      });
+
+      const logOutput = mockLogger.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logOutput).toContain('Starting stream session-sanitized-url via FFmpeg with URL: rtsps://127.0.0.1:554/live');
+      expect(logOutput).not.toContain('super-secret-token');
+      expect(logOutput).not.toContain('expires=123456');
+    });
   });
 
   describe('prepareStream edge cases', () => {

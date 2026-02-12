@@ -364,7 +364,7 @@ export class BlinkAuth {
 
   /**
    * Extract CSRF token from HTML response
-   * Looks for: 
+   * Looks for:
    * - JSON in <script id="oauth-args">{"csrf-token":"..."}</script>
    * - <input type="hidden" name="_token" value="...">
    * - <meta name="csrf-token" content="...">
@@ -540,11 +540,11 @@ export class BlinkAuth {
   /**
    * Step 3: Submit credentials
    * POST /oauth/v2/signin
-   * 
+   *
    * Returns:
    * - true: Login successful, authorization code available
    * - false: 2FA required, need to call oauthVerify2FA
-   * 
+   *
    * Status codes:
    * - 302: Success (redirect to authorize)
    * - 412: 2FA required (JSON body with phone, user_id, etc.)
@@ -671,12 +671,12 @@ export class BlinkAuth {
   /**
    * Step 4: Submit 2FA PIN
    * POST /oauth/v2/2fa/verify
-   * 
+   *
    * Field names verified against working flow:
    * - 2fa_code: The verification code
    * - csrf-token: The CSRF token from signin page
    * - remember_me: Whether to remember device
-   * 
+   *
    * Response:
    * - 201: Success, body contains {"status":"auth-completed"}
    * - 302: Success, redirect to authorize
@@ -746,7 +746,7 @@ export class BlinkAuth {
 
   /**
    * Step 5: Get authorization code from redirect
-   * 
+   *
    * CRITICAL: After 2FA, use bare /oauth/v2/authorize URL WITHOUT params.
    * The server session remembers the original OAuth request parameters.
    * Sending params again causes redirect back to signin.
@@ -802,7 +802,7 @@ export class BlinkAuth {
   /**
    * Step 6: Exchange authorization code for tokens
    * POST /oauth/token with grant_type=authorization_code
-   * 
+   *
    * Parameters validated against working flow:
    * - grant_type: authorization_code
    * - code: the authorization code
@@ -895,7 +895,7 @@ export class BlinkAuth {
     const currentSession = this.oauthSession!;
     if (!signinSuccess && currentSession.requires2FA) {
       this.logDebug('2FA verification required');
-      
+
       // If a 2FA code was provided in config, try it automatically
       if (this.config.twoFactorCode) {
         this.logDebug('Using 2FA code from config');
