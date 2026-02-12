@@ -51,7 +51,7 @@ Current implementation polls the media API. Could improve with push notification
 - [x] Support per-device motion timeout settings
 - [x] Support excluding specific devices from discovery
 - [x] Support custom names for devices in HomeKit
-- [ ] Support per-device motion sensitivity settings
+- [x] Support per-device motion sensitivity settings
 
 ## Documentation
 
