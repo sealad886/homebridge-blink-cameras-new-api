@@ -104,6 +104,13 @@
         "default": false,
         "required": false
       },
+      "authLocked": {
+        "title": "Lock Authentication",
+        "description": "Lock authentication state after successful login. When locked, stored 2FA and verification codes in the config are ignored and only token refresh is used. Unlock to force re-authentication.",
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
       "persistAuth": {
         "title": "Persist Auth Tokens",
         "description": "Persist OAuth tokens across restarts to avoid repeated logins and verification prompts.",
@@ -362,6 +369,7 @@
       "items": [
         "tier",
         "debugAuth",
+        "authLocked",
         "persistAuth",
         "trustDevice"
       ]

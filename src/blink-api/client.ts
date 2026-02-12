@@ -17,9 +17,10 @@ import {
   BlinkConfig,
   BlinkGeneratePinResponse,
   BlinkHomescreen,
+  BlinkLiveVideoResponse,
+  BlinkLogger,
   BlinkMediaResponse,
   BlinkMediaQuery,
-  BlinkLiveVideoResponse,
   BlinkPinVerificationResponse,
   BlinkResendPinResponse,
   BlinkTierInfo,
@@ -42,6 +43,8 @@ export class BlinkApi {
   private readonly http: BlinkHttp;
   private readonly sharedHttp: BlinkHttp;
   private readonly sharedRootHttp: BlinkHttp;
+  private readonly log: BlinkLogger;
+  private readonly debug: boolean;
   private accountId: number | null = null;
   private clientId: number | null = null;
 
@@ -50,6 +53,14 @@ export class BlinkApi {
     this.http = new BlinkHttp(this.auth, config);
     this.sharedHttp = new BlinkHttp(this.auth, config, getSharedRestBaseUrl(config));
     this.sharedRootHttp = new BlinkHttp(this.auth, config, getSharedRestRootUrl(config));
+    this.log = config.logger ?? { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+    this.debug = config.debugAuth ?? false;
+  }
+
+  private logDebug(message: string): void {
+    if (this.debug) {
+      this.log.info(`[Client Debug] ${message}`);
+    }
   }
 
   getSharedRestRootUrl(): string {
@@ -71,18 +82,25 @@ export class BlinkApi {
    * @throws Blink2FARequiredError if 2FA is required but no code provided
    */
   async login(twoFaCode?: string): Promise<void> {
-    // Sync persisted tier to config BEFORE any HTTP requests
-    // This ensures we use the correct base URL from the start
+    this.logDebug('login → syncing persisted tier to config');
     await this.syncPersistedTierToConfig();
 
-    // If 2FA code provided and 2FA is pending, complete it
-    if ((twoFaCode ?? this.config.twoFactorCode) && this.auth.is2FAPending()) {
-      await this.auth.complete2FA(twoFaCode ?? this.config.twoFactorCode!);
+    // When auth is locked, skip 2FA/verification code auto-submission
+    const effectiveTwoFaCode = this.config.authLocked ? undefined : (twoFaCode ?? this.config.twoFactorCode);
+
+    if (effectiveTwoFaCode && this.auth.is2FAPending()) {
+      this.logDebug('login → 2FA pending, completing with provided code');
+      await this.auth.complete2FA(effectiveTwoFaCode);
     } else {
+      if (this.config.authLocked && (twoFaCode ?? this.config.twoFactorCode)) {
+        this.logDebug('login → authLocked=true, ignoring stored 2FA/verification codes');
+      }
+      this.logDebug('login → ensuring valid token');
       await this.auth.ensureValidToken();
     }
     this.accountId = this.auth.getAccountId();
     this.clientId = this.auth.getClientId();
+    this.logDebug(`login → authenticated (accountId=${this.accountId}, clientId=${this.clientId})`);
     await this.syncAccountInfoAndVerify();
   }
 
@@ -92,6 +110,7 @@ export class BlinkApi {
    */
   private async syncPersistedTierToConfig(): Promise<void> {
     const persistedTier = await this.auth.getPersistedTier();
+    this.logDebug(`syncPersistedTierToConfig → persisted tier: ${persistedTier ?? 'none'}, current: ${this.config.tier ?? 'prod'}`);
     if (persistedTier && persistedTier !== this.config.tier) {
       const previousTier = this.config.tier ?? 'prod';
       this.config.tier = persistedTier;
@@ -99,6 +118,7 @@ export class BlinkApi {
         this.config.sharedTier = persistedTier;
       }
       this.updateBaseUrls();
+      this.logDebug(`syncPersistedTierToConfig → updated tier ${previousTier} → ${persistedTier}`);
       this.config.logger?.info(`Restored persisted tier: ${persistedTier} (was ${previousTier})`);
     }
   }
@@ -119,10 +139,13 @@ export class BlinkApi {
    * Fetch account info and handle any first-time verification requirements.
    */
   private async syncAccountInfoAndVerify(): Promise<void> {
+    this.logDebug('syncAccountInfoAndVerify → fetching account info');
     let accountInfo: BlinkAccountInfo | null = null;
     try {
       accountInfo = await this.getAccountInfo();
+      this.logDebug(`syncAccountInfoAndVerify → account_id=${accountInfo?.account_id}, client_id=${accountInfo?.client_id}`);
     } catch (error) {
+      this.logDebug(`syncAccountInfoAndVerify → account info fetch failed: ${(error as Error).message}`);
       this.config.logger?.warn(
         `Failed to fetch Blink account info: ${(error as Error).message}. Continuing with fallback tier info.`,
       );
@@ -135,6 +158,7 @@ export class BlinkApi {
       this.auth.setClientId(this.clientId);
     }
 
+    this.logDebug('syncAccountInfoAndVerify → syncing tier info');
     const tierInfo = await this.syncTierInfo();
     if (tierInfo?.account_id && !this.accountId) {
       this.accountId = tierInfo.account_id;
@@ -142,17 +166,24 @@ export class BlinkApi {
     }
 
     if (accountInfo?.client_verification_required) {
+      this.logDebug('syncAccountInfoAndVerify → client verification required');
       await this.handleClientVerification(accountInfo);
     }
 
     if (accountInfo?.phone_verification_required || accountInfo?.account_verification_required) {
+      this.logDebug('syncAccountInfoAndVerify → account/phone verification required');
       await this.handleAccountVerification(accountInfo);
     }
+    this.logDebug('syncAccountInfoAndVerify → complete');
   }
 
   private async handleClientVerification(accountInfo: BlinkAccountInfo): Promise<void> {
     const log = this.config.logger;
-    const code = this.config.clientVerificationCode;
+    const code = this.config.authLocked ? undefined : this.config.clientVerificationCode;
+
+    if (this.config.authLocked && this.config.clientVerificationCode) {
+      this.logDebug('handleClientVerification → authLocked=true, ignoring stored clientVerificationCode');
+    }
 
     if (!code) {
       await this.requestClientVerificationPin();
@@ -169,8 +200,12 @@ export class BlinkApi {
 
   private async handleAccountVerification(accountInfo: BlinkAccountInfo): Promise<void> {
     const log = this.config.logger;
-    const code = this.config.accountVerificationCode;
+    const code = this.config.authLocked ? undefined : this.config.accountVerificationCode;
     const requiredLabels: string[] = [];
+
+    if (this.config.authLocked && this.config.accountVerificationCode) {
+      this.logDebug('handleAccountVerification → authLocked=true, ignoring stored accountVerificationCode');
+    }
     if (accountInfo.phone_verification_required) {
       requiredLabels.push('phone');
     }
@@ -213,6 +248,7 @@ export class BlinkApi {
     const log = this.config.logger;
     try {
       const tierInfo = await this.getTierInfo();
+      this.logDebug(`syncTierInfo → received tier: ${tierInfo?.tier ?? 'none'}`);
       if (!tierInfo?.tier) {
         return tierInfo ?? null;
       }

@@ -328,6 +328,31 @@
             Configure Camera Settings
           </button>
         </div>
+
+        <hr class="mt-4 mb-3">
+
+        <!-- Auth Lock Controls -->
+        <div id="authLockSection">
+          <h6 class="text-muted">Authentication Lock</h6>
+          <p class="small text-muted mb-2">
+            Lock authentication to prevent stale 2FA/verification codes from interfering with token refresh.
+            Locking clears stored codes from your config.
+          </p>
+
+          <div id="lockControls">
+            <button type="button" class="btn btn-sm btn-outline-warning" id="lockAuthBtn">
+              🔒 Lock Authentication
+            </button>
+          </div>
+
+          <div id="unlockControls" class="hidden">
+            <span class="badge badge-warning mb-2">🔒 Authentication Locked</span>
+            <br>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="unlockAuthBtn">
+              🔓 Unlock &amp; Re-authenticate
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -779,6 +804,65 @@
       console.error('[Blink UI] Config save failed:', error);
     }
   });
+
+  // Auth Lock Controls
+  const lockControls = document.getElementById('lockControls');
+  const unlockControls = document.getElementById('unlockControls');
+  const lockAuthBtn = document.getElementById('lockAuthBtn');
+  const unlockAuthBtn = document.getElementById('unlockAuthBtn');
+
+  function updateLockUI(locked) {
+    if (locked) {
+      lockControls.classList.add('hidden');
+      unlockControls.classList.remove('hidden');
+    } else {
+      lockControls.classList.remove('hidden');
+      unlockControls.classList.add('hidden');
+    }
+  }
+
+  lockAuthBtn.addEventListener('click', async () => {
+    try {
+      await homebridge.request('/lock');
+
+      // Update local config
+      let config = pluginConfig[0] || {};
+      config.authLocked = true;
+      delete config.twoFactorCode;
+      delete config.clientVerificationCode;
+      delete config.accountVerificationCode;
+      pluginConfig[0] = config;
+      await homebridge.updatePluginConfig(pluginConfig);
+
+      updateLockUI(true);
+      homebridge.toast.success('Authentication locked. Stored verification codes cleared.', 'Locked');
+    } catch (e) {
+      showError(e.message || 'Failed to lock authentication');
+    }
+  });
+
+  unlockAuthBtn.addEventListener('click', async () => {
+    try {
+      await homebridge.request('/unlock');
+
+      // Update local config
+      let config = pluginConfig[0] || {};
+      config.authLocked = false;
+      pluginConfig[0] = config;
+      await homebridge.updatePluginConfig(pluginConfig);
+
+      updateLockUI(false);
+      showStep('login');
+      homebridge.toast.info('Authentication unlocked. You can re-authenticate now.', 'Unlocked');
+    } catch (e) {
+      showError(e.message || 'Failed to unlock authentication');
+    }
+  });
+
+  // Initialize lock UI from config
+  if (pluginConfig[0]?.authLocked) {
+    updateLockUI(true);
+  }
 
   // Check for existing auth on load
   // If already configured (has username), show schema form immediately

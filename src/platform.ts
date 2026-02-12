@@ -72,6 +72,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioBitrate?: number;
   videoBitrate?: number;
   debugAuth?: boolean;
+  authLocked?: boolean;
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds. Set to 0 to always request fresh snapshots. Default: 60 */
   snapshotCacheTTL?: number;
@@ -159,6 +160,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       tier: this.config.tier,
       sharedTier: this.config.sharedTier,
       debugAuth: this.config.debugAuth,
+      authLocked: this.config.authLocked,
       logger: this.log,
     });
 

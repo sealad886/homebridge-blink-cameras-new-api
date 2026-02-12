@@ -88,6 +88,8 @@ class BlinkUiServer extends HomebridgePluginUiServer {
     this.registerRequest('/verify', this.handleVerify.bind(this));
     this.registerRequest('/status', this.handleStatus.bind(this));
     this.registerRequest('/logout', this.handleLogout.bind(this));
+    this.registerRequest('/lock', this.handleLock.bind(this));
+    this.registerRequest('/unlock', this.handleUnlock.bind(this));
     this.registerRequest('/test-connection', this.handleTestConnection.bind(this));
 
     // Signal ready
@@ -373,6 +375,25 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Clear authentication state
    */
   async handleLogout(): Promise<{ success: boolean }> {
+    this.blinkApi = null;
+    this.pendingConfig = null;
+    this.authStatus = { authenticated: false };
+    return { success: true };
+  }
+
+  /**
+   * Lock authentication — clears stored verification codes
+   */
+  async handleLock(): Promise<{ success: boolean }> {
+    this.logDebug('Locking authentication state');
+    return { success: true };
+  }
+
+  /**
+   * Unlock authentication — allows re-authentication
+   */
+  async handleUnlock(): Promise<{ success: boolean }> {
+    this.logDebug('Unlocking authentication state');
     this.blinkApi = null;
     this.pendingConfig = null;
     this.authStatus = { authenticated: false };

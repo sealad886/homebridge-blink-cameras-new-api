@@ -392,6 +392,8 @@ export interface BlinkConfig {
   sharedTier?: string;
   /** Enable verbose auth diagnostics */
   debugAuth?: boolean;
+  /** Lock auth state — ignore stored 2FA/verification codes, use only token refresh */
+  authLocked?: boolean;
   /** Logger for diagnostic output */
   logger?: BlinkLogger;
 }
