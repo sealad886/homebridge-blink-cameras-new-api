@@ -15,6 +15,7 @@ import { PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkDoorbell } from '../types';
 import { MotionCameraAccessoryBase } from './motion-base';
+import { configureAccessoryInfo } from './accessory-info';
 
 export class DoorbellAccessory extends MotionCameraAccessoryBase<BlinkDoorbell> {
   private readonly doorbellService: Service;
@@ -33,10 +34,7 @@ export class DoorbellAccessory extends MotionCameraAccessoryBase<BlinkDoorbell> 
     });
 
     // Configure accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)
-      ?.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Blink')
-      .setCharacteristic(this.platform.Characteristic.Model, 'Doorbell')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, device.serial ?? `${device.id}`);
+    configureAccessoryInfo(this.accessory, this.platform, 'Doorbell', device.serial ?? device.id);
 
     // Doorbell service for ring notifications
     this.doorbellService =
@@ -74,14 +72,5 @@ export class DoorbellAccessory extends MotionCameraAccessoryBase<BlinkDoorbell> 
       .updateValue(ProgrammableSwitchEvent.SINGLE_PRESS);
 
     this.platform.log.info(`Doorbell ring: ${this.device.name}`);
-  }
-
-  /**
-   * Get the doorbell ID for matching with media clips.
-   *
-   * @returns The Blink doorbell ID
-   */
-  getDoorbellId(): number {
-    return this.device.id;
   }
 }

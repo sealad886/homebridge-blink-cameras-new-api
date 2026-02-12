@@ -14,6 +14,7 @@ import { PlatformAccessory } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkCamera } from '../types';
 import { MotionCameraAccessoryBase } from './motion-base';
+import { configureAccessoryInfo } from './accessory-info';
 
 export class CameraAccessory extends MotionCameraAccessoryBase<BlinkCamera> {
   constructor(
@@ -31,10 +32,7 @@ export class CameraAccessory extends MotionCameraAccessoryBase<BlinkCamera> {
     });
 
     // Configure accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)
-      ?.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Blink')
-      .setCharacteristic(this.platform.Characteristic.Model, device.type ?? 'Camera')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, device.serial ?? `${device.id}`);
+    configureAccessoryInfo(this.accessory, this.platform, device.type ?? 'Camera', device.serial ?? device.id);
 
     // Camera controller for snapshot support
     // Determine device type from API response - Mini cameras have type 'owl'
@@ -54,14 +52,5 @@ export class CameraAccessory extends MotionCameraAccessoryBase<BlinkCamera> {
       return;
     }
     await this.platform.apiClient.disableCameraMotion(this.device.network_id, this.device.id);
-  }
-
-  /**
-   * Get the camera ID for matching with media clips.
-   *
-   * @returns The Blink camera ID
-   */
-  getCameraId(): number {
-    return this.device.id;
   }
 }

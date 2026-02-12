@@ -96,6 +96,16 @@ export abstract class MotionCameraAccessoryBase<TDevice extends MotionDevice> {
   }
 
   /**
+   * Get the device ID.
+   * Used for matching with media clips and identifying the device in API calls.
+   *
+   * @returns The Blink device ID
+   */
+  getDeviceId(): number {
+    return this.device.id;
+  }
+
+  /**
    * Enable or disable motion detection
    */
   private async setMotionEnabled(value: CharacteristicValue): Promise<void> {

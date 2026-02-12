@@ -16,6 +16,7 @@ import { PlatformAccessory } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkOwl } from '../types';
 import { MotionCameraAccessoryBase } from './motion-base';
+import { configureAccessoryInfo } from './accessory-info';
 
 export class OwlAccessory extends MotionCameraAccessoryBase<BlinkOwl> {
   constructor(
@@ -32,10 +33,7 @@ export class OwlAccessory extends MotionCameraAccessoryBase<BlinkOwl> {
     });
 
     // Configure accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)
-      ?.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Blink')
-      .setCharacteristic(this.platform.Characteristic.Model, 'Mini')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, device.serial ?? `${device.id}`);
+    configureAccessoryInfo(this.accessory, this.platform, 'Mini', device.serial ?? device.id);
   }
 
   /**
@@ -48,14 +46,5 @@ export class OwlAccessory extends MotionCameraAccessoryBase<BlinkOwl> {
       return;
     }
     await this.platform.apiClient.disableOwlMotion(this.device.network_id, this.device.id);
-  }
-
-  /**
-   * Get the owl ID for matching with media clips.
-   *
-   * @returns The Blink owl (Mini camera) ID
-   */
-  getOwlId(): number {
-    return this.device.id;
   }
 }
