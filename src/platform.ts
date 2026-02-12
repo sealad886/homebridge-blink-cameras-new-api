@@ -390,9 +390,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);
-      void this.applyDeviceSettings(homescreen).catch((error) => {
+      try {
+        await this.applyDeviceSettings(homescreen);
+      } catch (error) {
         this.log.warn(`Failed to apply device settings: ${(error as Error).message}`);
-      });
+      }
       this.startPolling();
       this.log.info('Blink discovery completed successfully');
       return true;
