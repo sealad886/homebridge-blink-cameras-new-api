@@ -8,7 +8,7 @@
  *
  * Source: API Dossier - /base-apk/docs/api_dossier.md
  */
-import { setInterval, clearInterval } from 'timers';
+import { setInterval, clearInterval, setTimeout, clearTimeout } from 'timers';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -42,6 +42,8 @@ const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
 const MIN_POLL_INTERVAL = 15;
 const MIN_MOTION_TIMEOUT = 5;
+const DISCOVERY_RETRY_BASE_MS = 5000;
+const DISCOVERY_RETRY_MAX_MS = 300000;
 
 interface DeviceSettings {
   motionTimeout?: number;
@@ -92,10 +94,17 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   public readonly streamingConfig: BlinkCameraStreamingConfig;
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
+  private pollQueued = false;
+  private skippedPollTicks = 0;
   private lastMediaCheck = new Date();
   private readonly pollInterval: number;
   private readonly motionTimeout: number;
   private readonly enableMotionPolling: boolean;
+  private discoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private discoveryRetryAttempts = 0;
+  private discoveryInProgress = false;
+  private shutdownRequested = false;
 
   // Maps for quick accessory lookup by device ID
   private networkAccessories = new Map<number, NetworkAccessory>();
@@ -173,16 +182,22 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', () => {
       this.log.info('Finished launching; starting Blink discovery');
-      this.discoverDevices().catch((error) => {
-        this.log.error('Failed to discover devices', error);
-      });
+      void this.ensureDiscovery();
     });
 
     this.api.on('shutdown', () => {
+      this.shutdownRequested = true;
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
       }
+      if (this.discoveryRetryTimer) {
+        clearTimeout(this.discoveryRetryTimer);
+        this.discoveryRetryTimer = null;
+      }
+      this.pollInFlight = false;
+      this.pollQueued = false;
+      this.discoveryInProgress = false;
     });
   }
 
@@ -331,7 +346,51 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     this.accessories.push(accessory);
   }
 
-  private async discoverDevices(): Promise<void> {
+  private async ensureDiscovery(): Promise<void> {
+    if (this.shutdownRequested || this.discoveryInProgress) {
+      return;
+    }
+
+    this.discoveryInProgress = true;
+    const discovered = await this.discoverDevices();
+    this.discoveryInProgress = false;
+
+    if (discovered) {
+      this.discoveryRetryAttempts = 0;
+      if (this.discoveryRetryTimer) {
+        clearTimeout(this.discoveryRetryTimer);
+        this.discoveryRetryTimer = null;
+      }
+      return;
+    }
+
+    if (this.shutdownRequested) {
+      return;
+    }
+
+    this.discoveryRetryAttempts += 1;
+    const retryDelayMs = this.getDiscoveryRetryDelayMs(this.discoveryRetryAttempts);
+    this.log.warn(
+      `Blink discovery failed; retrying in ${Math.round(retryDelayMs / 1000)}s ` +
+      `(attempt ${this.discoveryRetryAttempts})`,
+    );
+
+    if (this.discoveryRetryTimer) {
+      clearTimeout(this.discoveryRetryTimer);
+    }
+
+    this.discoveryRetryTimer = setTimeout(() => {
+      this.discoveryRetryTimer = null;
+      void this.ensureDiscovery();
+    }, retryDelayMs);
+  }
+
+  private getDiscoveryRetryDelayMs(attempt: number): number {
+    const exponent = Math.max(0, Math.min(attempt - 1, 6));
+    return Math.min(DISCOVERY_RETRY_MAX_MS, DISCOVERY_RETRY_BASE_MS * Math.pow(2, exponent));
+  }
+
+  private async discoverDevices(): Promise<boolean> {
     try {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
@@ -340,8 +399,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         this.log.warn(`Failed to apply device settings: ${(error as Error).message}`);
       });
       this.startPolling();
+      this.log.info('Blink discovery completed successfully');
+      return true;
     } catch (error) {
       this.log.error('Device discovery failed', error);
+      return false;
     }
   }
 
@@ -477,7 +539,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         updateHandler();
       } catch (error) {
         this.log.warn(
-          `Failed to apply motion enable for ${deviceType} ${device.name}: ${(error as Error).message}`,
+          `Failed to apply motion ${deviceSettings.enableMotion ? 'enable' : 'disable'} for ` +
+          `${deviceType} ${device.name}: ${(error as Error).message}`,
         );
       }
     }
@@ -645,11 +708,41 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Optionally polls media for motion detection events
    */
   private startPolling(): void {
+    if (this.pollTimer) {
+      this.log.debug('Polling loop already running; keeping existing timer');
+      return;
+    }
+
     this.log.info(`Starting status polling every ${this.pollInterval} seconds`);
 
-    this.pollTimer = setInterval(async () => {
-      await this.pollDeviceStates();
+    this.pollTimer = setInterval(() => {
+      void this.runPollCycle();
     }, this.pollInterval * 1000);
+  }
+
+  private async runPollCycle(): Promise<void> {
+    if (this.pollInFlight) {
+      this.pollQueued = true;
+      this.skippedPollTicks += 1;
+      if (this.skippedPollTicks <= 3 || this.skippedPollTicks % 10 === 0) {
+        this.log.debug(
+          `Skipping overlapping poll tick (in-flight request still running, skipped=${this.skippedPollTicks})`,
+        );
+      }
+      return;
+    }
+
+    this.pollInFlight = true;
+    this.skippedPollTicks = 0;
+    try {
+      await this.pollDeviceStates();
+    } finally {
+      this.pollInFlight = false;
+      if (this.pollQueued && !this.shutdownRequested) {
+        this.pollQueued = false;
+        await this.runPollCycle();
+      }
+    }
   }
 
   /**

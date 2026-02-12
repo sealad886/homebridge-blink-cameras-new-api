@@ -22,6 +22,7 @@ import {
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
+import { sanitizeUrlForLog } from '../blink-api/log-sanitizer';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -160,6 +161,11 @@ const redactFfmpegArgs = (args: string[]): string[] => {
       if (i + 1 < redacted.length) {
         redacted[i + 1] = '<redacted>';
       }
+      continue;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(flag)) {
+      redacted[i] = sanitizeUrlForLog(flag);
     }
   }
   return redacted;
@@ -570,7 +576,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       // which would cause HomeKit to timeout and send a stop request before
       // FFmpeg even connects, killing the proxy.
       const ffmpegArgs = this.buildFfmpegArgs(ffmpegInputUrl, request, active);
-      this.log(`Starting stream ${sessionId} via FFmpeg with URL: ${ffmpegInputUrl}`);
+      const safeInputUrl = sanitizeUrlForLog(ffmpegInputUrl);
+      this.log(`Starting stream ${sessionId} via FFmpeg with URL: ${safeInputUrl}`);
       if (this.streamingConfig.ffmpegDebug) {
         const safeArgs = redactFfmpegArgs(ffmpegArgs);
         this.log(`FFmpeg args: ${safeArgs.join(' ')}`);
