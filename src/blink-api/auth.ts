@@ -37,6 +37,7 @@ import {
   getOAuth2FAVerifyUrl,
 } from './urls';
 import { generatePKCEPair, generateOAuthState } from './oauth-pkce';
+import { redactValue, sanitizeForLog, nullLogger, debugLog } from './log-sanitizer';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
@@ -44,13 +45,7 @@ import { URL } from 'node:url';
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
-
-const nullLogger: BlinkLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-};
+const DEFAULT_AUTH_TIMEOUT_MS = 15000;
 
 class FileAuthStorage implements BlinkAuthStorage {
   constructor(private readonly filePath: string) {}
@@ -84,35 +79,7 @@ class FileAuthStorage implements BlinkAuthStorage {
   }
 }
 
-function redact(value: string | undefined, showChars = 4): string {
-  if (!value) return '<empty>';
-  if (value.length <= showChars * 2) return '***';
-  return `${value.slice(0, showChars)}...${value.slice(-showChars)}`;
-}
-
-const SENSITIVE_LOG_KEY = /(authorization|token-auth|access[_-]?token|refresh[_-]?token|password|hardware[_-]?id|cookie|2fa|pin|email|phone)/i;
-
-function sanitizeForLog(value: unknown, keyHint?: string): unknown {
-  if (value === null || value === undefined) {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeForLog(entry, keyHint));
-  }
-
-  if (typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, sanitizeForLog(entry, key)]),
-    );
-  }
-
-  if (typeof value === 'string' && keyHint && SENSITIVE_LOG_KEY.test(keyHint)) {
-    return redact(value, 3);
-  }
-
-  return value;
-}
+const redact = redactValue;
 
 interface BlinkAuthErrorDetail {
   status: number;
@@ -212,6 +179,7 @@ export class BlinkAuth {
   private tier: string | null = null;
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
+  private readonly authRequestTimeoutMs: number;
   private readonly storage?: BlinkAuthStorage;
   private stateLoaded = false;
   private stateLoadPromise: Promise<void> | null = null;
@@ -224,6 +192,7 @@ export class BlinkAuth {
   constructor(private readonly config: BlinkConfig) {
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
+    this.authRequestTimeoutMs = Math.max(1000, config.requestTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS);
     if (config.authStorage) {
       this.storage = config.authStorage;
     } else if (config.authStoragePath) {
@@ -232,8 +201,29 @@ export class BlinkAuth {
   }
 
   private logDebug(message: string, ...args: unknown[]): void {
-    if (this.debug) {
-      this.log.info(`[Auth Debug] ${message}`, ...args);
+    debugLog(this.log, this.debug, 'Auth', message, ...args);
+  }
+
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    operation: string,
+  ): Promise<FetchResponse> {
+    const controller = new globalThis.AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.authRequestTimeoutMs);
+
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') {
+        throw new Error(`Blink OAuth ${operation} timed out after ${this.authRequestTimeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -486,11 +476,15 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(authorizeUrl.toString(), {
-      method: 'GET',
-      headers,
-      redirect: 'manual', // Don't follow redirects automatically
-    });
+    const response = await this.fetchWithTimeout(
+      authorizeUrl.toString(),
+      {
+        method: 'GET',
+        headers,
+        redirect: 'manual', // Don't follow redirects automatically
+      },
+      'authorize request',
+    );
 
     this.extractAndMergeCookies(response);
     this.logDebug(`Authorize response: ${response.status}`);
@@ -512,10 +506,14 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(signinUrl, {
-      method: 'GET',
-      headers,
-    });
+    const response = await this.fetchWithTimeout(
+      signinUrl,
+      {
+        method: 'GET',
+        headers,
+      },
+      'signin page fetch',
+    );
 
     this.extractAndMergeCookies(response);
 
@@ -573,12 +571,16 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(signinUrl, {
-      method: 'POST',
-      headers,
-      body: formData.toString(),
-      redirect: 'manual',
-    });
+    const response = await this.fetchWithTimeout(
+      signinUrl,
+      {
+        method: 'POST',
+        headers,
+        body: formData.toString(),
+        redirect: 'manual',
+      },
+      'signin submit',
+    );
 
     this.extractAndMergeCookies(response);
     this.logDebug(`Signin response: ${response.status}`);
@@ -705,12 +707,16 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(verifyUrl, {
-      method: 'POST',
-      headers,
-      body: formData.toString(),
-      redirect: 'manual',
-    });
+    const response = await this.fetchWithTimeout(
+      verifyUrl,
+      {
+        method: 'POST',
+        headers,
+        body: formData.toString(),
+        redirect: 'manual',
+      },
+      '2FA verify',
+    );
 
     this.extractAndMergeCookies(response);
     this.logDebug(`2FA verify response: ${response.status}`);
@@ -768,11 +774,15 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(authorizeUrl, {
-      method: 'GET',
-      headers,
-      redirect: 'manual',
-    });
+    const response = await this.fetchWithTimeout(
+      authorizeUrl,
+      {
+        method: 'GET',
+        headers,
+        redirect: 'manual',
+      },
+      'authorization code fetch',
+    );
 
     this.extractAndMergeCookies(response);
 
@@ -832,11 +842,15 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers,
-      body: formData.toString(),
-    });
+    const response = await this.fetchWithTimeout(
+      tokenUrl,
+      {
+        method: 'POST',
+        headers,
+        body: formData.toString(),
+      },
+      'token exchange',
+    );
 
     if (!response.ok) {
       await this.handleAuthError('token_exchange', response);
@@ -966,11 +980,15 @@ export class BlinkAuth {
       Accept: 'application/json',
     });
 
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers,
-      body: formData.toString(),
-    });
+    const response = await this.fetchWithTimeout(
+      tokenUrl,
+      {
+        method: 'POST',
+        headers,
+        body: formData.toString(),
+      },
+      'token refresh',
+    );
 
     this.logDebug(`Response: ${response.status} ${response.statusText}`);
 

@@ -9,6 +9,7 @@
 import { BlinkAuth } from './auth';
 import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
+import { sanitizeForLog, nullLogger, debugLog } from './log-sanitizer';
 import { BlinkConfig, BlinkLogger, HttpMethod } from '../types';
 import { randomUUID } from 'node:crypto';
 import { setTimeout, clearTimeout } from 'node:timers';
@@ -23,32 +24,6 @@ import { setTimeout, clearTimeout } from 'node:timers';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
-
-/**
- * Null logger that discards all output
- */
-const nullLogger: BlinkLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-};
-
-/**
- * Redact authorization headers for logging
- */
-function redactHeaders(headers: Record<string, string>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lowerKey = key.toLowerCase();
-    if (lowerKey === 'authorization' || lowerKey === 'token-auth') {
-      result[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-4)}` : '***';
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
 
 /**
  * Custom error for HTTP failures with diagnostics
@@ -86,8 +61,8 @@ export class BlinkHttpError extends Error {
     if (this.responseBody) {
       lines.push(`\nResponse Body:`);
       try {
-        const parsed = JSON.parse(this.responseBody);
-        lines.push(JSON.stringify(parsed, null, 2));
+        const parsed = JSON.parse(this.responseBody) as unknown;
+        lines.push(JSON.stringify(sanitizeForLog(parsed), null, 2));
       } catch {
         lines.push(this.responseBody);
       }
@@ -124,9 +99,7 @@ export class BlinkHttp {
    * Log diagnostic message if debug is enabled
    */
   private logDebug(message: string, ...args: unknown[]): void {
-    if (this.debug) {
-      this.log.info(`[HTTP Debug] ${message}`, ...args);
-    }
+    debugLog(this.log, this.debug, 'HTTP', message, ...args);
   }
 
   async get<T>(path: string): Promise<T> {
@@ -166,9 +139,10 @@ export class BlinkHttp {
 
     if (attempt === 0) {
       this.logDebug(`[${requestId}] ${method} ${url}`);
-      this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
+      this.logDebug(`[${requestId}] Request headers:`, sanitizeForLog(headers as unknown));
       if (body) {
-        this.logDebug(`[${requestId}] Request body:`, JSON.stringify(body, null, 2));
+        const sanitizedBody = sanitizeForLog(body);
+        this.logDebug(`[${requestId}] Request body:`, JSON.stringify(sanitizedBody, null, 2));
       }
     } else {
       this.logDebug(`[${requestId}] ${method} ${url} (retry attempt ${attempt})`);
@@ -262,7 +236,8 @@ export class BlinkHttp {
 
     if (this.debug) {
       // Only log response body in debug mode (can be verbose)
-      this.logDebug(`[${requestId}] Response body:`, JSON.stringify(responseData, null, 2).slice(0, 500) + '...');
+      const sanitizedResponse = sanitizeForLog(responseData);
+      this.logDebug(`[${requestId}] Response body:`, JSON.stringify(sanitizedResponse, null, 2).slice(0, 500) + '...');
     }
 
     return responseData;
