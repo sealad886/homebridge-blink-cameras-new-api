@@ -17,6 +17,7 @@
 import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { BlinkNetwork } from '../types';
+import { configureAccessoryInfo } from './accessory-info';
 
 export class NetworkAccessory {
   private readonly service: Service;
@@ -27,10 +28,7 @@ export class NetworkAccessory {
     private device: BlinkNetwork,
   ) {
     // Configure accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)
-      ?.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Blink')
-      .setCharacteristic(this.platform.Characteristic.Model, 'Network')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, `${device.id}`);
+    configureAccessoryInfo(this.accessory, this.platform, 'Network', device.id);
 
     // Use SecuritySystem service for proper arm/disarm in HomeKit
     this.service =
