@@ -21,15 +21,9 @@ describe('Accessory handlers', () => {
       armNetwork: jest.fn().mockResolvedValue({ command_id: 123 }),
       disarmNetwork: jest.fn().mockResolvedValue({ command_id: 124 }),
       pollCommand: jest.fn().mockResolvedValue({ complete: true }),
-      enableCameraMotion: jest.fn(),
-      disableCameraMotion: jest.fn(),
-      enableDoorbellMotion: jest.fn(),
-      disableDoorbellMotion: jest.fn(),
-      enableOwlMotion: jest.fn(),
-      disableOwlMotion: jest.fn(),
-      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
-      requestOwlThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
-      requestDoorbellThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
+      enableMotion: jest.fn(),
+      disableMotion: jest.fn(),
+      requestThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
     };
 
     const platform: PlatformStub = {
@@ -116,8 +110,8 @@ describe('Accessory handlers', () => {
     await characteristic?.onSetHandler?.(true);
     await characteristic?.onSetHandler?.(false);
 
-    expect(apiClient.enableCameraMotion).toHaveBeenCalledWith(1, 2);
-    expect(apiClient.disableCameraMotion).toHaveBeenCalledWith(1, 2);
+    expect(apiClient.enableMotion).toHaveBeenCalledWith('camera', 1, 2);
+    expect(apiClient.disableMotion).toHaveBeenCalledWith('camera', 1, 2);
     expect(device.enabled).toBe(false);
     expect(handler).toBeInstanceOf(CameraAccessory);
   });
@@ -135,8 +129,8 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(true);
 
-    expect(apiClient.enableCameraMotion).not.toHaveBeenCalled();
-    expect(apiClient.disableCameraMotion).not.toHaveBeenCalled();
+    expect(apiClient.enableMotion).not.toHaveBeenCalled();
+    expect(apiClient.disableMotion).not.toHaveBeenCalled();
     expect(device.enabled).toBe(true);
     expect(handler).toBeInstanceOf(CameraAccessory);
   });
@@ -154,7 +148,7 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(false);
 
-    expect(apiClient.disableDoorbellMotion).toHaveBeenCalledWith(1, 3);
+    expect(apiClient.disableMotion).toHaveBeenCalledWith('doorbell', 1, 3);
     expect(device.enabled).toBe(false);
     expect(handler).toBeInstanceOf(DoorbellAccessory);
   });
@@ -172,8 +166,8 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(false);
 
-    expect(apiClient.enableDoorbellMotion).not.toHaveBeenCalled();
-    expect(apiClient.disableDoorbellMotion).not.toHaveBeenCalled();
+    expect(apiClient.enableMotion).not.toHaveBeenCalled();
+    expect(apiClient.disableMotion).not.toHaveBeenCalled();
     expect(device.enabled).toBe(false);
     expect(handler).toBeInstanceOf(DoorbellAccessory);
   });
@@ -191,7 +185,7 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(true);
 
-    expect(apiClient.enableOwlMotion).toHaveBeenCalledWith(2, 4);
+    expect(apiClient.enableMotion).toHaveBeenCalledWith('owl', 2, 4);
     expect(device.enabled).toBe(true);
     expect(handler).toBeInstanceOf(OwlAccessory);
   });
@@ -209,8 +203,8 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(true);
 
-    expect(apiClient.enableOwlMotion).not.toHaveBeenCalled();
-    expect(apiClient.disableOwlMotion).not.toHaveBeenCalled();
+    expect(apiClient.enableMotion).not.toHaveBeenCalled();
+    expect(apiClient.disableMotion).not.toHaveBeenCalled();
     expect(device.enabled).toBe(true);
     expect(handler).toBeInstanceOf(OwlAccessory);
   });
@@ -219,9 +213,7 @@ describe('Accessory handlers', () => {
     const hap = createHap();
     const logFn = jest.fn();
     const apiClient = {
-      requestCameraThumbnail: jest.fn(),
-      requestOwlThumbnail: jest.fn(),
-      requestDoorbellThumbnail: jest.fn(),
+      requestThumbnail: jest.fn(),
       pollCommand: jest.fn(),
     };
 

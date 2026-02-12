@@ -53,10 +53,10 @@ export class DoorbellAccessory extends MotionCameraAccessoryBase<BlinkDoorbell> 
    */
   protected async setMotionEnabledOnDevice(target: boolean): Promise<void> {
     if (target) {
-      await this.platform.apiClient.enableDoorbellMotion(this.device.network_id, this.device.id);
+      await this.platform.apiClient.enableMotion('doorbell', this.device.network_id, this.device.id);
       return;
     }
-    await this.platform.apiClient.disableDoorbellMotion(this.device.network_id, this.device.id);
+    await this.platform.apiClient.disableMotion('doorbell', this.device.network_id, this.device.id);
   }
 
   /**

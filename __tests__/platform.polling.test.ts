@@ -20,12 +20,8 @@ type MockedBlinkApi = jest.Mocked<{
   armNetwork: jest.Mock;
   disarmNetwork: jest.Mock;
   pollCommand: jest.Mock;
-  enableCameraMotion: jest.Mock;
-  disableCameraMotion: jest.Mock;
-  enableDoorbellMotion: jest.Mock;
-  disableDoorbellMotion: jest.Mock;
-  enableOwlMotion: jest.Mock;
-  disableOwlMotion: jest.Mock;
+  enableMotion: jest.Mock;
+  disableMotion: jest.Mock;
   getUnwatchedMedia: jest.Mock;
 }>;
 
@@ -39,12 +35,8 @@ const buildBlinkApi = (): MockedBlinkApi => ({
   armNetwork: jest.fn(),
   disarmNetwork: jest.fn(),
   pollCommand: jest.fn().mockResolvedValue({ complete: true }),
-  enableCameraMotion: jest.fn(),
-  disableCameraMotion: jest.fn(),
-  enableDoorbellMotion: jest.fn(),
-  disableDoorbellMotion: jest.fn(),
-  enableOwlMotion: jest.fn(),
-  disableOwlMotion: jest.fn(),
+  enableMotion: jest.fn(),
+  disableMotion: jest.fn(),
   getUnwatchedMedia: jest.fn().mockResolvedValue({ media: [] }),
 });
 

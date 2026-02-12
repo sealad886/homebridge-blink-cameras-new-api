@@ -22,8 +22,8 @@ import { setTimeout, clearTimeout } from 'node:timers';
  * - LOCALE: Device locale
  */
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
 /**
  * Custom error for HTTP failures with diagnostics

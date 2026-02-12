@@ -42,9 +42,9 @@ export class OwlAccessory extends MotionCameraAccessoryBase<BlinkOwl> {
    */
   protected async setMotionEnabledOnDevice(target: boolean): Promise<void> {
     if (target) {
-      await this.platform.apiClient.enableOwlMotion(this.device.network_id, this.device.id);
+      await this.platform.apiClient.enableMotion('owl', this.device.network_id, this.device.id);
       return;
     }
-    await this.platform.apiClient.disableOwlMotion(this.device.network_id, this.device.id);
+    await this.platform.apiClient.disableMotion('owl', this.device.network_id, this.device.id);
   }
 }

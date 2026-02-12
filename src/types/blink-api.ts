@@ -427,6 +427,9 @@ export type HttpMethod = 'GET' | 'POST' | 'DELETE';
  */
 export type BlinkDeviceType = 'camera' | 'owl' | 'doorbell' | 'sync_module';
 
+/** Device types with per-device API endpoints (excludes sync_module). */
+export type BlinkApiDeviceType = Exclude<BlinkDeviceType, 'sync_module'>;
+
 /**
  * OAuth v2 session state for Authorization Code + PKCE flow
  * Persisted during 2FA flow to allow resumption

@@ -21,8 +21,10 @@ import {
   StreamingRequest,
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
+import { sleep } from '../blink-api/http';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { sanitizeUrlForLog } from '../blink-api/log-sanitizer';
+import { BlinkApiDeviceType } from '../types';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -30,7 +32,8 @@ import * as dgram from 'node:dgram';
 import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
-export type DeviceType = 'camera' | 'owl' | 'doorbell';
+/** @deprecated Use BlinkApiDeviceType from '../types' instead. */
+export type DeviceType = BlinkApiDeviceType;
 export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
 
 export interface BlinkCameraStreamingConfig {
@@ -238,7 +241,6 @@ const buildRtpUrl = (
 
 const toSrtpParams = (srtp: Buffer): string => srtp.toString('base64');
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const SNAPSHOT_FETCH_TIMEOUT_MS = 10000;
 
 export class BlinkCameraSource implements CameraStreamingDelegate {
@@ -344,19 +346,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    */
   private async requestThumbnail(): Promise<void> {
     try {
-      let response;
-
-      switch (this.deviceType) {
-        case 'camera':
-          response = await this.api.requestCameraThumbnail(this.networkId, this.deviceId);
-          break;
-        case 'owl':
-          response = await this.api.requestOwlThumbnail(this.networkId, this.deviceId);
-          break;
-        case 'doorbell':
-          response = await this.api.requestDoorbellThumbnail(this.networkId, this.deviceId);
-          break;
-      }
+      const response = await this.api.requestThumbnail(this.deviceType, this.networkId, this.deviceId);
 
       // Poll for command completion
       if (response) {
@@ -720,14 +710,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private async requestLiveView(): Promise<{ server: string; command_id?: number; polling_interval?: number; continue_interval?: number; id?: number; }> {
-    switch (this.deviceType) {
-      case 'camera':
-        return this.api.startCameraLiveview(this.networkId, this.deviceId);
-      case 'owl':
-        return this.api.startOwlLiveview(this.networkId, this.deviceId);
-      case 'doorbell':
-        return this.api.startDoorbellLiveview(this.networkId, this.deviceId);
-    }
+    return this.api.startLiveview(this.deviceType, this.networkId, this.deviceId);
   }
 
   private async waitForLiveViewReady(

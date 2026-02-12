@@ -47,10 +47,11 @@ export class CameraAccessory extends MotionCameraAccessoryBase<BlinkCamera> {
    * Source: API Dossier Section 3.3 - enable/disable endpoints
    */
   protected async setMotionEnabledOnDevice(target: boolean): Promise<void> {
+    const deviceType = this.device.type === 'owl' ? 'owl' as const : 'camera' as const;
     if (target) {
-      await this.platform.apiClient.enableCameraMotion(this.device.network_id, this.device.id);
+      await this.platform.apiClient.enableMotion(deviceType, this.device.network_id, this.device.id);
       return;
     }
-    await this.platform.apiClient.disableCameraMotion(this.device.network_id, this.device.id);
+    await this.platform.apiClient.disableMotion(deviceType, this.device.network_id, this.device.id);
   }
 }

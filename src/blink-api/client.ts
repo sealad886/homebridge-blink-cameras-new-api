@@ -12,6 +12,7 @@ import { BlinkHttp } from './http';
 import { getRestBaseUrl, getSharedRestBaseUrl, getSharedRestRootUrl } from './urls';
 import {
   BlinkAccountInfo,
+  BlinkApiDeviceType,
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
@@ -38,11 +39,25 @@ const normalizeTier = (tier?: string | null): string | null => {
   return tier.toLowerCase();
 };
 
+interface DeviceEndpointEntry {
+  http: () => BlinkHttp;
+  prefix: string;
+}
+
+interface DeviceEndpointConfig {
+  pathSegment: string;
+  motion: DeviceEndpointEntry;
+  config: DeviceEndpointEntry;
+  thumbnail: DeviceEndpointEntry;
+  liveview: DeviceEndpointEntry;
+}
+
 export class BlinkApi {
   private readonly auth: BlinkAuth;
   private readonly http: BlinkHttp;
   private readonly sharedHttp: BlinkHttp;
   private readonly sharedRootHttp: BlinkHttp;
+  private readonly deviceEndpoints: Record<BlinkApiDeviceType, DeviceEndpointConfig>;
   private accountId: number | null = null;
   private clientId: number | null = null;
 
@@ -51,6 +66,30 @@ export class BlinkApi {
     this.http = new BlinkHttp(this.auth, config);
     this.sharedHttp = new BlinkHttp(this.auth, config, getSharedRestBaseUrl(config));
     this.sharedRootHttp = new BlinkHttp(this.auth, config, getSharedRestRootUrl(config));
+
+    this.deviceEndpoints = {
+      camera: {
+        pathSegment: 'cameras',
+        motion: { http: () => this.sharedRootHttp, prefix: '' },
+        config: { http: () => this.sharedHttp, prefix: 'v2/' },
+        thumbnail: { http: () => this.sharedRootHttp, prefix: '' },
+        liveview: { http: () => this.sharedHttp, prefix: 'v6/' },
+      },
+      doorbell: {
+        pathSegment: 'doorbells',
+        motion: { http: () => this.sharedHttp, prefix: 'v1/' },
+        config: { http: () => this.sharedHttp, prefix: 'v1/' },
+        thumbnail: { http: () => this.sharedHttp, prefix: 'v1/' },
+        liveview: { http: () => this.sharedHttp, prefix: 'v2/' },
+      },
+      owl: {
+        pathSegment: 'owls',
+        motion: { http: () => this.sharedHttp, prefix: 'v1/' },
+        config: { http: () => this.sharedHttp, prefix: 'v1/' },
+        thumbnail: { http: () => this.sharedHttp, prefix: 'v1/' },
+        liveview: { http: () => this.sharedHttp, prefix: 'v2/' },
+      },
+    };
   }
 
   getSharedRestRootUrl(): string {
@@ -360,115 +399,81 @@ export class BlinkApi {
   }
 
   /**
-   * Enable motion detection for a camera
-   * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/enable
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
-   * Note: No version prefix - uses root URL (without /api/)
+   * Enable motion detection for a device.
+   * Source: API Dossier Sections 3.3 (cameras), 3.4 (owls), 3.5 (doorbells)
+   * Note: Camera endpoints use root URL (no /api/ prefix); doorbell/owl use /api/v1/.
    */
-  async enableCameraMotion(networkId: number, cameraId: number): Promise<void> {
+  async enableMotion(deviceType: BlinkApiDeviceType, networkId: number, deviceId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
+    const ep = this.deviceEndpoints[deviceType];
+    await ep.motion.http().post(
+      `${ep.motion.prefix}accounts/${accountId}/networks/${networkId}/${ep.pathSegment}/${deviceId}/enable`,
+    );
   }
 
   /**
-   * Disable motion detection for a camera
-   * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/disable
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
-   * Note: No version prefix - uses root URL (without /api/)
+   * Disable motion detection for a device.
+   * Source: API Dossier Sections 3.3 (cameras), 3.4 (owls), 3.5 (doorbells)
    */
-  async disableCameraMotion(networkId: number, cameraId: number): Promise<void> {
+  async disableMotion(deviceType: BlinkApiDeviceType, networkId: number, deviceId: number): Promise<void> {
     const accountId = await this.ensureAccountId();
-    await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
+    const ep = this.deviceEndpoints[deviceType];
+    await ep.motion.http().post(
+      `${ep.motion.prefix}accounts/${accountId}/networks/${networkId}/${ep.pathSegment}/${deviceId}/disable`,
+    );
   }
 
   /**
-   * Enable motion detection for a doorbell
-   * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{network}/doorbells/{lotus}/enable
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
+   * Update device configuration (e.g., motion sensitivity).
+   * Source: API Dossier Sections 3.3 (cameras v2), 3.4 (owls v1), 3.5 (doorbells v1)
    */
-  async enableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
-  }
-
-  /**
-   * Disable motion detection for a doorbell
-   * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{network}/doorbells/{lotus}/disable
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
-   */
-  async disableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
-  }
-
-  /**
-   * Enable motion detection for an owl (Mini camera)
-   * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/enable
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
-   */
-  async enableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
-  }
-
-  /**
-   * Disable motion detection for an owl (Mini camera)
-   * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/disable
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
-   */
-  async disableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
-  }
-
-  /**
-   * Update camera configuration (e.g., motion sensitivity).
-   * Source: API Dossier Section 3.3 - POST v2/accounts/{account_id}/networks/{networkId}/cameras/{cameraId}/config
-   * Evidence: UpdateCameraBody includes motion_sensitivity (Android app)
-   */
-  async updateCameraConfig(
+  async updateDeviceConfig(
+    deviceType: BlinkApiDeviceType,
     networkId: number,
-    cameraId: number,
+    deviceId: number,
     update: BlinkCameraConfigUpdate,
   ): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v2/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/config`,
+    const ep = this.deviceEndpoints[deviceType];
+    return ep.config.http().post<BlinkCommandResponse>(
+      `${ep.config.prefix}accounts/${accountId}/networks/${networkId}/${ep.pathSegment}/${deviceId}/config`,
       update,
     );
   }
 
   /**
-   * Update doorbell configuration (e.g., motion sensitivity).
-   * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{networkId}/doorbells/{doorbellId}/config
-   * Evidence: UpdateLotusBody includes motion_sensitivity (Android app)
+   * Request thumbnail capture for a device.
+   * Source: API Dossier Sections 3.3 (cameras), 3.4 (owls), 3.5 (doorbells)
+   * Note: Camera endpoints use root URL (no /api/ prefix); doorbell/owl use /api/v1/.
    */
-  async updateDoorbellConfig(
-    networkId: number,
-    doorbellId: number,
-    update: BlinkCameraConfigUpdate,
-  ): Promise<BlinkCommandResponse> {
+  async requestThumbnail(deviceType: BlinkApiDeviceType, networkId: number, deviceId: number): Promise<BlinkCommandResponse> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/config`,
-      update,
+    const ep = this.deviceEndpoints[deviceType];
+    return ep.thumbnail.http().post<BlinkCommandResponse>(
+      `${ep.thumbnail.prefix}accounts/${accountId}/networks/${networkId}/${ep.pathSegment}/${deviceId}/thumbnail`,
     );
   }
 
   /**
-   * Update owl (Mini camera) configuration (e.g., motion sensitivity).
-   * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/config
-   * Evidence: UpdateOwlBody includes motion_sensitivity (Android app)
+   * Start live view session for a device.
+   * Source: API Dossier Sections 3.3 (cameras v6), 3.4 (owls v2), 3.5 (doorbells v2)
    */
-  async updateOwlConfig(
+  async startLiveview(
+    deviceType: BlinkApiDeviceType,
     networkId: number,
-    owlId: number,
-    update: BlinkCameraConfigUpdate,
-  ): Promise<BlinkCommandResponse> {
+    deviceId: number,
+    intent = 'liveview',
+    motionEventStartTime?: string | null,
+  ): Promise<BlinkLiveVideoResponse> {
     const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/config`,
-      update,
+    const ep = this.deviceEndpoints[deviceType];
+    const body = {
+      intent,
+      motion_event_start_time: motionEventStartTime ?? null,
+    };
+    return ep.liveview.http().post<BlinkLiveVideoResponse>(
+      `${ep.liveview.prefix}accounts/${accountId}/networks/${networkId}/${ep.pathSegment}/${deviceId}/liveview`,
+      body,
     );
   }
 
@@ -509,110 +514,6 @@ export class BlinkApi {
   async getUnwatchedMedia(): Promise<BlinkUnwatchedMediaResponse> {
     const accountId = await this.ensureAccountId();
     return this.sharedHttp.get<BlinkUnwatchedMediaResponse>(`v4/accounts/${accountId}/unwatched_media`);
-  }
-
-  /**
-   * Request thumbnail capture for a camera
-   * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/thumbnail
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
-   * Note: No version prefix - uses root URL (without /api/)
-   */
-  async requestCameraThumbnail(networkId: number, cameraId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedRootHttp.post<BlinkCommandResponse>(
-      `accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/thumbnail`,
-    );
-  }
-
-  /**
-   * Request thumbnail capture for an owl (Mini camera)
-   * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/thumbnail
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
-   */
-  async requestOwlThumbnail(networkId: number, owlId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/thumbnail`,
-    );
-  }
-
-  /**
-   * Request thumbnail capture for a doorbell
-   * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{network}/doorbells/{lotus}/thumbnail
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
-   */
-  async requestDoorbellThumbnail(networkId: number, doorbellId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/thumbnail`,
-    );
-  }
-
-  /**
-   * Start live view session for a camera
-   * Source: API Dossier Section 3.3 - POST v6/accounts/{account_id}/networks/{networkId}/cameras/{cameraId}/liveview
-   * Source: API Dossier Section 4.2 - LiveVideoResponse model
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
-   */
-  async startCameraLiveview(
-    networkId: number,
-    cameraId: number,
-    intent = 'liveview',
-    motionEventStartTime?: string | null,
-  ): Promise<BlinkLiveVideoResponse> {
-    const accountId = await this.ensureAccountId();
-    const body = {
-      intent,
-      motion_event_start_time: motionEventStartTime ?? null,
-    };
-    return this.sharedHttp.post<BlinkLiveVideoResponse>(
-      `v6/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/liveview`,
-      body,
-    );
-  }
-
-  /**
-   * Start live view session for an owl (Mini camera)
-   * Source: API Dossier Section 3.4 - POST v2/accounts/{account_id}/networks/{networkId}/owls/{owlId}/liveview
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
-   */
-  async startOwlLiveview(
-    networkId: number,
-    owlId: number,
-    intent = 'liveview',
-    motionEventStartTime?: string | null,
-  ): Promise<BlinkLiveVideoResponse> {
-    const accountId = await this.ensureAccountId();
-    const body = {
-      intent,
-      motion_event_start_time: motionEventStartTime ?? null,
-    };
-    return this.sharedHttp.post<BlinkLiveVideoResponse>(
-      `v2/accounts/${accountId}/networks/${networkId}/owls/${owlId}/liveview`,
-      body,
-    );
-  }
-
-  /**
-   * Start live view session for a doorbell
-   * Source: API Dossier Section 3.5 - POST v2/accounts/{account_id}/networks/{networkId}/doorbells/{doorbellId}/liveview
-   * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
-   */
-  async startDoorbellLiveview(
-    networkId: number,
-    doorbellId: number,
-    intent = 'liveview',
-    motionEventStartTime?: string | null,
-  ): Promise<BlinkLiveVideoResponse> {
-    const accountId = await this.ensureAccountId();
-    const body = {
-      intent,
-      motion_event_start_time: motionEventStartTime ?? null,
-    };
-    return this.sharedHttp.post<BlinkLiveVideoResponse>(
-      `v2/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/liveview`,
-      body,
-    );
   }
 
   /**

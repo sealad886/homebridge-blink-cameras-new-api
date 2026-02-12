@@ -15,13 +15,11 @@ const mockFetch = jest.fn();
 
 describe('BlinkCameraSource', () => {
   let mockApi: {
-    requestCameraThumbnail: jest.Mock;
-    requestOwlThumbnail: jest.Mock;
-    requestDoorbellThumbnail: jest.Mock;
+    requestThumbnail: jest.Mock;
     pollCommand: jest.Mock;
     getSharedRestRootUrl: jest.Mock;
     getAuthHeaders: jest.Mock;
-    startCameraLiveview: jest.Mock;
+    startLiveview: jest.Mock;
     completeCommand: jest.Mock;
     updateCommand: jest.Mock;
     getCommandStatus: jest.Mock;
@@ -34,13 +32,11 @@ describe('BlinkCameraSource', () => {
     jest.clearAllMocks();
 
     mockApi = {
-      requestCameraThumbnail: jest.fn(),
-      requestOwlThumbnail: jest.fn(),
-      requestDoorbellThumbnail: jest.fn(),
+      requestThumbnail: jest.fn(),
       pollCommand: jest.fn(),
       getSharedRestRootUrl: jest.fn().mockReturnValue('https://rest-prod.immedia-semi.com/'),
       getAuthHeaders: jest.fn().mockReturnValue({ 'TOKEN_AUTH': 'test-token', 'ACCOUNT_ID': '12345' }),
-      startCameraLiveview: jest.fn().mockResolvedValue({
+      startLiveview: jest.fn().mockResolvedValue({
         server: 'rtsps://127.0.0.1:554/live',
         command_id: 101,
         polling_interval: 5,
@@ -92,7 +88,7 @@ describe('BlinkCameraSource', () => {
   describe('handleSnapshotRequest', () => {
     it('should request new thumbnail and fetch image data for camera', async () => {
       const imageData = new ArrayBuffer(1024);
-      mockApi.requestCameraThumbnail.mockResolvedValue({ command_id: 123 });
+      mockApi.requestThumbnail.mockResolvedValue({ command_id: 123 });
       mockApi.pollCommand.mockResolvedValue({});
       mockFetch.mockResolvedValue({
         ok: true,
@@ -109,14 +105,14 @@ describe('BlinkCameraSource', () => {
 
       await source.handleSnapshotRequest(request, callback);
 
-      expect(mockApi.requestCameraThumbnail).toHaveBeenCalledWith(12345, 67890);
+      expect(mockApi.requestThumbnail).toHaveBeenCalledWith('camera', 12345, 67890);
       expect(mockApi.pollCommand).toHaveBeenCalledWith(12345, 123);
       expect(callback).toHaveBeenCalledWith(undefined, expect.any(Buffer));
     });
 
     it('should request new thumbnail for owl device type', async () => {
       const imageData = new ArrayBuffer(512);
-      mockApi.requestOwlThumbnail.mockResolvedValue({ command_id: 456 });
+      mockApi.requestThumbnail.mockResolvedValue({ command_id: 456 });
       mockApi.pollCommand.mockResolvedValue({});
       mockFetch.mockResolvedValue({
         ok: true,
@@ -133,13 +129,13 @@ describe('BlinkCameraSource', () => {
 
       await source.handleSnapshotRequest(request, callback);
 
-      expect(mockApi.requestOwlThumbnail).toHaveBeenCalledWith(12345, 67890);
+      expect(mockApi.requestThumbnail).toHaveBeenCalledWith('owl', 12345, 67890);
       expect(callback).toHaveBeenCalledWith(undefined, expect.any(Buffer));
     });
 
     it('should request new thumbnail for doorbell device type', async () => {
       const imageData = new ArrayBuffer(2048);
-      mockApi.requestDoorbellThumbnail.mockResolvedValue({ command_id: 789 });
+      mockApi.requestThumbnail.mockResolvedValue({ command_id: 789 });
       mockApi.pollCommand.mockResolvedValue({});
       mockFetch.mockResolvedValue({
         ok: true,
@@ -156,13 +152,13 @@ describe('BlinkCameraSource', () => {
 
       await source.handleSnapshotRequest(request, callback);
 
-      expect(mockApi.requestDoorbellThumbnail).toHaveBeenCalledWith(12345, 67890);
+      expect(mockApi.requestThumbnail).toHaveBeenCalledWith('doorbell', 12345, 67890);
       expect(callback).toHaveBeenCalledWith(undefined, expect.any(Buffer));
     });
 
     it('should fallback to existing thumbnail URL when thumbnail request fails', async () => {
       const imageData = new ArrayBuffer(256);
-      mockApi.requestCameraThumbnail.mockRejectedValue(new Error('API error'));
+      mockApi.requestThumbnail.mockRejectedValue(new Error('API error'));
       mockFetch.mockResolvedValue({
         ok: true,
         arrayBuffer: jest.fn().mockResolvedValue(imageData),
@@ -188,7 +184,7 @@ describe('BlinkCameraSource', () => {
     });
 
     it('should callback with error when fetch fails', async () => {
-      mockApi.requestCameraThumbnail.mockResolvedValue({ command_id: 123 });
+      mockApi.requestThumbnail.mockResolvedValue({ command_id: 123 });
       mockApi.pollCommand.mockResolvedValue({});
       mockFetch.mockResolvedValue({
         ok: false,
@@ -210,7 +206,7 @@ describe('BlinkCameraSource', () => {
     });
 
     it('should callback with error when no thumbnail URL available', async () => {
-      mockApi.requestCameraThumbnail.mockRejectedValue(new Error('API error'));
+      mockApi.requestThumbnail.mockRejectedValue(new Error('API error'));
       getThumbnailUrl.mockReturnValue(undefined);
 
       const source = new BlinkCameraSource(
@@ -227,7 +223,7 @@ describe('BlinkCameraSource', () => {
     });
 
     it('should timeout snapshot fetch when Blink media URL hangs', async () => {
-      mockApi.requestCameraThumbnail.mockResolvedValue({ command_id: 123 });
+      mockApi.requestThumbnail.mockResolvedValue({ command_id: 123 });
       mockApi.pollCommand.mockResolvedValue({});
       mockFetch.mockImplementation((_url: string, options: RequestInit = {}) => {
         return new Promise((_resolve, reject) => {
@@ -458,7 +454,7 @@ describe('BlinkCameraSource', () => {
     });
 
     it('sanitizes liveview URL query parameters in startup logs', async () => {
-      mockApi.startCameraLiveview.mockResolvedValueOnce({
+      mockApi.startLiveview.mockResolvedValueOnce({
         server: 'rtsps://127.0.0.1:554/live?token=super-secret-token&expires=123456',
         command_id: 202,
         polling_interval: 5,

@@ -38,6 +38,7 @@ import {
 } from './urls';
 import { generatePKCEPair, generateOAuthState } from './oauth-pkce';
 import { redactValue, sanitizeForLog, nullLogger, debugLog } from './log-sanitizer';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from './http';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
@@ -45,7 +46,6 @@ import { URL } from 'node:url';
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
-const DEFAULT_AUTH_TIMEOUT_MS = 15000;
 
 class FileAuthStorage implements BlinkAuthStorage {
   constructor(private readonly filePath: string) {}
@@ -192,7 +192,7 @@ export class BlinkAuth {
   constructor(private readonly config: BlinkConfig) {
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
-    this.authRequestTimeoutMs = Math.max(1000, config.requestTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS);
+    this.authRequestTimeoutMs = Math.max(1000, config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     if (config.authStorage) {
       this.storage = config.authStorage;
     } else if (config.authStoragePath) {
