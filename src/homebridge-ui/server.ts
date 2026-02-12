@@ -15,8 +15,9 @@ import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-ut
 import { Blink2FARequiredError, BlinkAuthenticationError } from '../blink-api/auth';
 import { BlinkApi } from '../blink-api/client';
 import { BlinkConfig, BlinkLogger } from '../types';
-import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import { resolveUiAuthStoragePath } from './auth-storage';
 
 interface LoginRequest {
   username: string;
@@ -139,10 +140,8 @@ class BlinkUiServer extends HomebridgePluginUiServer {
   /**
    * Get the auth storage path for this Homebridge instance
    */
-  private getAuthStoragePath(): string {
-    // Use a sibling directory to Homebridge storage for auth persistence
-    const storagePath = this.homebridgeStoragePath ?? '.';
-    return path.join(storagePath, '..', 'blink-auth', 'auth-state.json');
+  private getAuthStoragePath(email: string, hardwareId: string): string {
+    return resolveUiAuthStoragePath(this.homebridgeStoragePath ?? '.', email, hardwareId);
   }
 
   /**
@@ -179,13 +178,15 @@ class BlinkUiServer extends HomebridgePluginUiServer {
       throw new RequestError('Username and password are required', { status: 400 });
     }
 
+    const resolvedDeviceId = deviceId || this.generateDeviceId();
+
     // Build config for Blink API
     const config: BlinkConfig = {
       email: username,
       password: password,
-      hardwareId: deviceId || this.generateDeviceId(),
+      hardwareId: resolvedDeviceId,
       tier: tier || 'prod',
-      authStoragePath: this.getAuthStoragePath(),
+      authStoragePath: this.getAuthStoragePath(username, resolvedDeviceId),
       debugAuth: true,
       logger: new UiLogger(this),
     };
@@ -373,6 +374,18 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Clear authentication state
    */
   async handleLogout(): Promise<{ success: boolean }> {
+    const authStoragePath = this.pendingConfig?.authStoragePath;
+    if (authStoragePath) {
+      try {
+        await fs.unlink(authStoragePath);
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== 'ENOENT') {
+          this.logDebug(`Failed to remove auth state file: ${(error as Error).message}`);
+        }
+      }
+    }
+
     this.blinkApi = null;
     this.pendingConfig = null;
     this.authStatus = { authenticated: false };
@@ -389,12 +402,13 @@ class BlinkUiServer extends HomebridgePluginUiServer {
       throw new RequestError('Username and password are required', { status: 400 });
     }
 
+    const resolvedDeviceId = deviceId || this.generateDeviceId();
     const config: BlinkConfig = {
       email: username,
       password: password,
-      hardwareId: deviceId || this.generateDeviceId(),
+      hardwareId: resolvedDeviceId,
       tier: tier || 'prod',
-      authStoragePath: this.getAuthStoragePath(),
+      authStoragePath: this.getAuthStoragePath(username, resolvedDeviceId),
       logger: new UiLogger(this),
     };
 

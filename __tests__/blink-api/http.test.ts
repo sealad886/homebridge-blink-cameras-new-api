@@ -100,4 +100,19 @@ describe('BlinkHttp', () => {
     await expect(http.get('v1/fail')).rejects.toThrow('Blink API GET v1/fail failed: 400 Bad Request');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('aborts hung requests after timeout and retries a bounded number of times', async () => {
+    const auth = mockAuth();
+    const http = new BlinkHttp(auth, { ...mockConfig, requestTimeoutMs: 50 });
+    (fetch as jest.Mock).mockImplementation((_url: string, options: RequestInit = {}) => {
+      return new Promise((_resolve, reject) => {
+        options.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+
+    await expect(http.get('v1/hangs')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
 });

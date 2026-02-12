@@ -104,6 +104,15 @@
         "default": false,
         "required": false
       },
+      "requestTimeoutMs": {
+        "title": "API Request Timeout (ms)",
+        "description": "Timeout for Blink REST API calls and retries. Increase on slow networks, decrease for faster failure detection.",
+        "type": "integer",
+        "default": 15000,
+        "minimum": 1000,
+        "maximum": 60000,
+        "required": false
+      },
       "persistAuth": {
         "title": "Persist Auth Tokens",
         "description": "Persist OAuth tokens across restarts to avoid repeated logins and verification prompts.",
@@ -366,6 +375,7 @@
       "items": [
         "tier",
         "debugAuth",
+        "requestTimeoutMs",
         "persistAuth",
         "trustDevice"
       ]

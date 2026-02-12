@@ -11,6 +11,7 @@ import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod } from '../types';
 import { randomUUID } from 'node:crypto';
+import { setTimeout, clearTimeout } from 'node:timers';
 
 /**
  * Standard headers for all Blink API requests
@@ -21,6 +22,7 @@ import { randomUUID } from 'node:crypto';
  */
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
 /**
  * Null logger that discards all output
@@ -100,6 +102,7 @@ export class BlinkHttp {
   private baseUrl: string;
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     private readonly auth: BlinkAuth,
@@ -109,6 +112,7 @@ export class BlinkHttp {
     this.baseUrl = baseUrlOverride ?? getRestBaseUrl(config);
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
+    this.requestTimeoutMs = Math.max(1000, config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   }
 
   setBaseUrl(baseUrl: string): void {
@@ -170,12 +174,34 @@ export class BlinkHttp {
       this.logDebug(`[${requestId}] ${method} ${url} (retry attempt ${attempt})`);
     }
 
+    const controller = new globalThis.AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+
+    let response: Awaited<ReturnType<typeof fetch>>;
     const startTime = Date.now();
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      const elapsed = Date.now() - startTime;
+      const aborted = (error as Error).name === 'AbortError';
+      if (aborted) {
+        this.logDebug(`[${requestId}] Request timed out after ${this.requestTimeoutMs}ms (${elapsed}ms elapsed)`);
+        if (attempt < 2) {
+          const delay = 500 * (attempt + 1);
+          this.logDebug(`[${requestId}] Retrying timed-out request in ${delay}ms...`);
+          await sleep(delay);
+          return this.request<T>(method, path, body, attempt + 1);
+        }
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
     const elapsed = Date.now() - startTime;
 
     this.logDebug(`[${requestId}] Response: ${response.status} ${response.statusText} (${elapsed}ms)`);

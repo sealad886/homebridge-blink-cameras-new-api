@@ -24,11 +24,11 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 
 - ✅ **Proper HomeKit SecuritySystem** - Arm/disarm networks using the Security System tile in Home app
 - ✅ **Motion Detection** - Receive motion alerts in HomeKit when your cameras detect motion
-- ✅ **Doorbell Support** - Ring notifications appear as HomeKit doorbell events
+- ✅ **Doorbell Support** - Ring notifications are emitted when Blink media events include doorbell press/ring metadata
 - ✅ **Status Polling** - Automatically syncs device states with Blink cloud
 - ✅ **OAuth Authentication** - Modern OAuth 2.0 with automatic token refresh
 - ✅ **2FA Support** - Works with Blink accounts that have two-factor authentication enabled
-- ✅ **Retry Logic** - Automatic retry with exponential backoff for rate limits and server errors
+- ✅ **Retry Logic + Timeouts** - Automatic retry with backoff for rate limits/server errors and bounded request timeouts
 
 ## Requirements
 
@@ -103,6 +103,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` (auto-detected tiers from Blink are honored for routing) |
 | `sharedTier` | No | - | Override shared REST tier (defaults to `tier`) |
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
+| `requestTimeoutMs` | No | `15000` | Timeout for Blink REST requests (milliseconds, min 1000) |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
@@ -142,6 +143,7 @@ Tips:
 
 - Ensure `deviceId` is unique per Homebridge instance.
 - Leave `trustDevice: true` so future sessions are approved automatically.
+- Persisted auth state is keyed by `username + deviceId`; changing either value creates a new auth session file.
 - If you keep seeing verification prompts, confirm that `persistAuth` is enabled and the Homebridge process can write to the auth directory.
 
 ## Live Streaming (FFmpeg)

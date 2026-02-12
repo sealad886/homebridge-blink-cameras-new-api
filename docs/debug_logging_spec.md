@@ -27,7 +27,7 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 
 - Log OAuth grant type, URL, and redacted identifiers.
 - Log token expiry timing and refresh attempts.
-- On failure, emit `BlinkAuthenticationError.toLogString()` details (status, error code, server message, update/2FA hints).
+- On failure, emit `BlinkAuthenticationError.toLogString()` details (status, error code, server message, update/2FA hints) with sensitive fields redacted.
 
 ## Redaction Rules (Required)
 
@@ -62,5 +62,5 @@ Recommended redaction pattern: show first 3–4 chars and last 3–4 chars, othe
 ## Implementation Pointers
 
 - HTTP redaction: `src/blink-api/http.ts` (`redactHeaders`).
-- Auth redaction: `src/blink-api/auth.ts` (`redact`, `formatHeadersForLog`).
+- Auth redaction: `src/blink-api/auth.ts` (`redact`, `sanitizeForLog`).
 - Error formatting: `BlinkHttpError.toLogString`, `BlinkAuthenticationError.toLogString`.

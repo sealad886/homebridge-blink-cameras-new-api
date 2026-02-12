@@ -298,6 +298,13 @@ export interface BlinkMediaClip {
   viewed?: boolean;
   deleted?: boolean;
   device_type?: 'camera' | 'owl' | 'doorbell';
+  type?: string;
+  event_type?: string;
+  alert_type?: string;
+  notification_type?: string;
+  category?: string;
+  doorbell_press?: boolean;
+  is_doorbell_press?: boolean;
 }
 
 /**
@@ -402,6 +409,8 @@ export interface BlinkConfig {
   authStorage?: BlinkAuthStorage;
   tier?: string;
   sharedTier?: string;
+  /** Request timeout in milliseconds for Blink REST calls (default: 15000) */
+  requestTimeoutMs?: number;
   /** Enable verbose auth diagnostics */
   debugAuth?: boolean;
   /** Logger for diagnostic output */

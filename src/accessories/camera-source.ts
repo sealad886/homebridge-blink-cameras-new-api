@@ -26,7 +26,7 @@ import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
-import { setInterval, clearInterval, setTimeout } from 'node:timers';
+import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
@@ -51,6 +51,8 @@ export interface BlinkCameraStreamingConfig {
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds (0 = always request fresh, default 60) */
   snapshotCacheTTL?: number;
+  /** Snapshot fetch timeout in milliseconds (default: 10000) */
+  snapshotFetchTimeoutMs?: number;
 }
 
 export type BlinkCameraStreamingConfigInput = Omit<
@@ -75,6 +77,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   },
   video: {},
   snapshotCacheTTL: 60,
+  snapshotFetchTimeoutMs: 10000,
 };
 
 export const resolveStreamingConfig = (
@@ -93,6 +96,7 @@ export const resolveStreamingConfig = (
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
+    snapshotFetchTimeoutMs: config?.snapshotFetchTimeoutMs ?? DEFAULT_STREAMING_CONFIG.snapshotFetchTimeoutMs,
     audio: {
       enabled: audio.enabled ?? DEFAULT_STREAMING_CONFIG.audio.enabled,
       twoWay,
@@ -229,6 +233,7 @@ const buildRtpUrl = (
 const toSrtpParams = (srtp: Buffer): string => srtp.toString('base64');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const SNAPSHOT_FETCH_TIMEOUT_MS = 10000;
 
 export class BlinkCameraSource implements CameraStreamingDelegate {
   private readonly streamingConfig: BlinkCameraStreamingConfig;
@@ -290,9 +295,18 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         : new URL(url, this.api.getSharedRestRootUrl()).toString();
 
       // Fetch the thumbnail image with auth headers
-      const response = await fetch(fullUrl, {
-        headers: this.api.getAuthHeaders(),
-      });
+      const snapshotTimeoutMs = this.streamingConfig.snapshotFetchTimeoutMs ?? SNAPSHOT_FETCH_TIMEOUT_MS;
+      const controller = new globalThis.AbortController();
+      const timeout = setTimeout(() => controller.abort(), snapshotTimeoutMs);
+      let response: Awaited<ReturnType<typeof fetch>>;
+      try {
+        response = await fetch(fullUrl, {
+          headers: this.api.getAuthHeaders(),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       if (!response.ok) {
         throw new Error(`Failed to fetch thumbnail: ${response.status}`);
       }
@@ -306,6 +320,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       this.log(`Snapshot returned (${buffer.length} bytes)`);
       callback(undefined, buffer);
     } catch (error) {
+      if ((error as Error).name === 'AbortError') {
+        const timeoutMs = this.streamingConfig.snapshotFetchTimeoutMs ?? SNAPSHOT_FETCH_TIMEOUT_MS;
+        const timeoutError = new Error(`Snapshot fetch timed out after ${timeoutMs}ms`);
+        this.log(`Snapshot error: ${timeoutError.message}`);
+        callback(timeoutError);
+        return;
+      }
       this.log(`Snapshot error: ${error}`);
       callback(error as Error);
     }
@@ -367,10 +388,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     request: PrepareStreamRequest,
     callback: PrepareStreamCallback,
   ): Promise<void> {
+    const allocatedPorts: number[] = [];
+    let committed = false;
     try {
       const sessionId = request.sessionID;
       const videoSSRC = randomBytes(4).readUInt32BE(0);
       const localVideoPort = await allocatePort();
+      allocatedPorts.push(localVideoPort);
+      const localVideoRtcpPort = await allocatePort();
+      allocatedPorts.push(localVideoRtcpPort);
 
       const session: PendingStreamSession = {
         address: request.targetAddress,
@@ -378,16 +404,21 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         sessionId,
         videoPort: request.video.port,
         localVideoPort,
-        localVideoRtcpPort: await allocatePort(),
+        localVideoRtcpPort,
         videoCryptoSuite: request.video.srtpCryptoSuite,
         videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
         videoSSRC,
       };
 
       if (this.streamingConfig.audio.enabled) {
+        if (!request.audio) {
+          throw new Error('Audio is enabled but audio stream parameters are missing');
+        }
         const audioSSRC = randomBytes(4).readUInt32BE(0);
         const localAudioPort = await allocatePort();
+        allocatedPorts.push(localAudioPort);
         const localAudioRtcpPort = await allocatePort();
+        allocatedPorts.push(localAudioRtcpPort);
         session.audioPort = request.audio.port;
         session.localAudioPort = localAudioPort;
         session.localAudioRtcpPort = localAudioRtcpPort;
@@ -397,6 +428,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       this.pendingSessions.set(sessionId, session);
+      committed = true;
 
       const response: PrepareStreamResponse = {
         video: {
@@ -425,6 +457,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       );
       callback(undefined, response);
     } catch (error) {
+      if (!committed) {
+        for (const port of allocatedPorts) {
+          releasePort(port);
+        }
+      }
       this.log(`Stream preparation failed: ${error}`);
       callback(error as Error);
     }
@@ -462,10 +499,19 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     request: Extract<StreamingRequest, { type: 'start' }>,
     callback: StreamRequestCallback,
   ): Promise<void> {
+    let callbackCompleted = false;
+    const completeCallback = (error?: Error): void => {
+      if (callbackCompleted) {
+        return;
+      }
+      callbackCompleted = true;
+      callback(error);
+    };
+
     const pending = this.pendingSessions.get(sessionId);
     if (!pending) {
       this.log(`No pending session for ${sessionId}`);
-      callback(new Error('No pending streaming session'));
+      completeCallback(new Error('No pending streaming session'));
       return;
     }
 
@@ -543,7 +589,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       // HomeKit will then wait for actual video frames on the RTP socket.
       ffmpeg.on('spawn', () => {
         this.log(`FFmpeg spawned for session ${sessionId}, signaling stream ready`);
-        callback();
+        completeCallback();
       });
 
       ffmpeg.stderr.on('data', (data) => {
@@ -554,8 +600,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       ffmpeg.on('error', (error) => {
         this.log(`FFmpeg failed to start for session ${sessionId}: ${error.message}`);
-        // Note: If spawn failed, the spawn event won't fire so callback wasn't called yet.
-        // We rely on HomeKit to handle the error gracefully when RTP data doesn't arrive.
+        void this.stopStream(sessionId);
+        completeCallback(error);
       });
 
       ffmpeg.on('exit', (code, signal) => {
@@ -595,7 +641,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     } catch (error) {
       this.log(`Failed to start stream ${sessionId}: ${error}`);
       await this.stopStream(sessionId);
-      callback(error as Error);
+      completeCallback(error as Error);
     }
   }
 
@@ -1128,6 +1174,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
   }
 }
+
+// Test-only helpers for verifying allocation cleanup behavior.
+export const __cameraSourceTestUtils = {
+  getUsedPortCount: (): number => usedPorts.size,
+};
 
 /**
  * Create CameraController options for snapshot/streaming support.

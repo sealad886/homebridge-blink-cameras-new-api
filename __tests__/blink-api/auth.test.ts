@@ -1,4 +1,4 @@
-import { BlinkAuth, Blink2FARequiredError } from '../../src/blink-api/auth';
+import { BlinkAuth, Blink2FARequiredError, BlinkAuthenticationError } from '../../src/blink-api/auth';
 import { BlinkConfig } from '../../src/types';
 import { URL } from 'node:url';
 
@@ -366,6 +366,81 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     it('throws when refreshing without prior login', async () => {
       const auth = new BlinkAuth(baseConfig);
       await expect(auth.refreshTokens()).rejects.toThrow('Cannot refresh token before login');
+    });
+
+    it('redacts sensitive fields in auth error logs', () => {
+      const error = new BlinkAuthenticationError('Auth failed', {
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {
+          Authorization: 'Bearer super-secret-access-token',
+          'TOKEN-AUTH': 'sensitive-token-auth-value',
+        },
+        responseBody: {
+          access_token: 'sensitive-access-token',
+          refresh_token: 'sensitive-refresh-token',
+          password: 'plain-password',
+          email: 'user@example.com',
+          nested: {
+            phone: '+1-555-1234',
+          },
+        },
+      });
+
+      const logString = error.toLogString();
+      expect(logString).not.toContain('super-secret-access-token');
+      expect(logString).not.toContain('sensitive-token-auth-value');
+      expect(logString).not.toContain('sensitive-access-token');
+      expect(logString).not.toContain('sensitive-refresh-token');
+      expect(logString).not.toContain('plain-password');
+      expect(logString).not.toContain('user@example.com');
+      expect(logString).not.toContain('+1-555-1234');
+    });
+  });
+
+  describe('state compatibility and concurrency', () => {
+    it('ignores incompatible persisted state and forces fresh login', async () => {
+      const storage = {
+        load: jest.fn().mockResolvedValue({
+          accessToken: 'persisted-token',
+          refreshToken: 'persisted-refresh',
+          tokenExpiry: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+          email: 'different@example.com',
+          hardwareId: 'hardware-id',
+        }),
+        save: jest.fn().mockResolvedValue(undefined),
+        clear: jest.fn().mockResolvedValue(undefined),
+      };
+
+      const auth = new BlinkAuth({
+        ...baseConfig,
+        email: 'user@example.com',
+        authStorage: storage,
+      });
+
+      const login = jest.spyOn(auth, 'login').mockResolvedValue(undefined);
+
+      await auth.ensureValidToken();
+
+      expect(storage.clear).toHaveBeenCalledTimes(1);
+      expect(login).toHaveBeenCalledTimes(1);
+    });
+
+    it('coalesces concurrent ensureValidToken calls into one login', async () => {
+      const auth = new BlinkAuth(baseConfig);
+      const login = jest.spyOn(auth, 'login').mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        (auth as unknown as { accessToken: string }).accessToken = 'token';
+        (auth as unknown as { tokenExpiry: Date }).tokenExpiry = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      });
+
+      await Promise.all([
+        auth.ensureValidToken(),
+        auth.ensureValidToken(),
+        auth.ensureValidToken(),
+      ]);
+
+      expect(login).toHaveBeenCalledTimes(1);
     });
   });
 });

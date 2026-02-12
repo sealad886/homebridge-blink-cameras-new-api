@@ -90,6 +90,30 @@ function redact(value: string | undefined, showChars = 4): string {
   return `${value.slice(0, showChars)}...${value.slice(-showChars)}`;
 }
 
+const SENSITIVE_LOG_KEY = /(authorization|token-auth|access[_-]?token|refresh[_-]?token|password|hardware[_-]?id|cookie|2fa|pin|email|phone)/i;
+
+function sanitizeForLog(value: unknown, keyHint?: string): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeForLog(entry, keyHint));
+  }
+
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, sanitizeForLog(entry, key)]),
+    );
+  }
+
+  if (typeof value === 'string' && keyHint && SENSITIVE_LOG_KEY.test(keyHint)) {
+    return redact(value, 3);
+  }
+
+  return value;
+}
+
 interface BlinkAuthErrorDetail {
   status: number;
   statusText: string;
@@ -140,13 +164,15 @@ export class BlinkAuthenticationError extends Error {
     }
 
     lines.push(`\nResponse Headers:`);
-    for (const [key, value] of Object.entries(this.details.headers)) {
+    const headers = sanitizeForLog(this.details.headers) as Record<string, string>;
+    for (const [key, value] of Object.entries(headers)) {
       lines.push(`  ${key}: ${value}`);
     }
 
     if (this.details.responseBody) {
       lines.push(`\nResponse Body:`);
-      lines.push(JSON.stringify(this.details.responseBody, null, 2));
+      const redactedBody = sanitizeForLog(this.details.responseBody);
+      lines.push(JSON.stringify(redactedBody, null, 2));
     }
 
     lines.push(`${'='.repeat(60)}\n`);
@@ -189,6 +215,7 @@ export class BlinkAuth {
   private readonly storage?: BlinkAuthStorage;
   private stateLoaded = false;
   private stateLoadPromise: Promise<void> | null = null;
+  private tokenEnsurePromise: Promise<void> | null = null;
 
   // OAuth v2 session state (persisted for 2FA flow)
   private oauthSession: BlinkOAuthSessionState | null = null;
@@ -221,6 +248,33 @@ export class BlinkAuth {
     this.stateLoadPromise = null;
   }
 
+  private isPersistedStateCompatible(state: BlinkAuthState): boolean {
+    const persistedEmail = state.email?.trim().toLowerCase();
+    const configEmail = this.config.email?.trim().toLowerCase();
+    if (persistedEmail && configEmail && persistedEmail !== configEmail) {
+      return false;
+    }
+
+    const persistedHardwareId = state.hardwareId?.trim().toLowerCase();
+    const configHardwareId = this.config.hardwareId?.trim().toLowerCase();
+    if (persistedHardwareId && configHardwareId && persistedHardwareId !== configHardwareId) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private async clearPersistedStateOnMismatch(): Promise<void> {
+    if (!this.storage) {
+      return;
+    }
+    try {
+      await this.storage.clear();
+    } catch (error) {
+      this.log.warn(`Failed to clear incompatible auth state: ${(error as Error).message}`);
+    }
+  }
+
   private async loadStateFromStorage(): Promise<void> {
     if (!this.storage) {
       this.stateLoaded = true;
@@ -229,6 +283,11 @@ export class BlinkAuth {
     try {
       const state = await this.storage.load();
       if (state) {
+        if (!this.isPersistedStateCompatible(state)) {
+          this.log.warn('Ignoring persisted auth state due to email/device mismatch');
+          await this.clearPersistedStateOnMismatch();
+          return;
+        }
         this.applyState(state);
         this.logDebug('Loaded persisted auth state');
       }
@@ -986,7 +1045,7 @@ export class BlinkAuth {
     throw error;
   }
 
-  async ensureValidToken(): Promise<void> {
+  private async ensureValidTokenInternal(): Promise<void> {
     await this.ensureStateLoaded();
     if (!this.accessToken) {
       this.logDebug('No access token, initiating login...');
@@ -1003,6 +1062,19 @@ export class BlinkAuth {
     } else {
       this.logDebug(`Access token valid until ${this.tokenExpiry?.toISOString()}`);
     }
+  }
+
+  async ensureValidToken(): Promise<void> {
+    if (this.tokenEnsurePromise) {
+      return this.tokenEnsurePromise;
+    }
+
+    this.tokenEnsurePromise = this.ensureValidTokenInternal()
+      .finally(() => {
+        this.tokenEnsurePromise = null;
+      });
+
+    return this.tokenEnsurePromise;
   }
 
   isTokenExpired(): boolean {

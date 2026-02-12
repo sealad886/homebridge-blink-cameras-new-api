@@ -61,6 +61,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   trustDevice?: boolean;
   tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
   sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
+  requestTimeoutMs?: number;
   pollInterval?: number;
   motionTimeout?: number;
   enableMotionPolling?: boolean;
@@ -166,6 +167,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       tier: this.config.tier,
       sharedTier: this.config.sharedTier,
       debugAuth: this.config.debugAuth,
+      requestTimeoutMs: this.config.requestTimeoutMs,
       logger: this.log,
     });
 
@@ -763,10 +765,38 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // Try doorbell
     const doorbellHandler = this.doorbellAccessories.get(clip.camera_id);
     if (doorbellHandler) {
+      if (this.isDoorbellRingClip(clip)) {
+        doorbellHandler.triggerRing();
+      }
       doorbellHandler.triggerMotion(this.motionTimeout);
       return;
     }
 
     this.log.debug(`Motion clip from unknown device: ${clip.camera_id}`);
+  }
+
+  private isDoorbellRingClip(clip: BlinkMediaClip): boolean {
+    if (clip.doorbell_press === true || clip.is_doorbell_press === true) {
+      return true;
+    }
+
+    const indicators = [
+      clip.type,
+      clip.event_type,
+      clip.alert_type,
+      clip.notification_type,
+      clip.category,
+    ]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      .map((value) => value.toLowerCase());
+
+    if (indicators.length === 0) {
+      return false;
+    }
+
+    const eventText = indicators.join(' ');
+    const mentionsDoorbell = eventText.includes('doorbell');
+    const mentionsRing = eventText.includes('ring') || eventText.includes('press');
+    return mentionsDoorbell && mentionsRing;
   }
 }
