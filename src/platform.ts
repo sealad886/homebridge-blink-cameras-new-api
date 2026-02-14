@@ -21,12 +21,8 @@ import {
 } from 'homebridge';
 import { BlinkApi } from './blink-api';
 import {
-  BlinkCamera,
-  BlinkDoorbell,
   BlinkHomescreen,
   BlinkMediaClip,
-  BlinkNetwork,
-  BlinkOwl,
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
@@ -320,7 +316,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     for (const network of homescreen.networks) {
       if (!this.isDeviceExcluded(network)) {
-        this.registerNetwork(network);
+        this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
       } else {
         excludedCount++;
       }
@@ -328,7 +324,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     for (const camera of homescreen.cameras) {
       if (!this.isDeviceExcluded(camera)) {
-        this.registerCamera(camera);
+        this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
       } else {
         excludedCount++;
       }
@@ -336,7 +332,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     for (const doorbell of homescreen.doorbells) {
       if (!this.isDeviceExcluded(doorbell)) {
-        this.registerDoorbell(doorbell);
+        this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
       } else {
         excludedCount++;
       }
@@ -344,7 +340,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     for (const owl of homescreen.owls) {
       if (!this.isDeviceExcluded(owl)) {
-        this.registerOwl(owl);
+        this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
       } else {
         excludedCount++;
       }
@@ -359,91 +355,31 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     );
   }
 
-  private registerNetwork(network: BlinkNetwork): void {
-    const uuid = this.api.hap.uuid.generate(`blink-network-${network.id}`);
+  private registerDevice<TDevice extends { id: number; name: string; serial?: string }, THandler>(
+    device: TDevice,
+    uuidPrefix: string,
+    deviceLabel: string,
+    accessoryMap: Map<number, THandler>,
+    HandlerClass: new (platform: BlinkCamerasPlatform, accessory: PlatformAccessory, device: TDevice) => THandler,
+  ): void {
+    const uuid = this.api.hap.uuid.generate(`${uuidPrefix}${device.id}`);
     const existing = this.accessories.find((acc) => acc.UUID === uuid);
-    const displayName = this.getDeviceDisplayName(network);
+    const displayName = this.getDeviceDisplayName(device);
 
     if (existing) {
       existing.displayName = displayName;
-      existing.context.device = network;
-      const handler = new NetworkAccessory(this, existing, network);
-      this.networkAccessories.set(network.id, handler);
-      this.log.info('Restored Blink network from cache:', displayName);
+      existing.context.device = device;
+      const handler = new HandlerClass(this, existing, device);
+      accessoryMap.set(device.id, handler);
+      this.log.info(`Restored Blink ${deviceLabel} from cache:`, displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
-      accessory.context.device = network;
-      const handler = new NetworkAccessory(this, accessory, network);
-      this.networkAccessories.set(network.id, handler);
+      accessory.context.device = device;
+      const handler = new HandlerClass(this, accessory, device);
+      accessoryMap.set(device.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
-      this.log.info('Registered new Blink network:', displayName);
-    }
-  }
-
-  private registerCamera(camera: BlinkCamera): void {
-    const uuid = this.api.hap.uuid.generate(`blink-camera-${camera.id}`);
-    const existing = this.accessories.find((acc) => acc.UUID === uuid);
-    const displayName = this.getDeviceDisplayName(camera);
-
-    if (existing) {
-      existing.displayName = displayName;
-      existing.context.device = camera;
-      const handler = new CameraAccessory(this, existing, camera);
-      this.cameraAccessories.set(camera.id, handler);
-      this.log.info('Restored Blink camera from cache:', displayName);
-    } else {
-      const accessory = new this.api.platformAccessory(displayName, uuid);
-      accessory.context.device = camera;
-      const handler = new CameraAccessory(this, accessory, camera);
-      this.cameraAccessories.set(camera.id, handler);
-      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.accessories.push(accessory);
-      this.log.info('Registered new Blink camera:', displayName);
-    }
-  }
-
-  private registerDoorbell(doorbell: BlinkDoorbell): void {
-    const uuid = this.api.hap.uuid.generate(`blink-doorbell-${doorbell.id}`);
-    const existing = this.accessories.find((acc) => acc.UUID === uuid);
-    const displayName = this.getDeviceDisplayName(doorbell);
-
-    if (existing) {
-      existing.displayName = displayName;
-      existing.context.device = doorbell;
-      const handler = new DoorbellAccessory(this, existing, doorbell);
-      this.doorbellAccessories.set(doorbell.id, handler);
-      this.log.info('Restored Blink doorbell from cache:', displayName);
-    } else {
-      const accessory = new this.api.platformAccessory(displayName, uuid);
-      accessory.context.device = doorbell;
-      const handler = new DoorbellAccessory(this, accessory, doorbell);
-      this.doorbellAccessories.set(doorbell.id, handler);
-      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.accessories.push(accessory);
-      this.log.info('Registered new Blink doorbell:', displayName);
-    }
-  }
-
-  private registerOwl(owl: BlinkOwl): void {
-    const uuid = this.api.hap.uuid.generate(`blink-owl-${owl.id}`);
-    const existing = this.accessories.find((acc) => acc.UUID === uuid);
-    const displayName = this.getDeviceDisplayName(owl);
-
-    if (existing) {
-      existing.displayName = displayName;
-      existing.context.device = owl;
-      const handler = new OwlAccessory(this, existing, owl);
-      this.owlAccessories.set(owl.id, handler);
-      this.log.info('Restored Blink owl from cache:', displayName);
-    } else {
-      const accessory = new this.api.platformAccessory(displayName, uuid);
-      accessory.context.device = owl;
-      const handler = new OwlAccessory(this, accessory, owl);
-      this.owlAccessories.set(owl.id, handler);
-      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.accessories.push(accessory);
-      this.log.info('Registered new Blink owl:', displayName);
+      this.log.info(`Registered new Blink ${deviceLabel}:`, displayName);
     }
   }
 

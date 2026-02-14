@@ -3,6 +3,7 @@ import { BlinkCamerasPlatform } from '../src/platform';
 import { BlinkApi } from '../src/blink-api';
 import { createApi, createLogger } from './helpers/homebridge';
 import { BlinkHomescreen } from '../src/types';
+import { NetworkAccessory } from '../src/accessories';
 
 jest.mock('../src/blink-api');
 
@@ -100,7 +101,8 @@ describe('BlinkCamerasPlatform', () => {
     );
     platform.accessories.push(cachedAccessory);
 
-    (platform as unknown as { registerNetwork: (net: typeof network) => void }).registerNetwork(network);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (platform as any).registerDevice(network, 'blink-network-', 'network', (platform as any).networkAccessories, NetworkAccessory);
 
     expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
     // Handler is stored in Map, not in context (to avoid circular JSON serialization)
