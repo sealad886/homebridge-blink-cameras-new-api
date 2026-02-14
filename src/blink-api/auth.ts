@@ -884,6 +884,13 @@ export class BlinkAuth {
    * @throws Blink2FARequiredError if 2FA verification is needed
    */
   async login(): Promise<void> {
+    if (!this.config.email || !this.config.password) {
+      throw new Error(
+        'No credentials available for OAuth login. '
+        + 'Authenticate via the plugin Custom UI or add username/password to config.',
+      );
+    }
+
     this.logDebug('Starting OAuth 2.0 Authorization Code Flow with PKCE...');
     this.logDebug(`  Email: ${redact(this.config.email, 3)}`);
     this.logDebug(`  Client ID: ${OAUTH_CLIENT_ID} (iOS)`);
