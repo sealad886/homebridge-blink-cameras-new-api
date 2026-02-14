@@ -42,6 +42,17 @@ interface DeviceSettings {
   enableMotion?: boolean;
 }
 
+interface DeviceNameOverride {
+  deviceIdentifier: string;
+  customName: string;
+}
+
+interface DeviceSettingOverride {
+  deviceIdentifier: string;
+  motionTimeout?: number;
+  enableMotion?: boolean;
+}
+
 interface BlinkPlatformConfig extends PlatformConfig {
   username?: string;
   password?: string;
@@ -58,8 +69,12 @@ interface BlinkPlatformConfig extends PlatformConfig {
   motionTimeout?: number;
   enableMotionPolling?: boolean;
   excludeDevices?: string[];
+  /** @deprecated Use deviceNameOverrides instead */
   deviceNames?: Record<string, string>;
+  /** @deprecated Use deviceSettingOverrides instead */
   deviceSettings?: Record<string, DeviceSettings>;
+  deviceNameOverrides?: DeviceNameOverride[];
+  deviceSettingOverrides?: DeviceSettingOverride[];
   enableStreaming?: boolean;
   ffmpegPath?: string;
   ffmpegDebug?: boolean;
@@ -73,7 +88,6 @@ interface BlinkPlatformConfig extends PlatformConfig {
   debugAuth?: boolean;
   authLocked?: boolean;
   debugStreamPath?: string;
-  /** Snapshot cache TTL in seconds. Set to 0 to always request fresh snapshots. Default: 60 */
   snapshotCacheTTL?: number;
 }
 
@@ -227,6 +241,24 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private getDeviceDisplayName(device: { id: number; name: string; serial?: string }): string {
+    // New array-based overrides (preferred)
+    const overrides = this.config.deviceNameOverrides;
+    if (overrides && Array.isArray(overrides)) {
+      for (const override of overrides) {
+        if (!override.deviceIdentifier || !override.customName) {
+          continue;
+        }
+        if (
+          override.deviceIdentifier === device.name ||
+          override.deviceIdentifier === `${device.id}` ||
+          (device.serial && override.deviceIdentifier === device.serial)
+        ) {
+          return override.customName;
+        }
+      }
+    }
+
+    // Legacy object-based format (backward compatibility)
     const customNames = this.config.deviceNames ?? {};
     if (device.serial && customNames[device.serial]) {
       return customNames[device.serial];
@@ -238,6 +270,25 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   public getDeviceMotionTimeout(device: { id: number; serial?: string }): number {
+    // New array-based overrides (preferred)
+    const overrides = this.config.deviceSettingOverrides;
+    if (overrides && Array.isArray(overrides)) {
+      for (const override of overrides) {
+        if (!override.deviceIdentifier) {
+          continue;
+        }
+        if (
+          override.deviceIdentifier === `${device.id}` ||
+          (device.serial && override.deviceIdentifier === device.serial)
+        ) {
+          if (override.motionTimeout !== undefined) {
+            return override.motionTimeout * 1000;
+          }
+        }
+      }
+    }
+
+    // Legacy object-based format (backward compatibility)
     const settings = this.config.deviceSettings;
     if (settings) {
       const deviceKey = device.serial ?? `${device.id}`;

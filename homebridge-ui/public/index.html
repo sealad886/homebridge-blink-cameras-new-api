@@ -324,9 +324,14 @@
           <p class="text-muted small">
             Your credentials have been saved. You can now configure your camera settings below.
           </p>
-          <button type="button" class="btn btn-outline-primary" id="showSchemaForm">
-            Configure Camera Settings
-          </button>
+          <div class="btn-group-vertical">
+            <button type="button" class="btn btn-outline-primary" id="showSchemaForm">
+              Configure Camera Settings
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="reAuthBtn">
+              Re-authenticate / Enter Verification Code
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -780,15 +785,32 @@
     }
   });
 
+  // Re-authenticate button - takes user back to login wizard
+  document.getElementById('reAuthBtn').addEventListener('click', async () => {
+    // Clear server-side auth state so we get a fresh login
+    try {
+      await homebridge.request('/logout');
+    } catch {
+      // ignore errors - just proceed to login
+    }
+    homebridge.hideSchemaForm();
+    showStep('login');
+  });
+
   // Check for existing auth on load
-  // If already configured (has username), show schema form immediately
-  // The login wizard is only needed for initial setup or re-authentication
+  // Always start by checking auth status and showing appropriate UI
   if (pluginConfig.length > 0 && pluginConfig[0].username) {
-    // Already configured - show schema form by default
-    homebridge.showSchemaForm();
-    
-    // Also check auth status to show appropriate UI state
-    await refreshAuthStatus();
+    // Already configured - check auth status
+    const status = await refreshAuthStatus();
+    if (status?.authenticated) {
+      // Show success view with re-auth option, then show schema form
+      updateAccountDisplay(true, status);
+      showStep('success');
+      homebridge.showSchemaForm();
+    } else {
+      // Config exists but not authenticated - show login wizard for re-auth
+      showStep('login');
+    }
   } else {
     // No config yet - user needs to authenticate first
     const status = await refreshAuthStatus();
