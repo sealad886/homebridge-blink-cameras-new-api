@@ -9,7 +9,7 @@
 import { BlinkAuth } from './auth';
 import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
-import { BlinkConfig, BlinkLogger, HttpMethod } from '../types';
+import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -21,16 +21,6 @@ import { randomUUID } from 'node:crypto';
  */
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Null logger that discards all output
- */
-const nullLogger: BlinkLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-};
 
 /**
  * Redact authorization headers for logging
