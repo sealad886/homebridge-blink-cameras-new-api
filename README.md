@@ -71,6 +71,8 @@ Restart Homebridge after installing.
 
 The plugin provides a full configuration UI. Navigate to Plugins → Settings for @sealad886/homebridge-blink-cameras-new-api.
 
+Authentication is handled exclusively in the custom UI card (**Sign in to Blink**). The schema form intentionally does not expose credential or verification code fields.
+
 ### Manual Configuration
 
 Add a platform entry to your Homebridge `config.json`:
@@ -81,8 +83,6 @@ Add a platform entry to your Homebridge `config.json`:
     {
       "platform": "BlinkCameras",
       "name": "Blink",
-      "username": "you@example.com",
-      "password": "your-blink-password",
       "deviceId": "homebridge-blink-01",
       "persistAuth": true,
       "trustDevice": true,
@@ -103,13 +103,10 @@ Add a platform entry to your Homebridge `config.json`:
 | ------ | -------- | ------- | ----------- |
 | `platform` | Yes | - | Must be `BlinkCameras` |
 | `name` | Yes | `Blink` | Platform name shown in logs |
-| `username` | Yes | - | Your Blink account email |
-| `password` | Yes | - | Your Blink account password |
+| `username` | No* | - | Blink account email (legacy/manual auth fallback) |
+| `password` | No* | - | Blink account password (legacy/manual auth fallback) |
 | `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (hardware_id) |
 | `deviceName` | No | - | Fallback for deviceId |
-| `twoFactorCode` | No | - | 2FA code (only needed during initial setup) |
-| `clientVerificationCode` | No | - | New-device verification PIN (only when prompted) |
-| `accountVerificationCode` | No | - | Account/phone verification PIN (only when prompted) |
 | `persistAuth` | No | `true` | Persist auth tokens across restarts |
 | `trustDevice` | No | `true` | Trust this device during client verification |
 | `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` (auto-detected tiers from Blink are honored for routing) |
@@ -138,21 +135,38 @@ When `persistAuth` is enabled, auth tokens are stored in a sibling folder to Hom
 storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the HAP
 persist directory.
 
+\* `username` and `password` are only needed for non-UI/manual fallback flows. In normal Homebridge UI usage, authenticate via the custom UI and keep credentials out of `config.json`.
+
 ## Quick Start: Login & Authorization
 
-On first setup, Blink may prompt for up to three codes. Provide only the one being requested at the time, then remove it after successful login/verification. Keep `persistAuth: true` so you won’t be prompted again.
+Use Homebridge UI → plugin Settings → **Sign in to Blink**.
 
-1. Start with your `username`, `password`, unique `deviceId`, and `persistAuth: true`.
-2. If prompted for a two-factor code, set `twoFactorCode` temporarily and restart Homebridge.
-3. If prompted for client verification (new device approval), set `clientVerificationCode` temporarily and restart.
-4. If prompted for account/phone verification, set `accountVerificationCode` temporarily and restart.
-5. After successful login/verification, remove any `*Code` values from your config and restart Homebridge.
+1. Enter email/password in the custom UI login card.
+2. Complete any prompted 2FA/client/account verification in the same custom UI flow.
+3. Keep `persistAuth: true` so tokens survive restarts.
+4. Confirm your `config.json` contains no password or verification codes.
 
 Tips:
 
 - Ensure `deviceId` is unique per Homebridge instance.
 - Leave `trustDevice: true` so future sessions are approved automatically.
 - If you keep seeing verification prompts, confirm that `persistAuth` is enabled and the Homebridge process can write to the auth directory.
+
+## Re-Authentication / Token Reset
+
+If you need to re-authenticate or switch Blink accounts:
+
+1. Stop Homebridge.
+2. Remove the persisted auth file in your Homebridge data directory sibling path: `blink-auth/auth-state.json`.
+3. Start Homebridge and run **Sign in to Blink** again from the plugin custom UI.
+
+## Manual Smoke Checklist (Duplicate Auth UI Regression)
+
+- Open Homebridge UI → Plugins → this plugin → Settings.
+- Confirm there is exactly one auth flow: the custom UI **Sign in to Blink** card.
+- Confirm there is no schema auth fieldset containing username/password/verification code inputs.
+- Complete login and restart Homebridge.
+- Confirm authentication persists and `config.json` has no password or verification code fields.
 
 ## Live Streaming (FFmpeg)
 

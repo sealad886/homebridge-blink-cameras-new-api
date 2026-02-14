@@ -16,19 +16,6 @@
         "default": "Blink",
         "required": true
       },
-      "username": {
-        "title": "Blink Account Email",
-        "description": "Your Blink account email address",
-        "type": "string",
-        "format": "email",
-        "required": true
-      },
-      "password": {
-        "title": "Blink Account Password",
-        "description": "Your Blink account password",
-        "type": "string",
-        "required": true
-      },
       "deviceId": {
         "title": "Device ID",
         "description": "Unique identifier for this Homebridge instance (sent to Blink as hardware_id)",
@@ -39,24 +26,6 @@
       "deviceName": {
         "title": "Device Name",
         "description": "Friendly name for this device (fallback for Device ID)",
-        "type": "string",
-        "required": false
-      },
-      "twoFactorCode": {
-        "title": "Two-Factor Code",
-        "description": "2FA code for initial login. Only needed if Blink sends a verification code. Remove after successful login.",
-        "type": "string",
-        "required": false
-      },
-      "clientVerificationCode": {
-        "title": "Client Verification Code",
-        "description": "Verification code sent for new device approval. Only needed if Blink asks to verify this client. Remove after successful verification.",
-        "type": "string",
-        "required": false
-      },
-      "accountVerificationCode": {
-        "title": "Account Verification Code",
-        "description": "Verification code sent for account/phone verification. Only needed if Blink requests account verification. Remove after successful verification.",
         "type": "string",
         "required": false
       },
@@ -296,16 +265,15 @@
   "layout": [
     {
       "type": "fieldset",
-      "title": "Account Settings",
+      "title": "Platform Settings",
       "items": [
         "name",
-        "username",
-        {
-          "key": "password",
-          "type": "password"
-        },
-        "twoFactorCode",
-        "clientVerificationCode"
+        "tier",
+        "sharedTier",
+        "persistAuth",
+        "trustDevice",
+        "authLocked",
+        "debugAuth"
       ]
     },
     {

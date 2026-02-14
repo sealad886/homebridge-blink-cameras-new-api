@@ -104,6 +104,31 @@
 - `package.json` (`copy-ui-assets` script)
 - `src/homebridge-ui/public/index.html`
 
+### Authentication UI Single Source of Truth
+
+**Status:** REQUIRED
+
+**Scope:** Homebridge settings UX and authentication configuration.
+
+**Rule:** When `homebridge.customUi` is enabled for this plugin, credential and verification-code inputs must exist only in the custom UI and must not be defined in `config.schema.json` properties/layout.
+
+**Rationale (Why this exists):**
+
+- Config UI X renders both schema fields and custom UI in plugin settings; defining auth fields in both creates duplicate and conflicting login flows.
+- Keeping credentials out of schema avoids persisting passwords and one-time verification codes in `config.json`.
+- Token persistence already exists via `blink-auth/auth-state.json`, so the custom UI can remain the single auth entry point.
+
+**Examples:**
+
+- Good: `config.schema.json` keeps non-secret platform settings only, while `src/homebridge-ui/public/index.html` contains the sign-in + verification workflow.
+- Bad: Reintroducing `username`, `password`, `twoFactorCode`, `clientVerificationCode`, or `accountVerificationCode` into schema properties or layout.
+
+**Related Files / Modules:**
+
+- `config.schema.json`
+- `homebridge-ui/public/index.html`
+- `src/homebridge-ui/server.ts`
+
 ## 3. Rationale and Examples
 
 - See individual conventions above.
@@ -114,6 +139,7 @@
 
 ## 5. Change History (Human-Readable)
 
+- 2026-02-14: Added required convention that auth credentials/codes must not be exposed in schema when custom UI auth is enabled.
 - 2026-01-20: Two-way talk is now forced off; HomeKit microphone UI is hidden and any config attempts log warnings.
 - 2026-01-17: Added convention clarifying npm registry requirement for publisher handle in Homebridge UI.
 - 2026-01-18: Added two-way talk status guardrails and experimental designation.

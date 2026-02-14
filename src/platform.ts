@@ -9,7 +9,6 @@
  * Source: API Dossier - /base-apk/docs/api_dossier.md
  */
 import { setInterval, clearInterval } from 'timers';
-import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import {
   API,
@@ -44,8 +43,8 @@ interface DeviceSettings {
 }
 
 interface BlinkPlatformConfig extends PlatformConfig {
-  username: string;
-  password: string;
+  username?: string;
+  password?: string;
   deviceId?: string;
   deviceName?: string;
   twoFactorCode?: string;
@@ -148,8 +147,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const authStoragePath = this.buildAuthStoragePath();
 
     this.apiClient = new BlinkApi({
-      email: this.config.username,
-      password: this.config.password,
+      email: this.config.username ?? '',
+      password: this.config.password ?? '',
       hardwareId,
       clientName: this.config.deviceName,
       twoFactorCode: this.config.twoFactorCode,
@@ -180,13 +179,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private validateConfig(): void {
-    if (!this.config.username) {
-      this.log.error('Configuration error: username is required');
-      throw new Error('Missing required config: username');
+    const hasUsername = Boolean(this.config.username?.trim());
+    const hasPassword = Boolean(this.config.password?.trim());
+
+    if (hasUsername !== hasPassword) {
+      this.log.error('Configuration error: username and password must be provided together');
+      throw new Error('Invalid config: username/password must be provided together');
     }
-    if (!this.config.password) {
-      this.log.error('Configuration error: password is required');
-      throw new Error('Missing required config: password');
+
+    if (!hasUsername && !hasPassword) {
+      this.log.info('No credentials in config; using persisted token authentication via custom UI.');
     }
     if (this.config.pollInterval !== undefined && this.config.pollInterval < MIN_POLL_INTERVAL) {
       this.log.warn(`pollInterval of ${this.config.pollInterval}s is below minimum; using ${MIN_POLL_INTERVAL}s`);
@@ -204,14 +206,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (!persistRoot) {
       return undefined;
     }
-    const deviceId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
-    const keySource = `${this.config.username}|${deviceId}`;
-    const key = createHash('sha1').update(keySource).digest('hex');
-
     // Avoid writing inside Homebridge's HAP persist directory (node-persist cannot
     // handle subdirectories there and will crash Homebridge on startup).
     const persistBase = path.dirname(persistRoot);
-    return path.join(persistBase, 'blink-auth', `${key}.json`);
+    return path.join(persistBase, 'blink-auth', 'auth-state.json');
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
