@@ -550,6 +550,12 @@
         savedUsername = resolveUsername(status);
         savedTier = resolveTier(status);
         showStep('success');
+      } else if (status?.requires2FA) {
+        handleVerificationRequired('2fa', status);
+      } else if (status?.requiresClientVerification) {
+        handleVerificationRequired('client', status);
+      } else if (status?.requiresAccountVerification) {
+        handleVerificationRequired('account', status);
       }
       return status;
     } catch (e) {
@@ -635,8 +641,13 @@
 
       if (response.authenticated) {
         handleAuthSuccess(response);
+      } else if (response.requires2FA) {
+        handleVerificationRequired('2fa', response);
+      } else if (response.requiresClientVerification) {
+        handleVerificationRequired('client', response);
+      } else if (response.requiresAccountVerification) {
+        handleVerificationRequired('account', response);
       }
-      // Other cases handled via events
     } catch (e) {
       showError(e.message || 'Login failed');
     } finally {
@@ -667,8 +678,11 @@
 
       if (response.authenticated) {
         handleAuthSuccess(response);
+      } else if (response.requiresClientVerification) {
+        handleVerificationRequired('client', response);
+      } else if (response.requiresAccountVerification) {
+        handleVerificationRequired('account', response);
       }
-      // Other cases handled via events
     } catch (e) {
       showError(e.message || 'Verification failed');
     } finally {
@@ -767,7 +781,7 @@
 
     showStep('success');
     homebridge.toast.success('Successfully authenticated with Blink!', 'Success');
-    
+
     // Automatically show the schema form after successful auth so user can configure all settings
     homebridge.showSchemaForm();
   }
