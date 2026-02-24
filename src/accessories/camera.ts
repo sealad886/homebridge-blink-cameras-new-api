@@ -58,6 +58,11 @@ export class CameraAccessory {
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .onGet(() => this.device.enabled);
 
+    // StatusFault indicates if the camera is offline/unavailable
+    this.motionService
+      .getCharacteristic(this.platform.Characteristic.StatusFault)
+      .onGet(() => this.isDeviceOffline() ? 1 : 0);
+
     // Camera controller for snapshot support
     // Determine device type from API response - Mini cameras have type 'owl'
     // and require different API endpoints even when returned in cameras array
@@ -72,6 +77,7 @@ export class CameraAccessory {
       deviceType,
       device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
+      () => this.device.status,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,
     );
@@ -80,6 +86,16 @@ export class CameraAccessory {
       createCameraControllerOptions(this.platform.api.hap, cameraSource, this.platform.streamingConfig),
     );
     this.accessory.configureController(this.cameraController);
+  }
+
+  /**
+   * Check if device is offline based on status field.
+   * Blink API returns status 'done' for online cameras, other values indicate offline/unavailable.
+   *
+   * @returns true if device is offline or unavailable
+   */
+  private isDeviceOffline(): boolean {
+    return this.device.status !== undefined && this.device.status !== 'done';
   }
 
   /**
@@ -119,11 +135,13 @@ export class CameraAccessory {
    * Update device state from polling.
    * Called by platform when homescreen data is refreshed.
    * Updates Switch and StatusActive characteristics if enabled state changed.
+   * Updates StatusFault characteristic if camera online/offline status changed.
    *
    * @param device - Fresh device data from Blink API homescreen response
    */
   updateState(device: BlinkCamera): void {
     const previousEnabled = this.device.enabled;
+    const previousStatus = this.device.status;
     this.device = device;
     this.accessory.context.device = device;
 
@@ -138,6 +156,18 @@ export class CameraAccessory {
 
       this.platform.log.debug(
         `Camera ${device.name} motion detection: ${device.enabled ? 'enabled' : 'disabled'}`,
+      );
+    }
+
+    // Update StatusFault if camera online/offline status changed
+    if (previousStatus !== device.status) {
+      const isOffline = this.isDeviceOffline();
+      this.motionService
+        .getCharacteristic(this.platform.Characteristic.StatusFault)
+        .updateValue(isOffline ? 1 : 0);
+
+      this.platform.log.debug(
+        `Camera ${device.name} status: ${device.status ?? 'unknown'} (${isOffline ? 'offline' : 'online'})`,
       );
     }
   }

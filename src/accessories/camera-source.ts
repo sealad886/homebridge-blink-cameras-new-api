@@ -245,6 +245,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly deviceType: DeviceType,
     private readonly serial: string,
     private readonly getThumbnailUrl: () => string | undefined,
+    private readonly getDeviceStatus: () => string | undefined,
     private readonly log: (message: string) => void,
     streamingConfig?: BlinkCameraStreamingConfigInput,
   ) {
@@ -263,6 +264,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     callback: SnapshotRequestCallback,
   ): Promise<void> {
     this.log(`Snapshot requested (${request.width}x${request.height})`);
+
+    // Check if camera is online before attempting to retrieve snapshot
+    const deviceStatus = this.getDeviceStatus();
+    if (deviceStatus && deviceStatus !== 'done') {
+      this.log(`Camera is offline (status: ${deviceStatus}), cannot provide snapshot`);
+      callback(new Error('Camera is offline or unavailable'));
+      return;
+    }
 
     const cacheTTL = (this.streamingConfig.snapshotCacheTTL ?? 60) * 1000;
     const cacheAge = Date.now() - this.cachedSnapshotTime;

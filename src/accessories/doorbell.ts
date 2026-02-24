@@ -69,6 +69,11 @@ export class DoorbellAccessory {
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .onGet(() => this.device.enabled);
 
+    // StatusFault indicates if the doorbell is offline/unavailable
+    this.motionService
+      .getCharacteristic(this.platform.Characteristic.StatusFault)
+      .onGet(() => this.isDeviceOffline() ? 1 : 0);
+
     // Camera controller for snapshot support
     const cameraSource = new BlinkCameraSource(
       this.platform.apiClient,
@@ -78,6 +83,7 @@ export class DoorbellAccessory {
       'doorbell',
       device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
+      () => this.device.status,
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,
     );
@@ -86,6 +92,16 @@ export class DoorbellAccessory {
       createCameraControllerOptions(this.platform.api.hap, cameraSource, this.platform.streamingConfig),
     );
     this.accessory.configureController(this.cameraController);
+  }
+
+  /**
+   * Check if device is offline based on status field.
+   * Blink API returns status 'done' for online doorbells, other values indicate offline/unavailable.
+   *
+   * @returns true if device is offline or unavailable
+   */
+  private isDeviceOffline(): boolean {
+    return this.device.status !== undefined && this.device.status !== 'done';
   }
 
   /**
@@ -124,11 +140,13 @@ export class DoorbellAccessory {
    * Update device state from polling.
    * Called by platform when homescreen data is refreshed.
    * Updates Switch and StatusActive characteristics if enabled state changed.
+   * Updates StatusFault characteristic if doorbell online/offline status changed.
    *
    * @param device - Fresh device data from Blink API homescreen response
    */
   updateState(device: BlinkDoorbell): void {
     const previousEnabled = this.device.enabled;
+    const previousStatus = this.device.status;
     this.device = device;
     this.accessory.context.device = device;
 
@@ -143,6 +161,18 @@ export class DoorbellAccessory {
 
       this.platform.log.debug(
         `Doorbell ${device.name} motion detection: ${device.enabled ? 'enabled' : 'disabled'}`,
+      );
+    }
+
+    // Update StatusFault if doorbell online/offline status changed
+    if (previousStatus !== device.status) {
+      const isOffline = this.isDeviceOffline();
+      this.motionService
+        .getCharacteristic(this.platform.Characteristic.StatusFault)
+        .updateValue(isOffline ? 1 : 0);
+
+      this.platform.log.debug(
+        `Doorbell ${device.name} status: ${device.status ?? 'unknown'} (${isOffline ? 'offline' : 'online'})`,
       );
     }
   }
