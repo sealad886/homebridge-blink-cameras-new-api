@@ -233,6 +233,7 @@ describe('Accessory handlers', () => {
       'camera',
       'TEST_SERIAL',
       jest.fn(),
+      jest.fn(),
       logFn,
     );
 
