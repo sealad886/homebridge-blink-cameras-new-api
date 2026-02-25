@@ -20,6 +20,7 @@ export interface MotionDevice {
   network_id: number;
   name: string;
   enabled: boolean;
+  status?: string;
   serial?: string;
   thumbnail?: string;
   type?: string;
@@ -31,6 +32,27 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   protected readonly cameraController: CameraController;
   protected motionDetected = false;
   protected motionTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  private isDeviceAvailable(): boolean {
+    const status = this.device.status?.trim().toLowerCase();
+    if (!status) {
+      return true;
+    }
+
+    const unavailableStatuses = new Set([
+      'offline',
+      'unavailable',
+      'disconnected',
+      'unreachable',
+      'down',
+    ]);
+
+    return !unavailableStatuses.has(status);
+  }
+
+  private isMotionServiceActive(): boolean {
+    return this.device.enabled && this.isDeviceAvailable();
+  }
 
   constructor(
     protected readonly platform: BlinkCamerasPlatform,
@@ -69,7 +91,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusActive)
-      .onGet(() => this.device.enabled);
+      .onGet(() => this.isMotionServiceActive());
 
     const cameraSource = new BlinkCameraSource(
       this.platform.apiClient,
@@ -79,6 +101,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       cameraSourceType,
       device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
+      () => this.isDeviceAvailable(),
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,
     );
@@ -132,15 +155,14 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.switchService
         .getCharacteristic(this.platform.Characteristic.On)
         .updateValue(device.enabled);
-
-      this.motionService
-        .getCharacteristic(this.platform.Characteristic.StatusActive)
-        .updateValue(device.enabled);
-
       this.platform.log.debug(
         `${this.deviceLabel.charAt(0).toUpperCase() + this.deviceLabel.slice(1)} ${device.name} motion detection: ${device.enabled ? 'enabled' : 'disabled'}`,
       );
     }
+
+    this.motionService
+      .getCharacteristic(this.platform.Characteristic.StatusActive)
+      .updateValue(this.isMotionServiceActive());
   }
 
   triggerMotion(timeoutMs = 30000): void {

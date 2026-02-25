@@ -637,12 +637,11 @@ export class BlinkApi {
   }
 
   /**
-   * Update/extend an ongoing command (e.g., live view)
+    * Update an onboarding/status command
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/update
    * Note: No version prefix - uses root URL (without /api/)
-   *
-   * Returns null if the command no longer exists (404) - this happens when the stream
-   * has already ended but the keep-alive timer hasn't been cleared yet.
+    *
+    * Returns null if the command no longer exists (404).
    */
   async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus | null> {
     const accountId = await this.ensureAccountId();
