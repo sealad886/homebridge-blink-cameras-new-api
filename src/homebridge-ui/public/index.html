@@ -566,6 +566,7 @@
       const status = await homebridge.request('/status');
       const authenticated = !!status?.authenticated;
       updateAccountDisplay(authenticated, status);
+      setAuthLockVisibility(authenticated);
       if (authenticated) {
         savedUsername = resolveUsername(status);
         savedTier = resolveTier(status);
@@ -735,6 +736,7 @@
   // Handle successful authentication
   async function handleAuthSuccess(data) {
     hideStatusError();
+    setAuthLockVisibility(true);
     // Update config with credentials
     let config = pluginConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
 
@@ -806,10 +808,19 @@
   });
 
   // Auth Lock Controls
+  const authLockSection = document.getElementById('authLockSection');
   const lockControls = document.getElementById('lockControls');
   const unlockControls = document.getElementById('unlockControls');
   const lockAuthBtn = document.getElementById('lockAuthBtn');
   const unlockAuthBtn = document.getElementById('unlockAuthBtn');
+
+  function setAuthLockVisibility(authenticated) {
+    if (authenticated) {
+      authLockSection.classList.remove('hidden');
+    } else {
+      authLockSection.classList.add('hidden');
+    }
+  }
 
   function updateLockUI(locked) {
     if (locked) {
