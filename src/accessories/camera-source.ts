@@ -267,7 +267,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     // Check if camera is online before attempting to retrieve snapshot
     const deviceStatus = this.getDeviceStatus();
-    if (deviceStatus && deviceStatus !== 'done') {
+      if (deviceStatus !== undefined && deviceStatus !== 'done') {
       this.log(`Camera is offline (status: ${deviceStatus}), cannot provide snapshot`);
       callback(new Error('Camera is offline or unavailable'));
       return;
