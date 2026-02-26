@@ -1,4 +1,4 @@
-import { HAP, PlatformAccessory } from 'homebridge';
+import { HAP, PlatformAccessory, SnapshotRequest } from 'homebridge';
 import { CameraAccessory } from '../src/accessories/camera';
 import { DoorbellAccessory } from '../src/accessories/doorbell';
 import { NetworkAccessory } from '../src/accessories/network';
@@ -11,12 +11,14 @@ import { BlinkApi } from '../src/blink-api';
 import { Buffer } from 'node:buffer';
 
 type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig'>;
+type CameraSourceFfmpegAccess = {
+  buildFfmpegArgs: (input: string, request: unknown, session: unknown) => string[];
+};
 
 describe('Accessory handlers', () => {
   const buildPlatform = () => {
     const hap = createHap();
     const log = createLogger();
-    const logFn = jest.fn();
     const apiClient = {
       armNetwork: jest.fn().mockResolvedValue({ command_id: 123 }),
       disarmNetwork: jest.fn().mockResolvedValue({ command_id: 124 }),
@@ -233,6 +235,7 @@ describe('Accessory handlers', () => {
       'camera',
       'TEST_SERIAL',
       jest.fn(),
+      () => true,
       logFn,
     );
 
@@ -276,7 +279,8 @@ describe('Accessory handlers', () => {
       },
     };
 
-    const args = (source as any).buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
+    const ffmpegSource = source as unknown as CameraSourceFfmpegAccess;
+    const args = ffmpegSource.buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
     const argString = args.join(' ');
 
     expect(argString).toContain('localrtpport=5100');
@@ -284,4 +288,62 @@ describe('Accessory handlers', () => {
     expect(argString).toContain('localrtpport=5101');
     expect(argString).toContain('localrtcpport=5103');
   });
+
+  it('marks motion service inactive when device status is offline', () => {
+    const { hap, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: true, status: 'online' };
+
+    const handler = new CameraAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+
+    handler.updateState({ ...device, status: 'offline' });
+
+    const statusActive = accessory
+      .getService(hap.Service.MotionSensor)
+      ?.getCharacteristic(hap.Characteristic.StatusActive)
+      .value;
+
+    expect(statusActive).toBe(false);
+  });
+
+  it('returns snapshot error when camera is offline even with cached image', async () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+      getAuthHeaders: jest.fn().mockReturnValue({ Authorization: 'Bearer token' }),
+      getSharedRestRootUrl: jest.fn().mockReturnValue('https://rest-e006.immedia-semi.com/'),
+    };
+
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      () => 'https://example.com/thumbnail.jpg',
+      () => false,
+      logFn,
+      { enabled: false },
+    );
+
+    const testSource = source as unknown as { cachedSnapshot: Buffer | null; cachedSnapshotTime: number };
+    testSource.cachedSnapshot = Buffer.from('cached');
+    testSource.cachedSnapshotTime = Date.now();
+
+    const callback = jest.fn();
+    await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, callback);
+
+    expect(callback).toHaveBeenCalledWith(expect.any(Error));
+    expect(testSource.cachedSnapshot).toBeNull();
+  });
+
 });

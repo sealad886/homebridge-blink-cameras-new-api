@@ -372,6 +372,13 @@ export interface BlinkLogger {
   error(message: string, ...parameters: unknown[]): void;
 }
 
+export const nullLogger: BlinkLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
+
 /**
  * Plugin configuration
  * Source: API Dossier Section 2.1 (OAuth parameters) and Section 1.1 (Base URLs)
@@ -392,6 +399,8 @@ export interface BlinkConfig {
   sharedTier?: string;
   /** Enable verbose auth diagnostics */
   debugAuth?: boolean;
+  /** Lock auth state — ignore stored 2FA/verification codes, use only token refresh */
+  authLocked?: boolean;
   /** Logger for diagnostic output */
   logger?: BlinkLogger;
 }

@@ -245,6 +245,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly deviceType: DeviceType,
     private readonly serial: string,
     private readonly getThumbnailUrl: () => string | undefined,
+    private readonly isDeviceAvailable: () => boolean = () => true,
     private readonly log: (message: string) => void,
     streamingConfig?: BlinkCameraStreamingConfigInput,
   ) {
@@ -263,6 +264,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     callback: SnapshotRequestCallback,
   ): Promise<void> {
     this.log(`Snapshot requested (${request.width}x${request.height})`);
+
+    if (!this.isDeviceAvailable()) {
+      this.cachedSnapshot = null;
+      this.cachedSnapshotTime = 0;
+      callback(new Error('Camera is unavailable/offline'));
+      return;
+    }
 
     const cacheTTL = (this.streamingConfig.snapshotCacheTTL ?? 60) * 1000;
     const cacheAge = Date.now() - this.cachedSnapshotTime;
@@ -709,16 +717,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const intervalMs = Math.max(5, intervalSeconds - 2) * 1000;
     active.keepAliveTimer = setInterval(async () => {
       try {
-        const result = await this.api.updateCommand(this.networkId, commandId);
-        // If result is null, command no longer exists - stop the keep-alive
-        if (result === null) {
+        const status = await this.api.getCommandStatus(this.networkId, commandId);
+        if (status.complete || status.status === 'complete' || status.status === 'failed') {
           if (active.keepAliveTimer) {
             clearInterval(active.keepAliveTimer);
             active.keepAliveTimer = null;
           }
         }
       } catch (error) {
-        this.log(`Failed to extend live view command ${commandId}: ${error}`);
+        this.log(`Failed to poll live view command ${commandId}: ${error}`);
       }
     }, intervalMs);
   }

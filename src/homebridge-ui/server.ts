@@ -43,6 +43,16 @@ interface AuthStatus {
   message?: string;
 }
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VERIFY_CODE_PATTERN = /^[A-Za-z0-9-]{4,12}$/;
+
+function redactSecrets(message: string): string {
+  return message
+    .replace(/(password|pass|pwd)\s*[=:]\s*[^\s,;]+/gi, '$1=<redacted>')
+    .replace(/(token-auth|access_token|refresh_token|authorization)\s*[=:]\s*[^\s,;]+/gi, '$1=<redacted>')
+    .replace(/(two[_-]?factor|verification|otp|code)\s*[=:]\s*[^\s,;]+/gi, '$1=<redacted>');
+}
+
 // Logger that sends messages to the UI
 class UiLogger implements BlinkLogger {
   private server: BlinkUiServer;
@@ -88,6 +98,8 @@ class BlinkUiServer extends HomebridgePluginUiServer {
     this.registerRequest('/verify', this.handleVerify.bind(this));
     this.registerRequest('/status', this.handleStatus.bind(this));
     this.registerRequest('/logout', this.handleLogout.bind(this));
+    this.registerRequest('/lock', this.handleLock.bind(this));
+    this.registerRequest('/unlock', this.handleUnlock.bind(this));
     this.registerRequest('/test-connection', this.handleTestConnection.bind(this));
 
     // Signal ready
@@ -99,7 +111,11 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Push log messages to the UI for display
    */
   pushLog(level: string, message: string): void {
-    this.pushEvent('log', { level, message, timestamp: new Date().toISOString() });
+    this.pushEvent('log', {
+      level,
+      message: redactSecrets(message),
+      timestamp: new Date().toISOString(),
+    });
   }
 
   private resolveDebugEnabled(): boolean {
@@ -142,7 +158,8 @@ class BlinkUiServer extends HomebridgePluginUiServer {
   private getAuthStoragePath(): string {
     // Use a sibling directory to Homebridge storage for auth persistence
     const storagePath = this.homebridgeStoragePath ?? '.';
-    return path.join(storagePath, '..', 'blink-auth', 'auth-state.json');
+    const persistBase = path.dirname(storagePath);
+    return path.join(persistBase, 'blink-auth', 'auth-state.json');
   }
 
   /**
@@ -173,10 +190,17 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Handle login request - initiates OAuth flow
    */
   async handleLogin(payload: LoginRequest): Promise<AuthStatus> {
-    const { username, password, deviceId, tier } = payload;
+    const username = payload.username?.trim();
+    const password = payload.password?.trim();
+    const deviceId = payload.deviceId?.trim();
+    const tier = payload.tier?.trim();
 
     if (!username || !password) {
       throw new RequestError('Username and password are required', { status: 400 });
+    }
+
+    if (!EMAIL_PATTERN.test(username)) {
+      throw new RequestError('A valid email address is required', { status: 400 });
     }
 
     // Build config for Blink API
@@ -186,7 +210,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
       hardwareId: deviceId || this.generateDeviceId(),
       tier: tier || 'prod',
       authStoragePath: this.getAuthStoragePath(),
-      debugAuth: true,
+      debugAuth: false,
       logger: new UiLogger(this),
     };
 
@@ -282,10 +306,16 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Handle verification code submission
    */
   async handleVerify(payload: VerifyRequest): Promise<AuthStatus> {
-    const { code, type, trustDevice } = payload;
+    const code = payload.code?.trim();
+    const type = payload.type;
+    const trustDevice = payload.trustDevice;
 
     if (!code) {
       throw new RequestError('Verification code is required', { status: 400 });
+    }
+
+    if (!VERIFY_CODE_PATTERN.test(code)) {
+      throw new RequestError('Verification code must be 4-12 alphanumeric characters', { status: 400 });
     }
 
     if (!this.blinkApi || !this.pendingConfig) {
@@ -373,6 +403,25 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Clear authentication state
    */
   async handleLogout(): Promise<{ success: boolean }> {
+    this.blinkApi = null;
+    this.pendingConfig = null;
+    this.authStatus = { authenticated: false };
+    return { success: true };
+  }
+
+  /**
+   * Lock authentication — clears stored verification codes
+   */
+  async handleLock(): Promise<{ success: boolean }> {
+    this.logDebug('Locking authentication state');
+    return { success: true };
+  }
+
+  /**
+   * Unlock authentication — allows re-authentication
+   */
+  async handleUnlock(): Promise<{ success: boolean }> {
+    this.logDebug('Unlocking authentication state');
     this.blinkApi = null;
     this.pendingConfig = null;
     this.authStatus = { authenticated: false };

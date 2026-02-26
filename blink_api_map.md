@@ -323,11 +323,11 @@ Poll this endpoint every `polling_interval` seconds to check if the live view se
 - `"complete"` - Stream ended normally
 - `"failed"` - Stream failed to start
 
-### Extending Live View Session
+### Live View Session Monitoring
 
-**Endpoint:** `POST /accounts/{account}/networks/{network}/commands/{command_id}/update`
+Use command polling (`GET /accounts/{account}/networks/{network}/commands/{command_id}`) to monitor whether the session is still running.
 
-Call this before the session times out to extend it.
+`POST /accounts/{account}/networks/{network}/commands/{command_id}/update` is currently treated as onboarding/status update behavior and should not be assumed to extend live view sessions.
 
 [CameraApi](jadx-out/sources/com/immediasemi/blink/common/device/camera/CameraApi.java) / [DoorbellApi](jadx-out/sources/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java) / [OwlApi](jadx-out/sources/com/immediasemi/blink/common/device/camera/wired/OwlApi.java) / [LiveViewCommandPostBody](jadx-out/sources/com/immediasemi/blink/common/device/camera/video/live/LiveViewCommandPostBody.java) / [LiveViewCommandResponse](jadx-out/sources/com/immediasemi/blink/common/device/camera/video/live/LiveViewCommandResponse.java)
 

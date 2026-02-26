@@ -21,6 +21,7 @@ import {
   BlinkLogger,
   BlinkOAuthSessionState,
   BlinkOAuthV2TokenResponse,
+  nullLogger,
 } from '../types';
 import {
   buildOAuthHeaders,
@@ -40,17 +41,13 @@ import { generatePKCEPair, generateOAuthState } from './oauth-pkce';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
-
-const nullLogger: BlinkLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-};
+const REFRESH_MAX_RETRIES = 2;
+const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
 
 class FileAuthStorage implements BlinkAuthStorage {
   constructor(private readonly filePath: string) {}
@@ -210,6 +207,105 @@ export class BlinkAuth {
     }
   }
 
+  /**
+   * Redact sensitive form body fields for logging
+   */
+  private redactFormBody(body: string): string {
+    const params = new URLSearchParams(body);
+    const redacted = new URLSearchParams();
+    for (const [key, value] of params.entries()) {
+      const sensitiveKeys = ['password', 'refresh_token', 'code', 'code_verifier', 'csrf-token', '2fa_code'];
+      if (sensitiveKeys.includes(key)) {
+        redacted.set(key, redact(value, 3));
+      } else {
+        redacted.set(key, value);
+      }
+    }
+    return redacted.toString();
+  }
+
+  /**
+   * Redact authorization-related headers for logging
+   */
+  private redactHeaders(headers: Headers): Record<string, string> {
+    const result: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey === 'authorization' || lowerKey === 'token-auth' || lowerKey === 'cookie') {
+        result[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-4)}` : '***';
+      } else {
+        result[key] = value;
+      }
+    });
+    return result;
+  }
+
+  /**
+   * Centralized fetch wrapper for all OAuth requests.
+   * Provides: request ID tracking, detailed debug logging, network error handling.
+   */
+  private async authFetch(
+    stepLabel: string,
+    url: string,
+    init: RequestInit,
+  ): Promise<FetchResponse> {
+    const requestId = randomUUID().slice(0, 8);
+    const method = init.method ?? 'GET';
+
+    this.logDebug(`[${requestId}] ── ${stepLabel} ──`);
+    this.logDebug(`[${requestId}] ${method} ${url}`);
+    this.logDebug(`[${requestId}] Request headers: ${JSON.stringify(this.redactHeaders(init.headers as Headers))}`);
+    if (init.body) {
+      this.logDebug(`[${requestId}] Request body: ${this.redactFormBody(init.body as string)}`);
+    }
+    if (init.redirect) {
+      this.logDebug(`[${requestId}] Redirect policy: ${init.redirect}`);
+    }
+
+    const startTime = Date.now();
+    let response: FetchResponse;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      const elapsed = Date.now() - startTime;
+      const err = error as Error;
+      const causeMsg = err.cause ? ` | cause: ${(err.cause as Error).message ?? String(err.cause)}` : '';
+      this.log.error(
+        `[Auth] [${requestId}] Network error during "${stepLabel}" after ${elapsed}ms: ` +
+        `${method} ${url} → ${err.name}: ${err.message}${causeMsg}`,
+      );
+      this.logDebug(`[${requestId}] Full error: ${JSON.stringify({ name: err.name, message: err.message, cause: err.cause, stack: err.stack })}`);
+      throw new BlinkAuthenticationError(
+        `Network error during ${stepLabel}: ${err.message}`,
+        {
+          status: 0,
+          statusText: 'Network Error',
+          message: `${err.name}: ${err.message}${causeMsg}`,
+          headers: {},
+        },
+      );
+    }
+
+    const elapsed = Date.now() - startTime;
+    this.logDebug(`[${requestId}] Response: ${response.status} ${response.statusText} (${elapsed}ms)`);
+
+    // Log response headers
+    const respHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey === 'token-auth' || lowerKey === 'authorization') {
+        respHeaders[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-4)}` : '***';
+      } else if (lowerKey === 'set-cookie') {
+        respHeaders[key] = `<${value.length} chars>`;
+      } else {
+        respHeaders[key] = value;
+      }
+    });
+    this.logDebug(`[${requestId}] Response headers: ${JSON.stringify(respHeaders)}`);
+
+    return response;
+  }
+
   private async ensureStateLoaded(): Promise<void> {
     if (this.stateLoaded) return;
     if (this.stateLoadPromise) {
@@ -315,7 +411,7 @@ export class BlinkAuth {
 
   /**
    * Extract CSRF token from HTML response
-   * Looks for: 
+   * Looks for:
    * - JSON in <script id="oauth-args">{"csrf-token":"..."}</script>
    * - <input type="hidden" name="_token" value="...">
    * - <meta name="csrf-token" content="...">
@@ -417,8 +513,6 @@ export class BlinkAuth {
     authorizeUrl.searchParams.set('device_os_version', '26.1');
     authorizeUrl.searchParams.set('hardware_id', this.config.hardwareId);
 
-    this.logDebug(`OAuth authorize request: ${authorizeUrl.toString()}`);
-
     const headers = new Headers({
       ...buildOAuthHeaders(),
     });
@@ -427,14 +521,13 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(authorizeUrl.toString(), {
+    const response = await this.authFetch('Step 1: OAuth Authorize (PKCE)', authorizeUrl.toString(), {
       method: 'GET',
       headers,
-      redirect: 'manual', // Don't follow redirects automatically
+      redirect: 'manual',
     });
 
     this.extractAndMergeCookies(response);
-    this.logDebug(`Authorize response: ${response.status}`);
   }
 
   /**
@@ -443,7 +536,6 @@ export class BlinkAuth {
    */
   private async oauthGetSigninPage(): Promise<string> {
     const signinUrl = getOAuthSigninUrl(this.config);
-    this.logDebug(`Fetching signin page: ${signinUrl}`);
 
     const headers = new Headers({
       ...buildOAuthHeaders(),
@@ -453,7 +545,7 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(signinUrl, {
+    const response = await this.authFetch('Step 2: Get Signin Page', signinUrl, {
       method: 'GET',
       headers,
     });
@@ -483,18 +575,17 @@ export class BlinkAuth {
   /**
    * Step 3: Submit credentials
    * POST /oauth/v2/signin
-   * 
+   *
    * Returns:
    * - true: Login successful, authorization code available
    * - false: 2FA required, need to call oauthVerify2FA
-   * 
+   *
    * Status codes:
    * - 302: Success (redirect to authorize)
    * - 412: 2FA required (JSON body with phone, user_id, etc.)
    */
   private async oauthSignin(csrfToken: string): Promise<boolean> {
     const signinUrl = getOAuthSigninUrl(this.config);
-    this.logDebug(`Submitting credentials to: ${signinUrl}`);
 
     // Use same field names as blinkpy: username, password, csrf-token
     const formData = new URLSearchParams({
@@ -514,7 +605,7 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(signinUrl, {
+    const response = await this.authFetch('Step 3: Submit Credentials', signinUrl, {
       method: 'POST',
       headers,
       body: formData.toString(),
@@ -522,7 +613,6 @@ export class BlinkAuth {
     });
 
     this.extractAndMergeCookies(response);
-    this.logDebug(`Signin response: ${response.status}`);
 
     // Status 412 = 2FA required (returns JSON with phone, user_id, etc.)
     if (response.status === 412) {
@@ -603,12 +693,12 @@ export class BlinkAuth {
   /**
    * Step 4: Submit 2FA PIN
    * POST /oauth/v2/2fa/verify
-   * 
+   *
    * Field names verified against working flow:
    * - 2fa_code: The verification code
    * - csrf-token: The CSRF token from signin page
    * - remember_me: Whether to remember device
-   * 
+   *
    * Response:
    * - 201: Success, body contains {"status":"auth-completed"}
    * - 302: Success, redirect to authorize
@@ -619,7 +709,6 @@ export class BlinkAuth {
     }
 
     const verifyUrl = getOAuth2FAVerifyUrl(this.config);
-    this.logDebug(`Verifying 2FA at: ${verifyUrl}`);
 
     // Field names match blinkpy: 2fa_code, csrf-token, remember_me
     const formData = new URLSearchParams({
@@ -639,7 +728,7 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(verifyUrl, {
+    const response = await this.authFetch('Step 4: Verify 2FA', verifyUrl, {
       method: 'POST',
       headers,
       body: formData.toString(),
@@ -647,7 +736,6 @@ export class BlinkAuth {
     });
 
     this.extractAndMergeCookies(response);
-    this.logDebug(`2FA verify response: ${response.status}`);
 
     // Status 201 means auth-completed (success)
     if (response.status === 201) {
@@ -674,7 +762,7 @@ export class BlinkAuth {
 
   /**
    * Step 5: Get authorization code from redirect
-   * 
+   *
    * CRITICAL: After 2FA, use bare /oauth/v2/authorize URL WITHOUT params.
    * The server session remembers the original OAuth request parameters.
    * Sending params again causes redirect back to signin.
@@ -692,8 +780,6 @@ export class BlinkAuth {
     // Use bare authorize URL - session remembers the original OAuth request
     const authorizeUrl = getOAuthAuthorizeUrl(this.config);
 
-    this.logDebug(`Getting authorization code (bare URL): ${authorizeUrl}`);
-
     const headers = new Headers({
       ...buildOAuthHeaders(),
     });
@@ -702,7 +788,7 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(authorizeUrl, {
+    const response = await this.authFetch('Step 5: Get Authorization Code', authorizeUrl, {
       method: 'GET',
       headers,
       redirect: 'manual',
@@ -726,7 +812,7 @@ export class BlinkAuth {
   /**
    * Step 6: Exchange authorization code for tokens
    * POST /oauth/token with grant_type=authorization_code
-   * 
+   *
    * Parameters validated against working flow:
    * - grant_type: authorization_code
    * - code: the authorization code
@@ -743,7 +829,6 @@ export class BlinkAuth {
     }
 
     const tokenUrl = getOAuthTokenUrl(this.config);
-    this.logDebug(`Exchanging code for tokens: ${tokenUrl}`);
 
     const formData = new URLSearchParams({
       grant_type: 'authorization_code',
@@ -766,7 +851,7 @@ export class BlinkAuth {
       headers.set('Cookie', this.sessionCookies);
     }
 
-    const response = await fetch(tokenUrl, {
+    const response = await this.authFetch('Step 6: Exchange Code for Tokens', tokenUrl, {
       method: 'POST',
       headers,
       body: formData.toString(),
@@ -793,6 +878,13 @@ export class BlinkAuth {
    * @throws Blink2FARequiredError if 2FA verification is needed
    */
   async login(): Promise<void> {
+    if (!this.config.email || !this.config.password) {
+      throw new Error(
+        'No credentials available for OAuth login. '
+        + 'Authenticate via the plugin Custom UI or add username/password to config.',
+      );
+    }
+
     this.logDebug('Starting OAuth 2.0 Authorization Code Flow with PKCE...');
     this.logDebug(`  Email: ${redact(this.config.email, 3)}`);
     this.logDebug(`  Client ID: ${OAUTH_CLIENT_ID} (iOS)`);
@@ -814,15 +906,20 @@ export class BlinkAuth {
     // TypeScript control-flow doesn't track this, so we use a non-null assertion
     const currentSession = this.oauthSession!;
     if (!signinSuccess && currentSession.requires2FA) {
-      this.logDebug('2FA verification required');
-      
-      // If a 2FA code was provided in config, try it automatically
-      if (this.config.twoFactorCode) {
-        this.logDebug('Using 2FA code from config');
+      this.logDebug('login → signin returned false → 2FA required');
+
+      // If a 2FA code was provided in config (and not locked), try it automatically
+      if (this.config.twoFactorCode && !this.config.authLocked) {
+        this.logDebug('login → auto-submitting 2FA code from config');
         await this.complete2FA(this.config.twoFactorCode);
         return;
       }
 
+      if (this.config.authLocked) {
+        this.logDebug('login → authLocked=true, not auto-submitting 2FA code');
+      }
+
+      this.logDebug('login → no usable 2FA code → throwing Blink2FARequiredError');
       throw new Blink2FARequiredError(
         '2FA verification required. Call complete2FA(pin) with the PIN sent to your device.',
         {
@@ -832,13 +929,15 @@ export class BlinkAuth {
       );
     }
 
+    this.logDebug('login → signin succeeded → getting authorization code');
+
     // Step 5: Get authorization code (if not already captured)
     const authorizationCode = await this.oauthGetAuthorizationCode();
 
     // Step 6: Exchange code for tokens
     await this.oauthExchangeCode(authorizationCode);
 
-    this.logDebug('OAuth 2.0 login completed successfully');
+    this.logDebug('login → OAuth 2.0 login completed successfully');
   }
 
   /**
@@ -874,7 +973,8 @@ export class BlinkAuth {
   }
 
   /**
-   * Refresh tokens using refresh_token grant
+   * Refresh tokens using refresh_token grant.
+   * Retries transient network errors up to REFRESH_MAX_RETRIES times.
    */
   async refreshTokens(): Promise<void> {
     await this.ensureStateLoaded();
@@ -884,9 +984,7 @@ export class BlinkAuth {
     }
 
     const tokenUrl = getOAuthTokenUrl(this.config);
-    this.logDebug('Starting token refresh...');
-    this.logDebug(`  URL: ${tokenUrl}`);
-    this.logDebug(`  Refresh token: ${redact(this.refreshToken)}`);
+    this.logDebug(`Refresh token: ${redact(this.refreshToken)}`);
 
     const formData = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -900,23 +998,39 @@ export class BlinkAuth {
       Accept: 'application/json',
     });
 
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers,
-      body: formData.toString(),
-    });
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= REFRESH_MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = REFRESH_RETRY_DELAYS_MS[attempt - 1] ?? 5000;
+        this.logDebug(`Token refresh retry ${attempt}/${REFRESH_MAX_RETRIES} after ${delay}ms delay...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
 
-    this.logDebug(`Response: ${response.status} ${response.statusText}`);
+      try {
+        const response = await this.authFetch(
+          attempt === 0 ? 'Token Refresh' : `Token Refresh (retry ${attempt})`,
+          tokenUrl,
+          { method: 'POST', headers, body: formData.toString() },
+        );
 
-    if (!response.ok) {
-      await this.handleAuthError('refresh', response);
+        if (!response.ok) {
+          await this.handleAuthError('refresh', response);
+        }
+
+        const body = (await response.json()) as BlinkOAuthV2TokenResponse;
+        this.logDebug('Token refresh successful');
+        this.logDebug(`  Token expires in: ${body.expires_in} seconds`);
+        this.captureTokens(body, response.headers.get('TOKEN-AUTH'));
+        return;
+      } catch (error) {
+        lastError = error as Error;
+        const isTransient = lastError instanceof BlinkAuthenticationError && lastError.details.status === 0;
+        if (!isTransient || attempt === REFRESH_MAX_RETRIES) {
+          throw lastError;
+        }
+        this.log.warn(`[Auth] Token refresh attempt ${attempt + 1} failed (transient): ${lastError.message}`);
+      }
     }
-
-    const body = (await response.json()) as BlinkOAuthV2TokenResponse;
-    this.logDebug('Token refresh successful');
-    this.logDebug(`  Token expires in: ${body.expires_in} seconds`);
-
-    this.captureTokens(body, response.headers.get('TOKEN-AUTH'));
   }
 
   private async handleAuthError(operation: string, response: FetchResponse): Promise<never> {
@@ -982,19 +1096,30 @@ export class BlinkAuth {
   async ensureValidToken(): Promise<void> {
     await this.ensureStateLoaded();
     if (!this.accessToken) {
-      this.logDebug('No access token, initiating login...');
+      this.logDebug('ensureValidToken → no access token → initiating login');
       await this.login();
       return;
     }
 
     if (this.isTokenExpired()) {
-      this.logDebug('Access token expired, refreshing...');
-      await this.refreshTokens();
+      this.logDebug('ensureValidToken → access token expired → refreshing');
+      try {
+        await this.refreshTokens();
+      } catch (error) {
+        this.log.warn(`[Auth] Token refresh failed, falling back to full login: ${(error as Error).message}`);
+        this.logDebug('ensureValidToken → refresh failed → falling back to login()');
+        await this.login();
+      }
     } else if (this.isTokenExpiringSoon()) {
-      this.logDebug('Access token expiring soon, refreshing proactively...');
-      await this.refreshTokens();
+      this.logDebug(`ensureValidToken → token expiring soon (expires ${this.tokenExpiry?.toISOString()}) → proactive refresh`);
+      try {
+        await this.refreshTokens();
+      } catch (error) {
+        this.log.warn(`[Auth] Proactive token refresh failed (non-critical): ${(error as Error).message}`);
+        this.logDebug('ensureValidToken → proactive refresh failed → continuing with current token');
+      }
     } else {
-      this.logDebug(`Access token valid until ${this.tokenExpiry?.toISOString()}`);
+      this.logDebug(`ensureValidToken → token valid until ${this.tokenExpiry?.toISOString()}`);
     }
   }
 

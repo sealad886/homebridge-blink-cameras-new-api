@@ -16,19 +16,6 @@
         "default": "Blink",
         "required": true
       },
-      "username": {
-        "title": "Blink Account Email",
-        "description": "Your Blink account email address",
-        "type": "string",
-        "format": "email",
-        "required": true
-      },
-      "password": {
-        "title": "Blink Account Password",
-        "description": "Your Blink account password",
-        "type": "string",
-        "required": true
-      },
       "deviceId": {
         "title": "Device ID",
         "description": "Unique identifier for this Homebridge instance (sent to Blink as hardware_id)",
@@ -42,67 +29,24 @@
         "type": "string",
         "required": false
       },
-      "twoFactorCode": {
-        "title": "Two-Factor Code",
-        "description": "2FA code for initial login. Only needed if Blink sends a verification code. Remove after successful login.",
-        "type": "string",
-        "required": false
-      },
-      "clientVerificationCode": {
-        "title": "Client Verification Code",
-        "description": "Verification code sent for new device approval. Only needed if Blink asks to verify this client. Remove after successful verification.",
-        "type": "string",
-        "required": false
-      },
-      "accountVerificationCode": {
-        "title": "Account Verification Code",
-        "description": "Verification code sent for account/phone verification. Only needed if Blink requests account verification. Remove after successful verification.",
-        "type": "string",
-        "required": false
-      },
       "tier": {
-        "title": "Blink Environment",
-        "description": "Blink API environment tier. Use 'prod' for production (default). Numeric tiers like 'e006' are region-specific production endpoints.",
+        "title": "Blink Region",
+        "description": "Blink API region. Use 'Production' for most users. The plugin auto-discovers the correct endpoint after first login.",
         "type": "string",
         "default": "prod",
         "required": false,
         "oneOf": [
-          { "title": "Production", "enum": ["prod"] },
+          { "title": "Production (Default)", "enum": ["prod"] },
+          { "title": "Europe (EU)", "enum": ["prde"] },
+          { "title": "Asia Pacific (APAC)", "enum": ["prsg"] },
+          { "title": "Australia (AU)", "enum": ["a001"] },
           { "title": "Production (e001)", "enum": ["e001"] },
           { "title": "Production (e002)", "enum": ["e002"] },
           { "title": "Production (e003)", "enum": ["e003"] },
           { "title": "Production (e004)", "enum": ["e004"] },
           { "title": "Production (e005)", "enum": ["e005"] },
-          { "title": "Production (e006)", "enum": ["e006"] },
-          { "title": "Staging (SQA1)", "enum": ["sqa1"] },
-          { "title": "CEMP", "enum": ["cemp"] },
-          { "title": "Production (EU)", "enum": ["prde"] },
-          { "title": "Production (APAC)", "enum": ["prsg"] },
-          { "title": "Production (AU)", "enum": ["a001"] },
-          { "title": "SRF1", "enum": ["srf1"] }
+          { "title": "Production (e006)", "enum": ["e006"] }
         ]
-      },
-      "sharedTier": {
-        "title": "Blink Shared Tier",
-        "description": "Override shared REST tier (rest-{shared_tier}); defaults to tier when unset.",
-        "type": "string",
-        "required": false,
-        "oneOf": [
-          { "title": "Production", "enum": ["prod"] },
-          { "title": "Staging (SQA1)", "enum": ["sqa1"] },
-          { "title": "CEMP", "enum": ["cemp"] },
-          { "title": "Production (EU)", "enum": ["prde"] },
-          { "title": "Production (APAC)", "enum": ["prsg"] },
-          { "title": "Production (AU)", "enum": ["a001"] },
-          { "title": "SRF1", "enum": ["srf1"] }
-        ]
-      },
-      "debugAuth": {
-        "title": "Debug Authentication",
-        "description": "Enable verbose diagnostic logging for Blink API authentication. Useful for troubleshooting login failures, token issues, and API errors. WARNING: May log sensitive request details.",
-        "type": "boolean",
-        "default": false,
-        "required": false
       },
       "persistAuth": {
         "title": "Persist Auth Tokens",
@@ -116,6 +60,20 @@
         "description": "Mark this Homebridge instance as a trusted device during client verification.",
         "type": "boolean",
         "default": true,
+        "required": false
+      },
+      "authLocked": {
+        "title": "Lock Authentication",
+        "description": "Lock authentication state after successful login. When locked, stored verification codes are ignored and only token refresh is used. Unlock to force re-authentication.",
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "debugAuth": {
+        "title": "Debug Authentication",
+        "description": "Enable verbose diagnostic logging for Blink API authentication. WARNING: May log sensitive request details.",
+        "type": "boolean",
+        "default": false,
         "required": false
       },
       "pollInterval": {
@@ -143,6 +101,15 @@
         "default": true,
         "required": false
       },
+      "snapshotCacheTTL": {
+        "title": "Snapshot Cache Duration (seconds)",
+        "description": "How long to cache camera snapshots before requesting a fresh one from Blink. Set to 0 to always request fresh snapshots (uses more battery). Default: 60 seconds.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 0,
+        "maximum": 300,
+        "required": false
+      },
       "enableStreaming": {
         "title": "Enable Live Streaming",
         "description": "Enable HomeKit live video streaming via FFmpeg.",
@@ -166,19 +133,10 @@
       },
       "debugStreamPath": {
         "title": "Debug Stream Recording Path",
-        "description": "Path to save raw MPEG-TS stream recordings for debugging. Leave empty to disable. Files are saved as blink-stream-{serial}-{timestamp}.ts",
+        "description": "Path to save raw MPEG-TS stream recordings for debugging. Leave empty to disable.",
         "type": "string",
         "required": false,
         "placeholder": "/tmp/blink-streams"
-      },
-      "snapshotCacheTTL": {
-        "title": "Snapshot Cache Duration (seconds)",
-        "description": "How long to cache camera snapshots before requesting a fresh one from Blink. Set to 0 to always request fresh snapshots (uses more battery). Default: 60 seconds.",
-        "type": "integer",
-        "default": 60,
-        "minimum": 0,
-        "maximum": 300,
-        "required": false
       },
       "rtspTransport": {
         "title": "RTSP Transport",
@@ -246,7 +204,7 @@
       },
       "excludeDevices": {
         "title": "Excluded Devices",
-        "description": "List of device serial numbers, IDs, or names to exclude from HomeKit. Useful for hiding devices you don't want to control.",
+        "description": "List of device serial numbers, IDs, or names to exclude from HomeKit.",
         "type": "array",
         "items": {
           "type": "string",
@@ -254,29 +212,51 @@
         },
         "required": false
       },
-      "deviceNames": {
+      "deviceNameOverrides": {
         "title": "Custom Device Names",
-        "description": "Override display names for devices in HomeKit. Key is the device serial number or ID, value is the custom name.",
-        "type": "object",
-        "additionalProperties": {
-          "type": "string"
+        "description": "Override display names for devices in HomeKit.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "deviceIdentifier": {
+              "title": "Device Serial / ID",
+              "description": "The device serial number or numeric ID to rename",
+              "type": "string",
+              "required": true
+            },
+            "customName": {
+              "title": "Custom Name",
+              "description": "The display name to use in HomeKit",
+              "type": "string",
+              "required": true
+            }
+          }
         },
         "required": false
       },
-      "deviceSettings": {
+      "deviceSettingOverrides": {
         "title": "Per-Device Settings",
-        "description": "Override settings for specific devices. Key is the device serial number or ID.",
-        "type": "object",
-        "additionalProperties": {
+        "description": "Override settings for specific devices.",
+        "type": "array",
+        "items": {
           "type": "object",
           "properties": {
+            "deviceIdentifier": {
+              "title": "Device Serial / ID",
+              "description": "The device serial number or numeric ID to configure",
+              "type": "string",
+              "required": true
+            },
             "motionTimeout": {
+              "title": "Motion Timeout (seconds)",
               "type": "integer",
               "minimum": 5,
               "maximum": 300,
               "description": "Motion timeout in seconds for this device"
             },
             "enableMotion": {
+              "title": "Enable Motion Detection",
               "type": "boolean",
               "description": "Enable/disable motion detection for this device"
             }
@@ -289,16 +269,10 @@
   "layout": [
     {
       "type": "fieldset",
-      "title": "Account Settings",
+      "title": "Platform Settings",
       "items": [
         "name",
-        "username",
-        {
-          "key": "password",
-          "type": "password"
-        },
-        "twoFactorCode",
-        "clientVerificationCode"
+        "tier"
       ]
     },
     {
@@ -313,13 +287,14 @@
     },
     {
       "type": "fieldset",
-      "title": "Polling Settings",
+      "title": "Polling & Snapshots",
       "expandable": true,
       "expanded": false,
       "items": [
         "pollInterval",
         "motionTimeout",
-        "enableMotionPolling"
+        "enableMotionPolling",
+        "snapshotCacheTTL"
       ]
     },
     {
@@ -330,13 +305,15 @@
       "items": [
         "enableStreaming",
         "ffmpegPath",
-        "ffmpegDebug",
-        "rtspTransport",
         "maxStreams",
         "enableAudio",
+        "twoWayAudio",
         "audioCodec",
         "audioBitrate",
-        "videoBitrate"
+        "videoBitrate",
+        "rtspTransport",
+        "ffmpegDebug",
+        "debugStreamPath"
       ]
     },
     {
@@ -348,10 +325,30 @@
         {
           "key": "excludeDevices",
           "type": "array",
-          "buttonText": "Add Device to Exclude"
+          "buttonText": "Add Device to Exclude",
+          "items": [
+            "excludeDevices[]"
+          ]
         },
-        "deviceNames",
-        "deviceSettings"
+        {
+          "key": "deviceNameOverrides",
+          "type": "array",
+          "buttonText": "Add Name Override",
+          "items": [
+            "deviceNameOverrides[].deviceIdentifier",
+            "deviceNameOverrides[].customName"
+          ]
+        },
+        {
+          "key": "deviceSettingOverrides",
+          "type": "array",
+          "buttonText": "Add Device Setting",
+          "items": [
+            "deviceSettingOverrides[].deviceIdentifier",
+            "deviceSettingOverrides[].motionTimeout",
+            "deviceSettingOverrides[].enableMotion"
+          ]
+        }
       ]
     },
     {
@@ -360,10 +357,10 @@
       "expandable": true,
       "expanded": false,
       "items": [
-        "tier",
-        "debugAuth",
         "persistAuth",
-        "trustDevice"
+        "trustDevice",
+        "authLocked",
+        "debugAuth"
       ]
     }
   ]
