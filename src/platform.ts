@@ -265,7 +265,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return device.name;
   }
 
-  public getDeviceMotionTimeout(device: { id: number; serial?: string }): number {
+  public getDeviceMotionTimeout(device: { id: number; name?: string; serial?: string }): number {
     // New array-based overrides (preferred)
     const overrides = this.config.deviceSettingOverrides;
     if (overrides && Array.isArray(overrides)) {
@@ -274,6 +274,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           continue;
         }
         if (
+          (device.name && override.deviceIdentifier === device.name) ||
           override.deviceIdentifier === `${device.id}` ||
           (device.serial && override.deviceIdentifier === device.serial)
         ) {

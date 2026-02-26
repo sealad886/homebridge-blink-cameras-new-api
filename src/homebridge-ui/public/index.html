@@ -864,23 +864,15 @@
     updateLockUI(true);
   }
 
-  // Check for existing auth on load
-  // If already configured (has username), show schema form immediately
-  // The login wizard is only needed for initial setup or re-authentication
-  if (pluginConfig.length > 0 && pluginConfig[0].username) {
-    // Already configured - show schema form by default
-    homebridge.showSchemaForm();
-    
-    // Also check auth status to show appropriate UI state
-    await refreshAuthStatus();
+  // Check auth status on load and drive UI from token state, not config fields.
+  const status = await refreshAuthStatus();
+  if (status?.authenticated) {
+    savedUsername = resolveUsername(status) || 'Unknown';
+    savedTier = resolveTier(status) || document.getElementById('tier').value;
+    handleAuthSuccess(status);
   } else {
-    // No config yet - user needs to authenticate first
-    const status = await refreshAuthStatus();
-    if (status?.authenticated) {
-      savedUsername = resolveUsername(status) || 'Unknown';
-      savedTier = resolveTier(status) || document.getElementById('tier').value;
-      handleAuthSuccess(status);
-    }
+    homebridge.hideSchemaForm();
+    showStep('login');
   }
 })();
 </script>

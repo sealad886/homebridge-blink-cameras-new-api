@@ -136,7 +136,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
       this.motionService
         .getCharacteristic(this.platform.Characteristic.StatusActive)
-        .updateValue(target);
+        .updateValue(this.isMotionServiceActive());
     } catch (error) {
       this.platform.log.error(
         `Failed to ${target ? 'enable' : 'disable'} motion for ${this.deviceLabel} ${this.device.name}:`,

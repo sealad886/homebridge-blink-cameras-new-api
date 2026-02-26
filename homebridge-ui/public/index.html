@@ -811,28 +811,15 @@
     showStep('login');
   });
 
-  // Check for existing auth on load
-  // Always start by checking auth status and showing appropriate UI
-  if (pluginConfig.length > 0 && pluginConfig[0].username) {
-    // Already configured - check auth status
-    const status = await refreshAuthStatus();
-    if (status?.authenticated) {
-      // Show success view with re-auth option, then show schema form
-      updateAccountDisplay(true, status);
-      showStep('success');
-      homebridge.showSchemaForm();
-    } else {
-      // Config exists but not authenticated - show login wizard for re-auth
-      showStep('login');
-    }
+  // Check auth status on load and drive UI from token state, not config fields.
+  const status = await refreshAuthStatus();
+  if (status?.authenticated) {
+    savedUsername = resolveUsername(status) || 'Unknown';
+    savedTier = resolveTier(status) || document.getElementById('tier').value;
+    handleAuthSuccess(status);
   } else {
-    // No config yet - user needs to authenticate first
-    const status = await refreshAuthStatus();
-    if (status?.authenticated) {
-      savedUsername = resolveUsername(status) || 'Unknown';
-      savedTier = resolveTier(status) || document.getElementById('tier').value;
-      handleAuthSuccess(status);
-    }
+    homebridge.hideSchemaForm();
+    showStep('login');
   }
 })();
 </script>
