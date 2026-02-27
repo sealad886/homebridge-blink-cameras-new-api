@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.9] - 2026-02-27
+
+### Fixed
+
+- Plugin settings page no longer forces a re-login after Homebridge restarts.
+  The UI server's `/status` endpoint now rehydrates from the persisted
+  `auth-state.json` file when it has no in-memory session, so the Custom UI
+  shows "Authenticated" and skips the login form when valid tokens exist on disk.
+
 ## [0.5.8] - 2026-02-27
 
 ### Fixed

@@ -14,7 +14,8 @@
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
 import { Blink2FARequiredError, BlinkAuthenticationError } from '../blink-api/auth';
 import { BlinkApi } from '../blink-api/client';
-import { BlinkConfig, BlinkLogger } from '../types';
+import { BlinkAuthState, BlinkConfig, BlinkLogger } from '../types';
+import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
@@ -396,10 +397,50 @@ class BlinkUiServer extends HomebridgePluginUiServer {
   }
 
   /**
-   * Check current authentication status
+   * Check current authentication status.
+   *
+   * If we have no in-memory session (e.g. after a Homebridge restart), try to
+   * rehydrate from the persisted auth-state file written by captureTokens().
+   * This lets the UI show "Authenticated" without forcing a re-login.
    */
   async handleStatus(): Promise<AuthStatus> {
+    if (!this.authStatus.authenticated) {
+      const diskState = await this.loadPersistedAuthState();
+      if (diskState) {
+        this.authStatus = {
+          authenticated: true,
+          email: diskState.email ?? undefined,
+          accountId: diskState.accountId ?? undefined,
+          tier: diskState.tier ?? undefined,
+          message: 'Restored from persisted auth state',
+        };
+      }
+    }
     return this.authStatus;
+  }
+
+  /**
+   * Read the on-disk auth-state.json and return it if it looks valid
+   * (has an access token and is not expired).
+   */
+  private async loadPersistedAuthState(): Promise<BlinkAuthState | null> {
+    try {
+      const filePath = this.getAuthStoragePath();
+      const raw = await fs.readFile(filePath, 'utf8');
+      const state = JSON.parse(raw) as BlinkAuthState;
+      if (!state?.accessToken) return null;
+      if (state.tokenExpiry) {
+        const expiry = new Date(state.tokenExpiry);
+        if (!Number.isNaN(expiry.getTime()) && expiry.getTime() <= Date.now()) {
+          this.logDebug('Persisted auth state has expired token; ignoring');
+          return null;
+        }
+      }
+      this.logDebug('Loaded valid persisted auth state from disk');
+      return state;
+    } catch {
+      return null;
+    }
   }
 
   /**
