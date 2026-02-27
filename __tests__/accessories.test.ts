@@ -16,7 +16,7 @@ type CameraSourceFfmpegAccess = {
 };
 
 describe('Accessory handlers', () => {
-  const buildPlatform = () => {
+  const buildPlatform = (streamingConfigOverrides: Partial<ReturnType<typeof resolveStreamingConfig>> = {}) => {
     const hap = createHap();
     const log = createLogger();
     const apiClient = {
@@ -40,7 +40,7 @@ describe('Accessory handlers', () => {
       apiClient: apiClient as unknown as BlinkCamerasPlatform['apiClient'],
       log: log as unknown as BlinkCamerasPlatform['log'],
       api: { hap } as unknown as BlinkCamerasPlatform['api'],
-      streamingConfig: resolveStreamingConfig({ enabled: false }),
+      streamingConfig: resolveStreamingConfig({ enabled: false, ...streamingConfigOverrides }),
     };
 
     return { hap, apiClient, platform, log };
@@ -344,6 +344,127 @@ describe('Accessory handlers', () => {
 
     expect(callback).toHaveBeenCalledWith(expect.any(Error));
     expect(testSource.cachedSnapshot).toBeNull();
+  });
+
+  it('returns cached snapshot indefinitely when persistSnapshotCache is enabled', async () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+      getAuthHeaders: jest.fn().mockReturnValue({ Authorization: 'Bearer token' }),
+      getSharedRestRootUrl: jest.fn().mockReturnValue('https://rest-e006.immedia-semi.com/'),
+    };
+
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      () => 'https://example.com/thumbnail.jpg',
+      () => true,
+      logFn,
+      { enabled: false, snapshotCacheTTL: 1, persistSnapshotCache: true },
+    );
+
+    const cached = Buffer.from('persisted');
+    const testSource = source as unknown as { cachedSnapshot: Buffer | null; cachedSnapshotTime: number };
+    testSource.cachedSnapshot = cached;
+    testSource.cachedSnapshotTime = Date.now() - 10 * 60 * 1000;
+
+    const callback = jest.fn();
+    await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, callback);
+
+    expect(callback).toHaveBeenCalledWith(undefined, cached);
+    expect(apiClient.requestCameraThumbnail).not.toHaveBeenCalled();
+    expect(apiClient.pollCommand).not.toHaveBeenCalled();
+  });
+
+  it('refresh switch forces thumbnail refresh and resets to off', async () => {
+    const refreshSpy = jest.spyOn(BlinkCameraSource.prototype, 'refreshSnapshotCache').mockResolvedValue();
+    try {
+      const { hap, platform } = buildPlatform({ persistSnapshotCache: true });
+      const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+      const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: true };
+
+      new CameraAccessory(
+        platform as unknown as BlinkCamerasPlatform,
+        accessory as unknown as PlatformAccessory,
+        device,
+      );
+
+      const refreshSwitch = accessory.getServiceById(hap.Service.Switch, 'snapshot-refresh');
+      const characteristic = refreshSwitch?.getCharacteristic(hap.Characteristic.On);
+
+      expect(refreshSwitch).toBeDefined();
+
+      await characteristic?.onSetHandler?.(true);
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(characteristic?.value).toBe(false);
+    } finally {
+      refreshSpy.mockRestore();
+    }
+  });
+
+  it('refreshSnapshotCache bypasses persistent cache and updates cached buffer', async () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10 }),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+      getAuthHeaders: jest.fn().mockReturnValue({ Authorization: 'Bearer token' }),
+      getSharedRestRootUrl: jest.fn().mockReturnValue('https://rest-e006.immedia-semi.com/'),
+    };
+    const freshBuffer = Buffer.from('fresh-image');
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () =>
+        freshBuffer.buffer.slice(freshBuffer.byteOffset, freshBuffer.byteOffset + freshBuffer.byteLength),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const source = new BlinkCameraSource(
+        apiClient as unknown as BlinkApi,
+        hap as unknown as HAP,
+        1,
+        2,
+        'camera',
+        'TEST_SERIAL',
+        () => 'https://example.com/thumbnail.jpg',
+        () => true,
+        logFn,
+        { enabled: false, persistSnapshotCache: true },
+      );
+
+      const testSource = source as unknown as { cachedSnapshot: Buffer | null; cachedSnapshotTime: number };
+      testSource.cachedSnapshot = Buffer.from('old-image');
+      testSource.cachedSnapshotTime = Date.now() - 1000 * 60 * 60;
+
+      await source.refreshSnapshotCache();
+
+      expect(apiClient.requestCameraThumbnail).toHaveBeenCalledWith(1, 2);
+      expect(apiClient.pollCommand).toHaveBeenCalledWith(1, 10);
+      expect(testSource.cachedSnapshot?.equals(freshBuffer)).toBe(true);
+
+      const callback = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, callback);
+
+      expect(apiClient.requestCameraThumbnail).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledWith(undefined, expect.any(Buffer));
+      const returnedBuffer = callback.mock.calls[0][1] as Buffer;
+      expect(returnedBuffer.equals(freshBuffer)).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
 });

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0-alpha.1] - 2026-02-27
+
+### Changed
+
+- **Auth storage location**: Migrated from `blink-auth/auth-state.json` subdirectory to
+  a single `.blink-auth.json` dot-file in the Homebridge storage root. This follows
+  Homebridge ecosystem conventions (e.g. homebridge-ring's `.ring.json`) and eliminates
+  the need for `mkdir` calls.
+- On first load, existing tokens are automatically migrated from the legacy
+  `blink-auth/` directory to the new dot-file location. The legacy directory is
+  removed after successful migration.
+
+### Added
+
+- `preuninstall` lifecycle hook that cleans up the `.blink-auth.json` dot-file and
+  legacy `blink-auth/` directory when the plugin is uninstalled.
+- Unit tests for `FileAuthStorage` persistence: save, load, migration, clear, and
+  error handling.
+
 ## [0.5.9] - 2026-02-27
 
 ### Fixed

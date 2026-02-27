@@ -1,6 +1,9 @@
 import { BlinkAuth, Blink2FARequiredError } from '../../src/blink-api/auth';
-import { BlinkConfig } from '../../src/types';
+import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
 import { URL } from 'node:url';
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 // RequestInit is a global type in Node.js 18+ but may need explicit typing in tests
 type FetchOptions = Parameters<typeof fetch>[1];
@@ -367,5 +370,141 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const auth = new BlinkAuth(baseConfig);
       await expect(auth.refreshTokens()).rejects.toThrow('Cannot refresh token before login');
     });
+  });
+});
+
+describe('FileAuthStorage via BlinkAuth persistence', () => {
+  let tmpDir: string;
+  let dotFilePath: string;
+  let legacyDir: string;
+  let legacyFilePath: string;
+
+  const sampleState: BlinkAuthState = {
+    accessToken: 'test-access-token',
+    refreshToken: 'test-refresh-token',
+    tokenAuth: 'test-token-auth',
+    tokenExpiry: '2026-12-31T00:00:00.000Z',
+    accountId: 42,
+    clientId: 100,
+    region: 'us-east-1',
+    tier: 'prod',
+    email: 'user@example.com',
+    hardwareId: 'hw-id',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  function getStorage(auth: BlinkAuth): BlinkAuthStorage {
+    return (auth as unknown as { storage: BlinkAuthStorage }).storage;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-auth-test-'));
+    dotFilePath = path.join(tmpDir, '.blink-auth-state.json');
+    legacyDir = path.join(tmpDir, 'blink-auth');
+    legacyFilePath = path.join(legacyDir, 'auth-state.json');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeAuth(opts?: { withLegacy?: boolean }): BlinkAuth {
+    const config: BlinkConfig = {
+      email: 'user@example.com',
+      password: 'password',
+      hardwareId: 'hw-id',
+      authStoragePath: dotFilePath,
+      ...(opts?.withLegacy ? { legacyAuthStoragePath: legacyFilePath } : {}),
+    };
+    return new BlinkAuth(config);
+  }
+
+  it('save() writes state to the dot-file path', async () => {
+    const storage = getStorage(makeAuth());
+    await storage.save(sampleState);
+
+    const raw = await fs.readFile(dotFilePath, 'utf8');
+    expect(JSON.parse(raw)).toEqual(sampleState);
+  });
+
+  it('load() reads state from the dot-file path', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+
+    const storage = getStorage(makeAuth());
+    const loaded = await storage.load();
+    expect(loaded).toEqual(sampleState);
+  });
+
+  it('load() returns null when no file exists', async () => {
+    const storage = getStorage(makeAuth());
+    const loaded = await storage.load();
+    expect(loaded).toBeNull();
+  });
+
+  it('load() migrates from legacy path to dot-file', async () => {
+    await fs.mkdir(legacyDir, { recursive: true });
+    await fs.writeFile(legacyFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+
+    const storage = getStorage(makeAuth({ withLegacy: true }));
+    const loaded = await storage.load();
+
+    expect(loaded).toEqual(sampleState);
+
+    // Dot-file was written with the migrated state
+    const primary = JSON.parse(await fs.readFile(dotFilePath, 'utf8'));
+    expect(primary).toEqual(sampleState);
+
+    // Legacy file was removed
+    await expect(fs.access(legacyFilePath)).rejects.toThrow();
+
+    // Legacy directory was removed (it was empty)
+    await expect(fs.access(legacyDir)).rejects.toThrow();
+  });
+
+  it('load() returns primary even when legacy exists (no migration)', async () => {
+    const primaryState = { ...sampleState, accessToken: 'primary-token' };
+    const legacyState = { ...sampleState, accessToken: 'legacy-token' };
+
+    await fs.writeFile(dotFilePath, JSON.stringify(primaryState, null, 2), 'utf8');
+    await fs.mkdir(legacyDir, { recursive: true });
+    await fs.writeFile(legacyFilePath, JSON.stringify(legacyState, null, 2), 'utf8');
+
+    const storage = getStorage(makeAuth({ withLegacy: true }));
+    const loaded = await storage.load();
+
+    expect(loaded).toEqual(primaryState);
+
+    // Legacy file is untouched — no migration occurred
+    const legacyStillExists = await fs.readFile(legacyFilePath, 'utf8');
+    expect(JSON.parse(legacyStillExists)).toEqual(legacyState);
+  });
+
+  it('clear() removes the dot-file', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState), 'utf8');
+
+    const storage = getStorage(makeAuth());
+    await storage.clear();
+
+    await expect(fs.access(dotFilePath)).rejects.toThrow();
+  });
+
+  it('clear() removes both dot-file and legacy path', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState), 'utf8');
+    await fs.mkdir(legacyDir, { recursive: true });
+    await fs.writeFile(legacyFilePath, JSON.stringify(sampleState), 'utf8');
+
+    const storage = getStorage(makeAuth({ withLegacy: true }));
+    await storage.clear();
+
+    await expect(fs.access(dotFilePath)).rejects.toThrow();
+    await expect(fs.access(legacyFilePath)).rejects.toThrow();
+    await expect(fs.access(legacyDir)).rejects.toThrow();
+  });
+
+  it('load() with corrupted JSON throws (not ENOENT)', async () => {
+    await fs.writeFile(dotFilePath, '{not-valid-json!!!', 'utf8');
+
+    const storage = getStorage(makeAuth());
+    await expect(storage.load()).rejects.toThrow();
   });
 });

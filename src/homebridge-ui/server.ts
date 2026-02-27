@@ -154,14 +154,17 @@ class BlinkUiServer extends HomebridgePluginUiServer {
   }
 
   /**
-   * Get the auth storage path for this Homebridge instance
+   * Get the auth storage path for this Homebridge instance.
+   * Single dot-file in the storage root — no custom subdirectory needed.
+   * Must match the path computed by platform.ts buildAuthStoragePath().
    */
   private getAuthStoragePath(): string {
-    // Write inside Homebridge's own storage directory so permissions are guaranteed.
-    // This must match the path computed by platform.ts buildAuthStoragePath(), which
-    // uses path.dirname(api.user.persistPath()) — where persistPath() is a sub-folder
-    // of homebridgeStoragePath (e.g. '.../homebridge/persist'), so dirname resolves back
-    // to homebridgeStoragePath itself.
+    const storagePath = this.homebridgeStoragePath ?? '.';
+    return path.join(storagePath, '.blink-auth.json');
+  }
+
+  /** Legacy path from pre-0.6 releases for automatic migration. */
+  private getLegacyAuthStoragePath(): string {
     const storagePath = this.homebridgeStoragePath ?? '.';
     return path.join(storagePath, 'blink-auth', 'auth-state.json');
   }
@@ -214,6 +217,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
       hardwareId: deviceId || this.generateDeviceId(),
       tier: tier || 'prod',
       authStoragePath: this.getAuthStoragePath(),
+      legacyAuthStoragePath: this.getLegacyAuthStoragePath(),
       debugAuth: false,
       logger: new UiLogger(this),
     };
@@ -420,27 +424,30 @@ class BlinkUiServer extends HomebridgePluginUiServer {
   }
 
   /**
-   * Read the on-disk auth-state.json and return it if it looks valid
-   * (has an access token and is not expired).
+   * Read the on-disk .blink-auth.json (or legacy blink-auth/auth-state.json)
+   * and return it if it looks valid (has an access token and is not expired).
    */
   private async loadPersistedAuthState(): Promise<BlinkAuthState | null> {
-    try {
-      const filePath = this.getAuthStoragePath();
-      const raw = await fs.readFile(filePath, 'utf8');
-      const state = JSON.parse(raw) as BlinkAuthState;
-      if (!state?.accessToken) return null;
-      if (state.tokenExpiry) {
-        const expiry = new Date(state.tokenExpiry);
-        if (!Number.isNaN(expiry.getTime()) && expiry.getTime() <= Date.now()) {
-          this.logDebug('Persisted auth state has expired token; ignoring');
-          return null;
+    // Try primary dot-file first, then fall back to legacy subdirectory path
+    for (const filePath of [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()]) {
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        const state = JSON.parse(raw) as BlinkAuthState;
+        if (!state?.accessToken) continue;
+        if (state.tokenExpiry) {
+          const expiry = new Date(state.tokenExpiry);
+          if (!Number.isNaN(expiry.getTime()) && expiry.getTime() <= Date.now()) {
+            this.logDebug(`Persisted auth state at ${filePath} has expired token; skipping`);
+            continue;
+          }
         }
+        this.logDebug(`Loaded valid persisted auth state from ${filePath}`);
+        return state;
+      } catch {
+        // File doesn't exist or is unreadable — try next
       }
-      this.logDebug('Loaded valid persisted auth state from disk');
-      return state;
-    } catch {
-      return null;
     }
+    return null;
   }
 
   /**
@@ -488,6 +495,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
       hardwareId: deviceId || this.generateDeviceId(),
       tier: tier || 'prod',
       authStoragePath: this.getAuthStoragePath(),
+      legacyAuthStoragePath: this.getLegacyAuthStoragePath(),
       logger: new UiLogger(this),
     };
 

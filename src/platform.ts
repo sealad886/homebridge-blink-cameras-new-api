@@ -85,6 +85,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   authLocked?: boolean;
   debugStreamPath?: string;
   snapshotCacheTTL?: number;
+  persistSnapshotCache?: boolean;
 }
 
 export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
@@ -133,6 +134,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       maxStreams: this.config.maxStreams,
       debugStreamPath: this.config.debugStreamPath,
       snapshotCacheTTL: this.config.snapshotCacheTTL,
+      persistSnapshotCache: this.config.persistSnapshotCache,
       audio: {
         enabled: this.config.enableAudio,
         twoWay: this.config.twoWayAudio,
@@ -148,6 +150,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.log.warn('Two-way talk UI is disabled until uplink framing is verified; ignoring twoWayAudio setting.');
     }
 
+    if (this.streamingConfig.persistSnapshotCache) {
+      this.log.info(
+        'Persistent snapshot cache enabled; snapshots are kept until manually refreshed via each camera\'s "Refresh Snapshot" switch.',
+      );
+    }
+
     // Log debug mode status
     if (this.config.debugAuth) {
       this.log.warn('Auth debugging enabled - verbose API logging active');
@@ -155,6 +163,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     const hardwareId = this.config.deviceId ?? this.config.deviceName ?? 'homebridge-blink';
     const authStoragePath = this.buildAuthStoragePath();
+    const legacyAuthStoragePath = this.buildLegacyAuthStoragePath();
 
     this.apiClient = new BlinkApi({
       email: this.config.username ?? '',
@@ -166,6 +175,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       accountVerificationCode: this.config.accountVerificationCode,
       trustDevice: this.config.trustDevice,
       authStoragePath,
+      legacyAuthStoragePath,
       tier: this.config.tier,
       sharedTier: this.config.sharedTier,
       debugAuth: this.config.debugAuth,
@@ -212,14 +222,19 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (this.config.persistAuth === false) {
       return undefined;
     }
-    const persistRoot = this.api?.user?.persistPath?.();
-    if (!persistRoot) {
+    const storagePath = this.api?.user?.storagePath?.();
+    if (!storagePath) {
       return undefined;
     }
-    // Avoid writing inside Homebridge's HAP persist directory (node-persist cannot
-    // handle subdirectories there and will crash Homebridge on startup).
-    const persistBase = path.dirname(persistRoot);
-    return path.join(persistBase, 'blink-auth', 'auth-state.json');
+    // Single dot-file in the Homebridge storage root — no custom subdirectory needed.
+    return path.join(storagePath, '.blink-auth.json');
+  }
+
+  /** Legacy path from pre-0.6 releases for automatic migration. */
+  private buildLegacyAuthStoragePath(): string | undefined {
+    const storagePath = this.api?.user?.storagePath?.();
+    if (!storagePath) return undefined;
+    return path.join(storagePath, 'blink-auth', 'auth-state.json');
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {

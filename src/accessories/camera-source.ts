@@ -51,6 +51,8 @@ export interface BlinkCameraStreamingConfig {
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds (0 = always request fresh, default 60) */
   snapshotCacheTTL?: number;
+  /** Keep last successful snapshot indefinitely until manually refreshed */
+  persistSnapshotCache?: boolean;
 }
 
 export type BlinkCameraStreamingConfigInput = Omit<
@@ -75,6 +77,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   },
   video: {},
   snapshotCacheTTL: 60,
+  persistSnapshotCache: false,
 };
 
 export const resolveStreamingConfig = (
@@ -93,6 +96,7 @@ export const resolveStreamingConfig = (
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
+    persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
     audio: {
       enabled: audio.enabled ?? DEFAULT_STREAMING_CONFIG.audio.enabled,
       twoWay,
@@ -254,7 +258,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
   /**
    * Handle snapshot request from HomeKit.
-   * Requests a fresh thumbnail from Blink and returns it as a JPEG buffer.
+   * Returns cached snapshots when valid/persistent; otherwise requests a fresh
+   * thumbnail from Blink and returns it as a JPEG buffer.
    *
    * @param request - Snapshot request with width/height
    * @param callback - Callback to return image buffer or error
@@ -272,10 +277,17 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
+    const persistSnapshotCache = this.streamingConfig.persistSnapshotCache ?? false;
+    if (this.cachedSnapshot && persistSnapshotCache) {
+      this.log(`Snapshot returned from persistent cache (${this.cachedSnapshot.length} bytes)`);
+      callback(undefined, this.cachedSnapshot);
+      return;
+    }
+
     const cacheTTL = (this.streamingConfig.snapshotCacheTTL ?? 60) * 1000;
     const cacheAge = Date.now() - this.cachedSnapshotTime;
 
-    // Return cached snapshot if still valid
+    // Return cached snapshot if still valid by TTL
     if (this.cachedSnapshot && cacheTTL > 0 && cacheAge < cacheTTL) {
       this.log(`Snapshot returned from cache (${this.cachedSnapshot.length} bytes, age ${Math.round(cacheAge / 1000)}s)`);
       callback(undefined, this.cachedSnapshot);
@@ -283,33 +295,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     try {
-      // Request fresh thumbnail from Blink only if cache is stale
-      await this.requestThumbnail();
-
-      // Get thumbnail URL from device data
-      const url = this.getThumbnailUrl();
-      if (!url) {
-        throw new Error('No thumbnail URL available');
-      }
-
-      // Build full URL (thumbnails may be relative paths)
-      const fullUrl = url.startsWith('http')
-        ? url
-        : new URL(url, this.api.getSharedRestRootUrl()).toString();
-
-      // Fetch the thumbnail image with auth headers
-      const response = await fetch(fullUrl, {
-        headers: this.api.getAuthHeaders(),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch thumbnail: ${response.status}`);
-      }
-
-      const buffer = Buffer.from(await response.arrayBuffer());
-
-      // Cache the snapshot
-      this.cachedSnapshot = buffer;
-      this.cachedSnapshotTime = Date.now();
+      const buffer = await this.fetchSnapshotBuffer();
+      this.cacheSnapshot(buffer);
 
       this.log(`Snapshot returned (${buffer.length} bytes)`);
       callback(undefined, buffer);
@@ -317,6 +304,51 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       this.log(`Snapshot error: ${error}`);
       callback(error as Error);
     }
+  }
+
+  /**
+   * Force a fresh snapshot fetch and update in-memory cache.
+   * Used by manual refresh controls when persistent caching is enabled.
+   */
+  async refreshSnapshotCache(): Promise<void> {
+    if (!this.isDeviceAvailable()) {
+      throw new Error('Camera is unavailable/offline');
+    }
+
+    const buffer = await this.fetchSnapshotBuffer();
+    this.cacheSnapshot(buffer);
+    this.log(`Snapshot cache refreshed manually (${buffer.length} bytes)`);
+  }
+
+  private cacheSnapshot(buffer: Buffer): void {
+    this.cachedSnapshot = buffer;
+    this.cachedSnapshotTime = Date.now();
+  }
+
+  private async fetchSnapshotBuffer(): Promise<Buffer> {
+    // Request fresh thumbnail from Blink
+    await this.requestThumbnail();
+
+    // Get thumbnail URL from device data
+    const url = this.getThumbnailUrl();
+    if (!url) {
+      throw new Error('No thumbnail URL available');
+    }
+
+    // Build full URL (thumbnails may be relative paths)
+    const fullUrl = url.startsWith('http')
+      ? url
+      : new URL(url, this.api.getSharedRestRootUrl()).toString();
+
+    // Fetch the thumbnail image with auth headers
+    const response = await fetch(fullUrl, {
+      headers: this.api.getAuthHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch thumbnail: ${response.status}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
   }
 
   /**

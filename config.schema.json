@@ -110,6 +110,13 @@
         "maximum": 300,
         "required": false
       },
+      "persistSnapshotCache": {
+        "title": "Persist Snapshot Cache Until Manual Refresh",
+        "description": "Keep the last successful snapshot indefinitely instead of expiring by TTL. When enabled, each camera exposes a 'Refresh Snapshot' switch in Home to fetch a new thumbnail on demand.",
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
       "enableStreaming": {
         "title": "Enable Live Streaming",
         "description": "Enable HomeKit live video streaming via FFmpeg.",
@@ -294,7 +301,8 @@
         "pollInterval",
         "motionTimeout",
         "enableMotionPolling",
-        "snapshotCacheTTL"
+        "snapshotCacheTTL",
+        "persistSnapshotCache"
       ]
     },
     {

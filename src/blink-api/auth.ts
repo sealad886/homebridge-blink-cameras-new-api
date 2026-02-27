@@ -50,33 +50,68 @@ const REFRESH_MAX_RETRIES = 2;
 const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
 
 class FileAuthStorage implements BlinkAuthStorage {
-  constructor(private readonly filePath: string) {}
+  /** Legacy directory-based path for migration (e.g. .../blink-auth/auth-state.json) */
+  private readonly legacyPath: string | null;
+
+  constructor(private readonly filePath: string, legacyPath?: string) {
+    this.legacyPath = legacyPath ?? null;
+  }
 
   async load(): Promise<BlinkAuthState | null> {
-    try {
-      const contents = await fs.readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(contents) as BlinkAuthState;
-      return parsed ?? null;
-    } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') {
-        return null;
+    // Try the primary (dot-file) path first
+    const primary = await this.readJsonFile(this.filePath);
+    if (primary) return primary;
+
+    // Migrate from the legacy blink-auth/ directory if it exists
+    if (this.legacyPath) {
+      const legacy = await this.readJsonFile(this.legacyPath);
+      if (legacy) {
+        await this.save(legacy);
+        await this.removeLegacy();
+        return legacy;
       }
-      throw error;
     }
+    return null;
   }
 
   async save(state: BlinkAuthState): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    // Parent directory is the Homebridge storagePath root — guaranteed to exist.
     await fs.writeFile(this.filePath, JSON.stringify(state, null, 2), 'utf8');
   }
 
   async clear(): Promise<void> {
+    await this.unlinkQuiet(this.filePath);
+    if (this.legacyPath) {
+      await this.removeLegacy();
+    }
+  }
+
+  private async readJsonFile(filePath: string): Promise<BlinkAuthState | null> {
     try {
-      await fs.unlink(this.filePath);
+      const contents = await fs.readFile(filePath, 'utf8');
+      return (JSON.parse(contents) as BlinkAuthState) ?? null;
     } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') {
-        throw error;
-      }
+      if ((error as { code?: string }).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  private async unlinkQuiet(filePath: string): Promise<void> {
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+    }
+  }
+
+  /** Remove the legacy auth-state.json and its parent blink-auth/ directory. */
+  private async removeLegacy(): Promise<void> {
+    if (!this.legacyPath) return;
+    await this.unlinkQuiet(this.legacyPath);
+    try {
+      await fs.rmdir(path.dirname(this.legacyPath));
+    } catch {
+      // Directory not empty or already gone — ignore
     }
   }
 }
@@ -197,7 +232,7 @@ export class BlinkAuth {
     if (config.authStorage) {
       this.storage = config.authStorage;
     } else if (config.authStoragePath) {
-      this.storage = new FileAuthStorage(config.authStoragePath);
+      this.storage = new FileAuthStorage(config.authStoragePath, config.legacyAuthStoragePath);
     }
   }
 

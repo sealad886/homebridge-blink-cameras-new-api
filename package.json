@@ -1,7 +1,7 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.5.9",
+    "version": "0.6.0-alpha.1",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
@@ -36,7 +36,8 @@
     "types": "dist/index.d.ts",
     "files": [
         "dist",
-        "config.schema.json"
+        "config.schema.json",
+        "scripts/preuninstall.js"
     ],
     "homebridge": {
         "pluginAlias": "BlinkCameras",
@@ -81,6 +82,7 @@
         "homebridge": ">=1.11.1"
     },
     "scripts": {
+        "preuninstall": "node scripts/preuninstall.js",
         "build": "tsc && npm run copy-ui-assets",
         "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
         "watch": "npm run build && nodemon",

@@ -100,16 +100,29 @@ export class MockAccessory {
   public services = new Map<string, MockService>();
 
   constructor(public readonly displayName: string, public readonly UUID: string, private readonly hap: ReturnType<typeof createHap>) {
-    this.services.set(this.hap.Service.AccessoryInformation, new MockService(this.hap.Service.AccessoryInformation, displayName));
+    this.services.set(this.getServiceKey(this.hap.Service.AccessoryInformation), new MockService(this.hap.Service.AccessoryInformation, displayName));
+  }
+
+  private getServiceKey(type: string, subtype?: string): string {
+    return subtype ? `${type}:${subtype}` : type;
   }
 
   getService(name: string): MockService | undefined {
-    return this.services.get(name);
+    for (const service of this.services.values()) {
+      if (service.type === name) {
+        return service;
+      }
+    }
+    return undefined;
   }
 
-  addService(name: string, displayName?: string): MockService {
+  getServiceById(name: string, subtype: string): MockService | undefined {
+    return this.services.get(this.getServiceKey(name, subtype));
+  }
+
+  addService(name: string, displayName?: string, subtype?: string): MockService {
     const service = new MockService(name, displayName);
-    this.services.set(name, service);
+    this.services.set(this.getServiceKey(name, subtype), service);
     return service;
   }
 

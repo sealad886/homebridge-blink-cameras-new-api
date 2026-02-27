@@ -30,8 +30,10 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   protected readonly switchService: Service;
   protected readonly motionService: Service;
   protected readonly cameraController: CameraController;
+  protected readonly cameraSource: BlinkCameraSource;
   protected motionDetected = false;
   protected motionTimeout: ReturnType<typeof setTimeout> | null = null;
+  private readonly refreshSnapshotService?: Service;
 
   private isDeviceAvailable(): boolean {
     const status = this.device.status?.trim().toLowerCase();
@@ -69,7 +71,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       .setCharacteristic(this.platform.Characteristic.SerialNumber, device.serial ?? `${device.id}`);
 
     this.switchService =
-      this.accessory.getService(this.platform.Service.Switch) ||
+      this.accessory.getServiceById(this.platform.Service.Switch, 'motion-switch') ||
       this.accessory.addService(this.platform.Service.Switch, `${device.name} Motion`, 'motion-switch');
 
     this.switchService
@@ -78,7 +80,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       .onSet(async (value) => this.setMotionEnabled(value));
 
     this.motionService =
-      this.accessory.getService(this.platform.Service.MotionSensor) ||
+      this.accessory.getServiceById(this.platform.Service.MotionSensor, 'motion-sensor') ||
       this.accessory.addService(
         this.platform.Service.MotionSensor,
         motionSensorDisplayName ?? device.name,
@@ -93,7 +95,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .onGet(() => this.isMotionServiceActive());
 
-    const cameraSource = new BlinkCameraSource(
+    this.cameraSource = new BlinkCameraSource(
       this.platform.apiClient,
       this.platform.api.hap,
       device.network_id,
@@ -107,13 +109,43 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     );
 
     this.cameraController = new this.platform.api.hap.CameraController(
-      createCameraControllerOptions(this.platform.api.hap, cameraSource, this.platform.streamingConfig),
+      createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig),
     );
     this.accessory.configureController(this.cameraController);
+
+    const existingRefreshService = this.accessory.getServiceById(this.platform.Service.Switch, 'snapshot-refresh');
+    if (this.platform.streamingConfig.persistSnapshotCache) {
+      this.refreshSnapshotService = existingRefreshService ??
+        this.accessory.addService(this.platform.Service.Switch, `${device.name} Refresh Snapshot`, 'snapshot-refresh');
+      this.refreshSnapshotService
+        .getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => false)
+        .onSet(async (value) => this.refreshSnapshot(value));
+    } else if (existingRefreshService) {
+      this.accessory.removeService(existingRefreshService);
+    }
   }
 
   protected abstract enableMotionApi(): Promise<void>;
   protected abstract disableMotionApi(): Promise<void>;
+
+  private async refreshSnapshot(value: CharacteristicValue): Promise<void> {
+    if (value !== true) {
+      return;
+    }
+
+    try {
+      await this.cameraSource.refreshSnapshotCache();
+      this.platform.log.info(`Manually refreshed snapshot for ${this.deviceLabel}: ${this.device.name}`);
+    } catch (error) {
+      this.platform.log.error(`Failed to refresh snapshot for ${this.deviceLabel} ${this.device.name}:`, error);
+      throw error;
+    } finally {
+      this.refreshSnapshotService
+        ?.getCharacteristic(this.platform.Characteristic.On)
+        .updateValue(false);
+    }
+  }
 
   private async setMotionEnabled(value: CharacteristicValue): Promise<void> {
     const target = Boolean(value);

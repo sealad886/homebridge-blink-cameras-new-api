@@ -127,6 +127,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 | `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings for debugging |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); 0 always fetches new snapshots |
+| `persistSnapshotCache` | No | `false` | Keep last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
 | `deviceNames` | No | - | Map of device IDs/serials to custom display names |
 | `deviceSettings` | No | - | Per-device overrides (e.g., motion timeout/enable) |
@@ -136,6 +137,9 @@ storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the
 persist directory.
 
 \* `username` and `password` are only needed for non-UI/manual fallback flows. In normal Homebridge UI usage, authenticate via the custom UI and keep credentials out of `config.json`.
+
+When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
+snapshot fetch. Use the `Refresh Snapshot` switch in Home to force a new thumbnail capture.
 
 ## Quick Start: Login & Authorization
 

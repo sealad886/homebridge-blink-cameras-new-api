@@ -67,6 +67,7 @@ homebridge-ui/server.js.map
 
 /scripts/*
 !/scripts/release.mjs
+!/scripts/preuninstall.js
 # IDE and tracking files
 .copilot-tracking/
 *.txt

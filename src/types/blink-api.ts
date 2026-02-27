@@ -394,6 +394,8 @@ export interface BlinkConfig {
   accountVerificationCode?: string;
   trustDevice?: boolean;
   authStoragePath?: string;
+  /** Legacy path from pre-0.6 releases for automatic migration */
+  legacyAuthStoragePath?: string;
   authStorage?: BlinkAuthStorage;
   tier?: string;
   sharedTier?: string;
