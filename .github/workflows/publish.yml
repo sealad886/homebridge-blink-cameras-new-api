@@ -35,6 +35,13 @@ jobs:
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
+          # Detect prerelease versions (e.g. 0.6.0-alpha.1, 1.0.0-beta.2)
+          if echo "$TARGET" | grep -qE '-(alpha|beta|rc)\.'; then
+            PRETAG=$(echo "$TARGET" | sed -E 's/.*-(alpha|beta|rc)\..*/\1/')
+            echo "npm_tag=$PRETAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build
         if: steps.version_check.outputs.publish == 'true'
@@ -64,7 +71,7 @@ jobs:
         if: steps.version_check.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+        run: npm publish --access public --tag ${{ steps.version_check.outputs.npm_tag }}
 
       - name: Skip publish
         if: steps.version_check.outputs.publish != 'true'
