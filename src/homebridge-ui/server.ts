@@ -156,10 +156,13 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Get the auth storage path for this Homebridge instance
    */
   private getAuthStoragePath(): string {
-    // Use a sibling directory to Homebridge storage for auth persistence
+    // Write inside Homebridge's own storage directory so permissions are guaranteed.
+    // This must match the path computed by platform.ts buildAuthStoragePath(), which
+    // uses path.dirname(api.user.persistPath()) — where persistPath() is a sub-folder
+    // of homebridgeStoragePath (e.g. '.../homebridge/persist'), so dirname resolves back
+    // to homebridgeStoragePath itself.
     const storagePath = this.homebridgeStoragePath ?? '.';
-    const persistBase = path.dirname(storagePath);
-    return path.join(persistBase, 'blink-auth', 'auth-state.json');
+    return path.join(storagePath, 'blink-auth', 'auth-state.json');
   }
 
   /**
