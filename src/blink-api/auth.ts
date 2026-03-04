@@ -282,7 +282,7 @@ export class BlinkAuth {
   private async authFetch(
     stepLabel: string,
     url: string,
-    init: RequestInit,
+    init: globalThis.RequestInit,
   ): Promise<FetchResponse> {
     const requestId = randomUUID().slice(0, 8);
     const method = init.method ?? 'GET';
