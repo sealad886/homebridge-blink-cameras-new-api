@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0-alpha.3] - 2026-03-04
+
+### Removed
+
+- Removed legacy `TODO.md`; deferred and future work continues to be tracked in
+  project docs/issues.
+
 ## [0.6.0-alpha.1] - 2026-02-27
 
 ### Changed
