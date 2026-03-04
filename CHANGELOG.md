@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-03-04
+
+### Changed
+
+- Promoted the `0.6.0-alpha` prerelease line to stable `0.6.0` for general
+  availability.
+
 ## [0.6.0-alpha.3] - 2026-03-04
 
 ### Removed
