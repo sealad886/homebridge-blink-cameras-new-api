@@ -31,6 +31,14 @@ import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
 export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
+export type VideoEncoderPreference =
+  | 'auto'
+  | 'libx264'
+  | 'h264_v4l2m2m'
+  | 'h264_videotoolbox'
+  | 'h264_qsv'
+  | 'h264_nvenc'
+  | 'h264_vaapi';
 
 export interface BlinkCameraStreamingConfig {
   enabled: boolean;
@@ -46,6 +54,7 @@ export interface BlinkCameraStreamingConfig {
   };
   video: {
     maxBitrate?: number;
+    encoder: VideoEncoderPreference;
   };
   /** Path to save debug stream recordings (MPEG-TS files) */
   debugStreamPath?: string;
@@ -63,6 +72,8 @@ export type BlinkCameraStreamingConfigInput = Omit<
   video?: Partial<BlinkCameraStreamingConfig['video']>;
 };
 
+const SOFTWARE_VIDEO_ENCODER: VideoEncoderPreference = 'libx264';
+
 const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
   ffmpegPath: 'ffmpeg',
@@ -75,7 +86,9 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
     codec: 'opus',
     bitrate: 32,
   },
-  video: {},
+  video: {
+    encoder: 'auto',
+  },
   snapshotCacheTTL: 60,
   persistSnapshotCache: false,
 };
@@ -105,6 +118,7 @@ export const resolveStreamingConfig = (
     },
     video: {
       maxBitrate: video.maxBitrate ?? DEFAULT_STREAMING_CONFIG.video.maxBitrate,
+      encoder: video.encoder ?? DEFAULT_STREAMING_CONFIG.video.encoder,
     },
   };
 };
@@ -135,6 +149,9 @@ interface ActiveStreamSession extends PendingStreamSession {
   keepAliveTimer?: ReturnType<typeof setInterval> | null;
   stopped?: boolean;
   immisProxy?: ImmisProxyServer;
+  selectedVideoEncoder?: VideoEncoderPreference;
+  fallbackVideoEncoderTried?: boolean;
+  readyNotified?: boolean;
 }
 
 const usedPorts = new Set<number>();
@@ -559,52 +576,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         ffmpegInputUrl = originalUrl;
       }
 
-      // CRITICAL: Start FFmpeg IMMEDIATELY after proxy is ready.
-      // HomeKit has a ~10s timeout. waitForLiveViewReady can take up to 30s,
-      // which would cause HomeKit to timeout and send a stop request before
-      // FFmpeg even connects, killing the proxy.
-      const ffmpegArgs = this.buildFfmpegArgs(ffmpegInputUrl, request, active);
-      this.log(`Starting stream ${sessionId} via FFmpeg with URL: ${ffmpegInputUrl}`);
-      if (this.streamingConfig.ffmpegDebug) {
-        const safeArgs = redactFfmpegArgs(ffmpegArgs);
-        this.log(`FFmpeg args: ${safeArgs.join(' ')}`);
-      }
-
-      const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
-      active.ffmpeg = ffmpeg;
-
-      // CRITICAL FIX: Call the callback IMMEDIATELY after FFmpeg spawns.
-      // The callback signals to HomeKit that we are ready to receive RTP data,
-      // not that video has started playing. Previously we waited for stderr output
-      // which only works with -loglevel debug. Without debug output, HomeKit would
-      // timeout and SIGKILL FFmpeg after ~8 seconds before it even started encoding.
-      //
-      // The ffmpeg 'spawn' event confirms the process started successfully.
-      // HomeKit will then wait for actual video frames on the RTP socket.
-      ffmpeg.on('spawn', () => {
-        this.log(`FFmpeg spawned for session ${sessionId}, signaling stream ready`);
-        callback();
-      });
-
-      ffmpeg.stderr.on('data', (data) => {
-        if (this.streamingConfig.ffmpegDebug) {
-          this.log(`FFmpeg(${sessionId}): ${data.toString('utf8').trim()}`);
-        }
-      });
-
-      ffmpeg.on('error', (error) => {
-        this.log(`FFmpeg failed to start for session ${sessionId}: ${error.message}`);
-        // Note: If spawn failed, the spawn event won't fire so callback wasn't called yet.
-        // We rely on HomeKit to handle the error gracefully when RTP data doesn't arrive.
-      });
-
-      ffmpeg.on('exit', (code, signal) => {
-        if (code !== 0 || signal) {
-          this.log(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
-        }
-        // Clean up the session - HomeKit will detect the stream ended via RTP timeout
-        void this.stopStream(sessionId);
-      });
+      this.startFfmpegStream(sessionId, ffmpegInputUrl, request, active, callback);
 
       // Start keep-alive and liveview polling in the BACKGROUND (non-blocking)
       // This must happen AFTER FFmpeg is spawned to avoid HomeKit timeout
@@ -951,7 +923,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private buildLatmEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; }): string[] {
-    // Blink IMMIS expects AAC-LATM (LOAS/LATM)
     const channels = audio.channel || 1;
     const sampleRateKhz = this.getAudioSampleRate(audio.sample_rate);
     const bitrate = this.getAudioBitrate(audio.max_bit_rate);
@@ -964,10 +935,158 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     ];
   }
 
+  private startFfmpegStream(
+    sessionId: string,
+    liveviewUrl: string,
+    request: Extract<StreamingRequest, { type: 'start' }>,
+    active: ActiveStreamSession,
+    callback: StreamRequestCallback,
+    useSoftwareFallback = false,
+  ): void {
+    const videoEncoder = useSoftwareFallback ? SOFTWARE_VIDEO_ENCODER : this.resolveVideoEncoder();
+    const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active, videoEncoder);
+    active.selectedVideoEncoder = videoEncoder;
+
+    this.log(`Starting stream ${sessionId} via FFmpeg using ${videoEncoder} with URL: ${liveviewUrl}`);
+    if (this.streamingConfig.ffmpegDebug) {
+      const safeArgs = redactFfmpegArgs(ffmpegArgs);
+      this.log(`FFmpeg args: ${safeArgs.join(' ')}`);
+    }
+
+    const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
+    active.ffmpeg = ffmpeg;
+
+    ffmpeg.on('spawn', () => {
+      if (active.ffmpeg !== ffmpeg) {
+        return;
+      }
+      if (!active.readyNotified) {
+        active.readyNotified = true;
+        this.log(`FFmpeg spawned for session ${sessionId}, signaling stream ready`);
+        callback();
+      }
+    });
+
+    ffmpeg.stderr.on('data', (data) => {
+      if (this.streamingConfig.ffmpegDebug) {
+        this.log(`FFmpeg(${sessionId}): ${data.toString('utf8').trim()}`);
+      }
+    });
+
+    ffmpeg.on('error', (error) => {
+      if (active.ffmpeg !== ffmpeg) {
+        return;
+      }
+
+      this.log(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
+
+      if (!useSoftwareFallback && videoEncoder !== SOFTWARE_VIDEO_ENCODER && !active.fallbackVideoEncoderTried) {
+        active.fallbackVideoEncoderTried = true;
+        this.log(`Retrying stream ${sessionId} with software encoder ${SOFTWARE_VIDEO_ENCODER}`);
+        this.startFfmpegStream(sessionId, liveviewUrl, request, active, callback, true);
+        return;
+      }
+
+      if (!active.readyNotified) {
+        callback(error);
+      }
+      void this.stopStream(sessionId);
+    });
+
+    ffmpeg.on('exit', (code, signal) => {
+      if (active.ffmpeg !== ffmpeg) {
+        return;
+      }
+
+      if (
+        (code !== 0 || signal) &&
+        !useSoftwareFallback &&
+        videoEncoder !== SOFTWARE_VIDEO_ENCODER &&
+        !active.fallbackVideoEncoderTried &&
+        !active.stopped
+      ) {
+        active.fallbackVideoEncoderTried = true;
+        this.log(
+          `FFmpeg exited for session ${sessionId} using ${videoEncoder} (code=${code}, signal=${signal}); ` +
+          `retrying with ${SOFTWARE_VIDEO_ENCODER}`,
+        );
+        this.startFfmpegStream(sessionId, liveviewUrl, request, active, callback, true);
+        return;
+      }
+
+      if (code !== 0 || signal) {
+        this.log(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
+      }
+      void this.stopStream(sessionId);
+    });
+  }
+
+  private resolveVideoEncoder(): VideoEncoderPreference {
+    const configuredEncoder = this.streamingConfig.video.encoder;
+    if (configuredEncoder && configuredEncoder !== 'auto') {
+      return configuredEncoder;
+    }
+
+    if (process.platform === 'darwin') {
+      return 'h264_videotoolbox';
+    }
+
+    if (process.platform === 'linux' && (process.arch === 'arm' || process.arch === 'arm64')) {
+      return 'h264_v4l2m2m';
+    }
+
+    return SOFTWARE_VIDEO_ENCODER;
+  }
+
+  private buildVideoEncoderArgs(
+    videoEncoder: VideoEncoderPreference,
+    profileName: string,
+    levelName: string,
+  ): string[] {
+    switch (videoEncoder) {
+      case 'h264_videotoolbox':
+        return [
+          '-vcodec', videoEncoder,
+          '-pix_fmt', 'yuv420p',
+          '-profile:v', profileName,
+          '-level:v', levelName,
+          '-realtime', 'true',
+        ];
+      case 'h264_vaapi':
+        return [
+          '-vf', 'format=nv12,hwupload',
+          '-vcodec', videoEncoder,
+          '-profile:v', profileName,
+          '-level:v', levelName,
+        ];
+      case 'h264_v4l2m2m':
+      case 'h264_qsv':
+      case 'h264_nvenc':
+        return [
+          '-vcodec', videoEncoder,
+          '-pix_fmt', 'yuv420p',
+          '-profile:v', profileName,
+          '-level:v', levelName,
+        ];
+      case 'auto':
+      case 'libx264':
+      default:
+        return [
+          '-vcodec', SOFTWARE_VIDEO_ENCODER,
+          '-pix_fmt', 'yuv420p',
+          '-profile:v', profileName,
+          '-level:v', levelName,
+          '-preset', 'veryfast',
+          '-tune', 'zerolatency',
+        ];
+    }
+  }
+
   private buildFfmpegArgs(
     liveviewUrl: string,
     request: Extract<StreamingRequest, { type: 'start' }>,
     session: ActiveStreamSession,
+    videoEncoder: VideoEncoderPreference = this.resolveVideoEncoder(),
   ): string[] {
     const video = request.video;
     const suiteName = this.getSrtpSuiteName(session.videoCryptoSuite);
@@ -977,10 +1096,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const profileName = this.getH264ProfileName(video.profile);
     const levelName = this.getH264LevelName(video.level);
+    const videoEncoderArgs = this.buildVideoEncoderArgs(videoEncoder, profileName, levelName);
 
-    // Use 'info' loglevel to ensure FFmpeg outputs stream info at startup.
-    // This triggers the stderr 'data' event, signaling HomeKit that the stream is ready.
-    // Without immediate stderr output, HomeKit times out waiting for video data.
     const args = [
       '-hide_banner',
       '-loglevel', this.streamingConfig.ffmpegDebug ? 'debug' : 'info',
@@ -1005,16 +1122,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     args.push(
       '-map', '0:v:0',
-      '-vcodec', 'libx264',
-      '-pix_fmt', 'yuv420p',
+      ...videoEncoderArgs,
       '-r', `${video.fps}`,
       '-s', `${video.width}x${video.height}`,
       '-b:v', `${bitrate}k`,
       '-bufsize', `${bitrate}k`,
-      '-profile:v', profileName,
-      '-level:v', levelName,
-      '-preset', 'veryfast',
-      '-tune', 'zerolatency',
       '-payload_type', `${video.pt}`,
       '-ssrc', `${ssrcToSigned(session.videoSSRC)}`,
       '-f', 'rtp',

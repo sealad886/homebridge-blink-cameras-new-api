@@ -209,6 +209,22 @@
         "maximum": 8000,
         "required": false
       },
+      "videoEncoder": {
+        "title": "Video Encoder",
+        "description": "Preferred FFmpeg video encoder. Auto tries a platform-appropriate hardware encoder first and falls back to software libx264 if needed.",
+        "type": "string",
+        "default": "auto",
+        "required": false,
+        "oneOf": [
+          { "title": "Auto (prefer hardware, fallback to software)", "enum": ["auto"] },
+          { "title": "Software (libx264)", "enum": ["libx264"] },
+          { "title": "Raspberry Pi / Linux ARM (h264_v4l2m2m)", "enum": ["h264_v4l2m2m"] },
+          { "title": "macOS VideoToolbox (h264_videotoolbox)", "enum": ["h264_videotoolbox"] },
+          { "title": "Intel Quick Sync (h264_qsv)", "enum": ["h264_qsv"] },
+          { "title": "NVIDIA NVENC (h264_nvenc)", "enum": ["h264_nvenc"] },
+          { "title": "Linux VAAPI (advanced)", "enum": ["h264_vaapi"] }
+        ]
+      },
       "excludeDevices": {
         "title": "Excluded Devices",
         "description": "List of device serial numbers, IDs, or names to exclude from HomeKit.",
@@ -319,6 +335,7 @@
         "audioCodec",
         "audioBitrate",
         "videoBitrate",
+        "videoEncoder",
         "rtspTransport",
         "ffmpegDebug",
         "debugStreamPath"

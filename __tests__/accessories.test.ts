@@ -291,6 +291,64 @@ describe('Accessory handlers', () => {
     expect(argString).toContain('-flags low_delay');
   });
 
+  it('uses a configured hardware encoder when requested', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      jest.fn(),
+      () => true,
+      logFn,
+      { enabled: true, video: { encoder: 'h264_v4l2m2m' } as never } as never,
+    );
+
+    const session = {
+      address: '192.168.1.50',
+      addressVersion: 'ipv4',
+      sessionId: 'session',
+      videoPort: 5000,
+      localVideoPort: 5100,
+      localVideoRtcpPort: 5102,
+      videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      videoSRTP: Buffer.alloc(30, 1),
+      videoSSRC: 1234,
+    };
+
+    const request = {
+      type: 'start',
+      sessionID: 'session',
+      video: {
+        fps: 30,
+        width: 1280,
+        height: 720,
+        max_bit_rate: 300,
+        profile: hap.H264Profile.HIGH,
+        level: hap.H264Level.LEVEL4_0,
+        pt: 99,
+        mtu: 1378,
+      },
+    };
+
+    const ffmpegSource = source as unknown as CameraSourceFfmpegAccess;
+    const args = ffmpegSource.buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
+    const argString = args.join(' ');
+
+    expect(argString).toContain('-vcodec h264_v4l2m2m');
+    expect(argString).not.toContain('-preset veryfast');
+  });
+
   it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {
     const hap = createHap();
     const options = createCameraControllerOptions(

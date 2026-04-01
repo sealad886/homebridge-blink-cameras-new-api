@@ -25,7 +25,7 @@ import {
   BlinkMediaClip,
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
-import { BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
+import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 
 const DEFAULT_POLL_INTERVAL = 60;
@@ -81,6 +81,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
   audioBitrate?: number;
   videoBitrate?: number;
+  videoEncoder?: VideoEncoderPreference;
   debugAuth?: boolean;
   authLocked?: boolean;
   debugStreamPath?: string;
@@ -143,6 +144,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       },
       video: {
         maxBitrate: this.config.videoBitrate,
+        encoder: this.config.videoEncoder,
       },
     });
 

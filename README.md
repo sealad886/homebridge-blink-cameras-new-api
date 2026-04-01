@@ -91,6 +91,7 @@ Add a platform entry to your Homebridge `config.json`:
       "enableMotionPolling": true,
       "enableStreaming": true,
       "ffmpegPath": "ffmpeg",
+      "videoEncoder": "auto",
       "enableAudio": true
     }
   ]
@@ -126,6 +127,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
+| `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
 | `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings for debugging |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` always fetches a new snapshot |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
@@ -179,6 +181,10 @@ If you need to re-authenticate or switch Blink accounts:
 
 Live streaming uses FFmpeg to transcode Blink's RTSPS stream to HomeKit SRTP. Make sure FFmpeg is installed
 and accessible in your PATH, or set `ffmpegPath` to the full binary location.
+
+Set `videoEncoder` to `auto` for the safest default across mixed installations. On macOS it prefers
+`h264_videotoolbox`, on Linux ARM boards such as Raspberry Pi it prefers `h264_v4l2m2m`, and it falls back
+to `libx264` if the hardware encoder cannot be started.
 
 If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
 
