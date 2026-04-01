@@ -205,7 +205,9 @@ dist
 .vscode-test
 
 # Beads local state
-.beads/
+.beads/*
+!.beads/.gitignore
+!.beads/config.yaml
 
 # yarn v3
 .pnp.*
@@ -234,3 +236,11 @@ vite.config.ts.timestamp-*
 # Built Visual Studio Code Extensions
 *.vsix
 scripts/deploy-to-pi.sh
+
+# Beads local credentials
+.beads-credential-key
+.beads/.beads-credential-key
+
+# Beads / Dolt database files
+.dolt/
+*.db
