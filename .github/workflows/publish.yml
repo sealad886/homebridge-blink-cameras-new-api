@@ -28,8 +28,11 @@ jobs:
         run: |
           TARGET=$(node -p "require('./package.json').version")
           CURRENT=$(npm view @sealad886/homebridge-blink-cameras-new-api version 2>/dev/null || echo "0.0.0")
+          STABLE_TAG=$(git tag --list 'v*' --sort=-version:refname | grep -vE '-(alpha|beta|rc)\.' | sed -n '1p')
+          STABLE_VERSION=${STABLE_TAG#v}
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "stable_version=$STABLE_VERSION" >> "$GITHUB_OUTPUT"
           if [ "$TARGET" != "$CURRENT" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
@@ -52,7 +55,7 @@ jobs:
         run: npm test
 
       - name: Ensure npm token present
-        if: steps.version_check.outputs.publish == 'true'
+        if: steps.version_check.outputs.publish == 'true' || steps.version_check.outputs.npm_tag != 'latest'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -62,7 +65,7 @@ jobs:
           fi
 
       - name: Configure npm auth
-        if: steps.version_check.outputs.publish == 'true'
+        if: steps.version_check.outputs.publish == 'true' || steps.version_check.outputs.npm_tag != 'latest'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
@@ -72,6 +75,21 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --tag ${{ steps.version_check.outputs.npm_tag }}
+
+      - name: Ensure prerelease dist-tags
+        if: steps.version_check.outputs.npm_tag != 'latest'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: '@sealad886/homebridge-blink-cameras-new-api'
+          TARGET_VERSION: ${{ steps.version_check.outputs.target }}
+          PRERELEASE_TAG: ${{ steps.version_check.outputs.npm_tag }}
+          STABLE_VERSION: ${{ steps.version_check.outputs.stable_version }}
+        run: |
+          npm dist-tag add "${PACKAGE_NAME}@${TARGET_VERSION}" "${PRERELEASE_TAG}"
+          if [ -n "${STABLE_VERSION}" ] && [ "${STABLE_VERSION}" != "${TARGET_VERSION}" ]; then
+            npm dist-tag add "${PACKAGE_NAME}@${STABLE_VERSION}" latest
+          fi
+          npm dist-tag ls "${PACKAGE_NAME}"
 
       - name: Create GitHub release
         if: steps.version_check.outputs.publish == 'true'
