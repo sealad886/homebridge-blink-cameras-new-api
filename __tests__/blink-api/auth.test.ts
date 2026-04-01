@@ -1,4 +1,4 @@
-import { BlinkAuth, Blink2FARequiredError } from '../../src/blink-api/auth';
+import { BlinkAuth, Blink2FARequiredError, BlinkAuthenticationError } from '../../src/blink-api/auth';
 import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
 import { URL } from 'node:url';
 import { promises as fs } from 'node:fs';
@@ -370,6 +370,33 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const auth = new BlinkAuth(baseConfig);
       await expect(auth.refreshTokens()).rejects.toThrow('Cannot refresh token before login');
     });
+
+    it('redacts secrets from authentication error logs', () => {
+      const error = new BlinkAuthenticationError('Auth failed', {
+        status: 401,
+        statusText: 'Unauthorized',
+        message: 'verification required',
+        requires2FA: true,
+        headers: {
+          authorization: 'Bearer secret-token',
+          cookie: 'session=abc123',
+          'token-auth': 'token-auth-secret',
+        },
+        responseBody: {
+          access_token: 'secret-token',
+          refresh_token: 'refresh-secret',
+          verification_code: '654321',
+        },
+      });
+
+      const log = error.toLogString();
+
+      expect(log).toContain('<redacted>');
+      expect(log).not.toContain('secret-token');
+      expect(log).not.toContain('refresh-secret');
+      expect(log).not.toContain('654321');
+      expect(log).not.toContain('session=abc123');
+    });
   });
 });
 
@@ -419,12 +446,15 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     return new BlinkAuth(config);
   }
 
-  it('save() writes state to the dot-file path', async () => {
+  it('save() writes state to the dot-file path with owner-only permissions', async () => {
     const storage = getStorage(makeAuth());
     await storage.save(sampleState);
 
     const raw = await fs.readFile(dotFilePath, 'utf8');
     expect(JSON.parse(raw)).toEqual(sampleState);
+
+    const stats = await fs.stat(dotFilePath);
+    expect(stats.mode & 0o777).toBe(0o600);
   });
 
   it('load() reads state from the dot-file path', async () => {

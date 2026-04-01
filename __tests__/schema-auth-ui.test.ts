@@ -19,6 +19,11 @@ type PackageDocument = {
 
 const repoRoot = path.resolve('.');
 
+const readText = (relativePath: string): string => {
+  const absolutePath = path.join(repoRoot, relativePath);
+  return fs.readFileSync(absolutePath, 'utf8');
+};
+
 const readJson = <T>(relativePath: string): T => {
   const absolutePath = path.join(repoRoot, relativePath);
   return JSON.parse(fs.readFileSync(absolutePath, 'utf8')) as T;
@@ -92,6 +97,13 @@ describe('schema auth UI regression', () => {
     expect(pkg.homebridge?.customUi).toBe('dist/homebridge-ui/server.js');
     expect(schema.customUi).toBe(true);
     expect(schema.customUiPath).toBe('./dist/homebridge-ui');
+  });
+
+  it('does not persist the Blink password back into plugin config', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+
+    expect(html).not.toContain('config.password = passwordValue');
+    expect(html).toContain('delete config.password');
   });
 
   it('does not expose auth credentials/codes in schema properties or layout', () => {

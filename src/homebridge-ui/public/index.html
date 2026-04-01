@@ -741,7 +741,6 @@
     let config = pluginConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
 
     const resolvedUsername = resolveUsername(data);
-    const passwordValue = document.getElementById('password').value;
     const deviceIdValue = document.getElementById('deviceId').value;
     const tierValue = document.getElementById('tier').value;
 
@@ -750,9 +749,7 @@
       config.username = resolvedUsername;
     }
 
-    if (passwordValue) {
-      config.password = passwordValue;
-    }
+    delete config.password;
 
     if (deviceIdValue) {
       config.deviceId = deviceIdValue;

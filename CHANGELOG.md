@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0-alpha.0] - 2026-04-01
+
+### Added
+
+- Cross-platform `videoEncoder` selection with automatic hardware acceleration on supported hosts and safe fallback to `libx264`.
+
+### Changed
+
+- Tuned HomeKit live streaming for smoother playback by preferring 30 fps profiles and lower-latency FFmpeg input flags.
+- Prepared the package and CI workflow for the next Homebridge verification pass and prerelease publishing flow.
+
+### Fixed
+
+- The custom UI no longer writes the plaintext Blink password back into the saved Homebridge platform config.
+- Persisted auth tokens are now written with owner-only file permissions, and logout/unlock clears saved auth state cleanly.
+- Authentication and HTTP error logging now redact tokens, cookies, PINs, and verification codes more consistently.
+
 ## [0.6.0] - 2026-03-04
 
 ### Changed

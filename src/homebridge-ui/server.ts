@@ -450,12 +450,30 @@ class BlinkUiServer extends HomebridgePluginUiServer {
     return null;
   }
 
+  private async clearPersistedAuthState(): Promise<void> {
+    for (const filePath of [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()]) {
+      try {
+        await fs.rm(filePath, { force: true });
+      } catch {
+        // Ignore missing or already-removed files.
+      }
+    }
+
+    try {
+      await fs.rmdir(path.dirname(this.getLegacyAuthStoragePath()));
+    } catch {
+      // Ignore if the legacy directory is already absent or still contains other files.
+    }
+  }
+
   /**
    * Clear authentication state
    */
   async handleLogout(): Promise<{ success: boolean }> {
+    await this.clearPersistedAuthState();
     this.blinkApi = null;
     this.pendingConfig = null;
+    this.lastAccountId = null;
     this.authStatus = { authenticated: false };
     return { success: true };
   }
@@ -473,8 +491,10 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    */
   async handleUnlock(): Promise<{ success: boolean }> {
     this.logDebug('Unlocking authentication state');
+    await this.clearPersistedAuthState();
     this.blinkApi = null;
     this.pendingConfig = null;
+    this.lastAccountId = null;
     this.authStatus = { authenticated: false };
     return { success: true };
   }

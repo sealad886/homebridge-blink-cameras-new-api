@@ -29,13 +29,43 @@ function redactHeaders(headers: Record<string, string>): Record<string, string> 
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const lowerKey = key.toLowerCase();
-    if (lowerKey === 'authorization' || lowerKey === 'token-auth') {
-      result[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-4)}` : '***';
+    if (/(authorization|token-auth|cookie|set-cookie)/i.test(lowerKey)) {
+      result[key] = '<redacted>';
     } else {
-      result[key] = value;
+      result[key] = redactText(value);
     }
   }
   return result;
+}
+
+function redactText(value: string): string {
+  return value
+    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
+    .replace(/((?:access_token|refresh_token|authorization|token-auth|cookie|password|pin|code|secret)\s*[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
+    .replace(/("(?:access_token|refresh_token|authorization|token-auth|cookie|password|pin|code|secret)"\s*:\s*")[^"]+(")/gi, '$1<redacted>$2');
+}
+
+function redactBody(body: unknown): unknown {
+  if (typeof body === 'string') {
+    return redactText(body);
+  }
+
+  if (Array.isArray(body)) {
+    return body.map((item) => redactBody(item));
+  }
+
+  if (!body || typeof body !== 'object') {
+    return body;
+  }
+
+  return Object.fromEntries(
+    Object.entries(body as Record<string, unknown>).map(([key, value]) => {
+      if (/(authorization|token|password|pin|code|secret|cookie)/i.test(key)) {
+        return [key, '<redacted>'];
+      }
+      return [key, redactBody(value)];
+    }),
+  );
 }
 
 /**
@@ -66,7 +96,7 @@ export class BlinkHttpError extends Error {
 
     if (this.responseHeaders) {
       lines.push(`\nResponse Headers:`);
-      for (const [key, value] of Object.entries(this.responseHeaders)) {
+      for (const [key, value] of Object.entries(redactHeaders(this.responseHeaders))) {
         lines.push(`  ${key}: ${value}`);
       }
     }
@@ -75,9 +105,9 @@ export class BlinkHttpError extends Error {
       lines.push(`\nResponse Body:`);
       try {
         const parsed = JSON.parse(this.responseBody);
-        lines.push(JSON.stringify(parsed, null, 2));
+        lines.push(JSON.stringify(redactBody(parsed), null, 2));
       } catch {
-        lines.push(this.responseBody);
+        lines.push(String(redactBody(this.responseBody)));
       }
     }
 
@@ -154,7 +184,7 @@ export class BlinkHttp {
       this.logDebug(`[${requestId}] ${method} ${url}`);
       this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
       if (body) {
-        this.logDebug(`[${requestId}] Request body:`, JSON.stringify(body, null, 2));
+        this.logDebug(`[${requestId}] Request body:`, JSON.stringify(redactBody(body), null, 2));
       }
     } else {
       this.logDebug(`[${requestId}] ${method} ${url} (retry attempt ${attempt})`);
@@ -226,7 +256,7 @@ export class BlinkHttp {
 
     if (this.debug) {
       // Only log response body in debug mode (can be verbose)
-      this.logDebug(`[${requestId}] Response body:`, JSON.stringify(responseData, null, 2).slice(0, 500) + '...');
+      this.logDebug(`[${requestId}] Response body:`, JSON.stringify(redactBody(responseData), null, 2).slice(0, 500) + '...');
     }
 
     return responseData;

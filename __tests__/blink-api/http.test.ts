@@ -1,4 +1,4 @@
-import { BlinkHttp } from '../../src/blink-api/http';
+import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
 import { BlinkAuth } from '../../src/blink-api/auth';
 import { BlinkConfig } from '../../src/types';
 
@@ -99,5 +99,25 @@ describe('BlinkHttp', () => {
 
     await expect(http.get('v1/fail')).rejects.toThrow('Blink API GET v1/fail failed: 400 Bad Request');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('redacts secrets from HTTP error logs', () => {
+    const error = new BlinkHttpError(
+      'request failed',
+      401,
+      'Unauthorized',
+      'https://example.com/api',
+      'POST',
+      JSON.stringify({ access_token: 'secret-token', pin: '123456', nested: { refresh_token: 'refresh-secret' } }),
+      { authorization: 'Bearer secret-token', 'set-cookie': 'session=abc123' },
+    );
+
+    const log = error.toLogString();
+
+    expect(log).toContain('<redacted>');
+    expect(log).not.toContain('secret-token');
+    expect(log).not.toContain('refresh-secret');
+    expect(log).not.toContain('123456');
+    expect(log).not.toContain('session=abc123');
   });
 });

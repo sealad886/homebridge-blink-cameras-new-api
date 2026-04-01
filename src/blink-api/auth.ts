@@ -75,8 +75,10 @@ class FileAuthStorage implements BlinkAuthStorage {
   }
 
   async save(state: BlinkAuthState): Promise<void> {
-    // Parent directory is the Homebridge storagePath root — guaranteed to exist.
-    await fs.writeFile(this.filePath, JSON.stringify(state, null, 2), 'utf8');
+    const payload = JSON.stringify(state, null, 2);
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+    await fs.writeFile(this.filePath, payload, { encoding: 'utf8', mode: 0o600 });
+    await fs.chmod(this.filePath, 0o600);
   }
 
   async clear(): Promise<void> {
@@ -120,6 +122,36 @@ function redact(value: string | undefined, showChars = 4): string {
   if (!value) return '<empty>';
   if (value.length <= showChars * 2) return '***';
   return `${value.slice(0, showChars)}...${value.slice(-showChars)}`;
+}
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
+    .replace(/((?:access_token|refresh_token|authorization|token-auth|cookie|password|pin|code|secret)\s*[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
+    .replace(/("(?:access_token|refresh_token|authorization|token-auth|cookie|password|pin|code|secret)"\s*:\s*")[^"]+(")/gi, '$1<redacted>$2');
+}
+
+function redactSensitivePayload(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactSensitiveText(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSensitivePayload(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => {
+      if (/(authorization|token|password|pin|code|secret|cookie)/i.test(key)) {
+        return [key, '<redacted>'];
+      }
+      return [key, redactSensitivePayload(nestedValue)];
+    }),
+  );
 }
 
 interface BlinkAuthErrorDetail {
@@ -173,12 +205,16 @@ export class BlinkAuthenticationError extends Error {
 
     lines.push(`\nResponse Headers:`);
     for (const [key, value] of Object.entries(this.details.headers)) {
-      lines.push(`  ${key}: ${value}`);
+      if (/(authorization|token-auth|cookie|set-cookie)/i.test(key)) {
+        lines.push(`  ${key}: <redacted>`);
+      } else {
+        lines.push(`  ${key}: ${redactSensitiveText(value)}`);
+      }
     }
 
     if (this.details.responseBody) {
       lines.push(`\nResponse Body:`);
-      lines.push(JSON.stringify(this.details.responseBody, null, 2));
+      lines.push(JSON.stringify(redactSensitivePayload(this.details.responseBody), null, 2));
     }
 
     lines.push(`${'='.repeat(60)}\n`);

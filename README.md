@@ -71,7 +71,7 @@ Restart Homebridge after installing.
 
 The plugin provides a full configuration UI. Navigate to `Plugins` → `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
 
-Authentication is handled in the custom UI card (**Sign in to Blink**). The schema form intentionally hides credential and verification-code fields, but a successful sign-in may still persist compatible `username` / `password` values in the platform config and stores tokens in Homebridge's `.blink-auth.json` auth file. Temporary verification codes are cleared after successful login.
+Authentication is handled in the custom UI card (**Sign in to Blink**). The schema form intentionally hides credential and verification-code fields, and a successful sign-in now keeps the Blink password out of the platform config while storing reusable tokens in Homebridge's `.blink-auth.json` auth file with owner-only permissions. Temporary verification codes are cleared after successful login.
 
 ### Manual Configuration
 
@@ -105,7 +105,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `platform` | Yes | - | Must be `BlinkCameras` |
 | `name` | Yes | `Blink` | Platform name shown in logs |
 | `username` | No* | - | Manual fallback email address. The custom UI may populate this automatically after a successful sign-in |
-| `password` | No* | - | Manual fallback password. The custom UI may populate this automatically after a successful sign-in |
+| `password` | No* | - | Manual fallback password for recovery-only flows; it is not re-saved by the custom UI after sign-in |
 | `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (`hardware_id`) |
 | `deviceName` | No | - | Friendly fallback name for this Homebridge instance |
 | `persistAuth` | No | `true` | Persist auth tokens across restarts in Homebridge's `.blink-auth.json` file |
@@ -137,7 +137,7 @@ Add a platform entry to your Homebridge `config.json`:
 
 When `persistAuth` is enabled, auth tokens are stored in a single `.blink-auth.json` file inside the Homebridge storage root. Pre-`0.6.x` installs using `blink-auth/auth-state.json` are migrated automatically.
 
-\* `username` and `password` are optional when you already have persisted tokens, but they remain supported for manual recovery flows and may be written by the custom UI for compatibility.
+\* `username` and `password` are optional when you already have persisted tokens. They remain supported for manual recovery flows, but the custom UI no longer writes the plaintext password back into the saved platform config.
 
 \* `twoFactorCode`, `clientVerificationCode`, and `accountVerificationCode` are also supported for manual fallback flows even though they are intentionally hidden from the schema UI. Add them only temporarily when Blink requests a code, then remove them after successful authentication.
 
@@ -151,7 +151,7 @@ Use Homebridge UI → plugin Settings → **Sign in to Blink**.
 1. Enter email/password in the custom UI login card.
 2. Complete any prompted 2FA/client/account verification in the same custom UI flow.
 3. Keep `persistAuth: true` so tokens survive restarts.
-4. Confirm the plugin remains authenticated after restart. Temporary verification-code fields should be cleared automatically; `username` / `password` may remain in the platform config depending on how you authenticated.
+4. Confirm the plugin remains authenticated after restart. Temporary verification-code fields should be cleared automatically, and the plaintext Blink password should not be written back into the platform config.
 
 Tips:
 
@@ -175,7 +175,7 @@ If you need to re-authenticate or switch Blink accounts:
 - Confirm there is exactly one auth flow: the custom UI **Sign in to Blink** card.
 - Confirm there is no schema auth fieldset containing username/password/verification code inputs.
 - Complete login and restart Homebridge.
-- Confirm authentication persists after restart and any temporary verification-code fields have been cleared from the config. (`username` / `password` may still be present if the custom UI saved them.)
+- Confirm authentication persists after restart and any temporary verification-code fields have been cleared from the config without re-saving the plaintext Blink password.
 
 ## Live Streaming (FFmpeg)
 
