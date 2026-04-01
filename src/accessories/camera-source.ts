@@ -1061,6 +1061,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           '-level:v', levelName,
         ];
       case 'h264_v4l2m2m':
+        return [
+          '-vcodec', videoEncoder,
+          '-pix_fmt', 'yuv420p',
+        ];
       case 'h264_qsv':
       case 'h264_nvenc':
         return [

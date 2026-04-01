@@ -347,6 +347,8 @@ describe('Accessory handlers', () => {
 
     expect(argString).toContain('-vcodec h264_v4l2m2m');
     expect(argString).not.toContain('-preset veryfast');
+    expect(argString).not.toContain('-profile:v high');
+    expect(argString).not.toContain('-level:v 4.0');
   });
 
   it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {

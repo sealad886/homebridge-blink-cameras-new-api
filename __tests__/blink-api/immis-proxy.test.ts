@@ -1,4 +1,5 @@
-import { parseLatmFrames } from '../../src/blink-api/immis-proxy';
+import { parseLatmFrames, ImmisProxyServer } from '../../src/blink-api/immis-proxy';
+import { EventEmitter } from 'node:events';
 
 const buildLoasFrame = (payload: Buffer): Buffer => {
   const length = payload.length;
@@ -34,5 +35,37 @@ describe('parseLatmFrames', () => {
     expect(result.frames).toHaveLength(1);
     expect(result.frames[0]).toEqual(frame);
     expect(result.remainder.length).toBe(0);
+  });
+});
+
+describe('ImmisProxyServer idle reconnect grace', () => {
+  class MockSocket extends EventEmitter {
+    public destroyed = false;
+  }
+
+  it('schedules a grace window instead of stopping immediately when the last client disconnects', () => {
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://example.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+    });
+
+    const stop = jest.spyOn(proxy, 'stop').mockImplementation(() => undefined);
+    jest.spyOn(proxy as unknown as { connectToImmisServer: () => void }, 'connectToImmisServer').mockImplementation(() => undefined);
+    const client = new MockSocket();
+
+    (proxy as unknown as { isRunning: boolean }).isRunning = true;
+    (proxy as unknown as { handleClient: (socket: MockSocket) => void }).handleClient(client);
+
+    client.emit('close');
+
+    expect(stop).not.toHaveBeenCalled();
+
+    const idleShutdownTimeout = (proxy as unknown as { idleShutdownTimeout: ReturnType<typeof setTimeout> | null }).idleShutdownTimeout;
+    expect(idleShutdownTimeout).toBeTruthy();
+
+    if (idleShutdownTimeout) {
+      clearTimeout(idleShutdownTimeout);
+      (proxy as unknown as { idleShutdownTimeout: null }).idleShutdownTimeout = null;
+    }
   });
 });

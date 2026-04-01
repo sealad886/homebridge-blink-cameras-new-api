@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0-alpha.1] - 2026-04-01
+
+### Fixed
+
+- Raspberry Pi hardware streaming now avoids passing incompatible `-profile:v high` / `-level:v 4.0` options to `h264_v4l2m2m`, which was causing FFmpeg to abort before hardware encoding could start.
+- The IMMIS proxy now stays alive briefly when FFmpeg falls back from hardware encoding to `libx264`, preventing the immediate `tcp://127.0.0.1` reconnect failure seen in HomeKit stream startup logs.
+
 ## [0.7.0-alpha.0] - 2026-04-01
 
 ### Added

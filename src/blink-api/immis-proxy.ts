@@ -83,6 +83,7 @@ const LOAS_SYNCWORD_MASK = 0xe0;
 const LOAS_SYNCWORD_VALUE = 0xe0;
 const LOAS_HEADER_LENGTH = 3;
 const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
+const IDLE_SHUTDOWN_GRACE_MS = 2000;
 
 export interface LatmParseResult {
   frames: Buffer[];
@@ -158,6 +159,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private isCommandReady = false;
   private pendingClients: net.Socket[] = [];
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private idleShutdownTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** Buffer for accumulating incoming data from the immis server */
   private receiveBuffer = Buffer.alloc(0);
@@ -326,6 +328,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Handle a new client connection
    */
   private handleClient(clientSocket: net.Socket): void {
+    this.cancelIdleShutdown();
     this.log('Client connected');
     this.clients.push(clientSocket);
 
@@ -334,10 +337,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       this.clients = this.clients.filter((c) => c !== clientSocket);
       this.pendingClients = this.pendingClients.filter((c) => c !== clientSocket);
 
-      // Stop everything if no clients remain
       if (this.clients.length === 0) {
-        this.log('Last client disconnected, stopping proxy');
-        this.stop();
+        this.log(`Last client disconnected, keeping proxy alive for ${IDLE_SHUTDOWN_GRACE_MS}ms in case FFmpeg reconnects`);
+        this.scheduleIdleShutdown();
       }
     });
 
@@ -355,6 +357,24 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     if (!this.targetSocket) {
       this.connectToImmisServer();
     }
+  }
+
+  private cancelIdleShutdown(): void {
+    if (this.idleShutdownTimeout) {
+      clearTimeout(this.idleShutdownTimeout);
+      this.idleShutdownTimeout = null;
+    }
+  }
+
+  private scheduleIdleShutdown(): void {
+    this.cancelIdleShutdown();
+    this.idleShutdownTimeout = setTimeout(() => {
+      this.idleShutdownTimeout = null;
+      if (this.clients.length === 0 && this.isRunning) {
+        this.log('Idle reconnect grace expired, stopping proxy');
+        this.stop();
+      }
+    }, IDLE_SHUTDOWN_GRACE_MS);
   }
 
   /**
@@ -434,9 +454,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
             this.connectToImmisServer();
           }
         }, 2000);
-      } else {
-        // No clients or not running, stop the proxy entirely
-        this.stop();
+      } else if (this.isRunning) {
+        this.debug(`Immis connection closed with no active clients; waiting ${IDLE_SHUTDOWN_GRACE_MS}ms for reconnect`);
+        this.scheduleIdleShutdown();
       }
     });
   }
@@ -763,6 +783,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+
+    this.cancelIdleShutdown();
 
     // Close target connection
     if (this.targetSocket && !this.targetSocket.destroyed) {
