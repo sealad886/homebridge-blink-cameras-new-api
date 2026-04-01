@@ -33,7 +33,7 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 ## Requirements
 
 - **Homebridge** 1.11.1 or later
-- **Node.js** 18.0.0 or later (native `fetch` API required)
+- **Node.js** 20, 22, or 24 LTS
 - A Blink account
 
 For the core HomeKit features (arm/disarm, motion, doorbell events, snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it (for example if Homebridge is running as a service user on Debian/Ubuntu).

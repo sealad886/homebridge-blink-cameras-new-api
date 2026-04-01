@@ -9,7 +9,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,6 +72,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --tag ${{ steps.version_check.outputs.npm_tag }}
+
+      - name: Create GitHub release
+        if: steps.version_check.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version_check.outputs.target }}
+          name: v${{ steps.version_check.outputs.target }}
+          generate_release_notes: true
 
       - name: Skip publish
         if: steps.version_check.outputs.publish != 'true'

@@ -6,7 +6,7 @@ In this repository, the canonical publish path is a version bump pushed to `main
 
 ## Prerequisites
 
-- Node.js 18+ and npm installed
+- Node.js 20, 22, or 24 LTS and npm installed
 - GitHub access to push the release commit to `main`
 - Repository publish credentials configured for GitHub Actions (`NPM_TOKEN` today, or trusted publishing if the workflow is updated)
 - Clean working tree with all changes committed
@@ -54,6 +54,7 @@ That push triggers `.github/workflows/publish.yml`, which:
 - skips publication if the version is already on npm
 - detects `alpha`, `beta`, and `rc` prerelease identifiers and publishes with the matching npm dist-tag
 - runs `npm run build` and `npm test` before publishing when a publish is required
+- creates a GitHub Release with generated release notes for the published version
 
 ## After Publishing
 
