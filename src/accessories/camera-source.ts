@@ -1028,14 +1028,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return configuredEncoder;
     }
 
-    if (process.platform === 'darwin') {
-      return 'h264_videotoolbox';
-    }
-
-    if (process.platform === 'linux' && (process.arch === 'arm' || process.arch === 'arm64')) {
-      return 'h264_v4l2m2m';
-    }
-
+    // Fallback heuristic if probe did not run (should not happen in normal operation)
     return SOFTWARE_VIDEO_ENCODER;
   }
 

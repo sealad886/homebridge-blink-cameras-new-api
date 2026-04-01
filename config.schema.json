@@ -211,7 +211,7 @@
       },
       "videoEncoder": {
         "title": "Video Encoder",
-        "description": "Preferred FFmpeg video encoder. Auto tries a platform-appropriate hardware encoder first and falls back to software libx264 if needed.",
+        "description": "Preferred FFmpeg video encoder. Auto probes available hardware encoders at startup (dry-run test) and selects the first working one; falls back to software libx264 if none found.",
         "type": "string",
         "default": "auto",
         "required": false,

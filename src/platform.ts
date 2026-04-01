@@ -26,6 +26,7 @@ import {
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
+import { probeVideoEncoder } from './accessories/encoder-probe';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 
 const DEFAULT_POLL_INTERVAL = 60;
@@ -320,6 +321,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private async discoverDevices(): Promise<void> {
     try {
+      if (this.streamingConfig.video.encoder === 'auto') {
+        const probe = await probeVideoEncoder(
+          this.streamingConfig.ffmpegPath,
+          (msg) => this.log.info(`[EncoderProbe] ${msg}`),
+        );
+        (this.streamingConfig.video as { encoder: VideoEncoderPreference }).encoder = probe.selected;
+        this.log.info(`Video encoder resolved to: ${probe.selected}`);
+      }
+
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);
