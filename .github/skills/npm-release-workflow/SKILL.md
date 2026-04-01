@@ -1,13 +1,13 @@
 ---
 name: npm-release-workflow
-description: NPM semantic versioning, prerelease lifecycle, dist-tag management, and GitHub-based publishing workflows
+description: Use when bumping npm package versions, publishing prereleases, promoting to stable, or reasoning about this repo's GitHub Actions-based npm release flow
 ---
 
 # NPM Release Workflow Skill
 
 ## Purpose
 
-Guide agents through the correct process for bumping versions, publishing prereleases (alpha/beta/rc), and promoting to stable — both locally and via CI. Prevent the most common npm publishing mistakes.
+Guide agents through the correct process for bumping versions, publishing prereleases (alpha/beta/rc), and promoting to stable in this repository, where npm publication is normally performed remotely by GitHub Actions after a version bump is pushed to `main`. Prevent the most common npm publishing mistakes, especially bypassing the repo's publish workflow.
 
 ## Semantic Versioning Quick Reference
 
@@ -46,7 +46,18 @@ MAJOR.MINOR.PATCH-PRERELEASE.N
 
 ## Critical Rules (Non-Negotiable)
 
-### Rule 1: NEVER publish a prerelease without `--tag`
+### Rule 1: Treat GitHub Actions as the canonical publish path
+
+In this repository, the normal release path is:
+
+1. Update `CHANGELOG.md`
+2. Bump `package.json` with `npm version ...`
+3. Push the version commit to `main`
+4. Let `.github/workflows/publish.yml` decide whether to publish and which dist-tag to use
+
+Do **not** use a local `npm publish` as the default release mechanism. That bypasses the repository's version-check logic, prerelease tag detection, and remote audit trail.
+
+### Rule 2: NEVER publish a prerelease without `--tag`
 
 ```bash
 # WRONG — overwrites `latest`, breaks all users who run `npm install`
@@ -60,7 +71,7 @@ npm publish --tag rc
 
 `npm publish` ALWAYS sets the `latest` dist-tag unless `--tag` is specified. This is the single most common npm publishing mistake.
 
-### Rule 2: Always run quality gates before publishing
+### Rule 3: Always run quality gates before pushing a release bump
 
 At minimum: lint, test, build. Never trust that tests were run locally.
 
@@ -68,7 +79,7 @@ At minimum: lint, test, build. Never trust that tests were run locally.
 npm run lint && npm test && npm run build
 ```
 
-### Rule 3: Keep git tags in sync with package.json versions
+### Rule 4: Keep git tags in sync with package.json versions
 
 `npm version` creates both a commit and a git tag by default. Do not suppress this unless you have an explicit reason. Always push tags:
 
@@ -76,7 +87,7 @@ npm run lint && npm test && npm run build
 git push --follow-tags
 ```
 
-### Rule 4: Clean up dist-tags after promoting to stable
+### Rule 5: Clean up dist-tags after promoting to stable
 
 Stale prerelease tags confuse users. After a stable release:
 
@@ -113,7 +124,7 @@ npm version minor                     # → 0.6.0  (strips suffix)
 
 ### Hotfix While in Prerelease
 
-If you need to patch the current stable while a prerelease is in flight, check out the stable branch, bump patch, and publish with `--tag latest` explicitly — or better, use a dedicated release branch.
+If you need to patch the current stable while a prerelease is in flight, cut the hotfix from the branch that will be merged back to `main`, bump the patch version there, and let `publish.yml` publish `latest` after that hotfix reaches `main`. If your team uses a dedicated release branch, merge it back before relying on the repo's canonical publish workflow.
 
 ### The `prerelease` vs `prepatch` Distinction
 
@@ -161,9 +172,9 @@ If a prerelease accidentally became `latest`:
 npm dist-tag add <package>@<stable-version> latest
 ```
 
-## Local Release Workflow
+## Canonical Repository Release Workflow
 
-### Preflight Checklist (Agent Must Verify)
+### Preflight Checklist (Agent Must Verify Before Pushing)
 
 1. Working tree is clean (`git status --porcelain` returns empty)
 2. All tests pass (`npm test`)
@@ -189,10 +200,11 @@ git commit -m "docs(changelog): update for X.Y.Z-stage.N"
 # 4. Bump version (creates commit + tag)
 npm version prerelease --preid=alpha -m "chore(release): %s"
 
-# 5. Push commit and tag
-git push --follow-tags
+# 5. Push the version bump to the main branch
+git push origin main --follow-tags
 
-# CI publishes automatically with correct --tag
+# 6. GitHub Actions publish.yml compares the new version against npm,
+#    skips if already published, and otherwise publishes with the detected prerelease tag
 ```
 
 ### Step-by-Step: Stable Release
@@ -209,22 +221,34 @@ git commit -m "docs(changelog): update for X.Y.Z"
 # 3. Bump version
 npm version <patch|minor|major> -m "chore(release): %s"
 
-# 4. Push
-git push --follow-tags
+# 4. Push the version bump to the main branch
+git push origin main --follow-tags
 
-# CI publishes with --tag latest
+# 5. GitHub Actions publish.yml compares the version with the npm registry
+#    and publishes with --tag latest when the version is new
 
-# 5. Clean up stale dist-tags
+# 6. After the stable publish lands, clean up stale dist-tags if needed
 npm dist-tag rm <package> alpha 2>/dev/null
 npm dist-tag rm <package> beta 2>/dev/null
 npm dist-tag rm <package> rc 2>/dev/null
 ```
 
+### What Actually Triggers Publication In This Repo
+
+`publish.yml` runs on pushes to `main` and on manual workflow dispatch. The workflow:
+
+1. Reads `package.json` version as the target version
+2. Checks the currently published npm version
+3. Skips the publish job entirely when the versions already match
+4. Detects `alpha`, `beta`, and `rc` prerelease identifiers from the version string
+5. Runs `npm run build` and `npm test` only when publication is needed
+6. Publishes remotely with `npm publish --access public --tag <detected-tag>`
+
 ## CI Publishing Workflow (GitHub Actions)
 
 ### Recommended: Version-Check Pattern
 
-This repo uses a push-to-main trigger that compares `package.json` version against the npm registry. It auto-detects prerelease versions and sets the correct dist-tag.
+This repo uses a push-to-`main` trigger that compares `package.json` version against the npm registry. A version bump committed and pushed to `main` is the normal way to publish. The workflow auto-detects prerelease versions, sets the correct dist-tag, and skips publication when npm already has the same version.
 
 Key CI logic for dist-tag detection:
 
@@ -278,13 +302,16 @@ If using traditional `NPM_TOKEN`:
 ## Post-Publish Verification (Agent Must Perform)
 
 ```bash
-# 1. Check the version appeared
+# 1. Confirm the publish workflow run succeeded
+#    (GitHub Actions UI, gh CLI, or equivalent CI inspection)
+
+# 2. Check the version appeared
 npm view <package> dist-tags
 
-# 2. Verify correct tag assignment
+# 3. Verify correct tag assignment
 # latest should point to stable, prerelease tags to their versions
 
-# 3. Check all published versions
+# 4. Check all published versions
 npm view <package> versions --json
 ```
 
@@ -293,18 +320,14 @@ npm view <package> versions --json
 This repo has `scripts/release.mjs` which:
 1. Ensures clean working tree
 2. Runs lint → test → clean → build → pack
-3. Without `--yes`: dry run only (validation)
-4. With `--yes`: publishes to npm and pushes tags
+3. Exits after local validation with instructions to push the version bump to `main`
 
 ```bash
 # Dry run (validates everything)
 npm run release
-
-# Publish for real
-npm run release -- --yes
 ```
 
-**Note:** The release script does NOT handle versioning — you must `npm version` first. The script handles the quality-gate + publish sequence.
+**Important:** In this repository, `npm run release` is a validation helper only. Push the version bump to `main` with `git push origin main --follow-tags` to trigger `publish.yml` for the actual npm publish.
 
 ## Decision Tree for Agents
 
@@ -330,14 +353,15 @@ Is this a prerelease?
 
 | Mistake | Prevention |
 |---------|------------|
+| Local publish bypasses repo workflow | Treat push-to-`main` + `publish.yml` as the canonical release path |
 | Prerelease published as `latest` | CI auto-detects preid and uses `--tag` |
-| Tests not run before publish | Release script enforces lint → test → build |
+| Tests not run before release push | Preflight and CI both run validation before remote publish |
 | Git tag missing | `npm version` creates tags by default |
-| Tag/version mismatch | CI verifies consistency |
+| Re-publishing an existing version | CI compares registry version and skips when unchanged |
 | Stale dist-tags after stable release | Checklist includes dist-tag cleanup |
 | CHANGELOG not updated | Preflight checklist requires it |
 | Dirty working tree at release | Release script checks `git status --porcelain` |
-| Publishing from wrong branch | Preflight checklist includes branch verification |
+| Publishing from wrong branch | Canonical workflow requires the version bump to reach `main` |
 
 ## Lifecycle Script Hooks (Optional Enhancement)
 

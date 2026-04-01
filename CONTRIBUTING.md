@@ -7,7 +7,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 ### Prerequisites
 
 - **Node.js 18+** (uses native `fetch` API)
-- **npm** or **yarn**
+- **npm** (the repository and CI workflows use npm)
 - A Blink account for testing (optional for unit tests)
 
 ### Clone and Install
@@ -79,8 +79,10 @@ npm link
 
 Add the plugin to your Homebridge config (or use Homebridge UI X). This repo
 publishes `config.schema.json`, so the Settings UI will appear in Homebridge UI X
-when the plugin is detected. For local dev, the repo also includes
-`test/hbConfig/config.json` for `npm run watch`.
+when the plugin is detected. Blink sign-in itself is handled by the custom UI card,
+while credential and verification-code fields remain intentionally hidden from the
+schema form. For local dev, the repo also includes `test/hbConfig/config.json` for
+`npm run watch`.
 
 ### Run Homebridge in Debug Mode
 

@@ -27,7 +27,34 @@
 **Related Files / Modules:**
 
 - `package.json` (version and metadata)
-- `scripts/deploy-to-pi.sh` (local tarball installs bypass registry metadata)
+
+### CI-Owned NPM Release Path
+
+**Status:** REQUIRED
+
+**Scope:** Release tooling, version bumps, npm publication, and supported Pi deployment flows.
+
+**Rule:** Supported releases must be published by pushing the version bump to `main` and letting `.github/workflows/publish.yml` publish from CI; repo scripts may validate or install published versions, but must not perform direct local `npm publish` or tarball-based bypasses as the supported workflow.
+
+**Rationale (Why this exists):**
+
+- The GitHub Actions workflow compares `package.json` against the registry before publishing, which avoids duplicate releases.
+- CI derives the correct npm dist-tag for prereleases, which is easy to get wrong in ad hoc local publishing.
+- Installing from the registry preserves npm metadata that Homebridge uses for plugin identity.
+
+**Examples:**
+
+- Good: Commit release-note changes, run `npm run release`, bump the version with `npm version ...`, and then push once the version bump commit is on `main`.
+- Good: Use `scripts/deploy-to-pi.sh` only after the target version is live on npm.
+- Bad: Reintroducing `npm run release -- --yes` or other direct `npm publish` paths in repo-managed scripts.
+- Bad: Reintroducing a tarball deployment mode that bypasses the registry for the supported release/deploy flow.
+
+**Related Files / Modules:**
+
+- `.github/workflows/publish.yml`
+- `docs/RELEASE.md`
+- `scripts/release.mjs`
+- `scripts/deploy-to-pi.sh`
 
 ### IMMIS Control-Plane Handling
 
@@ -94,9 +121,9 @@
 **Examples:**
 
 - Good:
-	- `npm run build` copies `src/homebridge-ui/public` → `dist/homebridge-ui/public` and `homebridge-ui/public`, then publishes including those assets.
+  - `npm run build` copies `src/homebridge-ui/public` → `dist/homebridge-ui/public` and `homebridge-ui/public`, then publishes including those assets.
 - Bad:
-	- Copying from `homebridge-ui/public` (nonexistent in a clean repo) causes `cp: homebridge-ui/public/*: No such file or directory`, leaving the custom UI missing from the package and causing an infinite spinner in Homebridge UI.
+  - Copying from `homebridge-ui/public` (nonexistent in a clean repo) causes `cp: homebridge-ui/public/*: No such file or directory`, leaving the custom UI missing from the package and causing an infinite spinner in Homebridge UI.
 
 **Related Files / Modules:**
 
@@ -135,10 +162,11 @@
 
 ## 4. Known Exceptions
 
-- Local development and Pi deployments often use tarballs; handle will appear blank (`@`). This is expected.
+- Manual tarball installs outside the repo-managed scripts still show a blank publisher handle (`@`). This is expected, but that path is not part of the supported release or Pi deployment workflow.
 
 ## 5. Change History (Human-Readable)
 
+- 2026-04-01: Added required convention that npm releases are CI-owned and removed supported local publish/tarball bypasses from repo-managed scripts.
 - 2026-02-14: Added required convention that auth credentials/codes must not be exposed in schema when custom UI auth is enabled.
 - 2026-01-20: Two-way talk is now forced off; HomeKit microphone UI is hidden and any config attempts log warnings.
 - 2026-01-17: Added convention clarifying npm registry requirement for publisher handle in Homebridge UI.

@@ -6,7 +6,17 @@ import process from 'node:process';
 const logger = new Console({ stdout: process.stdout, stderr: process.stderr });
 
 const args = new Set(process.argv.slice(2));
-const shouldPublish = args.has('--yes');
+
+if (args.has('--yes')) {
+    logger.error('The --yes local publish mode has been removed.');
+    logger.error('Run `npm run release` for validation, then make sure the version bump commit is on main before pushing `git push origin main --follow-tags` to trigger publish.yml.');
+    process.exit(1);
+}
+
+if (args.size > 0) {
+    logger.error(`Unsupported option(s): ${Array.from(args).join(', ')}`);
+    process.exit(1);
+}
 
 const run = (command, commandArgs, options = {}) => {
     const result = spawnSync(command, commandArgs, {
@@ -62,16 +72,4 @@ run('npm', ['run', 'clean']);
 run('npm', ['run', 'build']);
 packAndClean();
 
-if (!shouldPublish) {
-    logger.log('\nRelease checks complete. Re-run with --yes to publish and push tags.');
-    process.exit(0);
-}
-
-run('npm', ['publish']);
-run('git', ['push']);
-run('git', ['push', '--tags']);
-
-const statusAfter = run('git', ['status', '--porcelain'], { capture: true });
-if (statusAfter.stdout.trim().length > 0) {
-    logger.warn('Working tree is not clean after publish.');
-}
+logger.log('\nRelease checks complete. Once the version bump commit is on main, push `git push origin main --follow-tags` to trigger publish.yml.');

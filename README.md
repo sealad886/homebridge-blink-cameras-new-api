@@ -34,19 +34,19 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 
 - **Homebridge** 1.11.1 or later
 - **Node.js** 18.0.0 or later (native `fetch` API required)
-- A Blink account with credentials
+- A Blink account
 
-- You MUST have `ffmpeg`  and `ffprobe` executables installed and with proper permissions set for use by the **homebridge** user (if you installed Homebridge using, for example, the [Debian or Ubuntu Linux instructions](https://github.com/homebridge/homebridge/wiki/Install-Homebridge-on-Debian-or-Ubuntu-Linux) then this is probably not your own user). My recommendation, simply for simplicity, is to install with [Homebrew](http://brew.sh), which is available for MacOS and (some) Linux distros.
+For the core HomeKit features (arm/disarm, motion, doorbell events, snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it (for example if Homebridge is running as a service user on Debian/Ubuntu).
 
 > [!NOTE]
-> If you have another version of ffmpeg installed, don't worry that this may be installed as keg-only, as you can specify the path to the executable in config
+> If Homebrew installs FFmpeg as keg-only, set `ffmpegPath` in the plugin config to the full binary path.
 
 ```bash
 # once Homebrew is installed
 brew install 'ffmpeg@8'     # or 'ffmpeg-full@8' for more features
 ```
 
-I do not recommend ffmpeg<6 as APIs have changed and I frankly haven't tested them. Snapshots and/or live streaming may not work.
+FFmpeg 6+ is recommended. Older releases are untested and may not work reliably for live streaming.
 
 ## Installation
 
@@ -69,9 +69,9 @@ Restart Homebridge after installing.
 
 ### Via Homebridge UI
 
-The plugin provides a full configuration UI. Navigate to Plugins → Settings for @sealad886/homebridge-blink-cameras-new-api.
+The plugin provides a full configuration UI. Navigate to `Plugins` → `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
 
-Authentication is handled exclusively in the custom UI card (**Sign in to Blink**). The schema form intentionally does not expose credential or verification code fields.
+Authentication is handled in the custom UI card (**Sign in to Blink**). The schema form intentionally hides credential and verification-code fields, but a successful sign-in may still persist compatible `username` / `password` values in the platform config and stores tokens in Homebridge's `.blink-auth.json` auth file. Temporary verification codes are cleared after successful login.
 
 ### Manual Configuration
 
@@ -103,40 +103,41 @@ Add a platform entry to your Homebridge `config.json`:
 | ------ | -------- | ------- | ----------- |
 | `platform` | Yes | - | Must be `BlinkCameras` |
 | `name` | Yes | `Blink` | Platform name shown in logs |
-| `username` | No* | - | Blink account email (legacy/manual auth fallback) |
-| `password` | No* | - | Blink account password (legacy/manual auth fallback) |
-| `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (hardware_id) |
-| `deviceName` | No | - | Fallback for deviceId |
-| `persistAuth` | No | `true` | Persist auth tokens across restarts |
+| `username` | No* | - | Manual fallback email address. The custom UI may populate this automatically after a successful sign-in |
+| `password` | No* | - | Manual fallback password. The custom UI may populate this automatically after a successful sign-in |
+| `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (`hardware_id`) |
+| `deviceName` | No | - | Friendly fallback name for this Homebridge instance |
+| `persistAuth` | No | `true` | Persist auth tokens across restarts in Homebridge's `.blink-auth.json` file |
 | `trustDevice` | No | `true` | Trust this device during client verification |
-| `tier` | No | `prod` | Blink API tier: `prod`, `sqa1`, `cemp`, `prde`, `prsg`, `a001`, or `srf1` (auto-detected tiers from Blink are honored for routing) |
-| `sharedTier` | No | - | Override shared REST tier (defaults to `tier`) |
+| `authLocked` | No | `false` | Ignore stored verification codes after a successful login until you explicitly unlock auth |
+| `tier` | No | `prod` | Blink API tier. Common UI values are `prod`, `prde`, `prsg`, `a001`, and `e001`-`e006`; advanced manual values such as `sqa1`, `cemp`, and `srf1` are also supported |
+| `sharedTier` | No | - | Advanced manual override for shared REST routing; defaults to `tier` and is intentionally hidden from the UI schema |
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
-| `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required) |
-| `ffmpegPath` | No | `ffmpeg` | Path to FFmpeg binary |
+| `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required only for streaming) |
+| `ffmpegPath` | No | `ffmpeg` | Path to the FFmpeg binary |
 | `ffmpegDebug` | No | `false` | Log FFmpeg debug output |
 | `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams |
 | `enableAudio` | No | `true` | Enable audio streaming from camera |
-| `twoWayAudio` | No | `false` (forced off) | Talkback is disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
+| `twoWayAudio` | No | `false` (forced off) | Talkback is currently disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
 | `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 | `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings for debugging |
-| `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); 0 always fetches new snapshots |
-| `persistSnapshotCache` | No | `false` | Keep last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
+| `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` always fetches a new snapshot |
+| `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
-| `deviceNames` | No | - | Map of device IDs/serials to custom display names |
-| `deviceSettings` | No | - | Per-device overrides (e.g., motion timeout/enable) |
+| `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
+| `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout }` (legacy `deviceSettings` is still accepted; `motionTimeout` is the currently applied runtime override) |
 
-When `persistAuth` is enabled, auth tokens are stored in a sibling folder to Homebridge's HAP
-storage (for example, `/var/lib/homebridge/blink-auth/`) to avoid corrupting the HAP
-persist directory.
+When `persistAuth` is enabled, auth tokens are stored in a single `.blink-auth.json` file inside the Homebridge storage root. Pre-`0.6.x` installs using `blink-auth/auth-state.json` are migrated automatically.
 
-\* `username` and `password` are only needed for non-UI/manual fallback flows. In normal Homebridge UI usage, authenticate via the custom UI and keep credentials out of `config.json`.
+\* `username` and `password` are optional when you already have persisted tokens, but they remain supported for manual recovery flows and may be written by the custom UI for compatibility.
+
+\* `twoFactorCode`, `clientVerificationCode`, and `accountVerificationCode` are also supported for manual fallback flows even though they are intentionally hidden from the schema UI. Add them only temporarily when Blink requests a code, then remove them after successful authentication.
 
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to force a new thumbnail capture.
@@ -148,20 +149,22 @@ Use Homebridge UI → plugin Settings → **Sign in to Blink**.
 1. Enter email/password in the custom UI login card.
 2. Complete any prompted 2FA/client/account verification in the same custom UI flow.
 3. Keep `persistAuth: true` so tokens survive restarts.
-4. Confirm your `config.json` contains no password or verification codes.
+4. Confirm the plugin remains authenticated after restart. Temporary verification-code fields should be cleared automatically; `username` / `password` may remain in the platform config depending on how you authenticated.
 
 Tips:
 
 - Ensure `deviceId` is unique per Homebridge instance.
 - Leave `trustDevice: true` so future sessions are approved automatically.
-- If you keep seeing verification prompts, confirm that `persistAuth` is enabled and the Homebridge process can write to the auth directory.
+- If you want restarts to ignore any stored verification codes after a successful login, enable `authLocked`.
+- If you keep seeing verification prompts, confirm that `persistAuth` is enabled and the Homebridge process can write to `.blink-auth.json`.
 
 ## Re-Authentication / Token Reset
 
 If you need to re-authenticate or switch Blink accounts:
 
 1. Stop Homebridge.
-2. Remove the persisted auth file in your Homebridge data directory sibling path: `blink-auth/auth-state.json`.
+2. Remove the persisted auth file from the Homebridge storage root: `.blink-auth.json`.
+   - If you are upgrading from a pre-`0.6.x` release and the legacy directory still exists, also remove `blink-auth/auth-state.json`.
 3. Start Homebridge and run **Sign in to Blink** again from the plugin custom UI.
 
 ## Manual Smoke Checklist (Duplicate Auth UI Regression)
@@ -170,7 +173,7 @@ If you need to re-authenticate or switch Blink accounts:
 - Confirm there is exactly one auth flow: the custom UI **Sign in to Blink** card.
 - Confirm there is no schema auth fieldset containing username/password/verification code inputs.
 - Complete login and restart Homebridge.
-- Confirm authentication persists and `config.json` has no password or verification code fields.
+- Confirm authentication persists after restart and any temporary verification-code fields have been cleared from the config. (`username` / `password` may still be present if the custom UI saved them.)
 
 ## Live Streaming (FFmpeg)
 
@@ -204,6 +207,9 @@ The HomeKit SecuritySystem exposes standard modes:
 Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's armed state.
 
 ## Two-Factor Authentication
+
+> [!TIP]
+> If `authLocked` is enabled, unlock authentication in the custom UI before using temporary verification-code fields. Locked auth ignores stored codes on restart.
 
 When you first connect a new device to your Blink account:
 
@@ -288,18 +294,18 @@ This plugin's API implementation is based on reverse engineering the official Bl
 
 ### Authentication
 
-- OAuth 2.0 password grant flow via `api.oauth.blink.com` (production)
-- Automatic token refresh when tokens expire
+- OAuth 2.0 authorization-code flow with PKCE via `api.oauth.blink.com`
+- Automatic token refresh using the `refresh_token` grant
 - Hardware ID required for device identification
-- Client verification PIN flow for new device approval
+- Client verification and account verification flows for new device approval
 - Region-aware routing based on tier and locale; behavior may differ by country
 
 ### Endpoints
 
-- Homescreen: `GET v4/accounts/{account_id}/homescreen`
-- Arm/Disarm: `POST v1/accounts/{account_id}/networks/{network_id}/state/arm|disarm`
-- Motion Enable/Disable: `POST accounts/{account_id}/networks/{network_id}/cameras/{camera_id}/enable|disable`
-- Media: `GET v4/accounts/{account_id}/media`
+- Homescreen/state discovery via `v4/accounts/{account_id}/homescreen`
+- Arm/Disarm via `v1/accounts/{account_id}/networks/{network_id}/state/arm|disarm`
+- Motion enable/disable via Blink device control endpoints under `accounts/{account_id}/networks/{network_id}/...`
+- Media polling via Blink `v4` media endpoints for motion/ring detection
 
 For full endpoint documentation, see the API dossier in the source repository.
 
@@ -334,25 +340,12 @@ npm run lint
 1. `npm run build`
 2. `npm test`
 3. `npm run lint`
-4. `npm pack` and confirm the tarball includes `dist/`, `config.schema.json`, and `homebridge-ui/`
+4. `npm pack` and confirm the tarball includes `dist/` (including `dist/homebridge-ui/`) and `config.schema.json`
 5. `npm run watch` and confirm the plugin boots with `test/hbConfig/config.json`
 
 ## Changelog
 
-### v2.0.0
-
-- Complete TypeScript rewrite with full API dossier evidence
-- SecuritySystem service for proper HomeKit arm/disarm
-- MotionSensor service for motion detection events
-- Doorbell service for ring notifications
-- Status polling with configurable interval
-- Media API polling for motion event detection
-- OAuth 2.0 authentication with automatic token refresh
-- Comprehensive configuration UI
-
-### v1.x
-
-- Legacy implementation using `node-blink-security`
+See `CHANGELOG.md` for current release notes and migration history.
 
 ## License
 

@@ -68,6 +68,7 @@ homebridge-ui/server.js.map
 /scripts/*
 !/scripts/release.mjs
 !/scripts/preuninstall.js
+!/scripts/deploy-to-pi.sh
 # IDE and tracking files
 .copilot-tracking/
 *.txt
@@ -224,7 +225,8 @@ vite.config.ts.timestamp-*
 .vite/
 
 # NOT these files/folders
-!__tests__/acccessories/**
+!__tests__/
+!__tests__/**
 
 .vscode/*
 !.vscode/settings.json
@@ -235,7 +237,6 @@ vite.config.ts.timestamp-*
 
 # Built Visual Studio Code Extensions
 *.vsix
-scripts/deploy-to-pi.sh
 
 # Beads local credentials
 .beads-credential-key
