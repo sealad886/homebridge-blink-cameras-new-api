@@ -988,14 +988,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     // Configure input based on URL type
     if (liveviewUrl.startsWith('tcp://')) {
-      // MPEG-TS stream from our IMMIS proxy
       args.push(
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
         '-f', 'mpegts',
         '-i', liveviewUrl,
       );
     } else {
-      // Standard RTSPS stream
       args.push(
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
         '-rtsp_transport', this.streamingConfig.rtspTransport,
         '-i', liveviewUrl,
       );
@@ -1202,6 +1204,14 @@ export function createCameraControllerOptions(
       supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
       video: {
         resolutions: [
+          [320, 180, 30],
+          [320, 240, 30],
+          [480, 270, 30],
+          [480, 360, 30],
+          [640, 360, 30],
+          [640, 480, 30],
+          [1280, 720, 30],
+          [1920, 1080, 30],
           [320, 180, 15],
           [320, 240, 15],
           [480, 270, 15],

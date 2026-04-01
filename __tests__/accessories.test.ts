@@ -6,7 +6,7 @@ import { OwlAccessory } from '../src/accessories/owl';
 import { BlinkCamerasPlatform } from '../src/platform';
 import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types';
 import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
-import { BlinkCameraSource, resolveStreamingConfig } from '../src/accessories/camera-source';
+import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { BlinkApi } from '../src/blink-api';
 import { Buffer } from 'node:buffer';
 
@@ -287,6 +287,20 @@ describe('Accessory handlers', () => {
     expect(argString).toContain('localrtcpport=5102');
     expect(argString).toContain('localrtpport=5101');
     expect(argString).toContain('localrtcpport=5103');
+    expect(argString).toContain('-fflags nobuffer');
+    expect(argString).toContain('-flags low_delay');
+  });
+
+  it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {
+    const hap = createHap();
+    const options = createCameraControllerOptions(
+      hap as unknown as HAP,
+      {} as never,
+      { enabled: true },
+    );
+
+    expect(options.streamingOptions?.video?.resolutions).toContainEqual([1280, 720, 30]);
+    expect(options.streamingOptions?.video?.resolutions).toContainEqual([1920, 1080, 30]);
   });
 
   it('marks motion service inactive when device status is offline', () => {
