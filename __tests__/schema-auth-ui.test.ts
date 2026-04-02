@@ -5,6 +5,7 @@ type SchemaDocument = {
   customUi?: boolean;
   customUiPath?: string;
   schema?: {
+    required?: unknown;
     properties?: Record<string, unknown>;
   };
   layout?: Array<unknown>;
@@ -86,6 +87,30 @@ const collectAllLayoutKeys = (node: unknown, keys: string[] = []): string[] => {
   }
 
   return keys;
+};
+
+const collectBooleanRequiredPaths = (node: unknown, path = '$', hits: string[] = []): string[] => {
+  if (Array.isArray(node)) {
+    for (const [index, item] of node.entries()) {
+      collectBooleanRequiredPaths(item, `${path}[${index}]`, hits);
+    }
+    return hits;
+  }
+
+  if (!node || typeof node !== 'object') {
+    return hits;
+  }
+
+  const record = node as Record<string, unknown>;
+  if (typeof record.required === 'boolean') {
+    hits.push(path);
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    collectBooleanRequiredPaths(value, `${path}.${key}`, hits);
+  }
+
+  return hits;
 };
 
 describe('schema auth UI regression', () => {
@@ -177,5 +202,18 @@ describe('schema layout integrity', () => {
     const settingOverrides = properties.deviceSettingOverrides as Record<string, unknown>;
     expect(nameOverrides.type).toBe('array');
     expect(settingOverrides.type).toBe('array');
+  });
+
+  it('uses object-level required arrays instead of per-property required booleans', () => {
+    const schema = readJson<SchemaDocument>('config.schema.json');
+    const rootSchema = schema.schema as Record<string, unknown>;
+    const properties = (rootSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const nameOverrides = properties.deviceNameOverrides?.items as Record<string, unknown>;
+    const settingOverrides = properties.deviceSettingOverrides?.items as Record<string, unknown>;
+
+    expect(rootSchema.required).toEqual(['name']);
+    expect(nameOverrides.required).toEqual(['deviceIdentifier', 'customName']);
+    expect(settingOverrides.required).toEqual(['deviceIdentifier']);
+    expect(collectBooleanRequiredPaths(schema)).toEqual([]);
   });
 });
