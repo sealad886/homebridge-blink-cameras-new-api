@@ -26,14 +26,21 @@ jobs:
       - name: Determine publish necessity
         id: version_check
         run: |
+          PACKAGE_NAME='@sealad886/homebridge-blink-cameras-new-api'
           TARGET=$(node -p "require('./package.json').version")
-          CURRENT=$(npm view @sealad886/homebridge-blink-cameras-new-api version 2>/dev/null || echo "0.0.0")
-          STABLE_TAG=$(git tag --list 'v*' --sort=-version:refname | grep -vE '-(alpha|beta|rc)\.' | sed -n '1p')
-          STABLE_VERSION=${STABLE_TAG#v}
+          CURRENT=$(npm view "${PACKAGE_NAME}" version 2>/dev/null || echo "0.0.0")
+          TARGET_EXISTS=$(npm view "${PACKAGE_NAME}@${TARGET}" version 2>/dev/null || true)
+          PUBLISHED_VERSIONS=$(npm view "${PACKAGE_NAME}" versions --json 2>/dev/null || echo '[]')
+          STABLE_VERSION=$(node -e '
+            const parsed = JSON.parse(process.argv[1]);
+            const versions = Array.isArray(parsed) ? parsed : [parsed];
+            const stable = versions.filter((version) => !/-(alpha|beta|rc)\./.test(version)).at(-1) ?? "";
+            process.stdout.write(stable);
+          ' "${PUBLISHED_VERSIONS}")
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "stable_version=$STABLE_VERSION" >> "$GITHUB_OUTPUT"
-          if [ "$TARGET" != "$CURRENT" ]; then
+          if [ "$TARGET_EXISTS" != "$TARGET" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
