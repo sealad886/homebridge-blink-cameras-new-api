@@ -47,10 +47,32 @@ jobs:
         run: |
           set -euo pipefail
 
+          run_allow_missing() {
+            local output
+            local status
+
+            set +e
+            output="$("$@" 2>&1)"
+            status=$?
+            set -e
+
+            printf '%s\n' "$output"
+
+            if [ "$status" -eq 0 ]; then
+              return 0
+            fi
+
+            if printf '%s' "$output" | grep -Eq 'E404|404 Not Found|No dist-tag named|not found'; then
+              return 0
+            fi
+
+            return "$status"
+          }
+
           if [ -n "${DIST_TAG}" ]; then
-            npm dist-tag rm "${PACKAGE_NAME}" "${DIST_TAG}" || true
+            run_allow_missing npm dist-tag rm "${PACKAGE_NAME}" "${DIST_TAG}"
           fi
 
-          npm unpublish "${PACKAGE_NAME}@${TARGET_VERSION}" || true
+          run_allow_missing npm unpublish "${PACKAGE_NAME}@${TARGET_VERSION}"
 
-          npm view "${PACKAGE_NAME}" version dist-tags versions --json || true
+          npm view "${PACKAGE_NAME}" version dist-tags versions --json
