@@ -26,6 +26,7 @@ import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
+import process from 'node:process';
 import { setInterval, clearInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
@@ -1175,10 +1176,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private buildAudioEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; }): string[] {
-    if (this.streamingConfig.audio.codec === 'copy') {
-      return ['-acodec', 'copy'];
-    }
-
     const codec = typeof audio.codec === 'string'
       ? audio.codec.toUpperCase()
       : audio.codec;
@@ -1307,12 +1304,8 @@ export function createCameraControllerOptions(
       ? { type: hap.AudioStreamingCodecType.AAC_ELD, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] }
       : resolved.audio.codec === 'pcma'
         ? { type: hap.AudioStreamingCodecType.PCMA, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
-      : resolved.audio.codec === 'pcmu'
-        ? { type: hap.AudioStreamingCodecType.PCMU, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
-        // HomeKit has no passthrough codec enum, so keep the default audio
-        // negotiation shape while the FFmpeg pipeline honors `audioCodec: copy`.
-        : resolved.audio.codec === 'copy'
-          ? { type: hap.AudioStreamingCodecType.OPUS, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] }
+        : resolved.audio.codec === 'pcmu'
+          ? { type: hap.AudioStreamingCodecType.PCMU, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
           : { type: hap.AudioStreamingCodecType.OPUS, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] },
   ] : [];
 

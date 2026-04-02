@@ -2,18 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.7.1-beta.0] - 2026-04-02
-
-### Added
-
-- Beta prerelease for validating the new `audioCodec: "copy"` passthrough mode against real Blink camera streams.
-
-### Fixed
-
-- The platform config type now accepts `audioCodec: "copy"` consistently with the schema and README.
-- FFmpeg audio argument generation now actually honors `audioCodec: "copy"` at runtime instead of falling back to the HomeKit-requested codec path.
-- Added a regression test to keep the audio passthrough FFmpeg path covered.
-
 ## [0.7.0] - 2026-04-02
 
 ### Added
