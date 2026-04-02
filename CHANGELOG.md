@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-04-02
+
+### Added
+
+- Cross-platform `videoEncoder` selection with automatic hardware acceleration on supported hosts and safe fallback to `libx264`. At startup the plugin probes available hardware encoders (VideoToolbox on macOS, V4L2 on Raspberry Pi / ARM Linux, NVENC, VAAPI, QSV) via a dry-run FFmpeg test and selects the first working one.
+
+### Changed
+
+- Tuned HomeKit live streaming for smoother playback by preferring 30 fps profiles and lower-latency FFmpeg input flags.
+- Removed `peerDependencies` for `homebridge`; the `engines.homebridge` field declares the required version and `devDependencies` provides it for local development. This resolves the Homebridge plugin verification check that was failing because npm 7+ auto-installs peer dependencies.
+
+### Fixed
+
+- Raspberry Pi hardware streaming now avoids passing incompatible `-profile:v high` / `-level:v 4.0` options to `h264_v4l2m2m`, which was causing FFmpeg to abort before hardware encoding could start.
+- The IMMIS proxy now stays alive briefly when FFmpeg falls back from hardware encoding to `libx264`, preventing the immediate `tcp://127.0.0.1` reconnect failure seen in HomeKit stream startup logs.
+- The custom UI no longer writes the plaintext Blink password back into the saved Homebridge platform config.
+- Persisted auth tokens are now written with owner-only file permissions, and logout/unlock clears saved auth state cleanly.
+- Authentication and HTTP error logging now redact tokens, cookies, PINs, and verification codes more consistently.
+
 ## [0.7.0-alpha.3] - 2026-04-02
 
 ### Fixed

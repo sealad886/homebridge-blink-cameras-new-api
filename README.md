@@ -186,6 +186,9 @@ Set `videoEncoder` to `auto` for the safest default across mixed installations. 
 `h264_videotoolbox`, on Linux ARM boards such as Raspberry Pi it prefers `h264_v4l2m2m`, and it falls back
 to `libx264` if the hardware encoder cannot be started.
 
+> [!NOTE]
+> The automatic encoder selection has been tested on a limited set of hardware (macOS with VideoToolbox and Raspberry Pi with V4L2). If you run into choppy streams, encoding errors, or unexpected fallback to software encoding on your platform, please [open an issue](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/new) with your hardware details and FFmpeg debug logs (`ffmpegDebug: true`).
+
 If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
 
 ```bash
