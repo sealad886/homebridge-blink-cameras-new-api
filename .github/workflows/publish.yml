@@ -39,7 +39,7 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
           # Detect prerelease versions (e.g. 0.6.0-alpha.1, 1.0.0-beta.2)
-          if echo "$TARGET" | grep -qE '-(alpha|beta|rc)\.'; then
+          if echo "$TARGET" | grep -qE -- '-(alpha|beta|rc)\.'; then
             PRETAG=$(echo "$TARGET" | sed -E 's/.*-(alpha|beta|rc)\..*/\1/')
             echo "npm_tag=$PRETAG" >> "$GITHUB_OUTPUT"
           else
@@ -98,6 +98,7 @@ jobs:
           tag_name: v${{ steps.version_check.outputs.target }}
           name: v${{ steps.version_check.outputs.target }}
           generate_release_notes: true
+          prerelease: ${{ steps.version_check.outputs.npm_tag != 'latest' }}
 
       - name: Skip publish
         if: steps.version_check.outputs.publish != 'true'
