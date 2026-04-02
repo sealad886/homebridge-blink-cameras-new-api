@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0-alpha.3] - 2026-04-02
+
+### Fixed
+
+- Removed `peerDependencies` for `homebridge` to pass the Homebridge plugin verification check. The `engines.homebridge` field already declares the required version; the old `peerDependencies` entry caused npm 7+ to auto-install `homebridge` and `hap-nodejs` into `node_modules`, failing the verification bot's filesystem check.
+
 ## [0.7.0-alpha.2] - 2026-04-02
 
 ### Fixed

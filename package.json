@@ -1,7 +1,7 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.7.0-alpha.2",
+    "version": "0.7.0-alpha.3",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
@@ -77,9 +77,6 @@
         "ts-jest": "^29.4.6",
         "typescript": "^5.9.3",
         "jest-util": "*"
-    },
-    "peerDependencies": {
-        "homebridge": ">=1.11.1"
     },
     "scripts": {
         "preuninstall": "node scripts/preuninstall.js",
