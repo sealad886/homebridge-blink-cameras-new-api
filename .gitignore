@@ -245,3 +245,4 @@ vite.config.ts.timestamp-*
 # Beads / Dolt database files
 .dolt/
 *.db
+.github/hooks/
