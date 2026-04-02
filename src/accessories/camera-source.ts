@@ -31,7 +31,7 @@ import { setInterval, clearInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
-export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu' | 'copy';
+export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
 export type VideoEncoderPreference =
   | 'auto'
   | 'libx264'
@@ -1209,8 +1209,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           '-ac', `${channels}`,
           '-b:a', `${bitrate}k`,
         ];
-      case 'COPY':
-        return ['-acodec', 'copy'];
       case 'OPUS':
       case this.hap.AudioStreamingCodecType.OPUS:
       default:
