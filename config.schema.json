@@ -170,7 +170,8 @@
           { "title": "Opus (recommended)", "enum": ["opus"] },
           { "title": "AAC-ELD", "enum": ["aac-eld"] },
           { "title": "PCMA", "enum": ["pcma"] },
-          { "title": "PCMU", "enum": ["pcmu"] }
+          { "title": "PCMU", "enum": ["pcmu"] },
+          { "title": "Copy (passthrough, no re-encode)", "enum": ["copy"] }
         ]
       },
       "audioBitrate": {

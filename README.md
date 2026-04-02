@@ -124,7 +124,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams |
 | `enableAudio` | No | `true` | Enable audio streaming from camera |
 | `twoWayAudio` | No | `false` (forced off) | Talkback is currently disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
-| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
+| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`, `copy`). Use `copy` to passthrough the source audio without re-encoding |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 | `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
