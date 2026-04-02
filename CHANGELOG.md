@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0-alpha.2] - 2026-04-02
+
+### Fixed
+
+- Verified runtime FFmpeg hardware encoder detection and fallback behavior across test suites.
+
 ## [0.7.0-alpha.1] - 2026-04-01
 
 ### Fixed
