@@ -10,6 +10,7 @@ module.exports = {
     '^.+\\.tsx?$': [
       'ts-jest',
       {
+        // Keep Jest on explicit CommonJS while the app build uses NodeNext.
         tsconfig: 'tsconfig.test.json',
       },
     ],

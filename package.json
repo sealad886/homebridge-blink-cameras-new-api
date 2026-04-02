@@ -8,6 +8,7 @@
         "email": "dev@andrewcox.doctor"
     },
     "license": "MIT",
+    "type": "commonjs",
     "homepage": "https://github.com/sealad886/homebridge-blink-cameras-new-api",
     "bugs": {
         "url": "https://github.com/sealad886/homebridge-blink-cameras-new-api/issues"
