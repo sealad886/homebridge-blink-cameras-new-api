@@ -1,0 +1,56 @@
+name: Cleanup npm prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version to remove from npm
+        required: true
+        type: string
+      dist_tag:
+        description: Dist-tag to remove if it still exists
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Use Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Ensure npm token present
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not configured; set repository secret NPM_TOKEN to manage npm releases." >&2
+            exit 1
+          fi
+
+      - name: Configure npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+
+      - name: Remove prerelease from npm
+        env:
+          PACKAGE_NAME: '@sealad886/homebridge-blink-cameras-new-api'
+          TARGET_VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${DIST_TAG}" ]; then
+            npm dist-tag rm "${PACKAGE_NAME}" "${DIST_TAG}" || true
+          fi
+
+          npm unpublish "${PACKAGE_NAME}@${TARGET_VERSION}" || true
+
+          npm view "${PACKAGE_NAME}" version dist-tags versions --json || true
