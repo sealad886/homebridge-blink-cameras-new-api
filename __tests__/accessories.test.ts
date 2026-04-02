@@ -291,6 +291,80 @@ describe('Accessory handlers', () => {
     expect(argString).toContain('-flags low_delay');
   });
 
+  it('uses audio passthrough when audioCodec is set to copy', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      jest.fn(),
+      () => true,
+      logFn,
+      {
+        enabled: true,
+        audio: { enabled: true, codec: 'copy' },
+      },
+    );
+
+    const session = {
+      address: '192.168.1.50',
+      addressVersion: 'ipv4',
+      sessionId: 'session',
+      videoPort: 5000,
+      localVideoPort: 5100,
+      localVideoRtcpPort: 5102,
+      videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      videoSRTP: Buffer.alloc(30, 1),
+      videoSSRC: 1234,
+      audioPort: 5001,
+      localAudioPort: 5101,
+      localAudioRtcpPort: 5103,
+      audioCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      audioSRTP: Buffer.alloc(30, 2),
+      audioSSRC: 5678,
+    };
+
+    const request = {
+      type: 'start',
+      sessionID: 'session',
+      video: {
+        fps: 15,
+        width: 640,
+        height: 480,
+        max_bit_rate: 300,
+        profile: hap.H264Profile.BASELINE,
+        level: hap.H264Level.LEVEL3_1,
+        pt: 99,
+        mtu: 1378,
+      },
+      audio: {
+        codec: hap.AudioStreamingCodecType.OPUS,
+        channel: 1,
+        sample_rate: hap.AudioStreamingSamplerate.KHZ_24,
+        max_bit_rate: 24,
+        pt: 110,
+      },
+    };
+
+    const ffmpegSource = source as unknown as CameraSourceFfmpegAccess;
+    const args = ffmpegSource.buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
+
+    expect(args).toContain('-acodec');
+    expect(args).toContain('copy');
+    expect(args).not.toContain('libopus');
+  });
+
   it('uses a configured hardware encoder when requested', () => {
     const hap = createHap();
     const logFn = jest.fn();

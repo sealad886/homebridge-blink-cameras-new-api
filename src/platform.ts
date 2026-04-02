@@ -79,7 +79,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   maxStreams?: number;
   enableAudio?: boolean;
   twoWayAudio?: boolean;
-  audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
+  audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu' | 'copy';
   audioBitrate?: number;
   videoBitrate?: number;
   videoEncoder?: VideoEncoderPreference;
