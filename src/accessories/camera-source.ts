@@ -26,7 +26,6 @@ import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
-import process from 'node:process';
 import { setInterval, clearInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
