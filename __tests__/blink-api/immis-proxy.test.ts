@@ -181,7 +181,11 @@ describe('ImmisProxyServer security controls', () => {
       });
       const stats = await fs.stat(String(streamFile?.path));
       expect(stats.mode & 0o777).toBe(0o600);
-      const dirStats = await fs.stat(tmpDir);
+      const rootStats = await fs.stat(tmpDir);
+      expect(rootStats.mode & 0o777).toBe(0o755);
+      const recordingDir = path.dirname(String(streamFile?.path));
+      expect(path.basename(recordingDir)).toBe('blink-stream-recordings');
+      const dirStats = await fs.stat(recordingDir);
       expect(dirStats.mode & 0o777).toBe(0o700);
       await new Promise<void>((resolve) => streamFile?.end(resolve));
     } finally {

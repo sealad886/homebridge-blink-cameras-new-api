@@ -87,6 +87,7 @@ const LOAS_SYNCWORD_VALUE = 0xe0;
 const LOAS_HEADER_LENGTH = 3;
 const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
 const IDLE_SHUTDOWN_GRACE_MS = 2000;
+const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
 
 export interface LatmParseResult {
   frames: Buffer[];
@@ -275,14 +276,14 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     }
 
     try {
-      // Create directory if it doesn't exist
-      await fs.promises.mkdir(this.config.saveStreamPath, { recursive: true, mode: 0o700 });
-      await fs.promises.chmod(this.config.saveStreamPath, 0o700);
+      const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
+      await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
+      await fs.promises.chmod(recordingDir, 0o700);
 
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const serialHash = createHash('sha256').update(this.config.serial).digest('hex').slice(0, 16);
-      const filename = path.join(this.config.saveStreamPath, `blink-stream-${serialHash}-${timestamp}.ts`);
+      const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}.ts`);
 
       this.streamFile = fs.createWriteStream(filename, { mode: 0o600 });
       this.streamBytesWritten = 0;

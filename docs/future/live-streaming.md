@@ -7,9 +7,10 @@
 
 ## Overview
 
-This document outlines the technical requirements for adding live video streaming to @sealad886/homebridge-blink-cameras-new-api.
+This document outlined the original technical requirements for adding live
+video streaming to @sealad886/homebridge-blink-cameras-new-api.
 
-## Current State
+## Implemented State
 
 The plugin currently supports:
 
@@ -60,7 +61,8 @@ interface CameraStreamingDelegate {
 }
 ```
 
-Currently only `handleSnapshotRequest` is implemented.
+`handleSnapshotRequest`, `prepareStream`, and `handleStreamRequest` are now
+implemented in `src/accessories/camera-source.ts`.
 
 ### 4. Stream Lifecycle
 
