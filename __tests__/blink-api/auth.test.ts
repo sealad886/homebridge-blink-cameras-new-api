@@ -476,6 +476,23 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
+  it('load() still returns state when permission hardening is unsupported', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    const chmodSpy = jest
+      .spyOn(fs, 'chmod')
+      .mockRejectedValueOnce(new Error('chmod unsupported'));
+
+    try {
+      const storage = getStorage(makeAuth());
+      const loaded = await storage.load();
+
+      expect(loaded).toEqual(sampleState);
+      expect(chmodSpy).toHaveBeenCalledWith(dotFilePath, 0o600);
+    } finally {
+      chmodSpy.mockRestore();
+    }
+  });
+
   it('load() returns null when no file exists', async () => {
     const storage = getStorage(makeAuth());
     const loaded = await storage.load();
