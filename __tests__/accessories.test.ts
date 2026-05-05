@@ -470,6 +470,20 @@ describe('Accessory handlers', () => {
       expect(logs).not.toContain('conn-secret');
       expect(logs).not.toContain('video-srtp-secret');
       expect(logs).not.toContain('audio-srtp-secret');
+
+      ffmpegProcess.stderr.emit(
+        'data',
+        Buffer.from(
+          `frame=1 input=${sensitiveUrl} -srtp_out_params progress-secret\r`,
+        ),
+      );
+
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).toContain('FFmpeg(session): frame=1');
+      expect(logs).not.toContain('progress-secret');
+      expect(logs).not.toContain('client-secret');
+      expect(logs).not.toContain('stream-secret');
+      expect(logs).not.toContain('conn-secret');
       expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.arrayContaining(['-i', sensitiveUrl]));
     } finally {
       spawnMock.mockClear();

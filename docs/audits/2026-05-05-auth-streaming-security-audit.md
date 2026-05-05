@@ -256,7 +256,7 @@ Targeted commands after remediation:
 
 Final full gate:
 
-- `npm test -- --runInBand`: passed 13 suites, 86 tests.
+- `npm test -- --runInBand`: passed 13 suites, 87 tests.
 - `npm run build`: passed.
 - `npm run lint`: passed with no warnings.
 - `npm audit --omit=dev --json`: passed with 0 production vulnerabilities.

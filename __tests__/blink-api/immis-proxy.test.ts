@@ -173,7 +173,7 @@ describe('ImmisProxyServer security controls', () => {
 
       const filename = path.basename(String(streamFile?.path));
       expect(filename).not.toContain('TEST_SERIAL');
-      expect(filename).toMatch(/^blink-stream-[a-f0-9]{16}-/);
+      expect(filename).toMatch(/^blink-stream-[a-f0-9]{16}-.+-[a-f0-9]{16}\.ts$/);
 
       await new Promise<void>((resolve, reject) => {
         streamFile?.once('open', () => resolve());
@@ -190,6 +190,54 @@ describe('ImmisProxyServer security controls', () => {
       await new Promise<void>((resolve) => streamFile?.end(resolve));
     } finally {
       (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses collision-resistant debug stream recording filenames for same-timestamp viewers', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const timestampSpy = jest
+      .spyOn(Date.prototype, 'toISOString')
+      .mockReturnValue('2026-05-05T21:00:00.000Z');
+    const proxyA = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+    });
+    const proxyB = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+    });
+
+    try {
+      await (proxyA as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      await (proxyB as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      const streamFileA = (proxyA as unknown as { streamFile: WriteStream | null }).streamFile;
+      const streamFileB = (proxyB as unknown as { streamFile: WriteStream | null }).streamFile;
+      expect(streamFileA).toBeTruthy();
+      expect(streamFileB).toBeTruthy();
+
+      const filenameA = path.basename(String(streamFileA?.path));
+      const filenameB = path.basename(String(streamFileB?.path));
+      expect(filenameA).toMatch(/^blink-stream-[a-f0-9]{16}-2026-05-05T21-00-00-000Z-[a-f0-9]{16}\.ts$/);
+      expect(filenameB).toMatch(/^blink-stream-[a-f0-9]{16}-2026-05-05T21-00-00-000Z-[a-f0-9]{16}\.ts$/);
+      expect(filenameA).not.toBe(filenameB);
+
+      await Promise.all([
+        new Promise<void>((resolve, reject) => {
+          streamFileA?.once('error', reject);
+          streamFileA?.end(resolve);
+        }),
+        new Promise<void>((resolve, reject) => {
+          streamFileB?.once('error', reject);
+          streamFileB?.end(resolve);
+        }),
+      ]);
+    } finally {
+      timestampSpy.mockRestore();
+      (proxyA as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      (proxyB as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

@@ -1079,7 +1079,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     active.ffmpegStderrBuffer = `${active.ffmpegStderrBuffer ?? ''}${data.toString('utf8')}`;
-    const lines = active.ffmpegStderrBuffer.split(/\r?\n/);
+    const lines = active.ffmpegStderrBuffer.split(/\r\n|\n|\r/);
     active.ffmpegStderrBuffer = lines.pop() ?? '';
 
     for (const line of lines) {

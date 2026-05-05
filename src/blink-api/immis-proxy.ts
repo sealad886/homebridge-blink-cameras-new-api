@@ -16,7 +16,7 @@
 import { Buffer } from 'node:buffer';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -291,7 +291,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const serialHash = createHash('sha256').update(this.config.serial).digest('hex').slice(0, 16);
-      const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}.ts`);
+      const randomSuffix = randomBytes(8).toString('hex');
+      const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}-${randomSuffix}.ts`);
 
       this.streamFile = fs.createWriteStream(filename, { mode: 0o600 });
       this.streamBytesWritten = 0;
