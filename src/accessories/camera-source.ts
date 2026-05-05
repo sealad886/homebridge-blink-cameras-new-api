@@ -187,6 +187,13 @@ const redactFfmpegArgs = (args: string[]): string[] => {
   return redacted;
 };
 
+const redactFfmpegOutput = (value: string): string => {
+  return value
+    .replace(/\b(?:immis|rtsps?):\/\/[^\s'"]+/gi, (url) => redactStreamUrl(url))
+    .replace(/(-srtp_(?:out|in)_params\s+)(\S+)/gi, '$1<redacted>')
+    .replace(/(\bsrtp_(?:out|in)_params[=:])(\S+)/gi, '$1<redacted>');
+};
+
 const redactStreamUrl = (value: string): string => {
   try {
     const parsed = new URL(value);
@@ -599,6 +606,19 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           waitForReady: readyPromise,
         });
 
+        immisProxy.on('error', (error) => {
+          if (active.immisProxy !== immisProxy || active.stopped) {
+            return;
+          }
+
+          this.log(`IMMIS proxy error for session ${sessionId}: ${error.message}`);
+          if (!active.readyNotified) {
+            active.readyNotified = true;
+            callback(error);
+          }
+          void this.stopStream(sessionId);
+        });
+
         active.immisProxy = immisProxy;
         ffmpegInputUrl = await immisProxy.start();
         this.log(`IMMIS proxy ready at ${ffmpegInputUrl}`);
@@ -1000,7 +1020,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     ffmpeg.stderr.on('data', (data) => {
       if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg(${sessionId}): ${data.toString('utf8').trim()}`);
+        this.log(`FFmpeg(${sessionId}): ${redactFfmpegOutput(data.toString('utf8').trim())}`);
       }
     });
 

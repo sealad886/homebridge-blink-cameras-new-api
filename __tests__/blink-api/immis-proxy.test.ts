@@ -138,7 +138,7 @@ describe('ImmisProxyServer security controls', () => {
     });
 
     try {
-      (proxy as unknown as { startStreamRecording: () => void }).startStreamRecording();
+      await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
       const streamFile = (proxy as unknown as { streamFile: WriteStream | null }).streamFile;
       expect(streamFile).toBeTruthy();
 

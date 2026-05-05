@@ -8,6 +8,7 @@ import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types
 import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { BlinkApi } from '../src/blink-api';
+import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 
@@ -439,13 +440,108 @@ describe('Accessory handlers', () => {
         jest.fn(),
       );
 
+      const ffmpegProcess = spawnMock.mock.results[0]?.value as {
+        stderr: { emit: (event: string, data: Buffer) => boolean };
+      };
+      ffmpegProcess.stderr.emit(
+        'data',
+        Buffer.from(
+          `Opening '${sensitiveUrl}' for reading with -srtp_out_params video-srtp-secret ` +
+          'and srtp_in_params=audio-srtp-secret',
+        ),
+      );
+
       const logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
       expect(logs).toContain('<redacted>');
       expect(logs).not.toContain('client-secret');
       expect(logs).not.toContain('stream-secret');
       expect(logs).not.toContain('conn-secret');
+      expect(logs).not.toContain('video-srtp-secret');
+      expect(logs).not.toContain('audio-srtp-secret');
       expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.arrayContaining(['-i', sensitiveUrl]));
     } finally {
+      spawnMock.mockClear();
+    }
+  });
+
+  it('handles IMMIS proxy errors without leaving an unhandled stream error', async () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      startCameraLiveview: jest.fn().mockResolvedValue({
+        server: 'immis://stream.immedia-semi.com/session/conn-secret?client_id=1',
+        command_id: 456,
+      }),
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      getCommandStatus: jest.fn().mockResolvedValue({ status: 'running' }),
+      completeCommand: jest.fn().mockResolvedValue({}),
+    };
+    const startSpy = jest.spyOn(ImmisProxyServer.prototype, 'start').mockResolvedValue('tcp://127.0.0.1:1234');
+    const spawnMock = spawn as unknown as jest.Mock;
+    spawnMock.mockClear();
+
+    try {
+      const source = new BlinkCameraSource(
+        apiClient as unknown as BlinkApi,
+        hap as unknown as HAP,
+        1,
+        2,
+        'camera',
+        'TEST_SERIAL',
+        jest.fn(),
+        () => true,
+        logFn,
+        { enabled: true, ffmpegDebug: true },
+      );
+
+      const session = {
+        address: '192.168.1.50',
+        addressVersion: 'ipv4',
+        sessionId: 'session',
+        videoPort: 5000,
+        localVideoPort: 5100,
+        localVideoRtcpPort: 5102,
+        videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        videoSRTP: Buffer.alloc(30, 1),
+        videoSSRC: 1234,
+      };
+      (source as unknown as CameraSourcePrivateAccess).pendingSessions.set('session', session);
+
+      const callback = jest.fn();
+      await (source as unknown as CameraSourcePrivateAccess).startStream(
+        'session',
+        {
+          type: 'start',
+          sessionID: 'session',
+          video: {
+            fps: 30,
+            width: 1280,
+            height: 720,
+            max_bit_rate: 300,
+            profile: hap.H264Profile.BASELINE,
+            level: hap.H264Level.LEVEL3_1,
+            pt: 99,
+            mtu: 1378,
+          },
+        },
+        callback,
+      );
+
+      const active = (source as unknown as CameraSourcePrivateAccess).ongoingSessions.get('session') as {
+        immisProxy?: ImmisProxyServer;
+      };
+      const proxyError = new Error('certificate verify failed');
+      active.immisProxy?.emit('error', proxyError);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(startSpy).toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledWith(proxyError);
+      expect(logFn).toHaveBeenCalledWith(expect.stringContaining('IMMIS proxy error for session session'));
+      expect((source as unknown as CameraSourcePrivateAccess).ongoingSessions.has('session')).toBe(false);
+    } finally {
+      startSpy.mockRestore();
       spawnMock.mockClear();
     }
   });

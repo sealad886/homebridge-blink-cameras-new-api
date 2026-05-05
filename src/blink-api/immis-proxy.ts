@@ -243,23 +243,25 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       });
 
       this.server.listen(this.config.port, this.config.host, () => {
-        const address = this.server!.address();
-        if (!address || typeof address === 'string') {
-          reject(new Error('Failed to get server address'));
-          return;
-        }
+        void (async () => {
+          const address = this.server!.address();
+          if (!address || typeof address === 'string') {
+            reject(new Error('Failed to get server address'));
+            return;
+          }
 
-        this.isRunning = true;
-        const url = `tcp://${address.address}:${address.port}`;
-        this.log(`Proxy server listening on ${url}`);
+          this.isRunning = true;
+          const url = `tcp://${address.address}:${address.port}`;
+          this.log(`Proxy server listening on ${url}`);
 
-        // Create stream recording file if saveStreamPath is configured
-        if (this.config.saveStreamPath) {
-          this.startStreamRecording();
-        }
+          // Create stream recording file if saveStreamPath is configured
+          if (this.config.saveStreamPath) {
+            await this.startStreamRecording();
+          }
 
-        this.emit('ready', url);
-        resolve(url);
+          this.emit('ready', url);
+          resolve(url);
+        })().catch(reject);
       });
     });
   }
@@ -267,14 +269,14 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   /**
    * Start recording the stream to a file
    */
-  private startStreamRecording(): void {
+  private async startStreamRecording(): Promise<void> {
     if (!this.config.saveStreamPath) {
       return;
     }
 
     try {
       // Create directory if it doesn't exist
-      fs.mkdirSync(this.config.saveStreamPath, { recursive: true, mode: 0o700 });
+      await fs.promises.mkdir(this.config.saveStreamPath, { recursive: true, mode: 0o700 });
 
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
