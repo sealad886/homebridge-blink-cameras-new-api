@@ -56,6 +56,7 @@ export interface BlinkCameraStreamingConfig {
     maxBitrate?: number;
     encoder: VideoEncoderPreference;
   };
+  verifyImmisTls: boolean;
   /** Path to save debug stream recordings (MPEG-TS files) */
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds (0 = always request fresh, default 60) */
@@ -89,6 +90,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   video: {
     encoder: 'auto',
   },
+  verifyImmisTls: true,
   snapshotCacheTTL: 60,
   persistSnapshotCache: false,
 };
@@ -108,6 +110,7 @@ export const resolveStreamingConfig = (
     rtspTransport: config?.rtspTransport ?? DEFAULT_STREAMING_CONFIG.rtspTransport,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
+    verifyImmisTls: config?.verifyImmisTls ?? DEFAULT_STREAMING_CONFIG.verifyImmisTls,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
     audio: {
@@ -177,9 +180,23 @@ const redactFfmpegArgs = (args: string[]): string[] => {
       if (i + 1 < redacted.length) {
         redacted[i + 1] = '<redacted>';
       }
+    } else {
+      redacted[i] = redactStreamUrl(redacted[i]);
     }
   }
   return redacted;
+};
+
+const redactStreamUrl = (value: string): string => {
+  try {
+    const parsed = new URL(value);
+    if (!['immis:', 'rtsp:', 'rtsps:'].includes(parsed.protocol)) {
+      return value;
+    }
+    return `${parsed.protocol}//${parsed.host}/<redacted>`;
+  } catch {
+    return value;
+  }
 };
 
 const allocatePort = async (): Promise<number> => {
@@ -526,6 +543,19 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
+    if (this.ongoingSessions.size >= this.streamingConfig.maxStreams) {
+      this.log(
+        `Stream start rejected for session ${sessionId}: maxStreams=${this.streamingConfig.maxStreams} already reached`,
+      );
+      releasePort(pending.localVideoPort);
+      releasePort(pending.localVideoRtcpPort);
+      releasePort(pending.localAudioPort);
+      releasePort(pending.localAudioRtcpPort);
+      this.pendingSessions.delete(sessionId);
+      callback(new Error(`Maximum live stream count (${this.streamingConfig.maxStreams}) reached`));
+      return;
+    }
+
     const active: ActiveStreamSession = {
       ...pending,
       keepAliveTimer: null,
@@ -565,6 +595,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           log: (msg) => this.log(msg),
           debug: this.streamingConfig.ffmpegDebug,
           saveStreamPath: this.streamingConfig.debugStreamPath,
+          verifyTls: this.streamingConfig.verifyImmisTls,
           waitForReady: readyPromise,
         });
 
@@ -947,7 +978,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active, videoEncoder);
     active.selectedVideoEncoder = videoEncoder;
 
-    this.log(`Starting stream ${sessionId} via FFmpeg using ${videoEncoder} with URL: ${liveviewUrl}`);
+    this.log(`Starting stream ${sessionId} via FFmpeg using ${videoEncoder} with URL: ${redactStreamUrl(liveviewUrl)}`);
     if (this.streamingConfig.ffmpegDebug) {
       const safeArgs = redactFfmpegArgs(ffmpegArgs);
       this.log(`FFmpeg args: ${safeArgs.join(' ')}`);

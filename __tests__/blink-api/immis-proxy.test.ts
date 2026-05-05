@@ -1,5 +1,32 @@
 import { parseLatmFrames, ImmisProxyServer } from '../../src/blink-api/immis-proxy';
 import { EventEmitter } from 'node:events';
+import { promises as fs } from 'node:fs';
+import type { WriteStream } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as tls from 'node:tls';
+
+jest.mock('node:tls', () => {
+  const actual = jest.requireActual('node:tls') as typeof import('node:tls');
+  const { EventEmitter: MockEventEmitter } = jest.requireActual('node:events') as typeof import('node:events');
+  return {
+    ...actual,
+    connect: jest.fn((_options: tls.ConnectionOptions, callback?: () => void) => {
+      const socket = new MockEventEmitter() as tls.TLSSocket & {
+        write: jest.Mock;
+        destroyed: boolean;
+        destroy: jest.Mock;
+      };
+      socket.write = jest.fn();
+      socket.destroyed = false;
+      socket.destroy = jest.fn();
+      if (callback) {
+        setImmediate(callback);
+      }
+      return socket;
+    }),
+  };
+});
 
 const buildLoasFrame = (payload: Buffer): Buffer => {
   const length = payload.length;
@@ -66,6 +93,69 @@ describe('ImmisProxyServer idle reconnect grace', () => {
     if (idleShutdownTimeout) {
       clearTimeout(idleShutdownTimeout);
       (proxy as unknown as { idleShutdownTimeout: null }).idleShutdownTimeout = null;
+    }
+  });
+});
+
+describe('ImmisProxyServer security controls', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('verifies upstream IMMIS TLS by default', async () => {
+    const connectMock = tls.connect as unknown as jest.Mock;
+    connectMock.mockClear();
+
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+    });
+
+    (proxy as unknown as { connectToImmisServer: () => void }).connectToImmisServer();
+
+    expect(connectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: 'stream.immedia-semi.com',
+        port: 443,
+        rejectUnauthorized: true,
+        servername: 'stream.immedia-semi.com',
+        minVersion: 'TLSv1.2',
+      }),
+      expect.any(Function),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+    (proxy as unknown as { isRunning: boolean }).isRunning = true;
+    proxy.stop();
+  });
+
+  it('keeps debug stream recordings owner-only and omits raw serials from filenames', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+    });
+
+    try {
+      (proxy as unknown as { startStreamRecording: () => void }).startStreamRecording();
+      const streamFile = (proxy as unknown as { streamFile: WriteStream | null }).streamFile;
+      expect(streamFile).toBeTruthy();
+
+      const filename = path.basename(String(streamFile?.path));
+      expect(filename).not.toContain('TEST_SERIAL');
+      expect(filename).toMatch(/^blink-stream-[a-f0-9]{16}-/);
+
+      await new Promise<void>((resolve, reject) => {
+        streamFile?.once('open', () => resolve());
+        streamFile?.once('error', reject);
+      });
+      const stats = await fs.stat(String(streamFile?.path));
+      expect(stats.mode & 0o777).toBe(0o600);
+      await new Promise<void>((resolve) => streamFile?.end(resolve));
+    } finally {
+      (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 });

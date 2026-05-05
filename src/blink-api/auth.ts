@@ -91,10 +91,19 @@ class FileAuthStorage implements BlinkAuthStorage {
   private async readJsonFile(filePath: string): Promise<BlinkAuthState | null> {
     try {
       const contents = await fs.readFile(filePath, 'utf8');
+      await this.hardenFileMode(filePath);
       return (JSON.parse(contents) as BlinkAuthState) ?? null;
     } catch (error) {
       if ((error as { code?: string }).code === 'ENOENT') return null;
       throw error;
+    }
+  }
+
+  private async hardenFileMode(filePath: string): Promise<void> {
+    try {
+      await fs.chmod(filePath, 0o600);
+    } catch {
+      // Best-effort only: some filesystems may not support POSIX modes.
     }
   }
 

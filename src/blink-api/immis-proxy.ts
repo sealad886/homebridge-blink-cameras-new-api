@@ -16,6 +16,7 @@
 import { Buffer } from 'node:buffer';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -38,6 +39,8 @@ export interface ImmisProxyConfig {
   debug?: boolean;
   /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
   saveStreamPath?: string;
+  /** Verify the upstream IMMIS TLS certificate and hostname. */
+  verifyTls?: boolean;
   /**
    * Promise that resolves when the Blink command is ready.
    * The proxy will wait for this before connecting to the immis server.
@@ -182,6 +185,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       saveStreamPath: config.saveStreamPath,
       debug: config.debug,
       waitForReady: config.waitForReady,
+      verifyTls: config.verifyTls ?? true,
     };
 
     // If a waitForReady promise is provided, set up the ready state handler
@@ -270,13 +274,14 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     try {
       // Create directory if it doesn't exist
-      fs.mkdirSync(this.config.saveStreamPath, { recursive: true });
+      fs.mkdirSync(this.config.saveStreamPath, { recursive: true, mode: 0o700 });
 
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = path.join(this.config.saveStreamPath, `blink-stream-${this.config.serial}-${timestamp}.ts`);
+      const serialHash = createHash('sha256').update(this.config.serial).digest('hex').slice(0, 16);
+      const filename = path.join(this.config.saveStreamPath, `blink-stream-${serialHash}-${timestamp}.ts`);
 
-      this.streamFile = fs.createWriteStream(filename);
+      this.streamFile = fs.createWriteStream(filename, { mode: 0o600 });
       this.streamBytesWritten = 0;
 
       this.log(`Recording stream to: ${filename}`);
@@ -409,7 +414,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       {
         host: hostname,
         port: port,
-        rejectUnauthorized: false, // Blink uses self-signed certs
+        rejectUnauthorized: this.config.verifyTls,
+        servername: hostname,
+        minVersion: 'TLSv1.2',
       },
       () => {
         this.log('TLS connection established');

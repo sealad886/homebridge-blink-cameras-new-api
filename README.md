@@ -128,6 +128,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 | `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
+| `verifyImmisTls` | No | `true` | Verify TLS certificates and hostnames for Blink IMMIS live streams |
 | `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings for debugging |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` always fetches a new snapshot |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
@@ -188,6 +189,11 @@ to `libx264` if the hardware encoder cannot be started.
 
 > [!NOTE]
 > The automatic encoder selection has been tested on a limited set of hardware (macOS with VideoToolbox and Raspberry Pi with V4L2). If you run into choppy streams, encoding errors, or unexpected fallback to software encoding on your platform, please [open an issue](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/new) with your hardware details and FFmpeg debug logs (`ffmpegDebug: true`).
+
+IMMIS live streams verify the upstream TLS certificate and hostname by default. Keep `verifyImmisTls: true`
+unless Blink support has confirmed your camera only exposes an insecure/self-signed stream endpoint. When
+`ffmpegDebug` is enabled, stream URLs and SRTP keys are redacted from logs. Debug recordings use hashed
+camera identifiers in filenames and are created with owner-only file permissions.
 
 If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
 
