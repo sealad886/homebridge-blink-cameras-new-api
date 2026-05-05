@@ -277,6 +277,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     try {
       // Create directory if it doesn't exist
       await fs.promises.mkdir(this.config.saveStreamPath, { recursive: true, mode: 0o700 });
+      await fs.promises.chmod(this.config.saveStreamPath, 0o700);
 
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -492,7 +493,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     // Client ID field (4 bytes, big-endian)
     const clientIdStr = this.parsedUrl.searchParams.get('client_id') ?? '0';
     const clientId = parseInt(clientIdStr, 10);
-    this.debug(`Client ID: ${clientId}`);
+    this.debug('Client ID: <redacted>');
     header.writeUInt32BE(clientId, offset);
     offset += 4;
 
@@ -515,7 +516,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     const fullConnId = pathParts[pathParts.length - 1]?.split('__')[0] ?? '';
     const connIdBytes = Buffer.alloc(CONN_ID_MAX_LENGTH);
     connIdBytes.write(fullConnId.substring(0, CONN_ID_MAX_LENGTH), 'utf-8');
-    this.debug(`Connection ID: ${fullConnId.substring(0, CONN_ID_MAX_LENGTH)}`);
+    this.debug('Connection ID: <redacted>');
     connIdBytes.copy(header, offset);
     offset += CONN_ID_MAX_LENGTH;
 

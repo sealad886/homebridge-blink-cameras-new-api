@@ -129,8 +129,37 @@ describe('ImmisProxyServer security controls', () => {
     proxy.stop();
   });
 
+  it('allows upstream IMMIS TLS verification to be disabled explicitly', async () => {
+    const connectMock = tls.connect as unknown as jest.Mock;
+    connectMock.mockClear();
+
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      verifyTls: false,
+    });
+
+    (proxy as unknown as { connectToImmisServer: () => void }).connectToImmisServer();
+
+    expect(connectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: 'stream.immedia-semi.com',
+        port: 443,
+        rejectUnauthorized: false,
+        servername: 'stream.immedia-semi.com',
+        minVersion: 'TLSv1.2',
+      }),
+      expect.any(Function),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+    (proxy as unknown as { isRunning: boolean }).isRunning = true;
+    proxy.stop();
+  });
+
   it('keeps debug stream recordings owner-only and omits raw serials from filenames', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    await fs.chmod(tmpDir, 0o755);
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
@@ -152,10 +181,30 @@ describe('ImmisProxyServer security controls', () => {
       });
       const stats = await fs.stat(String(streamFile?.path));
       expect(stats.mode & 0o777).toBe(0o600);
+      const dirStats = await fs.stat(tmpDir);
+      expect(dirStats.mode & 0o777).toBe(0o700);
       await new Promise<void>((resolve) => streamFile?.end(resolve));
     } finally {
       (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('redacts IMMIS auth identifiers from proxy debug logs', () => {
+    const log = jest.fn();
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session/conn-secret__suffix?client_id=12345',
+      serial: 'TEST_SERIAL',
+      debug: true,
+      log,
+    });
+
+    (proxy as unknown as { buildAuthHeader: () => Buffer }).buildAuthHeader();
+
+    const logs = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logs).toContain('Client ID: <redacted>');
+    expect(logs).toContain('Connection ID: <redacted>');
+    expect(logs).not.toContain('12345');
+    expect(logs).not.toContain('conn-secret');
   });
 });
