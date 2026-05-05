@@ -32,6 +32,9 @@ External contracts checked:
 - `npm run lint`: 0 errors, 1 warning for unused `process` in
   `src/accessories/camera-source.ts`.
 - `npm audit --omit=dev --json`: blocked by npm registry audit endpoint error.
+- After rebasing on the updated remote, `npm audit --json` reported dev-only
+  transitive vulnerabilities in `handlebars`, `flatted`, `minimatch`,
+  `picomatch`, `brace-expansion`, and `ajv`.
 - Existing untracked files before work: `.vscode/`, `__tests__/.DS_Store`.
 
 ## Findings
@@ -211,6 +214,36 @@ Fix status: not reproducible
 Resolution evidence: a later rerun completed successfully and reported zero
 production vulnerabilities.
 
+### F7 - Dev dependency audit reported vulnerable transitive packages
+
+Severity: medium
+
+Affected paths:
+
+- `package-lock.json`
+
+Evidence: after rebasing on the updated remote, `npm audit --json` reported
+six vulnerable transitive dev packages, including one critical advisory through
+`handlebars`.
+
+Root cause: lockfile pinned older vulnerable transitive versions allowed by
+current dependency ranges.
+
+Fix status: fixed
+
+Remediation:
+
+- Ran `npm audit fix` without `--force`.
+- Updated only `package-lock.json`.
+- Removed the reported dev dependency vulnerabilities.
+
+Proof:
+
+- `npm audit --json`: passed with 0 total vulnerabilities.
+
+Residual risk: this audit fix covers npm advisories visible to the registry at
+the time of the run. It does not replace Dependabot monitoring.
+
 ## Verification Ledger
 
 Targeted commands after remediation:
@@ -227,3 +260,5 @@ Final full gate:
 - `npm run build`: passed.
 - `npm run lint`: passed with no warnings.
 - `npm audit --omit=dev --json`: passed with 0 production vulnerabilities.
+- `npm audit --json`: passed with 0 total vulnerabilities after lockfile
+  remediation.
