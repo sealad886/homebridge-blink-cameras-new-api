@@ -9,10 +9,37 @@ import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { BlinkApi } from '../src/blink-api';
 import { Buffer } from 'node:buffer';
+import { spawn } from 'node:child_process';
+
+jest.mock('node:child_process', () => {
+  const actual = jest.requireActual('node:child_process') as typeof import('node:child_process');
+  const { EventEmitter: MockEventEmitter } = jest.requireActual('node:events') as typeof import('node:events');
+  return {
+    ...actual,
+    spawn: jest.fn(() => {
+      const process = new MockEventEmitter() as import('node:child_process').ChildProcessWithoutNullStreams;
+      process.stderr = new MockEventEmitter() as never;
+      process.kill = jest.fn() as never;
+      return process;
+    }),
+  };
+});
 
 type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig'>;
 type CameraSourceFfmpegAccess = {
   buildFfmpegArgs: (input: string, request: unknown, session: unknown) => string[];
+};
+type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
+  startFfmpegStream: (
+    sessionId: string,
+    input: string,
+    request: unknown,
+    session: unknown,
+    callback: (error?: Error) => void,
+  ) => void;
+  startStream: (sessionId: string, request: unknown, callback: (error?: Error) => void) => Promise<void>;
+  pendingSessions: Map<string, unknown>;
+  ongoingSessions: Map<string, unknown>;
 };
 
 describe('Accessory handlers', () => {
@@ -349,6 +376,139 @@ describe('Accessory handlers', () => {
     expect(argString).not.toContain('-preset veryfast');
     expect(argString).not.toContain('-profile:v high');
     expect(argString).not.toContain('-level:v 4.0');
+  });
+
+  it('redacts live stream URLs from stream start and FFmpeg debug logs', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+    const spawnMock = spawn as unknown as jest.Mock;
+    spawnMock.mockClear();
+
+    try {
+      const source = new BlinkCameraSource(
+        apiClient as unknown as BlinkApi,
+        hap as unknown as HAP,
+        1,
+        2,
+        'camera',
+        'TEST_SERIAL',
+        jest.fn(),
+        () => true,
+        logFn,
+        { enabled: true, ffmpegDebug: true },
+      );
+
+      const session = {
+        address: '192.168.1.50',
+        addressVersion: 'ipv4',
+        sessionId: 'session',
+        videoPort: 5000,
+        localVideoPort: 5100,
+        localVideoRtcpPort: 5102,
+        videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        videoSRTP: Buffer.alloc(30, 1),
+        videoSSRC: 1234,
+      };
+      const request = {
+        type: 'start',
+        sessionID: 'session',
+        video: {
+          fps: 30,
+          width: 1280,
+          height: 720,
+          max_bit_rate: 300,
+          profile: hap.H264Profile.BASELINE,
+          level: hap.H264Level.LEVEL3_1,
+          pt: 99,
+          mtu: 1378,
+        },
+      };
+      const sensitiveUrl = 'immis://stream.immedia-semi.com/session/conn-secret?client_id=client-secret&token=stream-secret';
+
+      (source as unknown as CameraSourcePrivateAccess).startFfmpegStream(
+        'session',
+        sensitiveUrl,
+        request,
+        session,
+        jest.fn(),
+      );
+
+      const logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).toContain('<redacted>');
+      expect(logs).not.toContain('client-secret');
+      expect(logs).not.toContain('stream-secret');
+      expect(logs).not.toContain('conn-secret');
+      expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.arrayContaining(['-i', sensitiveUrl]));
+    } finally {
+      spawnMock.mockClear();
+    }
+  });
+
+  it('rejects stream starts beyond configured maxStreams before requesting live view', async () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      startCameraLiveview: jest.fn().mockResolvedValue({ server: 'rtsp://example.com/live' }),
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      jest.fn(),
+      () => true,
+      logFn,
+      { enabled: true, maxStreams: 1 },
+    );
+    const privateSource = source as unknown as CameraSourcePrivateAccess;
+    privateSource.pendingSessions.set('new-session', {
+      address: '192.168.1.50',
+      addressVersion: 'ipv4',
+      sessionId: 'new-session',
+      videoPort: 5000,
+      localVideoPort: 5100,
+      localVideoRtcpPort: 5102,
+      videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      videoSRTP: Buffer.alloc(30, 1),
+      videoSSRC: 1234,
+    });
+    privateSource.ongoingSessions.set('existing-session', {
+      sessionId: 'existing-session',
+      localVideoPort: 5200,
+      localVideoRtcpPort: 5202,
+    });
+
+    const callback = jest.fn();
+    await privateSource.startStream('new-session', {
+      type: 'start',
+      sessionID: 'new-session',
+      video: {
+        fps: 30,
+        width: 1280,
+        height: 720,
+        max_bit_rate: 300,
+        profile: hap.H264Profile.BASELINE,
+        level: hap.H264Level.LEVEL3_1,
+        pt: 99,
+        mtu: 1378,
+      },
+    }, callback);
+
+    expect(callback).toHaveBeenCalledWith(expect.any(Error));
+    expect(apiClient.startCameraLiveview).not.toHaveBeenCalled();
+    expect(privateSource.pendingSessions.has('new-session')).toBe(false);
   });
 
   it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {

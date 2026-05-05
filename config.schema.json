@@ -203,6 +203,12 @@
           { "title": "Linux VAAPI (advanced)", "enum": ["h264_vaapi"] }
         ]
       },
+      "verifyImmisTls": {
+        "title": "Verify IMMIS TLS",
+        "description": "Verify TLS certificates and hostnames for Blink IMMIS live streams. Keep enabled unless Blink support has confirmed your camera requires an insecure self-signed stream endpoint.",
+        "type": "boolean",
+        "default": true
+      },
       "excludeDevices": {
         "title": "Excluded Devices",
         "description": "List of device serial numbers, IDs, or names to exclude from HomeKit.",
@@ -315,6 +321,7 @@
         "audioBitrate",
         "videoBitrate",
         "videoEncoder",
+        "verifyImmisTls",
         "rtspTransport",
         "ffmpegDebug",
         "debugStreamPath"

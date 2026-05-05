@@ -1,5 +1,10 @@
 # Live Streaming Implementation
 
+> Status: historical design note. Live streaming is now implemented in
+> `src/accessories/camera-source.ts` with IMMIS proxy support in
+> `src/blink-api/immis-proxy.ts`. Use the README live-streaming section for
+> current user-facing configuration.
+
 ## Overview
 
 This document outlines the technical requirements for adding live video streaming to @sealad886/homebridge-blink-cameras-new-api.
@@ -10,8 +15,11 @@ The plugin currently supports:
 
 - Static snapshots via the Blink thumbnail API
 - Motion detection via polling
-
-Live streaming is **not** implemented.
+- HomeKit live streaming through `CameraStreamingDelegate`
+- FFmpeg transcoding from Blink RTSPS/IMMIS input to HomeKit SRTP output
+- Optional hardware H.264 encoder probing with `libx264` fallback
+- Single-stream default enforcement via `maxStreams`
+- Secure-by-default IMMIS TLS verification and redacted FFmpeg diagnostics
 
 ## Technical Requirements
 

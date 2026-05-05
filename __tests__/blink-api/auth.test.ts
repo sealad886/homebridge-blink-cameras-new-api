@@ -465,6 +465,17 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     expect(loaded).toEqual(sampleState);
   });
 
+  it('load() hardens an existing primary auth file to owner-only permissions', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.chmod(dotFilePath, 0o644);
+
+    const storage = getStorage(makeAuth());
+    await storage.load();
+
+    const stats = await fs.stat(dotFilePath);
+    expect(stats.mode & 0o777).toBe(0o600);
+  });
+
   it('load() returns null when no file exists', async () => {
     const storage = getStorage(makeAuth());
     const loaded = await storage.load();
