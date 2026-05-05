@@ -278,7 +278,11 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     try {
       const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
       await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
-      await fs.promises.chmod(recordingDir, 0o700);
+      try {
+        await fs.promises.chmod(recordingDir, 0o700);
+      } catch (error) {
+        this.log(`Failed to set debug recording directory permissions: ${error}`);
+      }
 
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');

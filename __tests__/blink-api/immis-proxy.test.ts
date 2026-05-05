@@ -194,6 +194,37 @@ describe('ImmisProxyServer security controls', () => {
     }
   });
 
+  it('continues debug stream recording when directory chmod is unsupported', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const log = jest.fn();
+    const chmodSpy = jest.spyOn(fs, 'chmod').mockRejectedValueOnce(new Error('chmod unsupported'));
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+      log,
+    });
+
+    try {
+      await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      const streamFile = (proxy as unknown as { streamFile: WriteStream | null }).streamFile;
+      expect(streamFile).toBeTruthy();
+      expect(chmodSpy).toHaveBeenCalledWith(expect.stringContaining('blink-stream-recordings'), 0o700);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to set debug recording directory permissions'),
+      );
+
+      await new Promise<void>((resolve, reject) => {
+        streamFile?.once('open', () => resolve());
+        streamFile?.once('error', reject);
+      });
+      await new Promise<void>((resolve) => streamFile?.end(resolve));
+    } finally {
+      (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('redacts IMMIS auth identifiers from proxy debug logs', () => {
     const log = jest.fn();
     const proxy = new ImmisProxyServer({

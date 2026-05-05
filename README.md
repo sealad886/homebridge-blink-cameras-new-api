@@ -129,7 +129,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 | `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
 | `verifyImmisTls` | No | `true` | Verify TLS certificates and hostnames for Blink IMMIS live streams |
-| `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings for debugging |
+| `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` always fetches a new snapshot |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
@@ -192,8 +192,11 @@ to `libx264` if the hardware encoder cannot be started.
 
 IMMIS live streams verify the upstream TLS certificate and hostname by default. Keep `verifyImmisTls: true`
 unless Blink support has confirmed your camera only exposes an insecure/self-signed stream endpoint. When
-`ffmpegDebug` is enabled, stream URLs and SRTP keys are redacted from logs. Debug recordings use hashed
-camera identifiers in filenames and are created with owner-only file permissions.
+`ffmpegDebug` is enabled, Blink live-view input URLs and SRTP keys are redacted from startup, FFmpeg
+argument, and FFmpeg stderr logs. The generated HomeKit `srtp://` output address may still appear in
+FFmpeg argument diagnostics. Debug recordings are written under
+`<debugStreamPath>/blink-stream-recordings/`, use hashed camera identifiers in filenames, and are
+created with owner-only file permissions where the filesystem supports POSIX modes.
 
 If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
 
