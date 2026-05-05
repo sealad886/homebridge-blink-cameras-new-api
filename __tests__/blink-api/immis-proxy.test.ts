@@ -225,6 +225,30 @@ describe('ImmisProxyServer security controls', () => {
     }
   });
 
+  it('rejects symlinked debug stream recording directories', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const targetDir = path.join(tmpDir, 'target');
+    const linkDir = path.join(tmpDir, 'blink-stream-recordings');
+    await fs.mkdir(targetDir);
+    await fs.symlink(targetDir, linkDir, 'dir');
+    const log = jest.fn();
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+      log,
+    });
+
+    try {
+      await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Failed to start stream recording'));
+    } finally {
+      (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('redacts IMMIS auth identifiers from proxy debug logs', () => {
     const log = jest.fn();
     const proxy = new ImmisProxyServer({

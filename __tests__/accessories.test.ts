@@ -443,15 +443,27 @@ describe('Accessory handlers', () => {
       const ffmpegProcess = spawnMock.mock.results[0]?.value as {
         stderr: { emit: (event: string, data: Buffer) => boolean };
       };
+      const firstUrlChunk = sensitiveUrl.slice(0, 45);
+      const secondUrlChunk = sensitiveUrl.slice(45);
+      ffmpegProcess.stderr.emit(
+        'data',
+        Buffer.from(`Opening '${firstUrlChunk}`),
+      );
+      let logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain(firstUrlChunk);
+
       ffmpegProcess.stderr.emit(
         'data',
         Buffer.from(
-          `Opening '${sensitiveUrl}' for reading with -srtp_out_params video-srtp-secret ` +
-          'and srtp_in_params=audio-srtp-secret',
+          `${secondUrlChunk}' for reading with -srtp_out_params video-`,
         ),
       );
+      ffmpegProcess.stderr.emit(
+        'data',
+        Buffer.from('srtp-secret and srtp_in_params=audio-srtp-secret\n'),
+      );
 
-      const logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
       expect(logs).toContain('<redacted>');
       expect(logs).not.toContain('client-secret');
       expect(logs).not.toContain('stream-secret');

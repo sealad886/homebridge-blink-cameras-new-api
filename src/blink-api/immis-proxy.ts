@@ -278,6 +278,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     try {
       const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
       await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
+      const recordingDirStats = await fs.promises.lstat(recordingDir);
+      if (recordingDirStats.isSymbolicLink() || !recordingDirStats.isDirectory()) {
+        throw new Error('Debug stream recording directory must be a real directory');
+      }
       try {
         await fs.promises.chmod(recordingDir, 0o700);
       } catch (error) {

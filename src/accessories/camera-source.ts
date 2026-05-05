@@ -155,6 +155,7 @@ interface ActiveStreamSession extends PendingStreamSession {
   selectedVideoEncoder?: VideoEncoderPreference;
   fallbackVideoEncoderTried?: boolean;
   readyNotified?: boolean;
+  ffmpegStderrBuffer?: string;
 }
 
 const usedPorts = new Set<number>();
@@ -1019,15 +1020,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg(${sessionId}): ${redactFfmpegOutput(data.toString('utf8').trim())}`);
-      }
+      this.handleFfmpegStderr(sessionId, active, data);
     });
 
     ffmpeg.on('error', (error) => {
       if (active.ffmpeg !== ffmpeg) {
         return;
       }
+      this.flushFfmpegStderr(sessionId, active);
 
       this.log(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
 
@@ -1048,6 +1048,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (active.ffmpeg !== ffmpeg) {
         return;
       }
+      this.flushFfmpegStderr(sessionId, active);
 
       if (
         (code !== 0 || signal) &&
@@ -1070,6 +1071,36 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
       void this.stopStream(sessionId);
     });
+  }
+
+  private handleFfmpegStderr(sessionId: string, active: ActiveStreamSession, data: Buffer): void {
+    if (!this.streamingConfig.ffmpegDebug) {
+      return;
+    }
+
+    active.ffmpegStderrBuffer = `${active.ffmpegStderrBuffer ?? ''}${data.toString('utf8')}`;
+    const lines = active.ffmpegStderrBuffer.split(/\r?\n/);
+    active.ffmpegStderrBuffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      this.logRedactedFfmpegLine(sessionId, line);
+    }
+  }
+
+  private flushFfmpegStderr(sessionId: string, active: ActiveStreamSession): void {
+    if (!this.streamingConfig.ffmpegDebug || !active.ffmpegStderrBuffer) {
+      return;
+    }
+
+    this.logRedactedFfmpegLine(sessionId, active.ffmpegStderrBuffer);
+    active.ffmpegStderrBuffer = '';
+  }
+
+  private logRedactedFfmpegLine(sessionId: string, line: string): void {
+    const trimmed = line.trim();
+    if (trimmed) {
+      this.log(`FFmpeg(${sessionId}): ${redactFfmpegOutput(trimmed)}`);
+    }
   }
 
   private resolveVideoEncoder(): VideoEncoderPreference {
