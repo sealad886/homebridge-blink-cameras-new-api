@@ -551,7 +551,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
-    if (this.ongoingSessions.size >= this.streamingConfig.maxStreams) {
+    const activeStreamCount = Array.from(this.ongoingSessions.values())
+      .filter((session) => !session.stopped)
+      .length;
+    if (activeStreamCount >= this.streamingConfig.maxStreams) {
       this.log(
         `Stream start rejected for session ${sessionId}: maxStreams=${this.streamingConfig.maxStreams} already reached`,
       );

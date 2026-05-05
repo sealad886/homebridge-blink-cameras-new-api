@@ -633,6 +633,74 @@ describe('Accessory handlers', () => {
     expect(privateSource.pendingSessions.has('new-session')).toBe(false);
   });
 
+  it('does not count stopping streams against maxStreams', async () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      startCameraLiveview: jest.fn().mockResolvedValue({ server: 'rtsp://example.com/live' }),
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+    const source = new BlinkCameraSource(
+      apiClient as unknown as BlinkApi,
+      hap as unknown as HAP,
+      1,
+      2,
+      'camera',
+      'TEST_SERIAL',
+      jest.fn(),
+      () => true,
+      logFn,
+      { enabled: true, maxStreams: 1 },
+    );
+    const spawnMock = spawn as unknown as jest.Mock;
+    spawnMock.mockClear();
+    const privateSource = source as unknown as CameraSourcePrivateAccess;
+    privateSource.pendingSessions.set('new-session', {
+      address: '192.168.1.50',
+      addressVersion: 'ipv4',
+      sessionId: 'new-session',
+      videoPort: 5000,
+      localVideoPort: 5100,
+      localVideoRtcpPort: 5102,
+      videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      videoSRTP: Buffer.alloc(30, 1),
+      videoSSRC: 1234,
+    });
+    privateSource.ongoingSessions.set('stopping-session', {
+      sessionId: 'stopping-session',
+      stopped: true,
+      localVideoPort: 5200,
+      localVideoRtcpPort: 5202,
+    });
+
+    const callback = jest.fn();
+    await privateSource.startStream('new-session', {
+      type: 'start',
+      sessionID: 'new-session',
+      video: {
+        fps: 30,
+        width: 1280,
+        height: 720,
+        max_bit_rate: 300,
+        profile: hap.H264Profile.BASELINE,
+        level: hap.H264Level.LEVEL3_1,
+        pt: 99,
+        mtu: 1378,
+      },
+    }, callback);
+
+    const ffmpegProcess = spawnMock.mock.results[0]?.value as { emit: (event: string) => boolean };
+    ffmpegProcess.emit('spawn');
+
+    expect(apiClient.startCameraLiveview).toHaveBeenCalledWith(1, 2);
+    expect(callback).toHaveBeenCalledWith();
+    expect(privateSource.pendingSessions.has('new-session')).toBe(false);
+    expect(privateSource.ongoingSessions.has('new-session')).toBe(true);
+  });
+
   it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {
     const hap = createHap();
     const options = createCameraControllerOptions(
