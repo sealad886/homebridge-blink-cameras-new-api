@@ -38,7 +38,7 @@ import {
   getOAuth2FAVerifyUrl,
 } from './urls';
 import { generatePKCEPair, generateOAuthState } from './oauth-pkce';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -53,39 +53,60 @@ const isNodeError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
 
-const assertSafeAuthStateFilePath = async (
-  filePath: string,
-  allowMissing = false,
-): Promise<void> => {
-  try {
-    const stats = await fs.lstat(filePath);
-    if (stats.isSymbolicLink()) {
-      throw new Error(`Refusing to use symlinked auth state file: ${filePath}`);
-    }
-    if (!stats.isFile()) {
-      throw new Error(`Auth state path is not a regular file: ${filePath}`);
-    }
-  } catch (error) {
-    if (allowMissing && isNodeError(error, 'ENOENT')) {
-      return;
-    }
-    throw error;
-  }
+type AuthStateFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+const noFollowFlag = fsConstants.O_NOFOLLOW ?? 0;
+
+const isSameFile = (
+  pathStats: Awaited<ReturnType<typeof fs.lstat>>,
+  handleStats: Awaited<ReturnType<AuthStateFileHandle['stat']>>,
+): boolean => {
+  return pathStats.dev === handleStats.dev && pathStats.ino === handleStats.ino;
 };
 
-export async function hardenAuthStateFileMode(filePath: string): Promise<void> {
+export async function hardenAuthStateFileMode(
+  target: string | Pick<AuthStateFileHandle, 'chmod'>,
+): Promise<void> {
   try {
-    await fs.chmod(filePath, 0o600);
+    if (typeof target === 'string') {
+      await fs.chmod(target, 0o600);
+    } else {
+      await target.chmod(0o600);
+    }
   } catch {
     // Best-effort only: some filesystems may not support POSIX modes.
   }
 }
 
 export async function readPersistedAuthStateFile(filePath: string): Promise<BlinkAuthState | null> {
-  await assertSafeAuthStateFilePath(filePath);
-  const contents = await fs.readFile(filePath, 'utf8');
-  await hardenAuthStateFileMode(filePath);
-  return (JSON.parse(contents) as BlinkAuthState) ?? null;
+  let handle: AuthStateFileHandle | null = null;
+  try {
+    handle = await fs.open(filePath, fsConstants.O_RDONLY | noFollowFlag);
+    const [pathStats, handleStats] = await Promise.all([
+      fs.lstat(filePath),
+      handle.stat(),
+    ]);
+    if (pathStats.isSymbolicLink()) {
+      throw new Error(`Refusing to use symlinked auth state file: ${filePath}`);
+    }
+    if (!pathStats.isFile() || !handleStats.isFile()) {
+      throw new Error(`Auth state path is not a regular file: ${filePath}`);
+    }
+    if (!isSameFile(pathStats, handleStats)) {
+      throw new Error(`Auth state file changed while opening: ${filePath}`);
+    }
+
+    const contents = await handle.readFile({ encoding: 'utf8' });
+    await hardenAuthStateFileMode(handle);
+    return (JSON.parse(contents) as BlinkAuthState) ?? null;
+  } catch (error) {
+    if (isNodeError(error, 'ELOOP')) {
+      throw new Error(`Refusing to use symlinked auth state file: ${filePath}`);
+    }
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 class FileAuthStorage implements BlinkAuthStorage {
@@ -115,10 +136,30 @@ class FileAuthStorage implements BlinkAuthStorage {
 
   async save(state: BlinkAuthState): Promise<void> {
     const payload = JSON.stringify(state, null, 2);
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
-    await assertSafeAuthStateFilePath(this.filePath, true);
-    await fs.writeFile(this.filePath, payload, { encoding: 'utf8', mode: 0o600 });
-    await fs.chmod(this.filePath, 0o600);
+    const directory = path.dirname(this.filePath);
+    const tempPath = path.join(
+      directory,
+      `.${path.basename(this.filePath)}.${randomUUID()}.tmp`,
+    );
+    let handle: AuthStateFileHandle | null = null;
+
+    try {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      handle = await fs.open(
+        tempPath,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag,
+        0o600,
+      );
+      await handle.writeFile(payload, { encoding: 'utf8' });
+      await hardenAuthStateFileMode(handle);
+      await handle.close();
+      handle = null;
+      await fs.rename(tempPath, this.filePath);
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await fs.unlink(tempPath).catch(() => undefined);
+      throw error;
+    }
   }
 
   async clear(): Promise<void> {

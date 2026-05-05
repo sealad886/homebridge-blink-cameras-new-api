@@ -175,10 +175,6 @@ describe('ImmisProxyServer security controls', () => {
       expect(filename).not.toContain('TEST_SERIAL');
       expect(filename).toMatch(/^blink-stream-[a-f0-9]{16}-.+-[a-f0-9]{16}\.ts$/);
 
-      await new Promise<void>((resolve, reject) => {
-        streamFile?.once('open', () => resolve());
-        streamFile?.once('error', reject);
-      });
       const stats = await fs.stat(String(streamFile?.path));
       expect(stats.mode & 0o777).toBe(0o600);
       const rootStats = await fs.stat(tmpDir);
@@ -262,10 +258,6 @@ describe('ImmisProxyServer security controls', () => {
         expect.stringContaining('Failed to set debug recording directory permissions'),
       );
 
-      await new Promise<void>((resolve, reject) => {
-        streamFile?.once('open', () => resolve());
-        streamFile?.once('error', reject);
-      });
       await new Promise<void>((resolve) => streamFile?.end(resolve));
     } finally {
       (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
@@ -292,6 +284,44 @@ describe('ImmisProxyServer security controls', () => {
       expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
       expect(log).toHaveBeenCalledWith(expect.stringContaining('Failed to start stream recording'));
     } finally {
+      (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects debug stream recording directory swaps before using the capture file', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const recordingDir = path.join(tmpDir, 'blink-stream-recordings');
+    const targetDir = path.join(tmpDir, 'target');
+    const log = jest.fn();
+    const realLstat = fs.lstat.bind(fs);
+    let recordingDirLstatCount = 0;
+    const lstatSpy = jest.spyOn(fs, 'lstat').mockImplementation(async (filePath) => {
+      if (String(filePath) === recordingDir) {
+        recordingDirLstatCount += 1;
+        if (recordingDirLstatCount === 2) {
+          await fs.rm(recordingDir, { recursive: true, force: true });
+          await fs.mkdir(targetDir, { recursive: true });
+          await fs.symlink(targetDir, recordingDir, 'dir');
+        }
+      }
+      return realLstat(filePath);
+    });
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+      log,
+    });
+
+    try {
+      await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
+      expect(lstatSpy).toHaveBeenCalledWith(recordingDir);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Failed to start stream recording'));
+      expect(await fs.readdir(targetDir)).toHaveLength(0);
+    } finally {
+      lstatSpy.mockRestore();
       (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

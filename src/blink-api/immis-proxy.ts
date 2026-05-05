@@ -88,6 +88,7 @@ const LOAS_HEADER_LENGTH = 3;
 const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
 const IDLE_SHUTDOWN_GRACE_MS = 2000;
 const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
+const NO_FOLLOW_FLAG = fs.constants.O_NOFOLLOW ?? 0;
 
 export interface LatmParseResult {
   frames: Buffer[];
@@ -294,7 +295,43 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       const randomSuffix = randomBytes(8).toString('hex');
       const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}-${randomSuffix}.ts`);
 
-      this.streamFile = fs.createWriteStream(filename, { mode: 0o600 });
+      let recordingFd: number | null = null;
+      try {
+        recordingFd = await new Promise<number>((resolve, reject) => {
+          fs.open(
+            filename,
+            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW_FLAG,
+            0o600,
+            (error, fd) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve(fd);
+            },
+          );
+        });
+        const currentRecordingDirStats = await fs.promises.lstat(recordingDir);
+        if (
+          currentRecordingDirStats.isSymbolicLink() ||
+          !currentRecordingDirStats.isDirectory() ||
+          currentRecordingDirStats.dev !== recordingDirStats.dev ||
+          currentRecordingDirStats.ino !== recordingDirStats.ino
+        ) {
+          throw new Error('Debug stream recording directory changed while opening recording file');
+        }
+
+        this.streamFile = fs.createWriteStream(filename, { fd: recordingFd, autoClose: true });
+        Object.defineProperty(this.streamFile, 'path', { value: filename });
+        recordingFd = null;
+      } catch (error) {
+        const fdToClose = recordingFd;
+        if (fdToClose !== null) {
+          await new Promise<void>((resolve) => fs.close(fdToClose, () => resolve()));
+        }
+        await fs.promises.unlink(filename).catch(() => undefined);
+        throw error;
+      }
       this.streamBytesWritten = 0;
 
       this.log(`Recording stream to: ${filename}`);

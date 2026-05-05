@@ -478,18 +478,21 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
 
   it('load() still returns state when permission hardening is unsupported', async () => {
     await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
-    const chmodSpy = jest
-      .spyOn(fs, 'chmod')
-      .mockRejectedValueOnce(new Error('chmod unsupported'));
+    const realOpen = fs.open.bind(fs);
+    const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      jest.spyOn(handle, 'chmod').mockRejectedValueOnce(new Error('chmod unsupported'));
+      return handle;
+    });
 
     try {
       const storage = getStorage(makeAuth());
       const loaded = await storage.load();
 
       expect(loaded).toEqual(sampleState);
-      expect(chmodSpy).toHaveBeenCalledWith(dotFilePath, 0o600);
+      expect(openSpy).toHaveBeenCalledWith(dotFilePath, expect.any(Number));
     } finally {
-      chmodSpy.mockRestore();
+      openSpy.mockRestore();
     }
   });
 
@@ -507,6 +510,19 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     } finally {
       chmodSpy.mockRestore();
     }
+  });
+
+  it('save() replaces a symlinked auth path without writing through it', async () => {
+    const targetPath = path.join(tmpDir, 'target-auth-state.json');
+    await fs.writeFile(targetPath, 'do-not-overwrite', 'utf8');
+    await fs.symlink(targetPath, dotFilePath);
+
+    const storage = getStorage(makeAuth());
+    await storage.save(sampleState);
+
+    expect(await fs.readFile(targetPath, 'utf8')).toBe('do-not-overwrite');
+    expect((await fs.lstat(dotFilePath)).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(await fs.readFile(dotFilePath, 'utf8'))).toEqual(sampleState);
   });
 
   it('load() returns null when no file exists', async () => {
