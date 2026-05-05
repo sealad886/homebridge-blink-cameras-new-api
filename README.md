@@ -196,7 +196,10 @@ unless Blink support has confirmed your camera only exposes an insecure/self-sig
 argument, and FFmpeg stderr logs. The generated HomeKit `srtp://` output address may still appear in
 FFmpeg argument diagnostics. Debug recordings are written under
 `<debugStreamPath>/blink-stream-recordings/`, use hashed camera identifiers in filenames, and are
-created with owner-only file permissions where the filesystem supports POSIX modes.
+created with owner-only file permissions where the filesystem supports POSIX modes. Existing
+recordings from older versions under `<debugStreamPath>/blink-stream-*.ts` are not moved or
+re-permissioned automatically; delete them or migrate them into a private directory if they contain
+sensitive footage.
 
 If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
 

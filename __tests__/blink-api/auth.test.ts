@@ -493,6 +493,22 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     }
   });
 
+  it('load() rejects symlinked auth files before hardening permissions', async () => {
+    const targetPath = path.join(tmpDir, 'target-auth-state.json');
+    await fs.writeFile(targetPath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.symlink(targetPath, dotFilePath);
+    const chmodSpy = jest.spyOn(fs, 'chmod');
+
+    try {
+      const storage = getStorage(makeAuth());
+
+      await expect(storage.load()).rejects.toThrow('symlinked auth state file');
+      expect(chmodSpy).not.toHaveBeenCalled();
+    } finally {
+      chmodSpy.mockRestore();
+    }
+  });
+
   it('load() returns null when no file exists', async () => {
     const storage = getStorage(makeAuth());
     const loaded = await storage.load();

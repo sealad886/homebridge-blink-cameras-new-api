@@ -49,6 +49,45 @@ const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
 const REFRESH_MAX_RETRIES = 2;
 const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
 
+const isNodeError = (error: unknown, code: string): boolean => {
+  return (error as { code?: string }).code === code;
+};
+
+const assertSafeAuthStateFilePath = async (
+  filePath: string,
+  allowMissing = false,
+): Promise<void> => {
+  try {
+    const stats = await fs.lstat(filePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use symlinked auth state file: ${filePath}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Auth state path is not a regular file: ${filePath}`);
+    }
+  } catch (error) {
+    if (allowMissing && isNodeError(error, 'ENOENT')) {
+      return;
+    }
+    throw error;
+  }
+};
+
+export async function hardenAuthStateFileMode(filePath: string): Promise<void> {
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // Best-effort only: some filesystems may not support POSIX modes.
+  }
+}
+
+export async function readPersistedAuthStateFile(filePath: string): Promise<BlinkAuthState | null> {
+  await assertSafeAuthStateFilePath(filePath);
+  const contents = await fs.readFile(filePath, 'utf8');
+  await hardenAuthStateFileMode(filePath);
+  return (JSON.parse(contents) as BlinkAuthState) ?? null;
+}
+
 class FileAuthStorage implements BlinkAuthStorage {
   /** Legacy directory-based path for migration (e.g. .../blink-auth/auth-state.json) */
   private readonly legacyPath: string | null;
@@ -77,6 +116,7 @@ class FileAuthStorage implements BlinkAuthStorage {
   async save(state: BlinkAuthState): Promise<void> {
     const payload = JSON.stringify(state, null, 2);
     await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+    await assertSafeAuthStateFilePath(this.filePath, true);
     await fs.writeFile(this.filePath, payload, { encoding: 'utf8', mode: 0o600 });
     await fs.chmod(this.filePath, 0o600);
   }
@@ -90,20 +130,10 @@ class FileAuthStorage implements BlinkAuthStorage {
 
   private async readJsonFile(filePath: string): Promise<BlinkAuthState | null> {
     try {
-      const contents = await fs.readFile(filePath, 'utf8');
-      await this.hardenFileMode(filePath);
-      return (JSON.parse(contents) as BlinkAuthState) ?? null;
+      return await readPersistedAuthStateFile(filePath);
     } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') return null;
+      if (isNodeError(error, 'ENOENT')) return null;
       throw error;
-    }
-  }
-
-  private async hardenFileMode(filePath: string): Promise<void> {
-    try {
-      await fs.chmod(filePath, 0o600);
-    } catch {
-      // Best-effort only: some filesystems may not support POSIX modes.
     }
   }
 

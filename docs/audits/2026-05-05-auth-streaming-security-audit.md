@@ -131,6 +131,9 @@ Remediation:
 - Created debug recording files with mode `0600`.
 - Created new recording directories with mode `0700` when possible.
 - Documented recording privacy behavior.
+- Documented that recordings created by older versions under
+  `<debugStreamPath>/blink-stream-*.ts` are not moved or re-permissioned
+  automatically.
 
 Proof:
 
@@ -146,9 +149,12 @@ Severity: medium
 Affected paths:
 
 - `src/blink-api/auth.ts`
+- `src/homebridge-ui/server.ts`
 
 Evidence: new token files were saved with `0600`, but an existing primary auth
-file with broader mode could be loaded without being tightened.
+file with broader mode could be loaded without being tightened. The UI status
+path also read persisted auth state directly from disk without sharing the
+same hardening path.
 
 Root cause: permission hardening was only on save/migration, not on primary
 load.
@@ -158,6 +164,8 @@ Fix status: fixed
 Remediation:
 
 - Added best-effort `chmod(0600)` after reading persisted auth state.
+- Rejected symlinked auth state files before reading or hardening them.
+- Reused the hardened auth-state reader from the Homebridge UI status path.
 
 Proof:
 
@@ -256,7 +264,7 @@ Targeted commands after remediation:
 
 Final full gate:
 
-- `npm test -- --runInBand`: passed 13 suites, 90 tests.
+- `npm test -- --runInBand`: passed 13 suites, 91 tests.
 - `npm run build`: passed.
 - `npm run lint`: passed with no warnings.
 - `npm audit --omit=dev --json`: passed with 0 production vulnerabilities.

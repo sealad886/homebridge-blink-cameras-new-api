@@ -12,7 +12,11 @@
  */
 
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
-import { Blink2FARequiredError, BlinkAuthenticationError } from '../blink-api/auth';
+import {
+  Blink2FARequiredError,
+  BlinkAuthenticationError,
+  readPersistedAuthStateFile,
+} from '../blink-api/auth';
 import { BlinkApi } from '../blink-api/client';
 import { BlinkAuthState, BlinkConfig, BlinkLogger } from '../types';
 import { promises as fs } from 'node:fs';
@@ -431,8 +435,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
     // Try primary dot-file first, then fall back to legacy subdirectory path
     for (const filePath of [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()]) {
       try {
-        const raw = await fs.readFile(filePath, 'utf8');
-        const state = JSON.parse(raw) as BlinkAuthState;
+        const state = await readPersistedAuthStateFile(filePath);
         if (!state?.accessToken) continue;
         if (state.tokenExpiry) {
           const expiry = new Date(state.tokenExpiry);
