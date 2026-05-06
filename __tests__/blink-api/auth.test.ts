@@ -481,13 +481,14 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
-  it('load() still returns state when an already owner-only file cannot be chmodded', async () => {
+  it('load() returns already owner-only state without chmodding', async () => {
     await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
     await fs.chmod(dotFilePath, 0o600);
     const realOpen = fs.open.bind(fs);
+    const chmodMocks: Array<jest.SpiedFunction<Awaited<ReturnType<typeof fs.open>>['chmod']>> = [];
     const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
       const handle = await realOpen(filePath, flags, mode);
-      jest.spyOn(handle, 'chmod').mockRejectedValueOnce(new Error('chmod unsupported'));
+      chmodMocks.push(jest.spyOn(handle, 'chmod').mockRejectedValueOnce(new Error('chmod unsupported')));
       return handle;
     });
 
@@ -497,6 +498,8 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
 
       expect(loaded).toEqual(sampleState);
       expect(openSpy).toHaveBeenCalledWith(dotFilePath, expect.any(Number));
+      expect(chmodMocks).toHaveLength(1);
+      expect(chmodMocks[0]).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
     }

@@ -339,6 +339,51 @@ describe('ImmisProxyServer security controls', () => {
     }
   });
 
+  it('does not chmod a swapped debug recording directory before verifying its identity', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const recordingDir = path.join(tmpDir, 'blink-stream-recordings');
+    const targetDir = path.join(tmpDir, 'target');
+    const log = jest.fn();
+    const realLstat = fs.lstat.bind(fs);
+    const realOpen = fs.open.bind(fs);
+    const dirHandleChmod = jest.fn();
+    const lstatSpy = jest.spyOn(fs, 'lstat').mockImplementation(async (filePath) => {
+      const stats = await realLstat(filePath);
+      if (String(filePath) === recordingDir) {
+        await fs.rm(recordingDir, { recursive: true, force: true });
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.symlink(targetDir, recordingDir, 'dir');
+      }
+      return stats;
+    });
+    const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
+      if (String(filePath) === recordingDir) {
+        const handle = await realOpen(targetDir, flags, mode);
+        jest.spyOn(handle, 'chmod').mockImplementation(dirHandleChmod);
+        return handle;
+      }
+      return realOpen(filePath, flags, mode);
+    });
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+      log,
+    });
+
+    try {
+      await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
+      expect(dirHandleChmod).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Failed to start stream recording'));
+    } finally {
+      lstatSpy.mockRestore();
+      openSpy.mockRestore();
+      (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('redacts IMMIS auth identifiers from proxy debug logs', () => {
     const log = jest.fn();
     const proxy = new ImmisProxyServer({

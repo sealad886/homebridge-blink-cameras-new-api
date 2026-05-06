@@ -67,6 +67,21 @@ describe('homebridge UI persisted auth state loading', () => {
     expect(logDebug).toHaveBeenCalledWith(result.message);
   });
 
+  it('reports invalid token expiry instead of restoring unusable persisted auth state', async () => {
+    await fs.writeFile(
+      primaryPath,
+      JSON.stringify({ ...state, tokenExpiry: 'not-a-date' }, null, 2),
+      'utf8',
+    );
+    await fs.chmod(primaryPath, 0o600);
+
+    const result = await loadPersistedAuthStateFromFiles([primaryPath], logDebug, now);
+
+    expect(result.state).toBeNull();
+    expect(result.message).toContain('invalid expiry');
+    expect(logDebug).toHaveBeenCalledWith(result.message);
+  });
+
   it('reports rejected auth state security errors instead of falling through silently', async () => {
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(legacyPath, JSON.stringify(state, null, 2), 'utf8');

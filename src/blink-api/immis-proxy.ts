@@ -91,12 +91,17 @@ const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
 const NO_FOLLOW_FLAG = fs.constants.O_NOFOLLOW ?? 0;
 const DIRECTORY_OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0) | NO_FOLLOW_FLAG;
 type FileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
+type FsStats = Awaited<ReturnType<typeof fs.promises.lstat>>;
 
 export interface LatmParseResult {
   frames: Buffer[];
   remainder: Buffer;
   discardedBytes: number;
 }
+
+const isSameFsEntry = (left: FsStats, right: FsStats): boolean => {
+  return left.dev === right.dev && left.ino === right.ino;
+};
 
 /**
  * Extract LOAS/LATM frames from a buffer.
@@ -282,10 +287,14 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     try {
       const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
       await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
+      const recordingDirPathStats = await fs.promises.lstat(recordingDir);
+      if (recordingDirPathStats.isSymbolicLink() || !recordingDirPathStats.isDirectory()) {
+        throw new Error('Debug stream recording directory must be a real directory');
+      }
       recordingDirHandle = await fs.promises.open(recordingDir, DIRECTORY_OPEN_FLAGS);
       const recordingDirStats = await recordingDirHandle.stat();
-      if (!recordingDirStats.isDirectory()) {
-        throw new Error('Debug stream recording directory must be a real directory');
+      if (!recordingDirStats.isDirectory() || !isSameFsEntry(recordingDirPathStats, recordingDirStats)) {
+        throw new Error('Debug stream recording directory changed while opening');
       }
       try {
         await recordingDirHandle.chmod(0o700);

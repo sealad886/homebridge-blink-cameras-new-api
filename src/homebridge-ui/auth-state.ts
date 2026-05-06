@@ -34,7 +34,13 @@ export async function loadPersistedAuthStateFromFiles(
       }
       if (state.tokenExpiry) {
         const expiry = new Date(state.tokenExpiry);
-        if (!Number.isNaN(expiry.getTime()) && expiry.getTime() <= nowMs()) {
+        const expiryMs = expiry.getTime();
+        if (Number.isNaN(expiryMs)) {
+          ignoredMessage = `Persisted Blink authentication was ignored: saved token at ${filePath} has invalid expiry ${state.tokenExpiry}`;
+          logDebug(ignoredMessage);
+          continue;
+        }
+        if (expiryMs <= nowMs()) {
           ignoredMessage = `Persisted Blink authentication was ignored: saved token at ${filePath} expired at ${state.tokenExpiry}`;
           logDebug(ignoredMessage);
           continue;
