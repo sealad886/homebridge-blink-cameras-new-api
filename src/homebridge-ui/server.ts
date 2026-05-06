@@ -425,7 +425,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
           tier: diskState.tier ?? undefined,
           message: 'Restored from persisted auth state',
         };
-      } else if (message) {
+      } else if (message && this.canShowPersistedAuthMessage()) {
         this.authStatus = {
           authenticated: false,
           message,
@@ -433,6 +433,13 @@ class BlinkUiServer extends HomebridgePluginUiServer {
       }
     }
     return this.authStatus;
+  }
+
+  private canShowPersistedAuthMessage(): boolean {
+    return !this.authStatus.message &&
+      !this.authStatus.requires2FA &&
+      !this.authStatus.requiresClientVerification &&
+      !this.authStatus.requiresAccountVerification;
   }
 
   /**
