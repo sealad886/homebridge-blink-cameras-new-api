@@ -1,4 +1,9 @@
-import { BlinkAuth, Blink2FARequiredError, BlinkAuthenticationError } from '../../src/blink-api/auth';
+import {
+  AuthStateFileSecurityError,
+  BlinkAuth,
+  Blink2FARequiredError,
+  BlinkAuthenticationError,
+} from '../../src/blink-api/auth';
 import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
 import { URL } from 'node:url';
 import { promises as fs } from 'node:fs';
@@ -476,8 +481,9 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
-  it('load() still returns state when permission hardening is unsupported', async () => {
+  it('load() still returns state when an already owner-only file cannot be chmodded', async () => {
     await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.chmod(dotFilePath, 0o600);
     const realOpen = fs.open.bind(fs);
     const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
       const handle = await realOpen(filePath, flags, mode);
@@ -491,6 +497,28 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
 
       expect(loaded).toEqual(sampleState);
       expect(openSpy).toHaveBeenCalledWith(dotFilePath, expect.any(Number));
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  const itIfPosix = process.platform === 'win32' ? it.skip : it;
+
+  itIfPosix('load() rejects shared-readable auth files when POSIX permission hardening fails', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.chmod(dotFilePath, 0o644);
+    const realOpen = fs.open.bind(fs);
+    const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      jest.spyOn(handle, 'chmod').mockRejectedValueOnce(new Error('chmod denied'));
+      return handle;
+    });
+
+    try {
+      const storage = getStorage(makeAuth());
+
+      await expect(storage.load()).rejects.toThrow(AuthStateFileSecurityError);
+      await expect(storage.load()).rejects.toThrow('could not be tightened to 0600');
     } finally {
       openSpy.mockRestore();
     }

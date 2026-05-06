@@ -15,10 +15,10 @@ import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-ut
 import {
   Blink2FARequiredError,
   BlinkAuthenticationError,
-  readPersistedAuthStateFile,
 } from '../blink-api/auth';
 import { BlinkApi } from '../blink-api/client';
-import { BlinkAuthState, BlinkConfig, BlinkLogger } from '../types';
+import { BlinkConfig, BlinkLogger } from '../types';
+import { loadPersistedAuthStateFromFiles } from './auth-state';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -413,7 +413,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    */
   async handleStatus(): Promise<AuthStatus> {
     if (!this.authStatus.authenticated) {
-      const diskState = await this.loadPersistedAuthState();
+      const { state: diskState, message } = await this.loadPersistedAuthState();
       if (diskState) {
         this.authStatus = {
           authenticated: true,
@@ -421,6 +421,11 @@ class BlinkUiServer extends HomebridgePluginUiServer {
           accountId: diskState.accountId ?? undefined,
           tier: diskState.tier ?? undefined,
           message: 'Restored from persisted auth state',
+        };
+      } else if (message) {
+        this.authStatus = {
+          authenticated: false,
+          message,
         };
       }
     }
@@ -431,26 +436,12 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Read the on-disk .blink-auth.json (or legacy blink-auth/auth-state.json)
    * and return it if it looks valid (has an access token and is not expired).
    */
-  private async loadPersistedAuthState(): Promise<BlinkAuthState | null> {
+  private async loadPersistedAuthState(): Promise<ReturnType<typeof loadPersistedAuthStateFromFiles>> {
     // Try primary dot-file first, then fall back to legacy subdirectory path
-    for (const filePath of [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()]) {
-      try {
-        const state = await readPersistedAuthStateFile(filePath);
-        if (!state?.accessToken) continue;
-        if (state.tokenExpiry) {
-          const expiry = new Date(state.tokenExpiry);
-          if (!Number.isNaN(expiry.getTime()) && expiry.getTime() <= Date.now()) {
-            this.logDebug(`Persisted auth state at ${filePath} has expired token; skipping`);
-            continue;
-          }
-        }
-        this.logDebug(`Loaded valid persisted auth state from ${filePath}`);
-        return state;
-      } catch {
-        // File doesn't exist or is unreadable — try next
-      }
-    }
-    return null;
+    return loadPersistedAuthStateFromFiles(
+      [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()],
+      this.logDebug.bind(this),
+    );
   }
 
   private async clearPersistedAuthState(): Promise<void> {

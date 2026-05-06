@@ -39,7 +39,9 @@ import {
 } from './urls';
 import { generatePKCEPair, generateOAuthState } from './oauth-pkce';
 import { constants as fsConstants, promises as fs } from 'node:fs';
+import type { Stats } from 'node:fs';
 import * as path from 'node:path';
+import process from 'node:process';
 import { URL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -48,12 +50,16 @@ type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
 const REFRESH_MAX_RETRIES = 2;
 const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
+const OWNER_ONLY_AUTH_FILE_MODE = 0o600;
+const SHARED_AUTH_FILE_MODE_MASK = 0o077;
+const POSIX_MODE_MASK = 0o777;
 
 const isNodeError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
 
 type AuthStateFileHandle = Awaited<ReturnType<typeof fs.open>>;
+type AuthStateFileModeTarget = string | Pick<AuthStateFileHandle, 'chmod' | 'stat'>;
 
 const noFollowFlag = fsConstants.O_NOFOLLOW ?? 0;
 
@@ -64,17 +70,71 @@ const isSameFile = (
   return pathStats.dev === handleStats.dev && pathStats.ino === handleStats.ino;
 };
 
+const formatFileMode = (mode: number): string => {
+  return `0${(mode & POSIX_MODE_MASK).toString(8)}`;
+};
+
+const hasSharedAuthFilePermissions = (mode: number): boolean => {
+  return (mode & SHARED_AUTH_FILE_MODE_MASK) !== 0;
+};
+
+export class AuthStateFileSecurityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthStateFileSecurityError';
+  }
+}
+
 export async function hardenAuthStateFileMode(
-  target: string | Pick<AuthStateFileHandle, 'chmod'>,
+  target: AuthStateFileModeTarget,
+  filePath = typeof target === 'string' ? target : 'auth state file',
 ): Promise<void> {
+  const getStats = async (): Promise<Stats> => {
+    if (typeof target === 'string') {
+      return fs.lstat(target);
+    }
+    return target.stat();
+  };
+
+  const originalStats = await getStats();
+  if (originalStats.isSymbolicLink()) {
+    throw new AuthStateFileSecurityError(`Refusing to harden symlinked auth state file: ${filePath}`);
+  }
+  if (!originalStats.isFile()) {
+    throw new AuthStateFileSecurityError(`Auth state path is not a regular file: ${filePath}`);
+  }
+
+  const originalMode = originalStats.mode;
+  if (!hasSharedAuthFilePermissions(originalMode)) {
+    return;
+  }
+
   try {
     if (typeof target === 'string') {
-      await fs.chmod(target, 0o600);
+      await fs.chmod(target, OWNER_ONLY_AUTH_FILE_MODE);
     } else {
-      await target.chmod(0o600);
+      await target.chmod(OWNER_ONLY_AUTH_FILE_MODE);
     }
   } catch {
-    // Best-effort only: some filesystems may not support POSIX modes.
+    if (process.platform !== 'win32') {
+      throw new AuthStateFileSecurityError(
+        `Persisted auth state file permissions are ${formatFileMode(originalMode)} ` +
+        `and could not be tightened to ${formatFileMode(OWNER_ONLY_AUTH_FILE_MODE)}: ${filePath}`,
+      );
+    }
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const hardenedMode = (await getStats()).mode;
+  if (hasSharedAuthFilePermissions(hardenedMode)) {
+    throw new AuthStateFileSecurityError(
+      `Persisted auth state file permissions remain ${formatFileMode(hardenedMode)} ` +
+      `after tightening to ${formatFileMode(OWNER_ONLY_AUTH_FILE_MODE)}: ${filePath}`,
+    );
   }
 }
 
@@ -87,21 +147,21 @@ export async function readPersistedAuthStateFile(filePath: string): Promise<Blin
       handle.stat(),
     ]);
     if (pathStats.isSymbolicLink()) {
-      throw new Error(`Refusing to use symlinked auth state file: ${filePath}`);
+      throw new AuthStateFileSecurityError(`Refusing to use symlinked auth state file: ${filePath}`);
     }
     if (!pathStats.isFile() || !handleStats.isFile()) {
-      throw new Error(`Auth state path is not a regular file: ${filePath}`);
+      throw new AuthStateFileSecurityError(`Auth state path is not a regular file: ${filePath}`);
     }
     if (!isSameFile(pathStats, handleStats)) {
-      throw new Error(`Auth state file changed while opening: ${filePath}`);
+      throw new AuthStateFileSecurityError(`Auth state file changed while opening: ${filePath}`);
     }
 
+    await hardenAuthStateFileMode(handle, filePath);
     const contents = await handle.readFile({ encoding: 'utf8' });
-    await hardenAuthStateFileMode(handle);
     return (JSON.parse(contents) as BlinkAuthState) ?? null;
   } catch (error) {
     if (isNodeError(error, 'ELOOP')) {
-      throw new Error(`Refusing to use symlinked auth state file: ${filePath}`);
+      throw new AuthStateFileSecurityError(`Refusing to use symlinked auth state file: ${filePath}`);
     }
     throw error;
   } finally {
