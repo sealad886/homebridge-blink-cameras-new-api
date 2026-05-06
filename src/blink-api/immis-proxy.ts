@@ -100,7 +100,17 @@ export interface LatmParseResult {
 }
 
 const isSameFsEntry = (left: FsStats, right: FsStats): boolean => {
-  return left.dev === right.dev && left.ino === right.ino;
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.birthtimeMs === right.birthtimeMs
+  );
 };
 
 /**
