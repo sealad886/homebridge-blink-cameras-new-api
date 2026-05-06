@@ -241,7 +241,16 @@ describe('ImmisProxyServer security controls', () => {
   it('continues debug stream recording when directory chmod is unsupported', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
     const log = jest.fn();
-    const chmodSpy = jest.spyOn(fs, 'chmod').mockRejectedValueOnce(new Error('chmod unsupported'));
+    const realOpen = fs.open.bind(fs);
+    const dirHandleChmod = jest.fn().mockRejectedValueOnce(new Error('chmod unsupported'));
+    const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      if (String(filePath).endsWith('blink-stream-recordings')) {
+        jest.spyOn(handle, 'chmod').mockImplementation(dirHandleChmod);
+      }
+      return handle;
+    });
+    const pathChmodSpy = jest.spyOn(fs, 'chmod');
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
@@ -253,13 +262,16 @@ describe('ImmisProxyServer security controls', () => {
       await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
       const streamFile = (proxy as unknown as { streamFile: WriteStream | null }).streamFile;
       expect(streamFile).toBeTruthy();
-      expect(chmodSpy).toHaveBeenCalledWith(expect.stringContaining('blink-stream-recordings'), 0o700);
+      expect(dirHandleChmod).toHaveBeenCalledWith(0o700);
+      expect(pathChmodSpy).not.toHaveBeenCalledWith(expect.stringContaining('blink-stream-recordings'), 0o700);
       expect(log).toHaveBeenCalledWith(
         expect.stringContaining('Failed to set debug recording directory permissions'),
       );
 
       await new Promise<void>((resolve) => streamFile?.end(resolve));
     } finally {
+      openSpy.mockRestore();
+      pathChmodSpy.mockRestore();
       (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -299,7 +311,7 @@ describe('ImmisProxyServer security controls', () => {
     const lstatSpy = jest.spyOn(fs, 'lstat').mockImplementation(async (filePath) => {
       if (String(filePath) === recordingDir) {
         recordingDirLstatCount += 1;
-        if (recordingDirLstatCount === 2) {
+        if (recordingDirLstatCount === 1) {
           await fs.rm(recordingDir, { recursive: true, force: true });
           await fs.mkdir(targetDir, { recursive: true });
           await fs.symlink(targetDir, recordingDir, 'dir');

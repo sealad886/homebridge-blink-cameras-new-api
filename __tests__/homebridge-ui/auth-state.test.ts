@@ -50,8 +50,21 @@ describe('homebridge UI persisted auth state loading', () => {
 
     const result = await loadPersistedAuthStateFromFiles([primaryPath], logDebug, now);
 
-    expect(result).toEqual({ state: null });
-    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining('expired token'));
+    expect(result.state).toBeNull();
+    expect(result.message).toContain('saved token');
+    expect(result.message).toContain('expired');
+    expect(logDebug).toHaveBeenCalledWith(result.message);
+  });
+
+  it('reports malformed persisted auth state instead of returning a generic logged-out status', async () => {
+    await fs.writeFile(primaryPath, '{not-json', 'utf8');
+    await fs.chmod(primaryPath, 0o600);
+
+    const result = await loadPersistedAuthStateFromFiles([primaryPath], logDebug, now);
+
+    expect(result.state).toBeNull();
+    expect(result.message).toContain('failed to read');
+    expect(logDebug).toHaveBeenCalledWith(result.message);
   });
 
   it('reports rejected auth state security errors instead of falling through silently', async () => {

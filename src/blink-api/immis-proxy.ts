@@ -89,6 +89,8 @@ const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
 const IDLE_SHUTDOWN_GRACE_MS = 2000;
 const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
 const NO_FOLLOW_FLAG = fs.constants.O_NOFOLLOW ?? 0;
+const DIRECTORY_OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0) | NO_FOLLOW_FLAG;
+type FileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
 
 export interface LatmParseResult {
   frames: Buffer[];
@@ -276,15 +278,17 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       return;
     }
 
+    let recordingDirHandle: FileHandle | null = null;
     try {
       const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
       await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
-      const recordingDirStats = await fs.promises.lstat(recordingDir);
-      if (recordingDirStats.isSymbolicLink() || !recordingDirStats.isDirectory()) {
+      recordingDirHandle = await fs.promises.open(recordingDir, DIRECTORY_OPEN_FLAGS);
+      const recordingDirStats = await recordingDirHandle.stat();
+      if (!recordingDirStats.isDirectory()) {
         throw new Error('Debug stream recording directory must be a real directory');
       }
       try {
-        await fs.promises.chmod(recordingDir, 0o700);
+        await recordingDirHandle.chmod(0o700);
       } catch (error) {
         this.log(`Failed to set debug recording directory permissions: ${error}`);
       }
@@ -342,6 +346,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       });
     } catch (error) {
       this.log(`Failed to start stream recording: ${error}`);
+    } finally {
+      await recordingDirHandle?.close().catch(() => undefined);
     }
   }
 
