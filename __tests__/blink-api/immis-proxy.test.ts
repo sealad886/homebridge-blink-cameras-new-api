@@ -384,6 +384,46 @@ describe('ImmisProxyServer security controls', () => {
     }
   });
 
+  it('does not unlink an existing recording file when exclusive open fails before creation', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
+    const log = jest.fn();
+    let attemptedFilename: string | null = null;
+    const nodeFs = jest.requireActual<typeof import('node:fs')>('node:fs');
+    const openSpy = jest.spyOn(nodeFs, 'open').mockImplementation(
+      ((filePath, _flags, modeOrCallback, maybeCallback) => {
+        const callback = typeof modeOrCallback === 'function' ? modeOrCallback : maybeCallback;
+        if (!callback) {
+          throw new Error('fs.open callback missing');
+        }
+        attemptedFilename = String(filePath);
+        void fs.mkdir(path.dirname(attemptedFilename), { recursive: true })
+          .then(() => fs.writeFile(String(attemptedFilename), 'existing recording', 'utf8'))
+          .then(() => {
+            const error = Object.assign(new Error('recording already exists'), { code: 'EEXIST' });
+            callback(error, 0);
+          });
+      }) as typeof nodeFs.open,
+    );
+    const proxy = new ImmisProxyServer({
+      immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
+      serial: 'TEST_SERIAL',
+      saveStreamPath: tmpDir,
+      log,
+    });
+
+    try {
+      await (proxy as unknown as { startStreamRecording: () => Promise<void> }).startStreamRecording();
+      expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
+      expect(attemptedFilename).toBeTruthy();
+      await expect(fs.readFile(String(attemptedFilename), 'utf8')).resolves.toBe('existing recording');
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Failed to start stream recording'));
+    } finally {
+      openSpy.mockRestore();
+      (proxy as unknown as { stopStreamRecording: () => void }).stopStreamRecording();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('redacts IMMIS auth identifiers from proxy debug logs', () => {
     const log = jest.fn();
     const proxy = new ImmisProxyServer({

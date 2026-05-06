@@ -309,6 +309,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}-${randomSuffix}.ts`);
 
       let recordingFd: number | null = null;
+      let recordingFileCreated = false;
       try {
         recordingFd = await new Promise<number>((resolve, reject) => {
           fs.open(
@@ -324,6 +325,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
             },
           );
         });
+        recordingFileCreated = true;
         const currentRecordingDirStats = await fs.promises.lstat(recordingDir);
         if (
           currentRecordingDirStats.isSymbolicLink() ||
@@ -342,7 +344,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         if (fdToClose !== null) {
           await new Promise<void>((resolve) => fs.close(fdToClose, () => resolve()));
         }
-        await fs.promises.unlink(filename).catch(() => undefined);
+        if (recordingFileCreated) {
+          await fs.promises.unlink(filename).catch(() => undefined);
+        }
         throw error;
       }
       this.streamBytesWritten = 0;
