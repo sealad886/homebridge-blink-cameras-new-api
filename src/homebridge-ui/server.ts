@@ -18,7 +18,10 @@ import {
 } from '../blink-api/auth';
 import { BlinkApi } from '../blink-api/client';
 import { BlinkConfig, BlinkLogger } from '../types';
-import { loadPersistedAuthStateFromFiles } from './auth-state';
+import {
+  loadPersistedAuthStateFromFiles,
+  type PersistedAuthStateLoadResult,
+} from './auth-state';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -436,7 +439,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    * Read the on-disk .blink-auth.json (or legacy blink-auth/auth-state.json)
    * and return it if it looks valid (has an access token and is not expired).
    */
-  private async loadPersistedAuthState(): Promise<ReturnType<typeof loadPersistedAuthStateFromFiles>> {
+  private async loadPersistedAuthState(): Promise<PersistedAuthStateLoadResult> {
     // Try primary dot-file first, then fall back to legacy subdirectory path
     return loadPersistedAuthStateFromFiles(
       [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()],

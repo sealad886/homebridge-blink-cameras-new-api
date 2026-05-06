@@ -211,7 +211,7 @@ class FileAuthStorage implements BlinkAuthStorage {
         0o600,
       );
       await handle.writeFile(payload, { encoding: 'utf8' });
-      await hardenAuthStateFileMode(handle);
+      await hardenAuthStateFileMode(handle, tempPath);
       await handle.close();
       handle = null;
       await fs.rename(tempPath, this.filePath);
