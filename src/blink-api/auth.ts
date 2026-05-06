@@ -38,8 +38,10 @@ import {
   getOAuth2FAVerifyUrl,
 } from './urls';
 import { generatePKCEPair, generateOAuthState } from './oauth-pkce';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
+import type { Stats } from 'node:fs';
 import * as path from 'node:path';
+import process from 'node:process';
 import { URL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -48,6 +50,124 @@ type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
 const REFRESH_MAX_RETRIES = 2;
 const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
+const OWNER_ONLY_AUTH_FILE_MODE = 0o600;
+const SHARED_AUTH_FILE_MODE_MASK = 0o077;
+const POSIX_MODE_MASK = 0o777;
+
+const isNodeError = (error: unknown, code: string): boolean => {
+  return (error as { code?: string }).code === code;
+};
+
+type AuthStateFileHandle = Awaited<ReturnType<typeof fs.open>>;
+type AuthStateFileModeTarget = string | Pick<AuthStateFileHandle, 'chmod' | 'stat'>;
+
+const noFollowFlag = fsConstants.O_NOFOLLOW ?? 0;
+
+const isSameFile = (
+  pathStats: Awaited<ReturnType<typeof fs.lstat>>,
+  handleStats: Awaited<ReturnType<AuthStateFileHandle['stat']>>,
+): boolean => {
+  return pathStats.dev === handleStats.dev && pathStats.ino === handleStats.ino;
+};
+
+const formatFileMode = (mode: number): string => {
+  return `0${(mode & POSIX_MODE_MASK).toString(8)}`;
+};
+
+const hasSharedAuthFilePermissions = (mode: number): boolean => {
+  return (mode & SHARED_AUTH_FILE_MODE_MASK) !== 0;
+};
+
+export class AuthStateFileSecurityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthStateFileSecurityError';
+  }
+}
+
+export async function hardenAuthStateFileMode(
+  target: AuthStateFileModeTarget,
+  filePath = typeof target === 'string' ? target : 'auth state file',
+): Promise<void> {
+  const getStats = async (): Promise<Stats> => {
+    if (typeof target === 'string') {
+      return fs.lstat(target);
+    }
+    return target.stat();
+  };
+
+  const originalStats = await getStats();
+  if (originalStats.isSymbolicLink()) {
+    throw new AuthStateFileSecurityError(`Refusing to harden symlinked auth state file: ${filePath}`);
+  }
+  if (!originalStats.isFile()) {
+    throw new AuthStateFileSecurityError(`Auth state path is not a regular file: ${filePath}`);
+  }
+
+  const originalMode = originalStats.mode;
+  if (!hasSharedAuthFilePermissions(originalMode)) {
+    return;
+  }
+
+  try {
+    if (typeof target === 'string') {
+      await fs.chmod(target, OWNER_ONLY_AUTH_FILE_MODE);
+    } else {
+      await target.chmod(OWNER_ONLY_AUTH_FILE_MODE);
+    }
+  } catch {
+    if (process.platform !== 'win32') {
+      throw new AuthStateFileSecurityError(
+        `Persisted auth state file permissions are ${formatFileMode(originalMode)} ` +
+        `and could not be tightened to ${formatFileMode(OWNER_ONLY_AUTH_FILE_MODE)}: ${filePath}`,
+      );
+    }
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const hardenedMode = (await getStats()).mode;
+  if (hasSharedAuthFilePermissions(hardenedMode)) {
+    throw new AuthStateFileSecurityError(
+      `Persisted auth state file permissions remain ${formatFileMode(hardenedMode)} ` +
+      `after tightening to ${formatFileMode(OWNER_ONLY_AUTH_FILE_MODE)}: ${filePath}`,
+    );
+  }
+}
+
+export async function readPersistedAuthStateFile(filePath: string): Promise<BlinkAuthState | null> {
+  let handle: AuthStateFileHandle | null = null;
+  try {
+    handle = await fs.open(filePath, fsConstants.O_RDONLY | noFollowFlag);
+    const [pathStats, handleStats] = await Promise.all([
+      fs.lstat(filePath),
+      handle.stat(),
+    ]);
+    if (pathStats.isSymbolicLink()) {
+      throw new AuthStateFileSecurityError(`Refusing to use symlinked auth state file: ${filePath}`);
+    }
+    if (!pathStats.isFile() || !handleStats.isFile()) {
+      throw new AuthStateFileSecurityError(`Auth state path is not a regular file: ${filePath}`);
+    }
+    if (!isSameFile(pathStats, handleStats)) {
+      throw new AuthStateFileSecurityError(`Auth state file changed while opening: ${filePath}`);
+    }
+
+    await hardenAuthStateFileMode(handle, filePath);
+    const contents = await handle.readFile({ encoding: 'utf8' });
+    return (JSON.parse(contents) as BlinkAuthState) ?? null;
+  } catch (error) {
+    if (isNodeError(error, 'ELOOP')) {
+      throw new AuthStateFileSecurityError(`Refusing to use symlinked auth state file: ${filePath}`);
+    }
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
 
 class FileAuthStorage implements BlinkAuthStorage {
   /** Legacy directory-based path for migration (e.g. .../blink-auth/auth-state.json) */
@@ -76,9 +196,30 @@ class FileAuthStorage implements BlinkAuthStorage {
 
   async save(state: BlinkAuthState): Promise<void> {
     const payload = JSON.stringify(state, null, 2);
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(this.filePath, payload, { encoding: 'utf8', mode: 0o600 });
-    await fs.chmod(this.filePath, 0o600);
+    const directory = path.dirname(this.filePath);
+    const tempPath = path.join(
+      directory,
+      `.${path.basename(this.filePath)}.${randomUUID()}.tmp`,
+    );
+    let handle: AuthStateFileHandle | null = null;
+
+    try {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      handle = await fs.open(
+        tempPath,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag,
+        0o600,
+      );
+      await handle.writeFile(payload, { encoding: 'utf8' });
+      await hardenAuthStateFileMode(handle, tempPath);
+      await handle.close();
+      handle = null;
+      await fs.rename(tempPath, this.filePath);
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await fs.unlink(tempPath).catch(() => undefined);
+      throw error;
+    }
   }
 
   async clear(): Promise<void> {
@@ -90,10 +231,9 @@ class FileAuthStorage implements BlinkAuthStorage {
 
   private async readJsonFile(filePath: string): Promise<BlinkAuthState | null> {
     try {
-      const contents = await fs.readFile(filePath, 'utf8');
-      return (JSON.parse(contents) as BlinkAuthState) ?? null;
+      return await readPersistedAuthStateFile(filePath);
     } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') return null;
+      if (isNodeError(error, 'ENOENT')) return null;
       throw error;
     }
   }

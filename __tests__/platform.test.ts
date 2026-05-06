@@ -108,4 +108,19 @@ describe('BlinkCamerasPlatform', () => {
     // Handler is stored in Map, not in context (to avoid circular JSON serialization)
     expect(cachedAccessory.context.device).toBe(network);
   });
+
+  it('forwards verifyImmisTls into the runtime streaming config', () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const log = createLogger() as unknown as Logger;
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+
+    const platform = new BlinkCamerasPlatform(
+      log,
+      { ...config, verifyImmisTls: false },
+      hapApi,
+    );
+
+    expect(platform.streamingConfig.verifyImmisTls).toBe(false);
+  });
 });

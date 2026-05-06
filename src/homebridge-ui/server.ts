@@ -12,9 +12,16 @@
  */
 
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
-import { Blink2FARequiredError, BlinkAuthenticationError } from '../blink-api/auth';
+import {
+  Blink2FARequiredError,
+  BlinkAuthenticationError,
+} from '../blink-api/auth';
 import { BlinkApi } from '../blink-api/client';
-import { BlinkAuthState, BlinkConfig, BlinkLogger } from '../types';
+import { BlinkConfig, BlinkLogger } from '../types';
+import {
+  loadPersistedAuthStateFromFiles,
+  type PersistedAuthStateLoadResult,
+} from './auth-state';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -409,7 +416,7 @@ class BlinkUiServer extends HomebridgePluginUiServer {
    */
   async handleStatus(): Promise<AuthStatus> {
     if (!this.authStatus.authenticated) {
-      const diskState = await this.loadPersistedAuthState();
+      const { state: diskState, message } = await this.loadPersistedAuthState();
       if (diskState) {
         this.authStatus = {
           authenticated: true,
@@ -418,36 +425,33 @@ class BlinkUiServer extends HomebridgePluginUiServer {
           tier: diskState.tier ?? undefined,
           message: 'Restored from persisted auth state',
         };
+      } else if (message && this.canShowPersistedAuthMessage()) {
+        this.authStatus = {
+          authenticated: false,
+          message,
+        };
       }
     }
     return this.authStatus;
+  }
+
+  private canShowPersistedAuthMessage(): boolean {
+    return !this.authStatus.message &&
+      !this.authStatus.requires2FA &&
+      !this.authStatus.requiresClientVerification &&
+      !this.authStatus.requiresAccountVerification;
   }
 
   /**
    * Read the on-disk .blink-auth.json (or legacy blink-auth/auth-state.json)
    * and return it if it looks valid (has an access token and is not expired).
    */
-  private async loadPersistedAuthState(): Promise<BlinkAuthState | null> {
+  private async loadPersistedAuthState(): Promise<PersistedAuthStateLoadResult> {
     // Try primary dot-file first, then fall back to legacy subdirectory path
-    for (const filePath of [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()]) {
-      try {
-        const raw = await fs.readFile(filePath, 'utf8');
-        const state = JSON.parse(raw) as BlinkAuthState;
-        if (!state?.accessToken) continue;
-        if (state.tokenExpiry) {
-          const expiry = new Date(state.tokenExpiry);
-          if (!Number.isNaN(expiry.getTime()) && expiry.getTime() <= Date.now()) {
-            this.logDebug(`Persisted auth state at ${filePath} has expired token; skipping`);
-            continue;
-          }
-        }
-        this.logDebug(`Loaded valid persisted auth state from ${filePath}`);
-        return state;
-      } catch {
-        // File doesn't exist or is unreadable — try next
-      }
-    }
-    return null;
+    return loadPersistedAuthStateFromFiles(
+      [this.getAuthStoragePath(), this.getLegacyAuthStoragePath()],
+      this.logDebug.bind(this),
+    );
   }
 
   private async clearPersistedAuthState(): Promise<void> {

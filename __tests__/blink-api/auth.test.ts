@@ -1,4 +1,9 @@
-import { BlinkAuth, Blink2FARequiredError, BlinkAuthenticationError } from '../../src/blink-api/auth';
+import {
+  AuthStateFileSecurityError,
+  BlinkAuth,
+  Blink2FARequiredError,
+  BlinkAuthenticationError,
+} from '../../src/blink-api/auth';
 import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
 import { URL } from 'node:url';
 import { promises as fs } from 'node:fs';
@@ -457,12 +462,115 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
+  it('save() replaces existing auth state during token refresh', async () => {
+    const storage = getStorage(makeAuth());
+    const refreshedState = {
+      ...sampleState,
+      accessToken: 'refreshed-access-token',
+      refreshToken: 'refreshed-refresh-token',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    };
+
+    await storage.save(sampleState);
+    await storage.save(refreshedState);
+
+    const raw = await fs.readFile(dotFilePath, 'utf8');
+    expect(JSON.parse(raw)).toEqual(refreshedState);
+    expect(await fs.readdir(tmpDir)).toEqual(['.blink-auth-state.json']);
+  });
+
   it('load() reads state from the dot-file path', async () => {
     await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
 
     const storage = getStorage(makeAuth());
     const loaded = await storage.load();
     expect(loaded).toEqual(sampleState);
+  });
+
+  it('load() hardens an existing primary auth file to owner-only permissions', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.chmod(dotFilePath, 0o644);
+
+    const storage = getStorage(makeAuth());
+    await storage.load();
+
+    const stats = await fs.stat(dotFilePath);
+    expect(stats.mode & 0o777).toBe(0o600);
+  });
+
+  it('load() returns already owner-only state without chmodding', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.chmod(dotFilePath, 0o600);
+    const realOpen = fs.open.bind(fs);
+    const chmodMocks: Array<jest.SpiedFunction<Awaited<ReturnType<typeof fs.open>>['chmod']>> = [];
+    const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      chmodMocks.push(jest.spyOn(handle, 'chmod').mockRejectedValueOnce(new Error('chmod unsupported')));
+      return handle;
+    });
+
+    try {
+      const storage = getStorage(makeAuth());
+      const loaded = await storage.load();
+
+      expect(loaded).toEqual(sampleState);
+      expect(openSpy).toHaveBeenCalledWith(dotFilePath, expect.any(Number));
+      expect(chmodMocks).toHaveLength(1);
+      expect(chmodMocks[0]).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  const itIfPosix = process.platform === 'win32' ? it.skip : it;
+
+  itIfPosix('load() rejects shared-readable auth files when POSIX permission hardening fails', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.chmod(dotFilePath, 0o644);
+    const realOpen = fs.open.bind(fs);
+    const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      jest.spyOn(handle, 'chmod').mockRejectedValueOnce(new Error('chmod denied'));
+      return handle;
+    });
+
+    try {
+      const storage = getStorage(makeAuth());
+
+      await expect(storage.load()).rejects.toThrow(AuthStateFileSecurityError);
+      await expect(storage.load()).rejects.toThrow('could not be tightened to 0600');
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('load() rejects symlinked auth files before hardening permissions', async () => {
+    const targetPath = path.join(tmpDir, 'target-auth-state.json');
+    await fs.writeFile(targetPath, JSON.stringify(sampleState, null, 2), 'utf8');
+    await fs.symlink(targetPath, dotFilePath);
+    const chmodSpy = jest.spyOn(fs, 'chmod');
+
+    try {
+      const storage = getStorage(makeAuth());
+
+      await expect(storage.load()).rejects.toThrow('symlinked auth state file');
+      expect(chmodSpy).not.toHaveBeenCalled();
+    } finally {
+      chmodSpy.mockRestore();
+    }
+  });
+
+  it('save() replaces a symlinked auth path without writing through it', async () => {
+    const targetPath = path.join(tmpDir, 'target-auth-state.json');
+    await fs.writeFile(targetPath, 'do-not-overwrite', 'utf8');
+    await fs.symlink(targetPath, dotFilePath);
+
+    const storage = getStorage(makeAuth());
+    await storage.save(sampleState);
+
+    expect(await fs.readFile(targetPath, 'utf8')).toBe('do-not-overwrite');
+    expect((await fs.lstat(dotFilePath)).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(await fs.readFile(dotFilePath, 'utf8'))).toEqual(sampleState);
   });
 
   it('load() returns null when no file exists', async () => {
