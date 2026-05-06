@@ -490,6 +490,88 @@ describe('Accessory handlers', () => {
     }
   });
 
+  it('omits overlong unterminated FFmpeg debug stderr lines', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const apiClient = {
+      requestCameraThumbnail: jest.fn(),
+      requestOwlThumbnail: jest.fn(),
+      requestDoorbellThumbnail: jest.fn(),
+      pollCommand: jest.fn(),
+    };
+    const spawnMock = spawn as unknown as jest.Mock;
+    spawnMock.mockClear();
+
+    try {
+      const source = new BlinkCameraSource(
+        apiClient as unknown as BlinkApi,
+        hap as unknown as HAP,
+        1,
+        2,
+        'camera',
+        'TEST_SERIAL',
+        jest.fn(),
+        () => true,
+        logFn,
+        { enabled: true, ffmpegDebug: true },
+      );
+
+      const session = {
+        address: '192.168.1.50',
+        addressVersion: 'ipv4',
+        sessionId: 'session',
+        videoPort: 5000,
+        localVideoPort: 5100,
+        localVideoRtcpPort: 5102,
+        videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        videoSRTP: Buffer.alloc(30, 1),
+        videoSSRC: 1234,
+      };
+      const request = {
+        type: 'start',
+        sessionID: 'session',
+        video: {
+          fps: 30,
+          width: 1280,
+          height: 720,
+          max_bit_rate: 300,
+          profile: hap.H264Profile.BASELINE,
+          level: hap.H264Level.LEVEL3_1,
+          pt: 99,
+          mtu: 1378,
+        },
+      };
+      const longSecretLine = `Opening immis://stream.immedia-semi.com/session/${'x'.repeat(70 * 1024)}?token=very-secret-token`;
+
+      (source as unknown as CameraSourcePrivateAccess).startFfmpegStream(
+        'session',
+        'immis://stream.immedia-semi.com/session/conn-secret?client_id=client-secret',
+        request,
+        session,
+        jest.fn(),
+      );
+
+      const ffmpegProcess = spawnMock.mock.results[0]?.value as {
+        stderr: { emit: (event: string, data: Buffer) => boolean };
+      };
+      logFn.mockClear();
+
+      ffmpegProcess.stderr.emit('data', Buffer.from(longSecretLine));
+      let logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain('very-secret-token');
+      expect(logs).not.toContain('stderr line omitted');
+
+      ffmpegProcess.stderr.emit('data', Buffer.from('\nframe=2 done\n'));
+
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).toContain('stderr line omitted because it exceeded 65536 characters');
+      expect(logs).toContain('FFmpeg(session): frame=2 done');
+      expect(logs).not.toContain('very-secret-token');
+    } finally {
+      spawnMock.mockClear();
+    }
+  });
+
   it('handles IMMIS proxy errors without leaving an unhandled stream error', async () => {
     const hap = createHap();
     const logFn = jest.fn();

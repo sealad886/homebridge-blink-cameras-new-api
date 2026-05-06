@@ -74,6 +74,7 @@ export type BlinkCameraStreamingConfigInput = Omit<
 };
 
 const SOFTWARE_VIDEO_ENCODER: VideoEncoderPreference = 'libx264';
+const MAX_FFMPEG_STDERR_BUFFER_CHARS = 64 * 1024;
 
 const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
@@ -156,6 +157,7 @@ interface ActiveStreamSession extends PendingStreamSession {
   fallbackVideoEncoderTried?: boolean;
   readyNotified?: boolean;
   ffmpegStderrBuffer?: string;
+  ffmpegStderrBufferTruncated?: boolean;
 }
 
 const usedPorts = new Set<number>();
@@ -1081,17 +1083,61 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
-    active.ffmpegStderrBuffer = `${active.ffmpegStderrBuffer ?? ''}${data.toString('utf8')}`;
-    const lines = active.ffmpegStderrBuffer.split(/\r\n|\n|\r/);
-    active.ffmpegStderrBuffer = lines.pop() ?? '';
+    const chunk = data.toString('utf8');
+    let lineStart = 0;
 
-    for (const line of lines) {
-      this.logRedactedFfmpegLine(sessionId, line);
+    for (let index = 0; index < chunk.length; index++) {
+      const char = chunk.charCodeAt(index);
+      if (char !== 10 && char !== 13) {
+        continue;
+      }
+
+      this.appendFfmpegStderrSegment(active, chunk.slice(lineStart, index));
+      this.flushFfmpegStderrLine(sessionId, active);
+
+      if (char === 13 && chunk.charCodeAt(index + 1) === 10) {
+        index++;
+      }
+      lineStart = index + 1;
     }
+
+    this.appendFfmpegStderrSegment(active, chunk.slice(lineStart));
   }
 
   private flushFfmpegStderr(sessionId: string, active: ActiveStreamSession): void {
-    if (!this.streamingConfig.ffmpegDebug || !active.ffmpegStderrBuffer) {
+    if (!this.streamingConfig.ffmpegDebug) {
+      return;
+    }
+
+    this.flushFfmpegStderrLine(sessionId, active);
+  }
+
+  private appendFfmpegStderrSegment(active: ActiveStreamSession, segment: string): void {
+    if (!segment || active.ffmpegStderrBufferTruncated) {
+      return;
+    }
+
+    const currentBuffer = active.ffmpegStderrBuffer ?? '';
+    if (currentBuffer.length + segment.length <= MAX_FFMPEG_STDERR_BUFFER_CHARS) {
+      active.ffmpegStderrBuffer = `${currentBuffer}${segment}`;
+      return;
+    }
+
+    active.ffmpegStderrBuffer = '';
+    active.ffmpegStderrBufferTruncated = true;
+  }
+
+  private flushFfmpegStderrLine(sessionId: string, active: ActiveStreamSession): void {
+    if (active.ffmpegStderrBufferTruncated) {
+      this.log(
+        `FFmpeg(${sessionId}): <stderr line omitted because it exceeded ${MAX_FFMPEG_STDERR_BUFFER_CHARS} characters>`,
+      );
+      active.ffmpegStderrBuffer = '';
+      active.ffmpegStderrBufferTruncated = false;
+      return;
+    }
+
+    if (!active.ffmpegStderrBuffer) {
       return;
     }
 
