@@ -53,7 +53,24 @@ describe('homebridge UI persisted auth state loading', () => {
     expect(result.state).toBeNull();
     expect(result.message).toContain('saved token');
     expect(result.message).toContain('expired');
-    expect(logDebug).toHaveBeenCalledWith(result.message);
+    expect(result.message).not.toContain(tmpDir);
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(primaryPath));
+  });
+
+  it('reports missing access tokens without exposing full auth paths', async () => {
+    await fs.writeFile(
+      primaryPath,
+      JSON.stringify({ ...state, accessToken: undefined }, null, 2),
+      'utf8',
+    );
+    await fs.chmod(primaryPath, 0o600);
+
+    const result = await loadPersistedAuthStateFromFiles([primaryPath], logDebug, now);
+
+    expect(result.state).toBeNull();
+    expect(result.message).toContain('does not contain an access token');
+    expect(result.message).not.toContain(tmpDir);
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(primaryPath));
   });
 
   it('reports malformed persisted auth state instead of returning a generic logged-out status', async () => {
@@ -64,7 +81,8 @@ describe('homebridge UI persisted auth state loading', () => {
 
     expect(result.state).toBeNull();
     expect(result.message).toContain('failed to read');
-    expect(logDebug).toHaveBeenCalledWith(result.message);
+    expect(result.message).not.toContain(tmpDir);
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(primaryPath));
   });
 
   it('reports invalid token expiry instead of restoring unusable persisted auth state', async () => {
@@ -79,7 +97,8 @@ describe('homebridge UI persisted auth state loading', () => {
 
     expect(result.state).toBeNull();
     expect(result.message).toContain('invalid expiry');
-    expect(logDebug).toHaveBeenCalledWith(result.message);
+    expect(result.message).not.toContain(tmpDir);
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(primaryPath));
   });
 
   it('reports rejected auth state security errors instead of falling through silently', async () => {
@@ -93,6 +112,7 @@ describe('homebridge UI persisted auth state loading', () => {
     expect(result.state).toBeNull();
     expect(result.message).toContain('Persisted Blink authentication was ignored');
     expect(result.message).toContain('symlinked auth state file');
-    expect(logDebug).toHaveBeenCalledWith(result.message);
+    expect(result.message).not.toContain(tmpDir);
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(primaryPath));
   });
 });

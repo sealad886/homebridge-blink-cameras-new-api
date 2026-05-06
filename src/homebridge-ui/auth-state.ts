@@ -3,6 +3,7 @@ import {
   readPersistedAuthStateFile,
 } from '../blink-api/auth';
 import { BlinkAuthState } from '../types';
+import * as path from 'node:path';
 
 export interface PersistedAuthStateLoadResult {
   state: BlinkAuthState | null;
@@ -17,6 +18,14 @@ const describeError = (error: unknown): string => {
   return error instanceof Error ? error.message : 'Unknown error';
 };
 
+const describeUiFilePath = (filePath: string): string => {
+  return path.basename(filePath) || 'auth state file';
+};
+
+const describeUiError = (error: unknown, filePath: string): string => {
+  return describeError(error).split(filePath).join(describeUiFilePath(filePath));
+};
+
 export async function loadPersistedAuthStateFromFiles(
   filePaths: string[],
   logDebug: (message: string) => void,
@@ -25,24 +34,29 @@ export async function loadPersistedAuthStateFromFiles(
   let ignoredMessage: string | undefined;
 
   for (const filePath of filePaths) {
+    const uiFilePath = describeUiFilePath(filePath);
     try {
       const state = await readPersistedAuthStateFile(filePath);
       if (!state?.accessToken) {
-        ignoredMessage = `Persisted Blink authentication was ignored: ${filePath} does not contain an access token`;
-        logDebug(ignoredMessage);
+        ignoredMessage = `Persisted Blink authentication was ignored: ${uiFilePath} does not contain an access token`;
+        logDebug(`Persisted Blink authentication was ignored: ${filePath} does not contain an access token`);
         continue;
       }
       if (state.tokenExpiry) {
         const expiry = new Date(state.tokenExpiry);
         const expiryMs = expiry.getTime();
         if (Number.isNaN(expiryMs)) {
-          ignoredMessage = `Persisted Blink authentication was ignored: saved token at ${filePath} has invalid expiry ${state.tokenExpiry}`;
-          logDebug(ignoredMessage);
+          ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} has invalid expiry ${state.tokenExpiry}`;
+          logDebug(
+            `Persisted Blink authentication was ignored: saved token at ${filePath} has invalid expiry ${state.tokenExpiry}`,
+          );
           continue;
         }
         if (expiryMs <= nowMs()) {
-          ignoredMessage = `Persisted Blink authentication was ignored: saved token at ${filePath} expired at ${state.tokenExpiry}`;
-          logDebug(ignoredMessage);
+          ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} expired at ${state.tokenExpiry}`;
+          logDebug(
+            `Persisted Blink authentication was ignored: saved token at ${filePath} expired at ${state.tokenExpiry}`,
+          );
           continue;
         }
       }
@@ -54,13 +68,13 @@ export async function loadPersistedAuthStateFromFiles(
       }
 
       if (error instanceof AuthStateFileSecurityError) {
-        const message = `Persisted Blink authentication was ignored: ${error.message}`;
-        logDebug(message);
+        const message = `Persisted Blink authentication was ignored: ${describeUiError(error, filePath)}`;
+        logDebug(`Persisted Blink authentication was ignored: ${error.message}`);
         return { state: null, message };
       }
 
-      ignoredMessage = `Persisted Blink authentication was ignored: failed to read ${filePath}: ${describeError(error)}`;
-      logDebug(ignoredMessage);
+      ignoredMessage = `Persisted Blink authentication was ignored: failed to read ${uiFilePath}: ${describeUiError(error, filePath)}`;
+      logDebug(`Persisted Blink authentication was ignored: failed to read ${filePath}: ${describeError(error)}`);
     }
   }
   return { state: null, message: ignoredMessage };
