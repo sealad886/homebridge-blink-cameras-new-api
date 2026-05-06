@@ -462,6 +462,23 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
+  it('save() replaces existing auth state during token refresh', async () => {
+    const storage = getStorage(makeAuth());
+    const refreshedState = {
+      ...sampleState,
+      accessToken: 'refreshed-access-token',
+      refreshToken: 'refreshed-refresh-token',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    };
+
+    await storage.save(sampleState);
+    await storage.save(refreshedState);
+
+    const raw = await fs.readFile(dotFilePath, 'utf8');
+    expect(JSON.parse(raw)).toEqual(refreshedState);
+    expect(await fs.readdir(tmpDir)).toEqual(['.blink-auth-state.json']);
+  });
+
   it('load() reads state from the dot-file path', async () => {
     await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), 'utf8');
 
