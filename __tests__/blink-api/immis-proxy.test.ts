@@ -1,7 +1,7 @@
 import { parseLatmFrames, ImmisProxyServer } from '../../src/blink-api/immis-proxy';
 import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
-import type { Stats, WriteStream } from 'node:fs';
+import type { WriteStream } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
@@ -35,12 +35,6 @@ const buildLoasFrame = (payload: Buffer): Buffer => {
   header[1] = 0xe0 | ((length >> 8) & 0x1f);
   header[2] = length & 0xff;
   return Buffer.concat([header, payload]);
-};
-
-type FsStats = Stats;
-
-const cloneStats = (stats: FsStats, overrides: Partial<FsStats>): FsStats => {
-  return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, overrides);
 };
 
 describe('parseLatmFrames', () => {
@@ -353,13 +347,11 @@ describe('ImmisProxyServer security controls', () => {
     const realLstat = fs.lstat.bind(fs);
     const realOpen = fs.open.bind(fs);
     const dirHandleChmod = jest.fn();
-    let originalRecordingDirStats: FsStats | null = null;
+    await fs.mkdir(targetDir, { recursive: true });
     const lstatSpy = jest.spyOn(fs, 'lstat').mockImplementation(async (filePath) => {
-      const stats = await realLstat(filePath) as FsStats;
+      const stats = await realLstat(filePath);
       if (String(filePath) === recordingDir) {
-        originalRecordingDirStats = stats;
         await fs.rm(recordingDir, { recursive: true, force: true });
-        await fs.mkdir(targetDir, { recursive: true });
         await fs.symlink(targetDir, recordingDir, 'dir');
       }
       return stats;
@@ -367,20 +359,6 @@ describe('ImmisProxyServer security controls', () => {
     const openSpy = jest.spyOn(fs, 'open').mockImplementation(async (filePath, flags, mode) => {
       if (String(filePath) === recordingDir) {
         const handle = await realOpen(targetDir, flags, mode);
-        const realHandleStat = handle.stat.bind(handle);
-        jest.spyOn(handle, 'stat').mockImplementation(async () => {
-          const targetStats = await realHandleStat() as FsStats;
-          if (!originalRecordingDirStats) {
-            return targetStats;
-          }
-          return cloneStats(targetStats, {
-            dev: originalRecordingDirStats.dev,
-            ino: originalRecordingDirStats.ino,
-            ctimeMs: originalRecordingDirStats.ctimeMs + 1,
-            mtimeMs: originalRecordingDirStats.mtimeMs + 1,
-            birthtimeMs: originalRecordingDirStats.birthtimeMs + 1,
-          });
-        });
         jest.spyOn(handle, 'chmod').mockImplementation(dirHandleChmod);
         return handle;
       }
