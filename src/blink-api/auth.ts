@@ -229,7 +229,6 @@ interface BlinkAuthErrorDetail {
   status: number;
   statusText: string;
   message?: string;
-  code?: number;
   errorType?: string;
   requiresUpdate?: boolean;
   requires2FA?: boolean;
@@ -251,7 +250,6 @@ export class BlinkAuthenticationError extends Error {
       status: Number.isSafeInteger(details.status) ? details.status : 0,
       statusText: '',
       message: authErrorCategory(details.message),
-      code: Number.isSafeInteger(details.code) ? details.code : undefined,
       errorType: authErrorCategory(details.errorType),
       requiresUpdate: details.requiresUpdate === true,
       requires2FA: details.requires2FA === true,
@@ -270,9 +268,6 @@ export class BlinkAuthenticationError extends Error {
 
     if (this.details.errorType) {
       lines.push(`Error Type: ${this.details.errorType}`);
-    }
-    if (this.details.code !== undefined) {
-      lines.push(`Error Code: ${this.details.code}`);
     }
     if (this.details.message) {
       lines.push(`Server Message: ${this.details.message}`);
@@ -1370,15 +1365,10 @@ export class BlinkAuth {
       || category === 'two_factor_required'
       || category === 'verification_required'
     );
-    const errorCode = Number.isSafeInteger(responseBody?.code)
-      ? responseBody?.code as number
-      : undefined;
-
     const details: BlinkAuthErrorDetail = {
       status: response.status,
       statusText: '',
       message: category,
-      code: errorCode,
       errorType: authErrorCategory(responseBody?.error),
       requiresUpdate,
       requires2FA,
@@ -1398,7 +1388,7 @@ export class BlinkAuth {
     try {
       await this.ensureStateLoaded();
     } catch (error) {
-      if (!this.hasLegacyCredentials()) {
+      if (!this.canUseLegacyCredentialLogin()) {
         throw error;
       }
       this.log.warn('[Auth] Persisted auth state unavailable; replacing it through legacy sign-in.');
@@ -1411,7 +1401,7 @@ export class BlinkAuth {
         await this.refreshTokens();
         return;
       }
-      if (!this.hasLegacyCredentials()) {
+      if (!this.canUseLegacyCredentialLogin()) {
         throw new Error(
           'No credentials available for OAuth login. '
           + 'Authenticate via the plugin Custom UI or add username/password to config.',
@@ -1432,7 +1422,7 @@ export class BlinkAuth {
             ? error
             : new BlinkHostedReauthenticationRequiredError();
         }
-        if (!this.hasLegacyCredentials()) {
+        if (!this.canUseLegacyCredentialLogin()) {
           throw error;
         }
         this.log.warn('[Auth] Token refresh failed; attempting legacy credential login.');
@@ -1449,7 +1439,7 @@ export class BlinkAuth {
             ? error
             : new BlinkHostedReauthenticationRequiredError();
         }
-        if (!this.hasLegacyCredentials()) {
+        if (!this.canUseLegacyCredentialLogin()) {
           throw error;
         }
         this.log.warn('[Auth] Proactive token refresh failed; continuing with current legacy token.');
@@ -1472,6 +1462,11 @@ export class BlinkAuth {
 
   private hasLegacyCredentials(): boolean {
     return this.config.email.trim().length > 0 && this.config.password.length > 0;
+  }
+
+  private canUseLegacyCredentialLogin(): boolean {
+    return this.hasLegacyCredentials()
+      && resolveOAuthProfile(this.oauthClientId).clientId === 'ios';
   }
 
   getAuthHeaders(): Record<string, string> {
@@ -1549,7 +1544,7 @@ export class BlinkAuth {
     try {
       await this.ensureStateLoaded();
     } catch (error) {
-      if (!this.hasLegacyCredentials()) {
+      if (!this.canUseLegacyCredentialLogin()) {
         throw error;
       }
       this.log.warn('[Auth] Persisted tier unavailable; legacy sign-in will replace auth state.');

@@ -121,6 +121,30 @@ describe('BlinkApi', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(4);
   });
 
+  it('does not start legacy authorization when Android persisted-tier loading fails', async () => {
+    const storage: BlinkAuthStorage = {
+      load: jest.fn(async () => { throw new Error('androidPersistedTierLoadSecret_2Bu8Wr'); }),
+      save: jest.fn(async (_state: BlinkAuthState) => undefined),
+      clear: jest.fn(async () => undefined),
+    };
+    globalThis.fetch = jest.fn() as unknown as typeof fetch;
+    const api = new BlinkApi({
+      ...config,
+      oauthClientId: 'android',
+      authStorage: storage,
+    });
+    const accountSync = jest.spyOn(
+      api as unknown as { syncAccountInfoAndVerify: () => Promise<void> },
+      'syncAccountInfoAndVerify',
+    ).mockResolvedValue(undefined);
+
+    await expect(api.login()).rejects.toThrow('Blink authentication state could not be loaded.');
+
+    expect(storage.load).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(accountSync).not.toHaveBeenCalled();
+  });
+
   it('fetches homescreen and updates account id from response', async () => {
     const { api, auth, http } = createApi();
     auth.getAccountId.mockReturnValue(7);

@@ -36,6 +36,7 @@ const TOKEN_AUTH = 'tokenAuthSentinel_3Cs7Xv';
 const UPSTREAM_BODY = 'upstreamBodySentinel_4Dt6Wu';
 const STORAGE_FAILURE = 'storageFailureSentinel_5Eu5Vt';
 const STORAGE_LOAD_FAILURE = 'storageLoadFailureSentinel_6Fv4Us';
+const AUTH_STATE_LOAD_FAILED = 'Blink authentication state could not be loaded.';
 
 type FetchMock = jest.MockedFunction<typeof fetch>;
 
@@ -926,6 +927,7 @@ describe('BlinkAuth hosted OAuth', () => {
   ])(
     'preserves allow-listed %s classification without retaining upstream diagnostics',
     async (_description, status, body, expectedCategory, requiresUpdate, requires2FA) => {
+      const upstreamNumericCode = 654321;
       const statusSecret = 'statusTextSecret_3Ya6Ah';
       const headerNameSecret = 'x-header-name-secret-4z';
       const headerValueSecret = 'headerValueSecret_5Aa4Yf';
@@ -940,7 +942,7 @@ describe('BlinkAuth hosted OAuth', () => {
       });
       const { logger, entries } = createLogger();
       const auth = new BlinkAuth(makeConfig(storage, logger));
-      fetchMock.mockResolvedValueOnce(tokenResponse(body, {
+      fetchMock.mockResolvedValueOnce(tokenResponse({ ...body, code: upstreamNumericCode }, {
         status,
         statusText: statusSecret,
         headers: { [headerNameSecret]: headerValueSecret },
@@ -959,12 +961,16 @@ describe('BlinkAuth hosted OAuth', () => {
       expect(authenticationError.details.requiresUpdate ?? false).toBe(requiresUpdate);
       expect(authenticationError.details.requires2FA ?? false).toBe(requires2FA);
       expect(authenticationError.details.responseBody).toBeUndefined();
+      expect(authenticationError.details).not.toHaveProperty('code');
       const diagnostics = [
         authenticationError.message,
         authenticationError.toLogString(),
         JSON.stringify(authenticationError.details),
+        JSON.stringify(authenticationError),
+        String(authenticationError),
         entries.join('\n'),
       ].join('\n');
+      expect(diagnostics).not.toContain(String(upstreamNumericCode));
       expectSecretsAbsent(diagnostics, [
         statusSecret,
         headerNameSecret,
@@ -1127,24 +1133,64 @@ describe('BlinkAuth hosted OAuth', () => {
     }));
   });
 
-  it('recovers a failed legacy state load with credentials and persists one replacement', async () => {
+  it.each([
+    ['profile-less', undefined],
+    ['explicit iOS', 'ios' as const],
+    ['resolver-compatible Amazon', 'amazon' as const],
+  ])(
+    'recovers a failed legacy state load for %s configuration and persists one replacement',
+    async (_description, oauthClientId) => {
+      const storage = createStorage(null);
+      storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
+      const { logger, entries } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger, {
+        email: ' legacy@example.com ',
+        password: 'legacy-password',
+        ...(oauthClientId === undefined ? {} : { oauthClientId }),
+      }));
+      queueLegacyLoginResponses(fetchMock);
+
+      await auth.ensureValidToken();
+      await auth.ensureValidToken();
+
+      expect(storage.load).toHaveBeenCalledTimes(1);
+      expect(storage.save).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(auth.getAccessToken()).toBe('replacementAccess_4Pd7Ku');
+      expect(entries.join('\n')).not.toContain(STORAGE_LOAD_FAILURE);
+    },
+  );
+
+  it('keeps failed state loads strict for configured Android despite legacy credentials', async () => {
     const storage = createStorage(null);
     storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
-    const { logger, entries } = createLogger();
+    const { logger } = createLogger();
     const auth = new BlinkAuth(makeConfig(storage, logger, {
       email: ' legacy@example.com ',
       password: 'legacy-password',
+      oauthClientId: 'android',
     }));
-    queueLegacyLoginResponses(fetchMock);
+    const loginSpy = jest.spyOn(auth, 'login').mockResolvedValue(undefined);
 
-    await auth.ensureValidToken();
-    await auth.ensureValidToken();
+    await expect(auth.ensureValidToken()).rejects.toThrow(AUTH_STATE_LOAD_FAILED);
 
-    expect(storage.load).toHaveBeenCalledTimes(1);
-    expect(storage.save).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(auth.getAccessToken()).toBe('replacementAccess_4Pd7Ku');
-    expect(entries.join('\n')).not.toContain(STORAGE_LOAD_FAILURE);
+    expect(loginSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps persisted-tier loading strict for configured Android despite legacy credentials', async () => {
+    const storage = createStorage(null);
+    storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      oauthClientId: 'android',
+    }));
+
+    await expect(auth.getPersistedTier()).rejects.toThrow(AUTH_STATE_LOAD_FAILED);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('keeps failed state loads fatal without legacy credentials', async () => {
@@ -1154,7 +1200,7 @@ describe('BlinkAuth hosted OAuth', () => {
     const auth = new BlinkAuth(makeConfig(storage, logger));
 
     await expect(auth.ensureValidToken()).rejects.toThrow(
-      'Blink authentication state could not be loaded.',
+      AUTH_STATE_LOAD_FAILED,
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
