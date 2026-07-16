@@ -39,6 +39,7 @@ type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
     callback: (error?: Error) => void,
   ) => void;
   startTalkback: (sessionId: string, request: unknown, session: unknown) => void;
+  startImmisTalkback: (sessionId: string, request: unknown, session: unknown) => void;
   startStream: (sessionId: string, request: unknown, callback: (error?: Error) => void) => Promise<void>;
   pendingSessions: Map<string, unknown>;
   ongoingSessions: Map<string, unknown>;
@@ -561,6 +562,84 @@ describe('Accessory handlers', () => {
       expect(logs).not.toContain('session-secret');
       expect(logs).not.toContain('stream-secret');
       expect(logs).not.toContain('talkback-srtp-secret');
+    } finally {
+      spawnMock.mockClear();
+    }
+  });
+
+  it('redacts split SRTP secrets from IMMIS talkback FFmpeg debug logs', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const spawnMock = spawn as unknown as jest.Mock;
+    spawnMock.mockClear();
+
+    try {
+      const source = new BlinkCameraSource(
+        {} as BlinkApi,
+        hap as unknown as HAP,
+        1,
+        2,
+        'camera',
+        'TEST_SERIAL',
+        jest.fn(),
+        () => true,
+        logFn,
+        { enabled: true, ffmpegDebug: true },
+      );
+      const immisProxy = {
+        attachAudioInput: jest.fn(),
+        startAudio: jest.fn(),
+        stopAudio: jest.fn(),
+      };
+      const session = {
+        address: '192.168.1.50',
+        addressVersion: 'ipv4',
+        sessionId: 'session',
+        videoPort: 5000,
+        localVideoPort: 5100,
+        videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        videoSRTP: Buffer.alloc(30, 1),
+        videoSSRC: 1234,
+        audioPort: 5001,
+        localAudioPort: 5101,
+        audioCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        audioSRTP: Buffer.from('immis-srtp-secret'.padEnd(30, '!')),
+        audioSSRC: 5678,
+        immisProxy,
+      };
+      const request = {
+        type: 'start',
+        sessionID: 'session',
+        video: {},
+        audio: {
+          codec: 'OPUS',
+          channel: 1,
+          sample_rate: hap.AudioStreamingSamplerate.KHZ_24,
+          max_bit_rate: 24,
+          pt: 110,
+        },
+      };
+
+      (source as unknown as CameraSourcePrivateAccess).startImmisTalkback('session', request, session);
+
+      const talkbackProcess = spawnMock.mock.results[0]?.value as {
+        stderr: { emit: (event: string, data: Buffer) => boolean };
+      };
+      talkbackProcess.stderr.emit(
+        'data',
+        Buffer.from('a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:immis-'),
+      );
+      let logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain('inline:immis-');
+
+      talkbackProcess.stderr.emit('data', Buffer.from('srtp-secret\n'));
+
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).toContain('FFmpeg-immis-talkback(session)');
+      expect(logs).toContain('inline:<redacted>');
+      expect(logs).not.toContain('immis-srtp-secret');
+      expect(immisProxy.attachAudioInput).toHaveBeenCalledTimes(1);
+      expect(immisProxy.startAudio).toHaveBeenCalledTimes(1);
     } finally {
       spawnMock.mockClear();
     }
