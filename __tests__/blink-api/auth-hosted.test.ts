@@ -467,10 +467,13 @@ describe('BlinkAuth hosted OAuth', () => {
       email: currentEmail,
     });
     const { logger, entries } = createLogger();
-    const auth = new BlinkAuth(makeConfig(storage, logger, { email: currentEmail }));
+    const runtimeConfig = makeConfig(storage, logger);
+    const auth = new BlinkAuth(runtimeConfig);
     fetchMock.mockResolvedValueOnce(exactHostedTokenResponse());
 
     await auth.refreshTokens();
+
+    expect(runtimeConfig.email).toBe(currentEmail);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.oauth.blink.com/oauth/token');
@@ -501,6 +504,35 @@ describe('BlinkAuth hosted OAuth', () => {
     expect(auth.getAuthHeaders()).toEqual({ Authorization: `Bearer ${ACCESS_TOKEN}` });
     expectSecretsAbsent(entries.join('\n'), [ACCESS_TOKEN, REFRESH_TOKEN, TOKEN_AUTH]);
   });
+
+  it.each([null, ''])(
+    'keeps an explicitly configured email when persisted email is %p',
+    async (persistedEmail) => {
+      const configuredEmail = 'configured-account@example.com';
+      const storage = createStorage({
+        accessToken: 'currentAccess_1Xg8Qr',
+        refreshToken: 'currentRefresh_2Yh7Ps',
+        tokenExpiry: '2026-12-31T00:00:00.000Z',
+        oauthClientId: 'android',
+        accountId: 42,
+        clientId: 100,
+        region: 'eu',
+        tier: 'prde',
+        email: persistedEmail,
+      });
+      const { logger } = createLogger();
+      const runtimeConfig = makeConfig(storage, logger, { email: configuredEmail });
+      const auth = new BlinkAuth(runtimeConfig);
+
+      await auth.getPersistedTier();
+      await auth.persistCurrentState();
+
+      expect(runtimeConfig.email).toBe(configuredEmail);
+      expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({
+        email: configuredEmail,
+      }));
+    },
+  );
 
   it('clears explicitly null account metadata while preserving omitted properties', async () => {
     const currentEmail = 'current-account@example.com';

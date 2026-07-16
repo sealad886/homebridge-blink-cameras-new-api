@@ -500,6 +500,7 @@ export class BlinkAuth {
     this.clientId = state.clientId ?? this.clientId;
     this.region = state.region ?? this.region;
     this.tier = state.tier ?? this.tier;
+    if (state.email) this.config.email = state.email;
     if (state.tokenExpiry) {
       const parsed = new Date(state.tokenExpiry);
       if (!Number.isNaN(parsed.getTime())) {
