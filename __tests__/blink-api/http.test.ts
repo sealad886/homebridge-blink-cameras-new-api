@@ -3,7 +3,7 @@ import {
   BlinkAuth,
   BlinkHostedReauthenticationRequiredError,
 } from '../../src/blink-api/auth';
-import { BlinkConfig } from '../../src/types';
+import { BlinkAuthStorage, BlinkConfig, BlinkLogger } from '../../src/types';
 
 describe('BlinkHttp', () => {
   const mockAuth = () => {
@@ -128,32 +128,135 @@ describe('BlinkHttp', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('throws with status text when request fails', async () => {
+  it('throws with numeric status only when request fails', async () => {
     const auth = mockAuth();
     const http = new BlinkHttp(auth, mockConfig);
     (fetch as jest.Mock).mockResolvedValue(response(400, { message: 'bad' }));
 
-    await expect(http.get('v1/fail')).rejects.toThrow('Blink API GET v1/fail failed: 400 Bad Request');
+    await expect(http.get('v1/fail')).rejects.toThrow('Blink API GET v1/fail failed: 400');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not preflight a REST retry after explicit refresh with a short-lived token', async () => {
+    const storage: BlinkAuthStorage = {
+      load: jest.fn(async () => ({
+        accessToken: 'initial-hosted-access',
+        refreshToken: 'initial-hosted-refresh',
+        tokenExpiry: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        oauthClientId: 'android' as const,
+      })),
+      save: jest.fn(async () => undefined),
+      clear: jest.fn(async () => undefined),
+    };
+    const auth = new BlinkAuth({
+      ...mockConfig,
+      email: '',
+      password: '',
+      authStorage: storage,
+    });
+    const http = new BlinkHttp(auth, mockConfig);
+    let tokenRequests = 0;
+    let restRequests = 0;
+    (fetch as jest.Mock).mockImplementation(async (input: string) => {
+      if (input === 'https://api.oauth.blink.com/oauth/token') {
+        tokenRequests += 1;
+        return {
+          ...response(200, {
+            access_token: `short-lived-access-${tokenRequests}`,
+            refresh_token: `rotated-refresh-${tokenRequests}`,
+            expires_in: 30,
+            token_type: 'Bearer',
+          }),
+          headers: new Headers(),
+        };
+      }
+      restRequests += 1;
+      return restRequests === 1
+        ? response(401)
+        : response(200, { ok: true });
+    });
+
+    await http.get('v1/short-lived-retry');
+
+    expect(tokenRequests).toBe(1);
+    expect(restRequests).toBe(2);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retain untrusted HTTP status text or response-header names and values', async () => {
+    const statusSecret = 'httpStatusSecret_1Un8Dw';
+    const headerNameSecret = 'x-http-header-name-secret';
+    const headerValueSecret = 'httpHeaderValueSecret_2Vo7Cv';
+    const bodySecret = 'httpReflectedBodySecret_3Wp6Bu';
+    const entries: string[] = [];
+    const record = (message: string, ...parameters: unknown[]): void => {
+      entries.push([message, ...parameters.map(String)].join(' '));
+    };
+    const logger: BlinkLogger = {
+      debug: record,
+      info: record,
+      warn: record,
+      error: record,
+    };
+    const auth = mockAuth();
+    const http = new BlinkHttp(auth, { ...mockConfig, debugAuth: true, logger });
+    (fetch as jest.Mock).mockResolvedValue({
+      ...response(400, { message: bodySecret }),
+      statusText: statusSecret,
+      headers: new Headers({ [headerNameSecret]: headerValueSecret }),
+    });
+
+    let caught: unknown;
+    try {
+      await http.get('v1/untrusted-diagnostics');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BlinkHttpError);
+    const httpError = caught as BlinkHttpError;
+    const diagnostics = [
+      httpError.message,
+      httpError.toLogString(),
+      JSON.stringify(httpError),
+      entries.join('\n'),
+    ].join('\n');
+    expect(diagnostics).not.toContain(statusSecret);
+    expect(diagnostics).not.toContain(headerNameSecret);
+    expect(diagnostics).not.toContain(headerValueSecret);
+    expect(diagnostics).not.toContain(bodySecret);
   });
 
   it('redacts secrets from HTTP error logs', () => {
     const error = new BlinkHttpError(
       'request failed',
       401,
-      'Unauthorized',
+      'statusTextSecret_3Wp6Bu',
       'https://example.com/api',
       'POST',
-      JSON.stringify({ access_token: 'secret-token', pin: '123456', nested: { refresh_token: 'refresh-secret' } }),
-      { authorization: 'Bearer secret-token', 'set-cookie': 'session=abc123' },
+      JSON.stringify({
+        access_token: 'secret-token',
+        pin: '123456',
+        nested: { refresh_token: 'refresh-secret' },
+        message: 'reflectedBodySecret_6Zs3Yr',
+      }),
+      {
+        authorization: 'Bearer secret-token',
+        'set-cookie': 'session=abc123',
+        'x-headerNameSecret_4Xq5At': 'headerValueSecret_5Yr4Zs',
+      },
     );
 
     const log = error.toLogString();
 
-    expect(log).toContain('<redacted>');
+    expect(log).toContain('Status: 401');
     expect(log).not.toContain('secret-token');
     expect(log).not.toContain('refresh-secret');
     expect(log).not.toContain('123456');
     expect(log).not.toContain('session=abc123');
+    expect(log).not.toContain('statusTextSecret_3Wp6Bu');
+    expect(log).not.toContain('headerNameSecret_4Xq5At');
+    expect(log).not.toContain('headerValueSecret_5Yr4Zs');
+    expect(log).not.toContain('reflectedBodySecret_6Zs3Yr');
   });
 });

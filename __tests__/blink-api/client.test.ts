@@ -1,5 +1,5 @@
 import { BlinkApi } from '../../src/blink-api/client';
-import { BlinkConfig } from '../../src/types';
+import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
 
 type MutableBlinkApi = {
   login: BlinkApi['login'];
@@ -63,6 +63,62 @@ describe('BlinkApi', () => {
 
     expect(auth.ensureValidToken).toHaveBeenCalled();
     expect((api as unknown as { accountId: number | null }).accountId).toBe(99);
+  });
+
+  it('recovers through BlinkApi.login when persisted tier loading fails but credentials exist', async () => {
+    const storage: BlinkAuthStorage = {
+      load: jest.fn(async () => { throw new Error('persistedTierLoadSecret_1At9Xq'); }),
+      save: jest.fn(async (_state: BlinkAuthState) => undefined),
+      clear: jest.fn(async () => undefined),
+    };
+    const headers = (values: Record<string, string> = {}): Headers => {
+      const result = new Headers(values);
+      (result as unknown as { getSetCookie: () => string[] }).getSetCookie = () => [];
+      return result;
+    };
+    globalThis.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, status: 302, statusText: 'Found', headers: headers() })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '<input name="_token" value="replacement-csrf">',
+        headers: headers(),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 302,
+        statusText: 'Found',
+        headers: headers({ location: 'callback?code=replacement-code' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          access_token: 'replacement-access',
+          refresh_token: 'replacement-refresh',
+          expires_in: 7_200,
+          token_type: 'Bearer',
+          account_id: 10,
+          client_id: 12345,
+        }),
+        headers: headers({ 'token-auth': 'replacement-token-auth' }),
+      }) as unknown as typeof fetch;
+    const api = new BlinkApi({
+      ...config,
+      authStorage: storage,
+    });
+    jest.spyOn(
+      api as unknown as { syncAccountInfoAndVerify: () => Promise<void> },
+      'syncAccountInfoAndVerify',
+    ).mockResolvedValue(undefined);
+
+    await api.login();
+
+    expect(storage.load).toHaveBeenCalledTimes(2);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
   });
 
   it('fetches homescreen and updates account id from response', async () => {

@@ -72,16 +72,30 @@ function redactBody(body: unknown): unknown {
  * Custom error for HTTP failures with diagnostics
  */
 export class BlinkHttpError extends Error {
+  public readonly statusText = '';
+  public readonly responseBody: string | undefined = undefined;
+  public readonly responseHeaders: Record<string, string> | undefined = undefined;
+
   constructor(
     message: string,
     public readonly status: number,
-    public readonly statusText: string,
+    statusText: string,
     public readonly url: string,
     public readonly method: string,
-    public readonly responseBody?: string,
-    public readonly responseHeaders?: Record<string, string>,
+    _responseBody?: string,
+    responseHeaders?: Record<string, string>,
   ) {
-    super(message);
+    const untrustedFragments = [
+      statusText,
+      ...Object.entries(responseHeaders ?? {}).flatMap(([key, value]) => [key, value]),
+    ];
+    let safeMessage = message;
+    for (const fragment of untrustedFragments) {
+      if (fragment) {
+        safeMessage = safeMessage.split(fragment).join('');
+      }
+    }
+    super(safeMessage.replace(/\s+/g, ' ').trim() || 'Blink API request failed.');
     this.name = 'BlinkHttpError';
   }
 
@@ -91,25 +105,8 @@ export class BlinkHttpError extends Error {
       `BLINK API ERROR`,
       `${'─'.repeat(60)}`,
       `${this.method} ${this.url}`,
-      `Status: ${this.status} ${this.statusText}`,
+      `Status: ${this.status}`,
     ];
-
-    if (this.responseHeaders) {
-      lines.push(`\nResponse Headers:`);
-      for (const [key, value] of Object.entries(redactHeaders(this.responseHeaders))) {
-        lines.push(`  ${key}: ${value}`);
-      }
-    }
-
-    if (this.responseBody) {
-      lines.push(`\nResponse Body:`);
-      try {
-        const parsed = JSON.parse(this.responseBody);
-        lines.push(JSON.stringify(redactBody(parsed), null, 2));
-      } catch {
-        lines.push(String(redactBody(this.responseBody)));
-      }
-    }
 
     lines.push(`${'─'.repeat(60)}\n`);
     return lines.join('\n');
@@ -169,8 +166,16 @@ export class BlinkHttp {
    * Source: API Dossier Section 2.3 - X-Blink-Time-Zone header required
    * Evidence: smali_classes10/com/immediasemi/blink/network/HeadersInterceptor.smali
    */
-  private async request<T>(method: HttpMethod, path: string, body?: unknown, attempt = 0): Promise<T> {
-    await this.auth.ensureValidToken();
+  private async request<T>(
+    method: HttpMethod,
+    path: string,
+    body?: unknown,
+    attempt = 0,
+    runPreflight = true,
+  ): Promise<T> {
+    if (runPreflight) {
+      await this.auth.ensureValidToken();
+    }
 
     const url = this.buildUrl(path);
     const requestId = randomUUID();
@@ -198,13 +203,13 @@ export class BlinkHttp {
     });
     const elapsed = Date.now() - startTime;
 
-    this.logDebug(`[${requestId}] Response: ${response.status} ${response.statusText} (${elapsed}ms)`);
+    this.logDebug(`[${requestId}] Response status: ${response.status} (${elapsed}ms)`);
 
     // Token expired or session invalid - refresh once and retry
     if ((response.status === 401 || response.status === 403) && attempt < 1) {
       this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
       await this.auth.refreshTokens();
-      return this.request<T>(method, path, body, attempt + 1);
+      return this.request<T>(method, path, body, attempt + 1, false);
     }
 
     // Rate limited - exponential backoff
@@ -212,7 +217,7 @@ export class BlinkHttp {
       const delay = 1000 * Math.pow(2, attempt);
       this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
       await sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1);
+      return this.request<T>(method, path, body, attempt + 1, false);
     }
 
     // Server error - linear backoff
@@ -220,24 +225,16 @@ export class BlinkHttp {
       const delay = 500 * (attempt + 1);
       this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
       await sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1);
+      return this.request<T>(method, path, body, attempt + 1, false);
     }
 
     if (!response.ok) {
-      const text = await response.text();
-      const responseHeaders: Record<string, string> = {};
-      response.headers.forEach((value, key) => {
-        responseHeaders[key] = value;
-      });
-
       const error = new BlinkHttpError(
-        `Blink API ${method} ${path} failed: ${response.status} ${response.statusText}`,
+        `Blink API ${method} ${path} failed: ${response.status}`,
         response.status,
-        response.statusText,
+        '',
         url,
         method,
-        text,
-        responseHeaders,
       );
 
       // Always log HTTP errors

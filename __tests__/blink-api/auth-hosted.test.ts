@@ -5,6 +5,7 @@ import * as path from 'node:path';
 
 import {
   BlinkAuth,
+  BlinkAuthenticationError,
   BlinkHostedReauthenticationRequiredError,
 } from '../../src/blink-api/auth';
 import { HostedOAuthCoordinator } from '../../src/blink-api/hosted-oauth';
@@ -124,6 +125,79 @@ const failedTokenResponse = (status = 400): Response => ({
     error_description: UPSTREAM_BODY,
   }),
 }) as unknown as Response;
+
+const tokenResponse = (
+  body: unknown,
+  options: {
+    status?: number;
+    statusText?: string;
+    headers?: Record<string, string>;
+  } = {},
+): Response => {
+  const status = options.status ?? 200;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: options.statusText ?? (status >= 400 ? 'Bad Request' : 'OK'),
+    headers: new Headers(options.headers),
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as unknown as Response;
+};
+
+const validTokenBody = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  access_token: ACCESS_TOKEN,
+  refresh_token: REFRESH_TOKEN,
+  expires_in: 14_400,
+  token_type: 'Bearer',
+  account_id: 42,
+  client_id: 100,
+  region: 'eu',
+  tier: 'prde',
+  ...overrides,
+});
+
+const responseHeaders = (values: Record<string, string> = {}): Headers => {
+  const headers = new Headers(values);
+  (headers as unknown as { getSetCookie: () => string[] }).getSetCookie = () => (
+    values['set-cookie'] ? [values['set-cookie']] : []
+  );
+  return headers;
+};
+
+const queueLegacyLoginResponses = (
+  fetchMock: FetchMock,
+  tokenBody: Record<string, unknown> = validTokenBody({
+    access_token: 'replacementAccess_4Pd7Ku',
+    refresh_token: 'replacementRefresh_5Qe6Jt',
+    expires_in: 7_200,
+  }),
+): void => {
+  fetchMock
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 302,
+      statusText: 'Found',
+      headers: responseHeaders(),
+    } as Response)
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '<input name="_token" value="replacement-csrf">',
+      headers: responseHeaders(),
+    } as Response)
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 302,
+      statusText: 'Found',
+      headers: responseHeaders({ location: 'callback?code=replacement-code' }),
+    } as Response)
+    .mockResolvedValueOnce({
+      ...tokenResponse(tokenBody),
+      headers: responseHeaders({ 'token-auth': 'replacement-token-auth' }),
+    } as Response);
+};
 
 const tokenState = (auth: BlinkAuth): MutableTokenState => {
   const state = auth as unknown as MutableTokenState;
@@ -529,7 +603,7 @@ describe('BlinkAuth hosted OAuth', () => {
     fetchMock.mockResolvedValueOnce(failedTokenResponse());
 
     await expect(auth.ensureValidToken()).rejects.toThrow(
-      'Blink OAuth refresh failed: 400 Bad Request',
+      'Blink OAuth refresh failed: 400',
     );
 
     expect(loginSpy).not.toHaveBeenCalled();
@@ -704,5 +778,400 @@ describe('BlinkAuth hosted OAuth', () => {
       pending.codeVerifier,
       callback.toString(),
     ]);
+  });
+
+  it.each([
+    ['null response', null],
+    ['array response', []],
+    ['blank access token', validTokenBody({ access_token: '   ' })],
+    ['wrong access token type', validTokenBody({ access_token: 42 })],
+    ['zero expiry', validTokenBody({ expires_in: 0 })],
+    ['non-finite expiry', validTokenBody({ expires_in: Number.POSITIVE_INFINITY })],
+    ['wrong token type', validTokenBody({ token_type: 'MAC' })],
+    ['missing hosted refresh token', (() => {
+      const body = validTokenBody();
+      delete body.refresh_token;
+      return body;
+    })()],
+    ['blank hosted refresh token', validTokenBody({ refresh_token: '   ' })],
+    ['wrong hosted refresh token type', validTokenBody({ refresh_token: 123 })],
+    ['invalid optional metadata', validTokenBody({ account_id: '42' })],
+  ])('rejects %s without relabeling or mutating a legacy token set', async (_description, body) => {
+    const previousState: BlinkAuthState = {
+      accessToken: 'legacyAccess_2Nf8Ls',
+      refreshToken: 'legacyRefresh_3Og7Kr',
+      tokenAuth: 'legacyTokenAuth_4Ph6Jq',
+      tokenExpiry: '2026-12-31T00:00:00.000Z',
+      oauthClientId: 'ios',
+      accountId: 11,
+      clientId: 22,
+      region: 'us',
+      tier: 'prod',
+    };
+    const storage = createStorage(previousState);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const { pending, callbackUrl } = await startHostedLogin(auth);
+    fetchMock.mockResolvedValueOnce(tokenResponse(body));
+
+    await expect(auth.completeHostedLogin(pending.flowId, callbackUrl)).rejects.toThrow(
+      'Blink sign-in could not be completed. Start sign-in again.',
+    );
+
+    expect(tokenState(auth)).toEqual({
+      accessToken: previousState.accessToken,
+      refreshToken: previousState.refreshToken,
+      tokenExpiry: new Date(previousState.tokenExpiry as string),
+      tokenAuth: previousState.tokenAuth,
+      oauthClientId: previousState.oauthClientId,
+      accountId: previousState.accountId,
+      clientId: previousState.clientId,
+      region: previousState.region,
+      tier: previousState.tier,
+    });
+    expect(storage.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['blank access token', validTokenBody({ access_token: '   ' })],
+    ['wrong access token type', validTokenBody({ access_token: false })],
+    ['negative expiry', validTokenBody({ expires_in: -1 })],
+    ['wrong token type', validTokenBody({ token_type: 'bearer' })],
+    ['blank refresh token', validTokenBody({ refresh_token: '   ' })],
+    ['wrong refresh token type', validTokenBody({ refresh_token: 123 })],
+    ['invalid optional metadata', validTokenBody({ tier: '' })],
+  ])('maps Android refresh %s to fixed reauthentication without mutation', async (_description, body) => {
+    const previousState: BlinkAuthState = {
+      accessToken: 'hostedAccess_5Qi5Ip',
+      refreshToken: 'hostedRefresh_6Rh4Ho',
+      tokenAuth: null,
+      tokenExpiry: '2026-12-31T00:00:00.000Z',
+      oauthClientId: 'android',
+      accountId: 12,
+      clientId: 23,
+      region: 'eu',
+      tier: 'prde',
+    };
+    const storage = createStorage(previousState);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    fetchMock.mockResolvedValueOnce(tokenResponse(body));
+
+    await expect(auth.refreshTokens()).rejects.toBeInstanceOf(
+      BlinkHostedReauthenticationRequiredError,
+    );
+
+    expect(tokenState(auth)).toEqual({
+      accessToken: previousState.accessToken,
+      refreshToken: previousState.refreshToken,
+      tokenExpiry: new Date(previousState.tokenExpiry as string),
+      tokenAuth: previousState.tokenAuth,
+      oauthClientId: previousState.oauthClientId,
+      accountId: previousState.accountId,
+      clientId: previousState.clientId,
+      region: previousState.region,
+      tier: previousState.tier,
+    });
+    expect(storage.save).not.toHaveBeenCalled();
+  });
+
+  it('allows an Android refresh to retain its existing nonblank refresh token', async () => {
+    const retainedRefreshToken = 'retainedHostedRefresh_7Sg3Gn';
+    const storage = createStorage({
+      accessToken: 'oldHostedAccess_8Tf2Fm',
+      refreshToken: retainedRefreshToken,
+      tokenExpiry: '2026-12-31T00:00:00.000Z',
+      oauthClientId: 'android',
+    });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const body = validTokenBody({ access_token: 'rotatedHostedAccess_9Ue1El' });
+    delete body.refresh_token;
+    fetchMock.mockResolvedValueOnce(tokenResponse(body));
+
+    await auth.refreshTokens();
+
+    expect(auth.getRefreshToken()).toBe(retainedRefreshToken);
+    expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({
+      refreshToken: retainedRefreshToken,
+      oauthClientId: 'android',
+    }));
+  });
+
+  it.each([
+    [
+      'client verification',
+      401,
+      { client_verification_required: true, message: 'bodySecret_0Vd9Dk' },
+      'client_verification_required',
+      false,
+      true,
+    ],
+    [
+      'app update',
+      426,
+      { message: 'bodySecret_1Wc8Cj' },
+      'app_update_required',
+      true,
+      false,
+    ],
+    [
+      'two-factor verification',
+      401,
+      { error: 'two_factor_required', error_description: 'bodySecret_2Xb7Bi' },
+      'two_factor_required',
+      false,
+      true,
+    ],
+  ])(
+    'preserves allow-listed %s classification without retaining upstream diagnostics',
+    async (_description, status, body, expectedCategory, requiresUpdate, requires2FA) => {
+      const statusSecret = 'statusTextSecret_3Ya6Ah';
+      const headerNameSecret = 'x-header-name-secret-4z';
+      const headerValueSecret = 'headerValueSecret_5Aa4Yf';
+      const bodySecret = Object.values(body).find((value) => (
+        typeof value === 'string' && value.startsWith('bodySecret_')
+      )) as string;
+      const storage = createStorage({
+        accessToken: 'legacyAccess_6Bb3Xe',
+        refreshToken: 'legacyRefresh_7Cc2Wd',
+        tokenExpiry: '2026-01-01T00:00:00.000Z',
+        oauthClientId: 'ios',
+      });
+      const { logger, entries } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger));
+      fetchMock.mockResolvedValueOnce(tokenResponse(body, {
+        status,
+        statusText: statusSecret,
+        headers: { [headerNameSecret]: headerValueSecret },
+      }));
+
+      let caught: unknown;
+      try {
+        await auth.refreshTokens();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(BlinkAuthenticationError);
+      const authenticationError = caught as BlinkAuthenticationError;
+      expect(authenticationError.details.message).toBe(expectedCategory);
+      expect(authenticationError.details.requiresUpdate ?? false).toBe(requiresUpdate);
+      expect(authenticationError.details.requires2FA ?? false).toBe(requires2FA);
+      expect(authenticationError.details.responseBody).toBeUndefined();
+      const diagnostics = [
+        authenticationError.message,
+        authenticationError.toLogString(),
+        JSON.stringify(authenticationError.details),
+        entries.join('\n'),
+      ].join('\n');
+      expectSecretsAbsent(diagnostics, [
+        statusSecret,
+        headerNameSecret,
+        headerValueSecret,
+        bodySecret,
+      ]);
+    },
+  );
+
+  it('single-flights concurrent refresh callers through one token request and save', async () => {
+    const storage = createStorage({
+      accessToken: 'oldHostedAccess_8Dd1Vc',
+      refreshToken: 'oldHostedRefresh_9Ee0Ub',
+      tokenExpiry: '2026-01-01T00:00:00.000Z',
+      oauthClientId: 'android',
+    });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    fetchMock.mockResolvedValue(tokenResponse(validTokenBody()));
+
+    await Promise.all([auth.refreshTokens(), auth.refreshTokens(), auth.refreshTokens()]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes public persistence behind token capture without deadlocking', async () => {
+    let releaseSave = (): void => undefined;
+    const saveGate = new Promise<void>((resolve) => { releaseSave = resolve; });
+    let markSaveStarted = (): void => undefined;
+    const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve; });
+    const storage = createStorage({
+      accessToken: 'oldHostedAccess_0Ff9Ta',
+      refreshToken: 'oldHostedRefresh_1Gg8Sz',
+      tokenExpiry: '2026-01-01T00:00:00.000Z',
+      oauthClientId: 'android',
+    }, async () => {
+      markSaveStarted();
+      await saveGate;
+    });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    fetchMock.mockResolvedValueOnce(tokenResponse(validTokenBody()));
+
+    const refresh = auth.refreshTokens();
+    await saveStarted;
+    const persistence = auth.persistCurrentState();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const savesBeforeRelease = storage.save.mock.calls.length;
+    releaseSave();
+    await Promise.all([refresh, persistence]);
+
+    expect(savesBeforeRelease).toBe(1);
+    expect(storage.save).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps newest hosted completion durable when an older refresh save rejects', async () => {
+    let rejectOlderSave = (_error: Error): void => undefined;
+    const olderSaveGate = new Promise<void>((_resolve, reject) => { rejectOlderSave = reject; });
+    let markOlderSaveStarted = (): void => undefined;
+    const olderSaveStarted = new Promise<void>((resolve) => { markOlderSaveStarted = resolve; });
+    let saveCount = 0;
+    let durableState: BlinkAuthState | null = null;
+    const initialState: BlinkAuthState = {
+      accessToken: 'initialHostedAccess_2Hh7Ry',
+      refreshToken: 'initialHostedRefresh_3Ii6Qx',
+      tokenExpiry: '2026-01-01T00:00:00.000Z',
+      oauthClientId: 'android',
+    };
+    const storage = createStorage(initialState, async (state) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        markOlderSaveStarted();
+        await olderSaveGate;
+      }
+      durableState = { ...state };
+    });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const { pending, callbackUrl } = await startHostedLogin(auth);
+    fetchMock
+      .mockResolvedValueOnce(tokenResponse(validTokenBody({
+        access_token: 'olderRefreshAccess_4Jj5Pw',
+        refresh_token: 'olderRefreshToken_5Kk4Ov',
+      })))
+      .mockResolvedValueOnce(tokenResponse(validTokenBody({
+        access_token: 'newerHostedAccess_6Ll3Nu',
+        refresh_token: 'newerHostedRefresh_7Mm2Mt',
+      })));
+
+    const olderRefresh = auth.refreshTokens();
+    const olderOutcome = olderRefresh.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await olderSaveStarted;
+    const newerCompletion = auth.completeHostedLogin(pending.flowId, callbackUrl);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    rejectOlderSave(new Error('older-save-rejected'));
+
+    expect(await olderOutcome).toBeInstanceOf(BlinkHostedReauthenticationRequiredError);
+    await newerCompletion;
+    expect(auth.getAccessToken()).toBe('newerHostedAccess_6Ll3Nu');
+    expect(auth.getRefreshToken()).toBe('newerHostedRefresh_7Mm2Mt');
+    expect(durableState).toEqual(expect.objectContaining({
+      accessToken: 'newerHostedAccess_6Ll3Nu',
+      refreshToken: 'newerHostedRefresh_7Mm2Mt',
+      oauthClientId: 'android',
+    }));
+  });
+
+  it('serializes hosted completion after an in-flight refresh network transition', async () => {
+    let releaseRefreshResponse = (_response: Response): void => undefined;
+    const refreshResponseGate = new Promise<Response>((resolve) => {
+      releaseRefreshResponse = resolve;
+    });
+    let markRefreshFetchStarted = (): void => undefined;
+    const refreshFetchStarted = new Promise<void>((resolve) => {
+      markRefreshFetchStarted = resolve;
+    });
+    let durableState: BlinkAuthState | null = null;
+    const storage = createStorage({
+      accessToken: 'initialHostedAccess_8Nn1Ls',
+      refreshToken: 'initialHostedRefresh_9Oo0Kr',
+      tokenExpiry: '2026-01-01T00:00:00.000Z',
+      oauthClientId: 'android',
+    }, async (state) => { durableState = { ...state }; });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const { pending, callbackUrl } = await startHostedLogin(auth);
+    fetchMock
+      .mockImplementationOnce(async () => {
+        markRefreshFetchStarted();
+        return refreshResponseGate;
+      })
+      .mockResolvedValueOnce(tokenResponse(validTokenBody({
+        access_token: 'newestHostedAccess_0Pp9Jq',
+        refresh_token: 'newestHostedRefresh_1Qq8Ip',
+      })));
+
+    const refresh = auth.refreshTokens();
+    await refreshFetchStarted;
+    const completion = auth.completeHostedLogin(pending.flowId, callbackUrl);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const fetchesBeforeRefreshReleased = fetchMock.mock.calls.length;
+    releaseRefreshResponse(tokenResponse(validTokenBody({
+      access_token: 'olderRefreshAccess_2Rr7Ho',
+      refresh_token: 'olderRefreshToken_3Ss6Gn',
+    })));
+
+    await Promise.all([refresh, completion]);
+    expect(fetchesBeforeRefreshReleased).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(auth.getAccessToken()).toBe('newestHostedAccess_0Pp9Jq');
+    expect(auth.getRefreshToken()).toBe('newestHostedRefresh_1Qq8Ip');
+    expect(durableState).toEqual(expect.objectContaining({
+      accessToken: 'newestHostedAccess_0Pp9Jq',
+      refreshToken: 'newestHostedRefresh_1Qq8Ip',
+      oauthClientId: 'android',
+    }));
+  });
+
+  it('recovers a failed legacy state load with credentials and persists one replacement', async () => {
+    const storage = createStorage(null);
+    storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
+    const { logger, entries } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: ' legacy@example.com ',
+      password: 'legacy-password',
+    }));
+    queueLegacyLoginResponses(fetchMock);
+
+    await auth.ensureValidToken();
+    await auth.ensureValidToken();
+
+    expect(storage.load).toHaveBeenCalledTimes(1);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(auth.getAccessToken()).toBe('replacementAccess_4Pd7Ku');
+    expect(entries.join('\n')).not.toContain(STORAGE_LOAD_FAILURE);
+  });
+
+  it('keeps failed state loads fatal without legacy credentials', async () => {
+    const storage = createStorage(null);
+    storage.load.mockRejectedValueOnce(new Error(STORAGE_LOAD_FAILURE));
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+
+    await expect(auth.ensureValidToken()).rejects.toThrow(
+      'Blink authentication state could not be loaded.',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not report legacy load recovery success when replacement persistence fails', async () => {
+    const storageError = new Error(STORAGE_FAILURE);
+    const storage = createStorage(null, async () => { throw storageError; });
+    storage.load.mockRejectedValueOnce(new Error(STORAGE_LOAD_FAILURE));
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+    }));
+    queueLegacyLoginResponses(fetchMock);
+
+    await expect(auth.ensureValidToken()).rejects.toBe(storageError);
+    expect(auth.getAccessToken()).toBeNull();
+    expect(storage.save).toHaveBeenCalledTimes(1);
   });
 });

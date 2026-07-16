@@ -533,6 +533,192 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       await expect(auth.login()).rejects.toThrow('Failed to fetch signin page');
     });
 
+    it('keeps signin-page failure status and response headers out of errors and logs', async () => {
+      const fetchMock = mockFetch();
+      const { logger, entries } = createCapturingLogger();
+      const statusSecret = 'signinPageStatusSecret_1At9Xq';
+      const headerNameSecret = 'x-signin-page-header-secret';
+      const headerValueSecret = 'signinPageHeaderValueSecret_2Bu8Wp';
+
+      fetchMock
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 302,
+          statusText: 'Found',
+          headers: createMockHeaders(),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: statusSecret,
+          headers: createMockHeaders({ [headerNameSecret]: headerValueSecret }),
+        });
+
+      const auth = new BlinkAuth({ ...baseConfig, debugAuth: true, logger });
+      let caught: unknown;
+      try {
+        await auth.login();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe('Failed to fetch signin page (status 500).');
+      const diagnostics = `${(caught as Error).message}\n${entries.join('\n')}`;
+      for (const secret of [statusSecret, headerNameSecret, headerValueSecret]) {
+        expectSecretAbsent(diagnostics, secret);
+      }
+    });
+
+    it('keeps signin failure bodies and credential-flow secrets out of errors and logs', async () => {
+      const fetchMock = mockFetch();
+      const { logger, entries } = createCapturingLogger();
+      const password = 'passwordSecret_3Cv7Vo';
+      const csrf = 'csrfSecret_4Dw6Un';
+      const cookie = 'cookieSecret_5Ex5Tm';
+      const callback = 'callbackSecret_6Fy4Sl';
+      const code = 'codeSecret_7Gz3Rk';
+      const body = `signinBodySecret_8Ha2Qj ${callback} ${code}`;
+      const statusSecret = 'signinStatusSecret_9Ib1Pi';
+      let generatedState = '';
+      let auth!: BlinkAuth;
+
+      fetchMock
+        .mockImplementationOnce(async () => {
+          generatedState = auth.getOAuthSession()?.state ?? '';
+          return {
+            ok: true,
+            status: 302,
+            statusText: 'Found',
+            headers: createMockHeaders({ 'set-cookie': `session=${cookie}` }),
+          };
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: async () => `<input name="_token" value="${csrf}">`,
+          headers: createMockHeaders(),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          statusText: statusSecret,
+          text: async () => body,
+          headers: createMockHeaders(),
+        });
+
+      auth = new BlinkAuth({
+        ...baseConfig,
+        password,
+        debugAuth: true,
+        logger,
+      });
+      let caught: unknown;
+      try {
+        await auth.login();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe('Blink sign-in failed (status 401).');
+      expect(generatedState).not.toBe('');
+      const diagnostics = `${(caught as Error).message}\n${entries.join('\n')}`;
+      for (const secret of [
+        password,
+        csrf,
+        cookie,
+        callback,
+        code,
+        body,
+        statusSecret,
+        generatedState,
+      ]) {
+        expectSecretAbsent(diagnostics, secret);
+      }
+    });
+
+    it('keeps failed 2FA response bodies and MFA-flow secrets out of errors and logs', async () => {
+      const fetchMock = mockFetch();
+      const { logger, entries } = createCapturingLogger();
+      const password = 'twoFaPasswordSecret_0Jc9Oh';
+      const pin = 'twoFaPinSecret_1Kd8Ng';
+      const csrf = 'twoFaCsrfSecret_2Le7Mf';
+      const cookie = 'twoFaCookieSecret_3Mf6Le';
+      const callback = 'twoFaCallbackSecret_4Ng5Kd';
+      const code = 'twoFaCodeSecret_5Oh4Jc';
+      const body = `twoFaBodySecret_6Pi3Ib ${callback} ${code}`;
+      const statusSecret = 'twoFaStatusSecret_7Qj2Ha';
+      let generatedState = '';
+      let auth!: BlinkAuth;
+
+      fetchMock
+        .mockImplementationOnce(async () => {
+          generatedState = auth.getOAuthSession()?.state ?? '';
+          return {
+            ok: true,
+            status: 302,
+            statusText: 'Found',
+            headers: createMockHeaders({ 'set-cookie': `session=${cookie}` }),
+          };
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: async () => `<input name="_token" value="${csrf}">`,
+          headers: createMockHeaders(),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: async () => '<html>2FA verification code required</html>',
+          headers: createMockHeaders(),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          statusText: statusSecret,
+          text: async () => body,
+          headers: createMockHeaders(),
+        });
+
+      auth = new BlinkAuth({
+        ...baseConfig,
+        password,
+        debugAuth: true,
+        logger,
+      });
+      await expect(auth.login()).rejects.toBeInstanceOf(Blink2FARequiredError);
+
+      let caught: unknown;
+      try {
+        await auth.complete2FA(pin);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe('Blink 2FA verification failed (status 401).');
+      expect(generatedState).not.toBe('');
+      const diagnostics = `${(caught as Error).message}\n${entries.join('\n')}`;
+      for (const secret of [
+        password,
+        pin,
+        csrf,
+        cookie,
+        callback,
+        code,
+        body,
+        statusSecret,
+        generatedState,
+      ]) {
+        expectSecretAbsent(diagnostics, secret);
+      }
+    });
+
     it('throws error when CSRF token cannot be extracted', async () => {
       const fetchMock = mockFetch();
       const { logger, entries } = createCapturingLogger();
@@ -565,13 +751,14 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     it('redacts secrets from authentication error logs', () => {
       const error = new BlinkAuthenticationError('Auth failed', {
         status: 401,
-        statusText: 'Unauthorized',
+        statusText: 'statusTextSecret_8Rk1Gz',
         message: 'verification required',
         requires2FA: true,
         headers: {
           authorization: 'Bearer secret-token',
           cookie: 'session=abc123',
           'token-auth': 'token-auth-secret',
+          'x-headerNameSecret_9Sl0Fy': 'headerValueSecret_0Tm9Ex',
         },
         responseBody: {
           access_token: 'secret-token',
@@ -582,11 +769,16 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
 
       const log = error.toLogString();
 
-      expect(log).toContain('<redacted>');
+      expect(log).toContain('Status: 401');
       expect(log).not.toContain('secret-token');
       expect(log).not.toContain('refresh-secret');
       expect(log).not.toContain('654321');
       expect(log).not.toContain('session=abc123');
+      expect(log).not.toContain('statusTextSecret_8Rk1Gz');
+      expect(log).not.toContain('headerNameSecret_9Sl0Fy');
+      expect(log).not.toContain('headerValueSecret_0Tm9Ex');
+      expect(error.details.statusText).not.toContain('statusTextSecret_8Rk1Gz');
+      expect(JSON.stringify(error.details.headers)).not.toContain('headerValueSecret_0Tm9Ex');
     });
   });
 });
