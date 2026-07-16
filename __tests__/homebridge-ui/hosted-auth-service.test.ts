@@ -4,6 +4,7 @@ import {
   HostedAuthServiceError,
 } from '../../src/homebridge-ui/hosted-auth-service';
 import { BlinkHostedReauthenticationRequiredError } from '../../src/blink-api/auth';
+import * as authState from '../../src/homebridge-ui/auth-state';
 import {
   BlinkApi,
   BlinkRestVerificationRequiredError,
@@ -68,6 +69,7 @@ interface ApiDouble {
   beginHostedLogin: jest.Mock;
   completeHostedLogin: jest.Mock;
   login: jest.Mock;
+  getAccountInfo: jest.Mock;
   verifyClientVerificationPin: jest.Mock;
   verifyAccountVerificationPin: jest.Mock;
   getHomescreen: jest.Mock;
@@ -90,6 +92,14 @@ const createApiDouble = (result: BlinkHostedLoginResult = {
   }),
   completeHostedLogin: jest.fn().mockResolvedValue(result),
   login: jest.fn().mockResolvedValue(undefined),
+  getAccountInfo: jest.fn().mockResolvedValue({
+    account_id: 123,
+    client_id: 456,
+    email: 'persisted@example.com',
+    region: 'eu',
+    tier: 'prde',
+    trust_device_enabled: true,
+  }),
   verifyClientVerificationPin: jest.fn().mockResolvedValue({
     valid: true,
     message: 'verified',
@@ -439,6 +449,34 @@ describe('HostedAuthService', () => {
     expect(apiFactory).not.toHaveBeenCalled();
   });
 
+  it('treats externally replaced fresh durable state as authoritative over cached completion', async () => {
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+    await service.start({});
+    await service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    });
+    await writeOwnerOnlyState(authStoragePath, persistedState({
+      email: 'replacement@example.com',
+      accountId: 999,
+      tier: 'e001',
+    }));
+
+    await expect(service.status()).resolves.toEqual({
+      authenticated: true,
+      email: 'replacement@example.com',
+      accountId: 999,
+      tier: 'e001',
+      message: 'Blink tokens are stored.',
+    });
+  });
+
   it('omits invalid persisted email metadata from status and logs', async () => {
     const emailSecret = 'persistedEmailSentinel_7Lq2';
     await writeOwnerOnlyState(authStoragePath, persistedState({ email: emailSecret }));
@@ -484,6 +522,39 @@ describe('HostedAuthService', () => {
       hostedOAuthPendingPath: pendingStoragePath,
       legacyAuthStoragePath,
     }));
+    expect(api.login).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks durable expiry instead of returning a cached completion status', async () => {
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.login.mockImplementation(async () => {
+      await writeOwnerOnlyState(authStoragePath, persistedState({
+        tokenExpiry: '2099-07-16T14:00:00.000Z',
+      }));
+    });
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+    await service.start({});
+    await service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    });
+    await writeOwnerOnlyState(authStoragePath, persistedState({
+      tokenExpiry: '2026-07-15T00:00:00.000Z',
+    }));
+
+    await expect(service.status()).resolves.toEqual({
+      authenticated: true,
+      verified: true,
+      email: 'persisted@example.com',
+      accountId: 123,
+      tier: 'prde',
+      message: 'Blink tokens refreshed and connection verified.',
+    });
     expect(api.login).toHaveBeenCalledTimes(1);
   });
 
@@ -599,6 +670,70 @@ describe('HostedAuthService', () => {
     expect(entries.join('\n')).not.toContain(secret);
   });
 
+  it('keeps a newly persisted usable token authenticated when rediscovery then fails', async () => {
+    const secret = 'postRefreshDiscoverySentinel_6Vk9';
+    await writeOwnerOnlyState(authStoragePath, persistedState({
+      tokenExpiry: '2026-07-15T00:00:00.000Z',
+    }));
+    const { logger, entries } = createLogger();
+    const api = createApiDouble();
+    api.login.mockImplementation(async () => {
+      await writeOwnerOnlyState(authStoragePath, persistedState({
+        email: 'recovered@example.com',
+        accountId: 789,
+        tier: 'e001',
+        tokenExpiry: '2099-07-16T14:00:00.000Z',
+      }));
+      throw new Error(secret);
+    });
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    const status = await service.status();
+
+    expect(status).toEqual({
+      authenticated: true,
+      verified: false,
+      email: 'recovered@example.com',
+      accountId: 789,
+      tier: 'e001',
+      message: 'tokens stored; connection verification failed',
+    });
+    expect(containsSecret(status, secret)).toBe(false);
+    expect(entries.join('\n')).not.toContain(secret);
+  });
+
+  it('bounds a storage failure while checking for post-error durable recovery', async () => {
+    const secret = 'recoveryStorageFailureSentinel_7Wu2';
+    const loadSpy = jest.spyOn(authState, 'loadPersistedAuthStateFromFiles')
+      .mockResolvedValueOnce({
+        state: persistedState({ tokenExpiry: '2026-07-15T00:00:00.000Z' }),
+        requiresRefresh: true,
+      })
+      .mockRejectedValueOnce(new Error(secret));
+    const { logger, entries } = createLogger();
+    const api = createApiDouble();
+    api.login.mockRejectedValue(new Error('boundedRefreshFailure_8Xv3'));
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    try {
+      await expect(service.status()).resolves.toEqual({
+        authenticated: false,
+        message: 'Stored Blink authentication could not be refreshed. Sign in securely with Blink again.',
+      });
+      expect(entries.join('\n')).not.toContain(secret);
+    } finally {
+      loadSpy.mockRestore();
+    }
+  });
+
   it('uses the pending transaction hardware ID when completion resumes in a new child process', async () => {
     const { logger } = createLogger();
     const starter = new HostedAuthService({ storageRoot, logger });
@@ -689,6 +824,7 @@ describe('HostedAuthService', () => {
       message: 'Blink verification completed.',
     }));
     expect(api.verifyClientVerificationPin).toHaveBeenCalledWith('ABCD-1234', true, false);
+    expect(api.getAccountInfo).toHaveBeenCalledTimes(1);
     expect(api.login).toHaveBeenCalledTimes(1);
 
     await expect(service.verify({ type: '2fa', code: '123456' } as never)).rejects.toMatchObject({
@@ -700,6 +836,37 @@ describe('HostedAuthService', () => {
       code: '123456',
       password: 'credentialSentinel',
     } as never)).rejects.toMatchObject({ category: 'invalid_request' });
+  });
+
+  it('honors persisted account trust-device policy during client verification after restart', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.getAccountInfo.mockResolvedValue({
+      account_id: 123,
+      client_id: 456,
+      email: 'persisted@example.com',
+      region: 'eu',
+      tier: 'prde',
+      trust_device_enabled: false,
+    });
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    await service.verify({
+      type: 'client',
+      code: 'ABCD-1234',
+      trustDevice: false,
+    });
+
+    expect(api.getAccountInfo).toHaveBeenCalledTimes(1);
+    expect(api.verifyClientVerificationPin).toHaveBeenCalledWith('ABCD-1234', false, false);
+    expect(api.getAccountInfo.mock.invocationCallOrder[0]).toBeLessThan(
+      api.verifyClientVerificationPin.mock.invocationCallOrder[0],
+    );
   });
 
   it('keeps the same API authenticated when client verification advances to account verification', async () => {
@@ -766,7 +933,11 @@ describe('HostedAuthService', () => {
       hardwareId: 'saved-device-id',
       oauthClientId: 'android',
     }));
+    expect(api.getAccountInfo).toHaveBeenCalledTimes(1);
     expect(api.verifyAccountVerificationPin).toHaveBeenCalledWith('987654');
+    expect(api.getAccountInfo.mock.invocationCallOrder[0]).toBeLessThan(
+      api.verifyAccountVerificationPin.mock.invocationCallOrder[0],
+    );
     expect(api.login).toHaveBeenCalledTimes(1);
   });
 

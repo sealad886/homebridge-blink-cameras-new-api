@@ -35,6 +35,7 @@ const NO_STORED_AUTH_MESSAGE = 'No stored Blink authentication was found. Sign i
 const CLEAR_FAILED_MESSAGE = 'Blink authentication could not be fully cleared.';
 const REAUTHENTICATION_MESSAGE =
   'Blink sign-in has expired. Open the plugin settings and sign in securely with Blink again.';
+const CONNECTION_VERIFICATION_FAILED_MESSAGE = 'tokens stored; connection verification failed';
 
 export interface HostedAuthStartRequest {
   deviceId?: string;
@@ -199,10 +200,6 @@ export class HostedAuthService {
   }
 
   async status(): Promise<AuthStatus> {
-    if (this.lastStatus) {
-      return { ...this.lastStatus };
-    }
-
     const loaded = await loadPersistedAuthStateFromFiles(
       [this.authStoragePath, this.legacyAuthStoragePath],
       message => this.options.logger.debug(message),
@@ -248,6 +245,23 @@ export class HostedAuthService {
         return { authenticated: false, message: REAUTHENTICATION_MESSAGE };
       }
       this.options.logger.warn('[Hosted Auth] Stored authentication refresh failed.');
+      try {
+        const recovered = await loadPersistedAuthStateFromFiles(
+          [this.authStoragePath, this.legacyAuthStoragePath],
+          message => this.options.logger.debug(message),
+        );
+        if (recovered.state && !recovered.requiresRefresh) {
+          this.lastStatus = {
+            authenticated: true,
+            verified: false,
+            ...safeMetadata(recovered.state),
+            message: CONNECTION_VERIFICATION_FAILED_MESSAGE,
+          };
+          return { ...this.lastStatus };
+        }
+      } catch {
+        this.options.logger.warn('[Hosted Auth] Persisted authentication recovery check failed.');
+      }
       return {
         authenticated: false,
         message: 'Stored Blink authentication could not be refreshed. Sign in securely with Blink again.',
@@ -270,8 +284,13 @@ export class HostedAuthService {
     let context: PersistedApiContext | null = null;
     try {
       context = await this.getPersistedApiContext();
+      const accountInfo = await context.api.getAccountInfo();
       if (request.type === 'client') {
-        await context.api.verifyClientVerificationPin(code, true, request.trustDevice ?? true);
+        await context.api.verifyClientVerificationPin(
+          code,
+          accountInfo.trust_device_enabled ?? true,
+          request.trustDevice ?? true,
+        );
       } else {
         const response = await context.api.verifyAccountVerificationPin(code);
         if (!response.valid || response.require_new_pin) {
@@ -462,7 +481,7 @@ export class HostedAuthService {
       authenticated: true,
       verified: false,
       ...metadata,
-      message: 'tokens stored; connection verification failed',
+      message: CONNECTION_VERIFICATION_FAILED_MESSAGE,
     };
   }
 

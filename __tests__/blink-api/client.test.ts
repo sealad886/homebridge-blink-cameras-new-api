@@ -180,6 +180,151 @@ describe('BlinkApi', () => {
     jest.restoreAllMocks();
   });
 
+  const createRestartVerificationApi = () => {
+    const storage: BlinkAuthStorage = {
+      load: jest.fn().mockResolvedValue({
+        accessToken: 'restart-access-token',
+        refreshToken: 'restart-refresh-token',
+        tokenExpiry: '2099-07-16T14:00:00.000Z',
+        oauthClientId: 'android',
+        accountId: 123,
+        clientId: 456,
+        region: 'eu',
+        tier: 'prde',
+        email: 'persisted@example.com',
+        hardwareId: 'restart-hardware',
+      } satisfies BlinkAuthState),
+      save: jest.fn().mockResolvedValue(undefined),
+      clear: jest.fn().mockResolvedValue(undefined),
+    };
+    const api = new BlinkApi({
+      email: '',
+      password: '',
+      hardwareId: 'restart-hardware',
+      oauthClientId: 'android',
+      authStorage: storage,
+      tier: 'prde',
+      authLocked: true,
+    });
+    return { api, storage };
+  };
+
+  const jsonResponse = (body: unknown): Response => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: new Headers(),
+    json: async () => body,
+  } as Response);
+
+  it('hydrates persisted email before account PIN verification after restart', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        account_id: 123,
+        client_id: 456,
+        email: 'persisted@example.com',
+        region: 'eu',
+        tier: 'prde',
+        trust_device_enabled: false,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        valid: true,
+        token: null,
+        require_new_pin: false,
+        code: 200,
+        message: 'verified',
+      }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const { api, storage } = createRestartVerificationApi();
+
+      await api.getAccountInfo();
+      await api.verifyAccountVerificationPin('987654');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        'https://rest-prde.immedia-semi.com/api/v2/users/info',
+      );
+      expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'GET' }));
+      expect(fetchMock.mock.calls[1][0]).toBe(
+        'https://rest-prde.immedia-semi.com/api/v4/users/pin/verify',
+      );
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
+        pin: '987654',
+        email: 'persisted@example.com',
+        device_identifier: 'restart-hardware',
+        client_name: 'homebridge-blink',
+      });
+      expect(storage.load).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
+        'https://api.oauth.blink.com/oauth/token',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    {
+      trustDeviceEnabled: true,
+      expectedUrl: 'https://rest-prde.immedia-semi.com/api/v5/clients/456/client_verification/pin/verify',
+      expectedBody: { pin: 'ABCD-1234', trusted: false },
+    },
+    {
+      trustDeviceEnabled: false,
+      expectedUrl: 'https://rest-prde.immedia-semi.com/api/v4/clients/456/pin/verify',
+      expectedBody: {
+        pin: 'ABCD-1234',
+        email: 'persisted@example.com',
+        device_identifier: 'restart-hardware',
+        client_name: 'homebridge-blink',
+      },
+    },
+  ])('uses the persisted-account client PIN endpoint when trust_device_enabled=$trustDeviceEnabled', async ({
+    trustDeviceEnabled,
+    expectedUrl,
+    expectedBody,
+  }) => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        account_id: 123,
+        client_id: 456,
+        email: 'persisted@example.com',
+        region: 'eu',
+        tier: 'prde',
+        trust_device_enabled: trustDeviceEnabled,
+      }))
+      .mockResolvedValueOnce(jsonResponse({ verified: true }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const { api, storage } = createRestartVerificationApi();
+
+      const accountInfo = await api.getAccountInfo();
+      await api.verifyClientVerificationPin(
+        'ABCD-1234',
+        accountInfo.trust_device_enabled ?? true,
+        false,
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        'https://rest-prde.immedia-semi.com/api/v2/users/info',
+      );
+      expect(fetchMock.mock.calls[1][0]).toBe(expectedUrl);
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual(expectedBody);
+      expect(storage.load).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
+        'https://api.oauth.blink.com/oauth/token',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('logs in and stores account id', async () => {
     const { api, auth } = createApi();
     auth.getAccountId.mockReturnValue(99);
