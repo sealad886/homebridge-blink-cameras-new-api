@@ -7,6 +7,7 @@ import * as path from 'node:path';
 
 export interface PersistedAuthStateLoadResult {
   state: BlinkAuthState | null;
+  requiresRefresh?: boolean;
   message?: string;
 }
 
@@ -14,16 +15,48 @@ const isNodeError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
 
-const describeError = (error: unknown): string => {
-  return error instanceof Error ? error.message : 'Unknown error';
-};
-
 const describeUiFilePath = (filePath: string): string => {
   return path.basename(filePath) || 'auth state file';
 };
 
-const describeUiError = (error: unknown, filePath: string): string => {
-  return describeError(error).split(filePath).join(describeUiFilePath(filePath));
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
+const isOptionalString = (value: unknown): boolean => {
+  return value === undefined || value === null || typeof value === 'string';
+};
+
+const isPersistedAuthState = (value: unknown): value is BlinkAuthState => {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.accessToken === 'string'
+    && value.accessToken.trim().length > 0
+    && isOptionalString(value.refreshToken)
+    && isOptionalString(value.tokenAuth)
+    && isOptionalString(value.tokenExpiry)
+    && isOptionalString(value.oauthClientId)
+    && isOptionalString(value.email)
+    && isOptionalString(value.hardwareId)
+    && isOptionalString(value.region)
+    && isOptionalString(value.tier)
+    && (value.accountId === undefined || value.accountId === null || Number.isSafeInteger(value.accountId))
+    && (value.clientId === undefined || value.clientId === null || Number.isSafeInteger(value.clientId))
+    && isOptionalString(value.updatedAt);
+};
+
+const calculateEtaMs = (
+  startedAt: number,
+  processed: number,
+  total: number,
+  nowMs: () => number,
+): number => {
+  if (processed <= 0 || processed >= total) {
+    return 0;
+  }
+  const elapsed = Math.max(0, nowMs() - startedAt);
+  return Math.max(0, Math.round((elapsed / processed) * (total - processed)));
 };
 
 export async function loadPersistedAuthStateFromFiles(
@@ -32,35 +65,67 @@ export async function loadPersistedAuthStateFromFiles(
   nowMs = Date.now,
 ): Promise<PersistedAuthStateLoadResult> {
   let ignoredMessage: string | undefined;
+  const total = filePaths.length;
+  const startedAt = nowMs();
+  let processed = 0;
 
-  for (const filePath of filePaths) {
+  const logProgress = (filePath: string, index: number): void => {
+    const percent = total === 0 ? 100 : Math.round((index / total) * 100);
+    const etaMs = calculateEtaMs(startedAt, index, total, nowMs);
+    logDebug(
+      `Persisted Blink auth scan progress: ${index}/${total} (${percent}%) `
+      + `file=${describeUiFilePath(filePath)} ETA ${etaMs}ms`,
+    );
+  };
+
+  const complete = (): void => {
+    logDebug(
+      `Persisted Blink auth scan complete: ${processed}/${total} (100%) ETA 0ms`,
+    );
+  };
+
+  for (const [index, filePath] of filePaths.entries()) {
+    processed = index + 1;
+    logProgress(filePath, processed);
     const uiFilePath = describeUiFilePath(filePath);
     try {
-      const state = await readOwnerOnlyJsonFile<BlinkAuthState>(filePath);
-      if (!state?.accessToken) {
+      const value = await readOwnerOnlyJsonFile<unknown>(filePath);
+      if (!isRecord(value) || typeof value.accessToken !== 'string' || value.accessToken.trim().length === 0) {
         ignoredMessage = `Persisted Blink authentication was ignored: ${uiFilePath} does not contain an access token`;
-        logDebug(`Persisted Blink authentication was ignored: ${filePath} does not contain an access token`);
+        logDebug(`Persisted Blink authentication was ignored: ${uiFilePath} does not contain an access token`);
         continue;
       }
+      if (!isPersistedAuthState(value)) {
+        ignoredMessage = `Persisted Blink authentication was ignored: ${uiFilePath} contains invalid authentication data`;
+        logDebug(`Persisted Blink authentication was ignored: ${uiFilePath} contains invalid authentication data`);
+        continue;
+      }
+      const state = value;
       if (state.tokenExpiry) {
         const expiry = new Date(state.tokenExpiry);
         const expiryMs = expiry.getTime();
         if (Number.isNaN(expiryMs)) {
-          ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} has invalid expiry ${state.tokenExpiry}`;
+          ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} has invalid expiry`;
           logDebug(
-            `Persisted Blink authentication was ignored: saved token at ${filePath} has invalid expiry ${state.tokenExpiry}`,
+            `Persisted Blink authentication was ignored: saved token in ${uiFilePath} has invalid expiry`,
           );
           continue;
         }
         if (expiryMs <= nowMs()) {
-          ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} expired at ${state.tokenExpiry}`;
+          if (typeof state.refreshToken === 'string' && state.refreshToken.trim().length > 0) {
+            logDebug(`Persisted Blink authentication in ${uiFilePath} requires token refresh`);
+            complete();
+            return { state, requiresRefresh: true };
+          }
+          ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} is expired`;
           logDebug(
-            `Persisted Blink authentication was ignored: saved token at ${filePath} expired at ${state.tokenExpiry}`,
+            `Persisted Blink authentication was ignored: saved token in ${uiFilePath} is expired`,
           );
           continue;
         }
       }
-      logDebug(`Loaded valid persisted auth state from ${filePath}`);
+      logDebug(`Loaded valid persisted auth state from ${uiFilePath}`);
+      complete();
       return { state };
     } catch (error) {
       if (isNodeError(error, 'ENOENT')) {
@@ -68,14 +133,19 @@ export async function loadPersistedAuthStateFromFiles(
       }
 
       if (error instanceof SecureJsonFileSecurityError) {
-        const message = `Persisted Blink authentication was ignored: ${describeUiError(error, filePath)}`;
-        logDebug(`Persisted Blink authentication was ignored: ${error.message}`);
+        const issue = error.message.includes('symlink')
+          ? 'symlinked auth state file'
+          : 'unsafe auth state file';
+        const message = `Persisted Blink authentication was ignored: ${issue}: ${uiFilePath}`;
+        logDebug(message);
+        complete();
         return { state: null, message };
       }
 
-      ignoredMessage = `Persisted Blink authentication was ignored: failed to read ${uiFilePath}: ${describeUiError(error, filePath)}`;
-      logDebug(`Persisted Blink authentication was ignored: failed to read ${filePath}: ${describeError(error)}`);
+      ignoredMessage = `Persisted Blink authentication was ignored: failed to read ${uiFilePath}`;
+      logDebug(`Persisted Blink authentication was ignored: failed to read ${uiFilePath}`);
     }
   }
+  complete();
   return { state: null, message: ignoredMessage };
 }
