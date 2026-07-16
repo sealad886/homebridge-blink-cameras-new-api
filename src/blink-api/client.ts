@@ -105,10 +105,7 @@ export class BlinkApi {
       return {
         authenticated: true,
         verified: true,
-        accountId: this.accountId ?? undefined,
-        clientId: this.clientId ?? undefined,
-        email: this.config.email || undefined,
-        tier: this.config.tier,
+        ...this.buildHostedResultMetadata(),
         networkCount: homescreen.networks?.length ?? 0,
         cameraCount: homescreen.cameras?.length ?? 0,
       };
@@ -122,6 +119,22 @@ export class BlinkApi {
     await this.auth.cancelHostedLogin();
   }
 
+  private buildHostedResultMetadata(): Partial<Pick<
+    BlinkHostedLoginResult,
+    'accountId' | 'clientId' | 'email' | 'tier'
+  >> {
+    const metadata: Partial<Pick<
+      BlinkHostedLoginResult,
+      'accountId' | 'clientId' | 'email' | 'tier'
+    >> = {};
+    if (this.accountId !== null) metadata.accountId = this.accountId;
+    if (this.clientId !== null) metadata.clientId = this.clientId;
+    if (this.config.email) metadata.email = this.config.email;
+    const tier = this.auth.getTier();
+    if (tier) metadata.tier = tier;
+    return metadata;
+  }
+
   private buildUnverifiedHostedResult(error: unknown): BlinkHostedLoginResult {
     return {
       authenticated: true,
@@ -129,10 +142,7 @@ export class BlinkApi {
       verificationRequirement: error instanceof BlinkRestVerificationRequiredError
         ? error.type
         : 'connection',
-      accountId: this.accountId ?? undefined,
-      clientId: this.clientId ?? undefined,
-      email: this.config.email || undefined,
-      tier: this.config.tier,
+      ...this.buildHostedResultMetadata(),
       networkCount: 0,
       cameraCount: 0,
     };
@@ -208,6 +218,7 @@ export class BlinkApi {
   } = {}): Promise<void> {
     this.logDebug('syncAccountInfoAndVerify → syncing tier info');
     const tierInfo = await this.syncTierInfo(options.useProductionBootstrap ?? false);
+    let discoveredTier = tierInfo?.tier ? normalizeBlinkTier(tierInfo.tier) : null;
     if (tierInfo?.account_id) {
       this.accountId = tierInfo.account_id;
     }
@@ -230,10 +241,15 @@ export class BlinkApi {
     if (accountInfo) {
       this.accountId = accountInfo.account_id ?? this.accountId;
       this.clientId = accountInfo.client_id ?? this.clientId;
-      if (!tierInfo?.tier && accountInfo.tier) {
+      if (!discoveredTier && accountInfo.tier) {
         try {
-          this.applyTier(normalizeBlinkTier(accountInfo.tier) ?? 'prod');
+          discoveredTier = normalizeBlinkTier(accountInfo.tier);
+          if (!discoveredTier) {
+            throw new Error('Invalid Blink account tier');
+          }
+          this.applyTier(discoveredTier);
         } catch {
+          discoveredTier = null;
           this.config.logger?.warn(
             'Blink account info returned an invalid tier. Continuing with the bootstrap tier.',
           );
@@ -245,7 +261,8 @@ export class BlinkApi {
       accountId: this.accountId,
       clientId: this.clientId,
       region: accountInfo?.region,
-      tier: this.config.tier ?? 'prod',
+      tier: discoveredTier
+        ?? (options.useProductionBootstrap ? undefined : this.config.tier ?? 'prod'),
       email: accountInfo?.email,
     });
 

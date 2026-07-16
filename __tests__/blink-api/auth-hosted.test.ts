@@ -158,6 +158,14 @@ const validTokenBody = (overrides: Record<string, unknown> = {}): Record<string,
   ...overrides,
 });
 
+const exactHostedTokenResponse = (): Response => tokenResponse({
+  access_token: ACCESS_TOKEN,
+  refresh_token: REFRESH_TOKEN,
+  expires_in: 14_400,
+  token_type: 'Bearer',
+  scope: 'client',
+});
+
 const responseHeaders = (values: Record<string, string> = {}): Headers => {
   const headers = new Headers(values);
   (headers as unknown as { getSetCookie: () => string[] }).getSetCookie = () => (
@@ -292,7 +300,7 @@ describe('BlinkAuth hosted OAuth', () => {
     const consumeSpy = jest.spyOn(HostedOAuthCoordinator.prototype, 'consumeCallback');
     const auth = new BlinkAuth(makeConfig(storage, logger));
     const { pending, callbackUrl } = await startHostedLogin(auth);
-    fetchMock.mockResolvedValueOnce(successfulTokenResponse());
+    fetchMock.mockResolvedValueOnce(exactHostedTokenResponse());
 
     let settled = false;
     const completion = auth.completeHostedLogin(pending.flowId, callbackUrl);
@@ -342,10 +350,11 @@ describe('BlinkAuth hosted OAuth', () => {
       refreshToken: REFRESH_TOKEN,
       tokenAuth: null,
       oauthClientId: 'android',
-      accountId: 42,
-      clientId: 100,
-      region: 'eu',
-      tier: 'prde',
+      accountId: null,
+      clientId: null,
+      region: null,
+      tier: null,
+      email: null,
     }));
     expect(auth.getAuthHeaders()).toEqual({ Authorization: `Bearer ${ACCESS_TOKEN}` });
     expectSecretsAbsent(entries.join('\n'), [
@@ -357,7 +366,8 @@ describe('BlinkAuth hosted OAuth', () => {
     ]);
   });
 
-  it('rejects completion and restores all nine prior fields when persistence fails', async () => {
+  it('restores the complete prior session when the first hosted token save fails', async () => {
+    const previousEmail = 'prior-account@example.com';
     const previousState: BlinkAuthState = {
       accessToken: 'priorAccess_8Gw3Ts',
       refreshToken: 'priorRefresh_9Hx2Sr',
@@ -368,16 +378,18 @@ describe('BlinkAuth hosted OAuth', () => {
       clientId: 22,
       region: 'us',
       tier: 'prod',
+      email: previousEmail,
     };
     const storageError = new Error(STORAGE_FAILURE);
-    const storage = createStorage(previousState, async () => {
+    const storage = createStorage(previousState, async (_state) => {
       throw storageError;
     });
     const { logger, entries } = createLogger();
     const consumeSpy = jest.spyOn(HostedOAuthCoordinator.prototype, 'consumeCallback');
-    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const runtimeConfig = makeConfig(storage, logger, { email: previousEmail });
+    const auth = new BlinkAuth(runtimeConfig);
     const { pending, callbackUrl } = await startHostedLogin(auth);
-    fetchMock.mockResolvedValueOnce(successfulTokenResponse());
+    fetchMock.mockResolvedValueOnce(exactHostedTokenResponse());
 
     await expect(auth.completeHostedLogin(pending.flowId, callbackUrl)).rejects.toBe(storageError);
 
@@ -397,6 +409,16 @@ describe('BlinkAuth hosted OAuth', () => {
       region: previousState.region,
       tier: previousState.tier,
     });
+    expect(runtimeConfig.email).toBe(previousEmail);
+    expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: ACCESS_TOKEN,
+      refreshToken: REFRESH_TOKEN,
+      accountId: null,
+      clientId: null,
+      region: null,
+      tier: null,
+      email: null,
+    }));
     expect(entries.filter((entry) => entry.includes('persist auth state'))).toEqual([
       '[Auth] Failed to persist auth state.',
     ]);
@@ -431,6 +453,7 @@ describe('BlinkAuth hosted OAuth', () => {
   });
 
   it('uses the exact Android refresh form and omits TOKEN-AUTH from hosted bearer headers', async () => {
+    const currentEmail = 'current-account@example.com';
     const storage = createStorage({
       accessToken: 'oldHostedAccess_1Ka9Pz',
       refreshToken: REFRESH_TOKEN,
@@ -441,10 +464,11 @@ describe('BlinkAuth hosted OAuth', () => {
       clientId: 100,
       region: 'eu',
       tier: 'prde',
+      email: currentEmail,
     });
     const { logger, entries } = createLogger();
-    const auth = new BlinkAuth(makeConfig(storage, logger));
-    fetchMock.mockResolvedValueOnce(successfulTokenResponse());
+    const auth = new BlinkAuth(makeConfig(storage, logger, { email: currentEmail }));
+    fetchMock.mockResolvedValueOnce(exactHostedTokenResponse());
 
     await auth.refreshTokens();
 
@@ -468,9 +492,55 @@ describe('BlinkAuth hosted OAuth', () => {
     expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({
       oauthClientId: 'android',
       tokenAuth: null,
+      accountId: 42,
+      clientId: 100,
+      region: 'eu',
+      tier: 'prde',
+      email: currentEmail,
     }));
     expect(auth.getAuthHeaders()).toEqual({ Authorization: `Bearer ${ACCESS_TOKEN}` });
     expectSecretsAbsent(entries.join('\n'), [ACCESS_TOKEN, REFRESH_TOKEN, TOKEN_AUTH]);
+  });
+
+  it('clears explicitly null account metadata while preserving omitted properties', async () => {
+    const currentEmail = 'current-account@example.com';
+    const storage = createStorage({
+      accessToken: 'currentAccess_1Xg8Qr',
+      refreshToken: 'currentRefresh_2Yh7Ps',
+      tokenExpiry: '2026-12-31T00:00:00.000Z',
+      oauthClientId: 'android',
+      accountId: 42,
+      clientId: 100,
+      region: 'eu',
+      tier: 'prde',
+      email: currentEmail,
+    });
+    const { logger } = createLogger();
+    const runtimeConfig = makeConfig(storage, logger, { email: currentEmail });
+    const auth = new BlinkAuth(runtimeConfig);
+    await auth.getPersistedTier();
+
+    auth.setAccountMetadata({ accountId: null, email: null });
+
+    expect(auth.getAccountId()).toBeNull();
+    expect(auth.getClientId()).toBe(100);
+    expect(auth.getRegion()).toBe('eu');
+    expect(auth.getTier()).toBe('prde');
+    expect(runtimeConfig.email).toBe('');
+
+    auth.setAccountMetadata({ clientId: null, region: null, tier: null });
+    await auth.persistCurrentState();
+
+    expect(auth.getClientId()).toBeNull();
+    expect(auth.getRegion()).toBeNull();
+    expect(auth.getTier()).toBeNull();
+    expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: null,
+      clientId: null,
+      region: null,
+      tier: null,
+      email: null,
+    }));
   });
 
   it('maps hosted refresh persistence failure to fixed reauthentication and restores memory', async () => {

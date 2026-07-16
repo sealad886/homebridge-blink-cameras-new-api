@@ -67,6 +67,7 @@ interface CapturedTokenState {
   clientId: number | null;
   region: string | null;
   tier: string | null;
+  email: string;
 }
 
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
@@ -532,7 +533,7 @@ export class BlinkAuth {
       oauthClientId: this.oauthClientId,
       region: this.region,
       tier: this.tier,
-      email: this.config.email ?? null,
+      email: this.config.email || null,
       hardwareId: this.config.hardwareId ?? null,
       updatedAt: new Date().toISOString(),
     };
@@ -608,7 +609,9 @@ export class BlinkAuth {
       this.log.warn('[Auth] Blink hosted token exchange failed.');
       throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
     }
-    await this.captureTokensUnlocked(body, null, request.oauthClientId);
+    await this.captureTokensUnlocked(body, null, request.oauthClientId, {
+      newAccountBoundary: true,
+    });
   }
 
   /**
@@ -1508,13 +1511,11 @@ export class BlinkAuth {
     tier?: string | null;
     email?: string | null;
   }): void {
-    this.accountId = metadata.accountId ?? this.accountId;
-    this.clientId = metadata.clientId ?? this.clientId;
-    this.region = metadata.region ?? this.region;
-    this.tier = metadata.tier ?? this.tier;
-    if (metadata.email) {
-      this.config.email = metadata.email;
-    }
+    if (metadata.accountId !== undefined) this.accountId = metadata.accountId;
+    if (metadata.clientId !== undefined) this.clientId = metadata.clientId;
+    if (metadata.region !== undefined) this.region = metadata.region;
+    if (metadata.tier !== undefined) this.tier = metadata.tier;
+    if (metadata.email !== undefined) this.config.email = metadata.email ?? '';
   }
 
   /**
@@ -1587,6 +1588,7 @@ export class BlinkAuth {
       clientId: this.clientId,
       region: this.region,
       tier: this.tier,
+      email: this.config.email,
     };
   }
 
@@ -1600,12 +1602,14 @@ export class BlinkAuth {
     this.clientId = snapshot.clientId;
     this.region = snapshot.region;
     this.tier = snapshot.tier;
+    this.config.email = snapshot.email;
   }
 
   private async captureTokensUnlocked(
     body: BlinkOAuthV2TokenResponse,
     tokenAuthHeader: string | null,
     oauthClientId?: BlinkOAuthClientId,
+    options: { newAccountBoundary?: boolean } = {},
   ): Promise<void> {
     const previous = this.snapshotTokenState();
     this.accessToken = body.access_token;
@@ -1613,10 +1617,18 @@ export class BlinkAuth {
     this.tokenExpiry = new Date(Date.now() + body.expires_in * 1000);
     this.tokenAuth = tokenAuthHeader;
     this.oauthClientId = oauthClientId ?? this.oauthClientId ?? 'ios';
-    this.accountId = body.account_id ?? this.accountId;
-    this.clientId = body.client_id ?? this.clientId;
-    this.region = body.region ?? this.region;
-    this.tier = body.tier ?? this.tier;
+    if (options.newAccountBoundary) {
+      this.accountId = null;
+      this.clientId = null;
+      this.region = null;
+      this.tier = null;
+      this.config.email = '';
+    } else {
+      this.accountId = body.account_id ?? this.accountId;
+      this.clientId = body.client_id ?? this.clientId;
+      this.region = body.region ?? this.region;
+      this.tier = body.tier ?? this.tier;
+    }
 
     try {
       await this.persistCurrentStateUnlocked();

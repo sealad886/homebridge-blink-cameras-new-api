@@ -1,6 +1,17 @@
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import { BlinkApi } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
-import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
+import { readOwnerOnlyJsonFile } from '../../src/blink-api/secure-json-file';
+import {
+  BlinkAuthState,
+  BlinkAuthStorage,
+  BlinkConfig,
+  BlinkHostedOAuthTransaction,
+  BlinkLogger,
+} from '../../src/types';
 
 type RoutedHttpDouble = {
   get: jest.Mock;
@@ -147,7 +158,15 @@ describe('BlinkApi', () => {
     await internals.auth.ensureValidToken();
     const hostedCompletion = jest
       .spyOn(internals.auth, 'completeHostedLogin')
-      .mockResolvedValue(undefined);
+      .mockImplementation(async () => {
+        internals.auth.setAccountMetadata({
+          accountId: null,
+          clientId: null,
+          region: null,
+          tier: null,
+          email: null,
+        });
+      });
     return {
       api: api as unknown as HostedBlinkApi,
       internals,
@@ -212,6 +231,141 @@ describe('BlinkApi', () => {
 
     expect(auth.beginHostedLogin).toHaveBeenCalledTimes(1);
     expect(auth.cancelHostedLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not pair a new hosted account token set with stale account metadata when discovery fails', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-client-hosted-boundary-'));
+    const pendingPath = path.join(directory, '.blink-auth-pending.json');
+    const originalFetch = globalThis.fetch;
+    const oldEmail = 'old-account@example.com';
+    const oldTier = 'prde';
+    const newAccessToken = 'newHostedAccess_1Ae8Qz';
+    const newRefreshToken = 'newHostedRefresh_2Bf7Py';
+    const authorizationCode = 'newHostedCode_3Cg6Ox';
+    const tierFailure = 'tierFailureSentinel_4Dh5Nw';
+    const accountFailure = 'accountFailureSentinel_5Ei4Mv';
+    const savedStates: BlinkAuthState[] = [];
+    const logEntries: string[] = [];
+    const recordLog = (message: string, ...parameters: unknown[]): void => {
+      logEntries.push([message, ...parameters.map(String)].join(' '));
+    };
+    const logger: BlinkLogger = {
+      debug: recordLog,
+      info: recordLog,
+      warn: recordLog,
+      error: recordLog,
+    };
+    const seededState: BlinkAuthState = {
+      accessToken: 'oldHostedAccess_6Fj3Lu',
+      refreshToken: 'oldHostedRefresh_7Gk2Kt',
+      tokenExpiry: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      oauthClientId: 'android',
+      accountId: 111,
+      clientId: 222,
+      region: 'us',
+      tier: oldTier,
+      email: oldEmail,
+      hardwareId: 'hosted-hardware-id',
+    };
+    const storage: BlinkAuthStorage = {
+      load: jest.fn(async () => ({ ...seededState })),
+      save: jest.fn(async (state: BlinkAuthState) => {
+        savedStates.push({ ...state });
+      }),
+      clear: jest.fn(async () => undefined),
+    };
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
+        json: async () => ({
+          access_token: newAccessToken,
+          refresh_token: newRefreshToken,
+          token_type: 'Bearer',
+          expires_in: 14_400,
+          scope: 'client',
+        }),
+      } as Response)
+      .mockRejectedValueOnce(new Error(tierFailure))
+      .mockRejectedValueOnce(new Error(accountFailure));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const api = new BlinkApi({
+        email: oldEmail,
+        password: '',
+        hardwareId: 'hosted-hardware-id',
+        oauthClientId: 'android',
+        authStorage: storage,
+        hostedOAuthPendingPath: pendingPath,
+        tier: oldTier,
+        debugAuth: true,
+        logger,
+      });
+      const start = await api.beginHostedLogin();
+      const pending = await readOwnerOnlyJsonFile<BlinkHostedOAuthTransaction>(pendingPath);
+      const callback = new URL('https://applinks.blink.com/signin/callback');
+      callback.searchParams.set('state', pending.state);
+      callback.searchParams.set('code', authorizationCode);
+
+      const result = await api.completeHostedLogin(start.flowId, callback.toString());
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const [tokenUrl, tokenInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(tokenUrl).toBe('https://api.oauth.blink.com/oauth/token');
+      expect(tokenInit.method).toBe('POST');
+      expect(Object.fromEntries(new URLSearchParams(tokenInit.body as string))).toEqual({
+        grant_type: 'authorization_code',
+        redirect_uri: 'https://applinks.blink.com/signin/callback',
+        code: authorizationCode,
+        code_verifier: pending.codeVerifier,
+        client_id: 'android',
+      });
+      expect(fetchMock.mock.calls.slice(1).map(([url]) => url)).toEqual([
+        'https://rest-prod.immedia-semi.com/api/v1/users/tier_info',
+        'https://rest-prod.immedia-semi.com/api/v2/users/info',
+      ]);
+      expect(result).toEqual({
+        authenticated: true,
+        verified: false,
+        verificationRequirement: 'connection',
+        networkCount: 0,
+        cameraCount: 0,
+      });
+
+      const newTokenSaves = savedStates.filter((state) => (
+        state.accessToken === newAccessToken && state.refreshToken === newRefreshToken
+      ));
+      expect(newTokenSaves).toHaveLength(2);
+      for (const state of newTokenSaves) {
+        expect(state).toEqual(expect.objectContaining({
+          accountId: null,
+          clientId: null,
+          region: null,
+          tier: null,
+          email: null,
+        }));
+      }
+
+      const diagnostics = `${JSON.stringify(result)}\n${logEntries.join('\n')}`;
+      for (const secret of [
+        callback.toString(),
+        authorizationCode,
+        pending.state,
+        pending.codeVerifier,
+        newAccessToken,
+        newRefreshToken,
+        tierFailure,
+        accountFailure,
+      ]) {
+        expect(diagnostics).not.toContain(secret);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('discovers the tier before account and homescreen calls, then durably persists metadata', async () => {
@@ -444,11 +598,73 @@ describe('BlinkApi', () => {
 
     const result = await api.completeHostedLogin('opaque-flow', 'https://callback.invalid/redacted');
 
-    expect(result.verificationRequirement).toBe('connection');
-    expect(result.verified).toBe(false);
+    expect(result).toEqual({
+      authenticated: true,
+      verified: false,
+      verificationRequirement: 'connection',
+      accountId: 42,
+      tier: 'prde',
+      networkCount: 0,
+      cameraCount: 0,
+    });
     expect(JSON.stringify(result)).not.toContain(upstreamSecret);
     expect(internals.sharedHttp.get).not.toHaveBeenCalled();
     expect(savedStates.at(-1)?.accessToken).toBe('durable-access-token');
+  });
+
+  it('does not report the bootstrap tier as discovered account metadata', async () => {
+    const { api, internals, events, savedStates } = await createSeededHostedApi();
+    internals.http = createRoutedHttp(
+      'https://rest-prod.immedia-semi.com/api/',
+      events,
+      async (path) => {
+        if (path === 'v1/users/tier_info') {
+          throw new Error('temporaryTierFailure_3Cv7Xt');
+        }
+        return {
+          account_id: 42,
+          client_id: 99,
+          email: 'hosted@example.com',
+          region: 'eu',
+        };
+      },
+    );
+    internals.sharedHttp = createRoutedHttp(
+      'https://rest-prod.immedia-semi.com/api/',
+      events,
+      async () => ({
+        account: { account_id: 42 },
+        networks: [],
+        cameras: [],
+        doorbells: [],
+        owls: [],
+        sync_modules: [],
+      }),
+    );
+    internals.sharedRootHttp = createRoutedHttp(
+      'https://rest-prod.immedia-semi.com/',
+      events,
+      async () => ({}),
+    );
+
+    const result = await api.completeHostedLogin('opaque-flow', 'https://callback.invalid/redacted');
+
+    expect(result).toEqual({
+      authenticated: true,
+      verified: true,
+      accountId: 42,
+      clientId: 99,
+      email: 'hosted@example.com',
+      networkCount: 0,
+      cameraCount: 0,
+    });
+    expect(savedStates.at(-1)).toEqual(expect.objectContaining({
+      accountId: 42,
+      clientId: 99,
+      region: 'eu',
+      tier: null,
+      email: 'hosted@example.com',
+    }));
   });
 
   it('recovers through BlinkApi.login when persisted tier loading fails but credentials exist', async () => {
