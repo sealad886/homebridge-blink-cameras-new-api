@@ -730,7 +730,9 @@
   // Handle the request response directly as events may arrive before listeners
   // are ready in some Homebridge UI environments.
   function handleAuthResponse(response) {
-    if (response.authenticated) {
+    if (!response) {
+      showError('Received an empty response from the server.');
+    } else if (response.authenticated) {
       handleAuthSuccess(response);
     } else if (response.requires2FA) {
       handleVerificationRequired('2fa', response);
@@ -738,6 +740,8 @@
       handleVerificationRequired('client', response);
     } else if (response.requiresAccountVerification) {
       handleVerificationRequired('account', response);
+    } else {
+      showError(response.message || 'Authentication failed. Please try again.');
     }
   }
 
