@@ -186,6 +186,18 @@ describe('schema layout integrity', () => {
     expect(hits).toEqual([]);
   });
 
+  it('exposes IMMIS TLS verification as secure-by-default streaming config', () => {
+    const schema = readJson<SchemaDocument>('config.schema.json');
+    const properties = schema.schema?.properties ?? {};
+    const verifyImmisTls = properties.verifyImmisTls as Record<string, unknown>;
+
+    expect(verifyImmisTls.type).toBe('boolean');
+    expect(verifyImmisTls.default).toBe(true);
+
+    const layoutReferences = findLayoutKeyReferences(schema.layout ?? [], new Set(['verifyImmisTls']));
+    expect(layoutReferences).toEqual(['verifyImmisTls']);
+  });
+
   it('uses array-based device customization instead of object additionalProperties', () => {
     const schema = readJson<SchemaDocument>('config.schema.json');
     const properties = schema.schema?.properties ?? {};

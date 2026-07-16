@@ -16,6 +16,7 @@
 import { Buffer } from 'node:buffer';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
+import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -38,6 +39,8 @@ export interface ImmisProxyConfig {
   debug?: boolean;
   /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
   saveStreamPath?: string;
+  /** Verify the upstream IMMIS TLS certificate and hostname. */
+  verifyTls?: boolean;
   /**
    * Promise that resolves when the Blink command is ready.
    * The proxy will wait for this before connecting to the immis server.
@@ -84,12 +87,21 @@ const LOAS_SYNCWORD_VALUE = 0xe0;
 const LOAS_HEADER_LENGTH = 3;
 const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
 const IDLE_SHUTDOWN_GRACE_MS = 2000;
+const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
+const NO_FOLLOW_FLAG = fs.constants.O_NOFOLLOW ?? 0;
+const DIRECTORY_OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0) | NO_FOLLOW_FLAG;
+type FileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
+type FsStats = Awaited<ReturnType<typeof fs.promises.lstat>>;
 
 export interface LatmParseResult {
   frames: Buffer[];
   remainder: Buffer;
   discardedBytes: number;
 }
+
+const isSameFsEntry = (left: FsStats, right: FsStats): boolean => {
+  return left.dev === right.dev && left.ino === right.ino;
+};
 
 /**
  * Extract LOAS/LATM frames from a buffer.
@@ -182,6 +194,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       saveStreamPath: config.saveStreamPath,
       debug: config.debug,
       waitForReady: config.waitForReady,
+      verifyTls: config.verifyTls ?? true,
     };
 
     // If a waitForReady promise is provided, set up the ready state handler
@@ -239,23 +252,25 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       });
 
       this.server.listen(this.config.port, this.config.host, () => {
-        const address = this.server!.address();
-        if (!address || typeof address === 'string') {
-          reject(new Error('Failed to get server address'));
-          return;
-        }
+        void (async () => {
+          const address = this.server!.address();
+          if (!address || typeof address === 'string') {
+            reject(new Error('Failed to get server address'));
+            return;
+          }
 
-        this.isRunning = true;
-        const url = `tcp://${address.address}:${address.port}`;
-        this.log(`Proxy server listening on ${url}`);
+          this.isRunning = true;
+          const url = `tcp://${address.address}:${address.port}`;
+          this.log(`Proxy server listening on ${url}`);
 
-        // Create stream recording file if saveStreamPath is configured
-        if (this.config.saveStreamPath) {
-          this.startStreamRecording();
-        }
+          // Create stream recording file if saveStreamPath is configured
+          if (this.config.saveStreamPath) {
+            await this.startStreamRecording();
+          }
 
-        this.emit('ready', url);
-        resolve(url);
+          this.emit('ready', url);
+          resolve(url);
+        })().catch(reject);
       });
     });
   }
@@ -263,20 +278,77 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   /**
    * Start recording the stream to a file
    */
-  private startStreamRecording(): void {
+  private async startStreamRecording(): Promise<void> {
     if (!this.config.saveStreamPath) {
       return;
     }
 
+    let recordingDirHandle: FileHandle | null = null;
     try {
-      // Create directory if it doesn't exist
-      fs.mkdirSync(this.config.saveStreamPath, { recursive: true });
+      const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
+      await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
+      const recordingDirPathStats = await fs.promises.lstat(recordingDir);
+      if (recordingDirPathStats.isSymbolicLink() || !recordingDirPathStats.isDirectory()) {
+        throw new Error('Debug stream recording directory must be a real directory');
+      }
+      recordingDirHandle = await fs.promises.open(recordingDir, DIRECTORY_OPEN_FLAGS);
+      const recordingDirStats = await recordingDirHandle.stat();
+      if (!recordingDirStats.isDirectory() || !isSameFsEntry(recordingDirPathStats, recordingDirStats)) {
+        throw new Error('Debug stream recording directory changed while opening');
+      }
+      try {
+        await recordingDirHandle.chmod(0o700);
+      } catch (error) {
+        this.log(`Failed to set debug recording directory permissions: ${error}`);
+      }
 
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = path.join(this.config.saveStreamPath, `blink-stream-${this.config.serial}-${timestamp}.ts`);
+      const serialHash = createHash('sha256').update(this.config.serial).digest('hex').slice(0, 16);
+      const randomSuffix = randomBytes(8).toString('hex');
+      const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}-${randomSuffix}.ts`);
 
-      this.streamFile = fs.createWriteStream(filename);
+      let recordingFd: number | null = null;
+      let recordingFileCreated = false;
+      try {
+        recordingFd = await new Promise<number>((resolve, reject) => {
+          fs.open(
+            filename,
+            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW_FLAG,
+            0o600,
+            (error, fd) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve(fd);
+            },
+          );
+        });
+        recordingFileCreated = true;
+        const currentRecordingDirStats = await fs.promises.lstat(recordingDir);
+        if (
+          currentRecordingDirStats.isSymbolicLink() ||
+          !currentRecordingDirStats.isDirectory() ||
+          currentRecordingDirStats.dev !== recordingDirStats.dev ||
+          currentRecordingDirStats.ino !== recordingDirStats.ino
+        ) {
+          throw new Error('Debug stream recording directory changed while opening recording file');
+        }
+
+        this.streamFile = fs.createWriteStream(filename, { fd: recordingFd, autoClose: true });
+        Object.defineProperty(this.streamFile, 'path', { value: filename });
+        recordingFd = null;
+      } catch (error) {
+        const fdToClose = recordingFd;
+        if (fdToClose !== null) {
+          await new Promise<void>((resolve) => fs.close(fdToClose, () => resolve()));
+        }
+        if (recordingFileCreated) {
+          await fs.promises.unlink(filename).catch(() => undefined);
+        }
+        throw error;
+      }
       this.streamBytesWritten = 0;
 
       this.log(`Recording stream to: ${filename}`);
@@ -287,6 +359,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       });
     } catch (error) {
       this.log(`Failed to start stream recording: ${error}`);
+    } finally {
+      await recordingDirHandle?.close().catch(() => undefined);
     }
   }
 
@@ -409,7 +483,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       {
         host: hostname,
         port: port,
-        rejectUnauthorized: false, // Blink uses self-signed certs
+        rejectUnauthorized: this.config.verifyTls,
+        servername: hostname,
+        minVersion: 'TLSv1.2',
       },
       () => {
         this.log('TLS connection established');
@@ -483,7 +559,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     // Client ID field (4 bytes, big-endian)
     const clientIdStr = this.parsedUrl.searchParams.get('client_id') ?? '0';
     const clientId = parseInt(clientIdStr, 10);
-    this.debug(`Client ID: ${clientId}`);
+    this.debug('Client ID: <redacted>');
     header.writeUInt32BE(clientId, offset);
     offset += 4;
 
@@ -506,7 +582,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     const fullConnId = pathParts[pathParts.length - 1]?.split('__')[0] ?? '';
     const connIdBytes = Buffer.alloc(CONN_ID_MAX_LENGTH);
     connIdBytes.write(fullConnId.substring(0, CONN_ID_MAX_LENGTH), 'utf-8');
-    this.debug(`Connection ID: ${fullConnId.substring(0, CONN_ID_MAX_LENGTH)}`);
+    this.debug('Connection ID: <redacted>');
     connIdBytes.copy(header, offset);
     offset += CONN_ID_MAX_LENGTH;
 

@@ -54,3 +54,5 @@
 # - github.repo
 
 auto-start-daemon: true
+
+sync.remote: "git+https://github.com/sealad886/homebridge-blink-cameras-new-api.git"

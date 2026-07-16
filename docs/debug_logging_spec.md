@@ -51,8 +51,9 @@ Recommended redaction pattern: show first 3–4 chars and last 3–4 chars, othe
 
 ## Streaming Diagnostics
 
-- `ffmpegDebug` should toggle FFmpeg loglevel (`debug` vs `error`).
-- Streaming logs must not include raw stream tokens or device serials unless redacted.
+- `ffmpegDebug` should toggle FFmpeg loglevel (`debug` vs `info`).
+- Streaming logs must not include raw stream tokens, liveview URLs, SRTP keys, or device serials unless redacted.
+- Debug stream recordings must avoid raw camera serials in filenames and use owner-only file permissions.
 
 ## EventStream Diagnostics (If Implemented)
 

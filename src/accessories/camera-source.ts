@@ -56,6 +56,7 @@ export interface BlinkCameraStreamingConfig {
     maxBitrate?: number;
     encoder: VideoEncoderPreference;
   };
+  verifyImmisTls: boolean;
   /** Path to save debug stream recordings (MPEG-TS files) */
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds (0 = always request fresh, default 60) */
@@ -73,6 +74,7 @@ export type BlinkCameraStreamingConfigInput = Omit<
 };
 
 const SOFTWARE_VIDEO_ENCODER: VideoEncoderPreference = 'libx264';
+const MAX_FFMPEG_STDERR_BUFFER_CHARS = 64 * 1024;
 
 const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
@@ -89,6 +91,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   video: {
     encoder: 'auto',
   },
+  verifyImmisTls: true,
   snapshotCacheTTL: 60,
   persistSnapshotCache: false,
 };
@@ -108,6 +111,7 @@ export const resolveStreamingConfig = (
     rtspTransport: config?.rtspTransport ?? DEFAULT_STREAMING_CONFIG.rtspTransport,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
+    verifyImmisTls: config?.verifyImmisTls ?? DEFAULT_STREAMING_CONFIG.verifyImmisTls,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
     audio: {
@@ -152,6 +156,13 @@ interface ActiveStreamSession extends PendingStreamSession {
   selectedVideoEncoder?: VideoEncoderPreference;
   fallbackVideoEncoderTried?: boolean;
   readyNotified?: boolean;
+  ffmpegStderrBuffer?: string;
+  ffmpegStderrBufferTruncated?: boolean;
+}
+
+interface FfmpegStderrState {
+  ffmpegStderrBuffer?: string;
+  ffmpegStderrBufferTruncated?: boolean;
 }
 
 const usedPorts = new Set<number>();
@@ -177,9 +188,31 @@ const redactFfmpegArgs = (args: string[]): string[] => {
       if (i + 1 < redacted.length) {
         redacted[i + 1] = '<redacted>';
       }
+    } else {
+      redacted[i] = redactStreamUrl(redacted[i]);
     }
   }
   return redacted;
+};
+
+const redactFfmpegOutput = (value: string): string => {
+  return value
+    .replace(/\b(?:immis|rtsps?):\/\/[^\s'"]+/gi, (url) => redactStreamUrl(url))
+    .replace(/(-srtp_(?:out|in)_params\s+)(\S+)/gi, '$1<redacted>')
+    .replace(/(\bsrtp_(?:out|in)_params[=:])(\S+)/gi, '$1<redacted>')
+    .replace(/(\binline:)([^\s|]+)/gi, '$1<redacted>');
+};
+
+const redactStreamUrl = (value: string): string => {
+  try {
+    const parsed = new URL(value);
+    if (!['immis:', 'rtsp:', 'rtsps:'].includes(parsed.protocol)) {
+      return value;
+    }
+    return `${parsed.protocol}//${parsed.host}/<redacted>`;
+  } catch {
+    return value;
+  }
 };
 
 const allocatePort = async (): Promise<number> => {
@@ -526,6 +559,22 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
+    const activeStreamCount = Array.from(this.ongoingSessions.values())
+      .filter((session) => !session.stopped)
+      .length;
+    if (activeStreamCount >= this.streamingConfig.maxStreams) {
+      this.log(
+        `Stream start rejected for session ${sessionId}: maxStreams=${this.streamingConfig.maxStreams} already reached`,
+      );
+      releasePort(pending.localVideoPort);
+      releasePort(pending.localVideoRtcpPort);
+      releasePort(pending.localAudioPort);
+      releasePort(pending.localAudioRtcpPort);
+      this.pendingSessions.delete(sessionId);
+      callback(new Error(`Maximum live stream count (${this.streamingConfig.maxStreams}) reached`));
+      return;
+    }
+
     const active: ActiveStreamSession = {
       ...pending,
       keepAliveTimer: null,
@@ -565,7 +614,21 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           log: (msg) => this.log(msg),
           debug: this.streamingConfig.ffmpegDebug,
           saveStreamPath: this.streamingConfig.debugStreamPath,
+          verifyTls: this.streamingConfig.verifyImmisTls,
           waitForReady: readyPromise,
+        });
+
+        immisProxy.on('error', (error) => {
+          if (active.immisProxy !== immisProxy || active.stopped) {
+            return;
+          }
+
+          this.log(`IMMIS proxy error for session ${sessionId}: ${error.message}`);
+          if (!active.readyNotified) {
+            active.readyNotified = true;
+            callback(error);
+          }
+          void this.stopStream(sessionId);
         });
 
         active.immisProxy = immisProxy;
@@ -835,20 +898,21 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
       stdio: ['pipe', 'ignore', 'pipe'],
     });
+    const stderrState: FfmpegStderrState = {};
     active.talkback = talkback;
     talkback.stdin?.end(sdp);
 
     talkback.stderr.on('data', (data) => {
-      if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg-talkback(${sessionId}): ${data.toString('utf8').trim()}`);
-      }
+      this.handleFfmpegStderr(sessionId, stderrState, data, 'FFmpeg-talkback');
     });
 
     talkback.on('error', (error) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
       this.log(`Talkback FFmpeg error for session ${sessionId}: ${error.message}`);
     });
 
     talkback.on('exit', (code, signal) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
       if (code !== 0) {
         this.log(`Talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
@@ -889,6 +953,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    const stderrState: FfmpegStderrState = {};
     active.talkback = talkback;
     talkback.stdin?.end(sdp);
 
@@ -901,16 +966,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     talkback.stderr.on('data', (data) => {
-      if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg-immis-talkback(${sessionId}): ${data.toString('utf8').trim()}`);
-      }
+      this.handleFfmpegStderr(sessionId, stderrState, data, 'FFmpeg-immis-talkback');
     });
 
     talkback.on('error', (error) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
       this.log(`IMMIS talkback FFmpeg error for session ${sessionId}: ${error.message}`);
     });
 
     talkback.on('exit', (code, signal) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
       if (code !== 0) {
         this.log(`IMMIS talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
@@ -947,7 +1012,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active, videoEncoder);
     active.selectedVideoEncoder = videoEncoder;
 
-    this.log(`Starting stream ${sessionId} via FFmpeg using ${videoEncoder} with URL: ${liveviewUrl}`);
+    this.log(`Starting stream ${sessionId} via FFmpeg using ${videoEncoder} with URL: ${redactStreamUrl(liveviewUrl)}`);
     if (this.streamingConfig.ffmpegDebug) {
       const safeArgs = redactFfmpegArgs(ffmpegArgs);
       this.log(`FFmpeg args: ${safeArgs.join(' ')}`);
@@ -968,15 +1033,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg(${sessionId}): ${data.toString('utf8').trim()}`);
-      }
+      this.handleFfmpegStderr(sessionId, active, data);
     });
 
     ffmpeg.on('error', (error) => {
       if (active.ffmpeg !== ffmpeg) {
         return;
       }
+      this.flushFfmpegStderr(sessionId, active);
 
       this.log(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
 
@@ -997,6 +1061,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (active.ffmpeg !== ffmpeg) {
         return;
       }
+      this.flushFfmpegStderr(sessionId, active);
 
       if (
         (code !== 0 || signal) &&
@@ -1019,6 +1084,85 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
       void this.stopStream(sessionId);
     });
+  }
+
+  private handleFfmpegStderr(
+    sessionId: string,
+    state: FfmpegStderrState,
+    data: Buffer,
+    label = 'FFmpeg',
+  ): void {
+    if (!this.streamingConfig.ffmpegDebug) {
+      return;
+    }
+
+    const chunk = data.toString('utf8');
+    let lineStart = 0;
+
+    for (let index = 0; index < chunk.length; index++) {
+      const char = chunk.charCodeAt(index);
+      if (char !== 10 && char !== 13) {
+        continue;
+      }
+
+      this.appendFfmpegStderrSegment(state, chunk.slice(lineStart, index));
+      this.flushFfmpegStderrLine(sessionId, state, label);
+
+      if (char === 13 && chunk.charCodeAt(index + 1) === 10) {
+        index++;
+      }
+      lineStart = index + 1;
+    }
+
+    this.appendFfmpegStderrSegment(state, chunk.slice(lineStart));
+  }
+
+  private flushFfmpegStderr(sessionId: string, state: FfmpegStderrState, label = 'FFmpeg'): void {
+    if (!this.streamingConfig.ffmpegDebug) {
+      return;
+    }
+
+    this.flushFfmpegStderrLine(sessionId, state, label);
+  }
+
+  private appendFfmpegStderrSegment(state: FfmpegStderrState, segment: string): void {
+    if (!segment || state.ffmpegStderrBufferTruncated) {
+      return;
+    }
+
+    const currentBuffer = state.ffmpegStderrBuffer ?? '';
+    if (currentBuffer.length + segment.length <= MAX_FFMPEG_STDERR_BUFFER_CHARS) {
+      state.ffmpegStderrBuffer = `${currentBuffer}${segment}`;
+      return;
+    }
+
+    state.ffmpegStderrBuffer = '';
+    state.ffmpegStderrBufferTruncated = true;
+  }
+
+  private flushFfmpegStderrLine(sessionId: string, state: FfmpegStderrState, label: string): void {
+    if (state.ffmpegStderrBufferTruncated) {
+      this.log(
+        `${label}(${sessionId}): <stderr line omitted because it exceeded ${MAX_FFMPEG_STDERR_BUFFER_CHARS} characters>`,
+      );
+      state.ffmpegStderrBuffer = '';
+      state.ffmpegStderrBufferTruncated = false;
+      return;
+    }
+
+    if (!state.ffmpegStderrBuffer) {
+      return;
+    }
+
+    this.logRedactedFfmpegLine(sessionId, state.ffmpegStderrBuffer, label);
+    state.ffmpegStderrBuffer = '';
+  }
+
+  private logRedactedFfmpegLine(sessionId: string, line: string, label = 'FFmpeg'): void {
+    const trimmed = line.trim();
+    if (trimmed) {
+      this.log(`${label}(${sessionId}): ${redactFfmpegOutput(trimmed)}`);
+    }
   }
 
   private resolveVideoEncoder(): VideoEncoderPreference {

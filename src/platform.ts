@@ -83,6 +83,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioBitrate?: number;
   videoBitrate?: number;
   videoEncoder?: VideoEncoderPreference;
+  verifyImmisTls?: boolean;
   debugAuth?: boolean;
   authLocked?: boolean;
   debugStreamPath?: string;
@@ -135,6 +136,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       rtspTransport: this.config.rtspTransport,
       maxStreams: this.config.maxStreams,
       debugStreamPath: this.config.debugStreamPath,
+      verifyImmisTls: this.config.verifyImmisTls,
       snapshotCacheTTL: this.config.snapshotCacheTTL,
       persistSnapshotCache: this.config.persistSnapshotCache,
       audio: {
