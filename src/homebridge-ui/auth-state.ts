@@ -1,7 +1,7 @@
 import {
-  AuthStateFileSecurityError,
-  readPersistedAuthStateFile,
-} from '../blink-api/auth';
+  readOwnerOnlyJsonFile,
+  SecureJsonFileSecurityError,
+} from '../blink-api/secure-json-file';
 import { BlinkAuthState } from '../types';
 import * as path from 'node:path';
 
@@ -36,7 +36,7 @@ export async function loadPersistedAuthStateFromFiles(
   for (const filePath of filePaths) {
     const uiFilePath = describeUiFilePath(filePath);
     try {
-      const state = await readPersistedAuthStateFile(filePath);
+      const state = await readOwnerOnlyJsonFile<BlinkAuthState>(filePath);
       if (!state?.accessToken) {
         ignoredMessage = `Persisted Blink authentication was ignored: ${uiFilePath} does not contain an access token`;
         logDebug(`Persisted Blink authentication was ignored: ${filePath} does not contain an access token`);
@@ -67,7 +67,7 @@ export async function loadPersistedAuthStateFromFiles(
         continue;
       }
 
-      if (error instanceof AuthStateFileSecurityError) {
+      if (error instanceof SecureJsonFileSecurityError) {
         const message = `Persisted Blink authentication was ignored: ${describeUiError(error, filePath)}`;
         logDebug(`Persisted Blink authentication was ignored: ${error.message}`);
         return { state: null, message };

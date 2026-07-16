@@ -5,6 +5,8 @@
  * Source: API Dossier - /base-apk/docs/api_dossier.md
  */
 
+export type BlinkOAuthClientId = 'android' | 'amazon' | 'ios';
+
 /**
  * OAuth token response from Blink authentication API
  * Source: API Dossier Section 2.1 (OAuth Flow) / OauthApi.smali
@@ -31,6 +33,7 @@ export interface BlinkAuthState {
   tokenExpiry?: string | null;
   accountId?: number | null;
   clientId?: number | null;
+  oauthClientId?: BlinkOAuthClientId | null;
   region?: string | null;
   tier?: string | null;
   email?: string | null;
@@ -387,13 +390,14 @@ export interface BlinkConfig {
   email: string;
   password: string;
   hardwareId: string;
-  clientId?: 'android' | 'amazon';
+  oauthClientId?: BlinkOAuthClientId;
   clientName?: string;
   twoFactorCode?: string;
   clientVerificationCode?: string;
   accountVerificationCode?: string;
   trustDevice?: boolean;
   authStoragePath?: string;
+  hostedOAuthPendingPath?: string;
   /** Legacy path from pre-0.6 releases for automatic migration */
   legacyAuthStoragePath?: string;
   authStorage?: BlinkAuthStorage;
@@ -405,6 +409,32 @@ export interface BlinkConfig {
   authLocked?: boolean;
   /** Logger for diagnostic output */
   logger?: BlinkLogger;
+}
+
+export interface BlinkHostedOAuthTransaction {
+  version: 1;
+  flowId: string;
+  state: string;
+  codeVerifier: string;
+  codeChallenge: string;
+  oauthClientId: 'android';
+  redirectUri: 'https://applinks.blink.com/signin/callback';
+  hardwareId: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface BlinkHostedOAuthStart {
+  authorizationUrl: string;
+  flowId: string;
+  expiresAt: string;
+}
+
+export interface BlinkHostedOAuthTokenRequest {
+  authorizationCode: string;
+  codeVerifier: string;
+  oauthClientId: 'android';
+  redirectUri: 'https://applinks.blink.com/signin/callback';
 }
 
 /**
@@ -500,4 +530,3 @@ export interface Blink2FAVerifyResponse {
   /** Error code if failed */
   code?: number;
 }
-

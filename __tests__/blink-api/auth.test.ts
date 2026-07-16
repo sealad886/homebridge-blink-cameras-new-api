@@ -3,6 +3,8 @@ import {
   BlinkAuth,
   Blink2FARequiredError,
   BlinkAuthenticationError,
+  hardenAuthStateFileMode,
+  readPersistedAuthStateFile,
 } from '../../src/blink-api/auth';
 import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
 import { URL } from 'node:url';
@@ -450,6 +452,15 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     };
     return new BlinkAuth(config);
   }
+
+  it('keeps auth-state security helpers source-compatible', async () => {
+    await fs.writeFile(dotFilePath, JSON.stringify(sampleState, null, 2), { mode: 0o644 });
+
+    await hardenAuthStateFileMode(dotFilePath);
+
+    await expect(readPersistedAuthStateFile(dotFilePath)).resolves.toEqual(sampleState);
+    expect(new AuthStateFileSecurityError('test')).toBeInstanceOf(Error);
+  });
 
   it('save() writes state to the dot-file path with owner-only permissions', async () => {
     const storage = getStorage(makeAuth());
