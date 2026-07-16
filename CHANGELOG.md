@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-07-16
+
+### Added
+
+- Added secure-by-default IMMIS TLS certificate verification with an explicit
+  `verifyImmisTls` compatibility opt-out for confirmed self-signed endpoints.
+- Added stream-concurrency enforcement before requesting a Blink live-view
+  session.
+
+### Changed
+
+- Hardened persisted authentication state and debug stream recordings against
+  symlink, path-swap, and unsafe-permission attacks.
+- Isolated debug captures under an owner-only `blink-stream-recordings`
+  directory and made capture names collision-resistant without exposing camera
+  serial numbers.
+- Updated audited development dependencies to patched transitive versions.
+
+### Fixed
+
+- Redacted Blink live-view URLs, SRTP parameters, and talkback SDP keys from
+  bounded FFmpeg debug diagnostics, including values split across stderr
+  chunks.
+- Prevented stopping sessions from incorrectly consuming the configured stream
+  concurrency limit.
+- Preserved active authentication verification status and removed absolute
+  auth-state paths from UI-facing status messages.
+
 ## [0.7.0] - 2026-04-02
 
 ### Added
