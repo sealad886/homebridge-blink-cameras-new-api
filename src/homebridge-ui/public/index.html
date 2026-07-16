@@ -714,6 +714,37 @@
     }
   });
 
+  function hostedOAuthSupportCode(error) {
+    const allowedCodes = new Set([
+      'BHO-NETWORK',
+      'BHO-HTTP-INVALID-REQUEST',
+      'BHO-HTTP-INVALID-CLIENT',
+      'BHO-HTTP-INVALID-GRANT',
+      'BHO-HTTP-UNAUTHORIZED-CLIENT',
+      'BHO-HTTP-UNSUPPORTED-GRANT',
+      'BHO-HTTP-INVALID-SCOPE',
+      'BHO-HTTP-400',
+      'BHO-HTTP-401',
+      'BHO-HTTP-403',
+      'BHO-HTTP-OTHER',
+      'BHO-JSON',
+      'BHO-SCHEMA-OBJECT',
+      'BHO-SCHEMA-ACCESS',
+      'BHO-SCHEMA-EXPIRY',
+      'BHO-SCHEMA-TYPE',
+      'BHO-SCHEMA-REFRESH',
+      'BHO-SCHEMA-OPTIONAL'
+    ]);
+    if (!error || typeof error !== 'object'
+        || !error.error || typeof error.error !== 'object') {
+      return '';
+    }
+    const supportCode = error.error.supportCode;
+    return typeof supportCode === 'string' && allowedCodes.has(supportCode)
+      ? supportCode
+      : '';
+  }
+
   async function completeHostedAuth(callbackUrl) {
     if (!activeFlowId) {
       resetHostedFlow();
@@ -751,9 +782,13 @@
         // Clipboard clearing is best effort only.
       }
       await handleAuthResponse(response);
-    } catch {
+    } catch (error) {
+      const supportCode = hostedOAuthSupportCode(error);
       resetHostedFlow();
-      showError('Blink sign-in could not be completed. Start sign-in again.');
+      showError(
+        'Blink sign-in could not be completed. Start sign-in again.'
+        + (supportCode ? ` Support code: ${supportCode}.` : '')
+      );
     } finally {
       submitted = '';
       callbackUrl = '';

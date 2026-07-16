@@ -2,7 +2,11 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
-import { BlinkHostedReauthenticationRequiredError } from '../blink-api/auth';
+import {
+  BlinkHostedReauthenticationRequiredError,
+  BlinkHostedTokenExchangeError,
+  type BlinkHostedOAuthSupportCode,
+} from '../blink-api/auth';
 import {
   BlinkApi,
   BlinkRestVerificationRequiredError,
@@ -72,6 +76,7 @@ export class HostedAuthServiceError extends Error {
     message: string,
     public readonly category: 'invalid_request' | 'authentication' | 'storage' | 'internal',
     public readonly status: number,
+    public readonly supportCode?: BlinkHostedOAuthSupportCode,
   ) {
     super(message);
     this.name = 'HostedAuthServiceError';
@@ -229,6 +234,15 @@ export class HostedAuthService {
     } catch (error) {
       if (error instanceof HostedAuthServiceError) {
         throw error;
+      }
+      if (error instanceof BlinkHostedTokenExchangeError) {
+        this.options.logger.warn('[Hosted Auth] Blink sign-in completion failed.');
+        throw new HostedAuthServiceError(
+          SIGN_IN_FAILED_MESSAGE,
+          'authentication',
+          400,
+          error.diagnosticCode,
+        );
       }
       this.options.logger.warn('[Hosted Auth] Blink sign-in completion failed.');
       throw new HostedAuthServiceError(SIGN_IN_FAILED_MESSAGE, 'authentication', 400);

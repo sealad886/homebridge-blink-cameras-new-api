@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import {
   BlinkAuth,
   BlinkAuthenticationError,
+  BlinkHostedTokenExchangeError,
   BlinkHostedReauthenticationRequiredError,
 } from '../../src/blink-api/auth';
 import { HostedOAuthCoordinator } from '../../src/blink-api/hosted-oauth';
@@ -752,6 +753,58 @@ describe('BlinkAuth hosted OAuth', () => {
     ]);
   });
 
+  it.each([
+    [
+      'an invalid-grant rejection',
+      () => failedTokenResponse(401),
+      'BHO-HTTP-INVALID-GRANT',
+    ],
+    [
+      'a successful response with an incompatible expiry',
+      () => tokenResponse(validTokenBody({ expires_in: '14400' })),
+      'BHO-SCHEMA-EXPIRY',
+    ],
+  ])('classifies %s with a bounded secret-free support code', async (
+    _description,
+    responseFactory,
+    diagnosticCode,
+  ) => {
+    const storage = createStorage(null);
+    const { logger, entries } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const { pending, callbackUrl } = await startHostedLogin(auth);
+    fetchMock.mockResolvedValueOnce(responseFactory());
+
+    let caught: unknown;
+    try {
+      await auth.completeHostedLogin(pending.flowId, callbackUrl);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BlinkHostedTokenExchangeError);
+    expect(caught).toMatchObject({
+      message: 'Blink sign-in could not be completed. Start sign-in again.',
+      diagnosticCode,
+    });
+    expectSecretsAbsent(JSON.stringify(caught), [
+      AUTHORIZATION_CODE,
+      CODE_VERIFIER,
+      ACCESS_TOKEN,
+      REFRESH_TOKEN,
+      TOKEN_AUTH,
+      UPSTREAM_BODY,
+    ]);
+    expectSecretsAbsent(entries.join('\n'), [
+      AUTHORIZATION_CODE,
+      CODE_VERIFIER,
+      ACCESS_TOKEN,
+      REFRESH_TOKEN,
+      TOKEN_AUTH,
+      UPSTREAM_BODY,
+    ]);
+  });
+
   it('keeps hosted fetch-rejection diagnostics fixed and free of callback and token secrets', async () => {
     const storage = createStorage(null);
     const { logger, entries } = createLogger();
@@ -775,15 +828,51 @@ describe('BlinkAuth hosted OAuth', () => {
     }
 
     expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).message).toBe(
-      'Blink sign-in could not be completed. Start sign-in again.',
-    );
+    expect(caught).toBeInstanceOf(BlinkHostedTokenExchangeError);
+    expect(caught).toMatchObject({
+      message: 'Blink sign-in could not be completed. Start sign-in again.',
+      diagnosticCode: 'BHO-NETWORK',
+    });
     expectSecretsAbsent(`${(caught as Error).message}\n${entries.join('\n')}`, [
       AUTHORIZATION_CODE,
       CODE_VERIFIER,
       ACCESS_TOKEN,
       REFRESH_TOKEN,
       TOKEN_AUTH,
+      UPSTREAM_BODY,
+    ]);
+  });
+
+  it('classifies a secret-bearing JSON decoder failure without retaining its cause', async () => {
+    const storage = createStorage(null);
+    const { logger, entries } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const { pending, callbackUrl } = await startHostedLogin(auth);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+      json: async () => {
+        throw new Error(`${UPSTREAM_BODY}|${ACCESS_TOKEN}|${REFRESH_TOKEN}`);
+      },
+    } as unknown as Response);
+
+    let caught: unknown;
+    try {
+      await auth.completeHostedLogin(pending.flowId, callbackUrl);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BlinkHostedTokenExchangeError);
+    expect(caught).toMatchObject({ diagnosticCode: 'BHO-JSON' });
+    expect(caught).not.toHaveProperty('cause');
+    expectSecretsAbsent(`${String(caught)}\n${JSON.stringify(caught)}\n${entries.join('\n')}`, [
+      AUTHORIZATION_CODE,
+      CODE_VERIFIER,
+      ACCESS_TOKEN,
+      REFRESH_TOKEN,
       UPSTREAM_BODY,
     ]);
   });

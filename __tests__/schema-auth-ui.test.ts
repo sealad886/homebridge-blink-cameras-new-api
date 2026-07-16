@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { BLINK_HOSTED_OAUTH_SUPPORT_CODES } from '../src/blink-api/auth';
+
 type SchemaDocument = {
   customUi?: boolean;
   customUiPath?: string;
@@ -233,6 +235,47 @@ describe('schema auth UI regression', () => {
     expect(completion).toContain("callbackUrl = ''");
     expect(completion).toContain("callbackInput.value = ''");
     expect(completion.indexOf("activeFlowId = ''", responseAwaitIndex)).toBeGreaterThan(responseAwaitIndex);
+  });
+
+  it('shows only allowlisted hosted OAuth support codes after the generic completion error', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+    const completion = sectionBetween(
+      html,
+      'async function completeHostedAuth(callbackUrl) {',
+      'function isPlausibleBlinkCallback(callbackUrl) {',
+    );
+    const supportCodeParser = sectionBetween(
+      html,
+      'function hostedOAuthSupportCode(error) {',
+      'async function completeHostedAuth(callbackUrl) {',
+    );
+
+    expect(completion).toContain('catch (error)');
+    expect(completion).toContain('hostedOAuthSupportCode(error)');
+    expect(completion).toContain('Support code: ${supportCode}.');
+    expect(completion).not.toContain('error.message');
+    expect(supportCodeParser).toContain("'BHO-HTTP-INVALID-GRANT'");
+    expect(supportCodeParser).toContain("'BHO-SCHEMA-EXPIRY'");
+    expect(supportCodeParser).toContain('error.error.supportCode');
+    expect(supportCodeParser).not.toContain('error.message');
+
+    const parseSupportCode = new Function(
+      `${supportCodeParser}\nreturn hostedOAuthSupportCode;`,
+    )() as (value: unknown) => string;
+    for (const supportCode of BLINK_HOSTED_OAUTH_SUPPORT_CODES) {
+      expect(parseSupportCode({ error: { supportCode } })).toBe(supportCode);
+    }
+    for (const rejected of [
+      undefined,
+      null,
+      {},
+      { error: null },
+      { error: { supportCode: 'bho-network' } },
+      { error: { supportCode: 'BHO-NETWORK-extra' } },
+      { error: { supportCode: 'callbackCodeStateSentinel_9Xw2' } },
+    ]) {
+      expect(parseSupportCode(rejected)).toBe('');
+    }
   });
 
   it('keeps callbacks out of browser storage, plugin config, logs, and events', () => {

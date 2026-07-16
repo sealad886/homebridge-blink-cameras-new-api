@@ -3,6 +3,7 @@
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
 
 import type { BlinkHostedOAuthStart, BlinkLogger } from '../types';
+import { isBlinkHostedOAuthSupportCode } from '../blink-api/auth';
 import {
   type AuthStatus,
   type HostedAuthCompleteRequest,
@@ -173,6 +174,9 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
       return new RequestError(error.message, {
         status: error.status,
         category: error.category,
+        ...(isBlinkHostedOAuthSupportCode(error.supportCode)
+          ? { supportCode: error.supportCode }
+          : {}),
       });
     }
     return new RequestError('Blink authentication request failed. Try again.', {

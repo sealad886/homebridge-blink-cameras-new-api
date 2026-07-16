@@ -3,7 +3,10 @@ import {
   HostedAuthService,
   HostedAuthServiceError,
 } from '../../src/homebridge-ui/hosted-auth-service';
-import { BlinkHostedReauthenticationRequiredError } from '../../src/blink-api/auth';
+import {
+  BlinkHostedReauthenticationRequiredError,
+  BlinkHostedTokenExchangeError,
+} from '../../src/blink-api/auth';
 import * as authState from '../../src/homebridge-ui/auth-state';
 import {
   BlinkApi,
@@ -363,9 +366,10 @@ describe('HostedAuthService', () => {
     const tokenSentinel = 'upstreamTokenSentinel_7Hd4';
     const { logger, entries } = createLogger();
     const api = createApiDouble();
-    api.completeHostedLogin.mockRejectedValue(
+    api.completeHostedLogin.mockRejectedValue(Object.assign(
       new Error(`upstream ${callbackSentinel} ${tokenSentinel}`),
-    );
+      { supportCode: tokenSentinel },
+    ));
     const service = new HostedAuthService({
       storageRoot,
       logger,
@@ -385,10 +389,35 @@ describe('HostedAuthService', () => {
 
     expect(caught).toBeInstanceOf(HostedAuthServiceError);
     expect(caught).toMatchObject({ category: 'authentication', status: 400 });
+    expect(caught).not.toHaveProperty('supportCode', tokenSentinel);
     expect(containsSecret(caught, callbackSentinel)).toBe(false);
     expect(containsSecret(caught, tokenSentinel)).toBe(false);
     expect(entries.join('\n')).not.toContain(callbackSentinel);
     expect(entries.join('\n')).not.toContain(tokenSentinel);
+  });
+
+  it('preserves only an allowlisted hosted token-exchange support code', async () => {
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.completeHostedLogin.mockRejectedValue(
+      new BlinkHostedTokenExchangeError('BHO-HTTP-INVALID-GRANT'),
+    );
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+    await service.start({});
+
+    await expect(service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    })).rejects.toMatchObject({
+      message: 'Blink sign-in could not be completed. Start sign-in again.',
+      category: 'authentication',
+      status: 400,
+      supportCode: 'BHO-HTTP-INVALID-GRANT',
+    });
   });
 
   it('omits invalid upstream email metadata from completion results and logs', async () => {
@@ -1373,6 +1402,57 @@ describe('BlinkUiServer hosted authentication routes', () => {
       message: 'Invalid Blink authentication request.',
       requestError: { status: 400, category: 'invalid_request' },
     });
+  });
+
+  it('carries an allowlisted hosted support code through RequestError metadata', async () => {
+    jest.spyOn(HostedAuthService.prototype, 'complete').mockRejectedValue(
+      new HostedAuthServiceError(
+        'Blink sign-in could not be completed. Start sign-in again.',
+        'authentication',
+        400,
+        'BHO-SCHEMA-EXPIRY',
+      ),
+    );
+    new BlinkUiServer();
+
+    await expect(mockUiHandlers.get('/auth/complete')?.({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    })).rejects.toMatchObject({
+      message: 'Blink sign-in could not be completed. Start sign-in again.',
+      requestError: {
+        status: 400,
+        category: 'authentication',
+        supportCode: 'BHO-SCHEMA-EXPIRY',
+      },
+    });
+  });
+
+  it('drops a non-allowlisted support code at the RequestError boundary', async () => {
+    const arbitraryCode = 'callbackCodeStateSentinel_4Qz7';
+    jest.spyOn(HostedAuthService.prototype, 'complete').mockRejectedValue(
+      new HostedAuthServiceError(
+        'Blink sign-in could not be completed. Start sign-in again.',
+        'authentication',
+        400,
+        arbitraryCode as 'BHO-NETWORK',
+      ),
+    );
+    new BlinkUiServer();
+
+    let caught: unknown;
+    try {
+      await mockUiHandlers.get('/auth/complete')?.({
+        flowId: 'opaque-flow-id',
+        callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(RequestError);
+    expect(caught).not.toHaveProperty('requestError.supportCode');
+    expect(containsSecret(caught, arbitraryCode)).toBe(false);
   });
 
   it('wraps unexpected failures in bounded RequestError diagnostics without logging secrets', async () => {

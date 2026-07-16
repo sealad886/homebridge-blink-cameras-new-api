@@ -90,6 +90,48 @@ const AUTH_ERROR_CATEGORIES = new Set([
   'verification_required',
 ]);
 
+export const BLINK_HOSTED_OAUTH_SUPPORT_CODES = [
+  'BHO-NETWORK',
+  'BHO-HTTP-INVALID-REQUEST',
+  'BHO-HTTP-INVALID-CLIENT',
+  'BHO-HTTP-INVALID-GRANT',
+  'BHO-HTTP-UNAUTHORIZED-CLIENT',
+  'BHO-HTTP-UNSUPPORTED-GRANT',
+  'BHO-HTTP-INVALID-SCOPE',
+  'BHO-HTTP-400',
+  'BHO-HTTP-401',
+  'BHO-HTTP-403',
+  'BHO-HTTP-OTHER',
+  'BHO-JSON',
+  'BHO-SCHEMA-OBJECT',
+  'BHO-SCHEMA-ACCESS',
+  'BHO-SCHEMA-EXPIRY',
+  'BHO-SCHEMA-TYPE',
+  'BHO-SCHEMA-REFRESH',
+  'BHO-SCHEMA-OPTIONAL',
+] as const;
+
+export type BlinkHostedOAuthSupportCode = typeof BLINK_HOSTED_OAUTH_SUPPORT_CODES[number];
+
+const BLINK_HOSTED_OAUTH_SUPPORT_CODE_SET: ReadonlySet<string> = new Set(
+  BLINK_HOSTED_OAUTH_SUPPORT_CODES,
+);
+
+export function isBlinkHostedOAuthSupportCode(
+  value: unknown,
+): value is BlinkHostedOAuthSupportCode {
+  return typeof value === 'string' && BLINK_HOSTED_OAUTH_SUPPORT_CODE_SET.has(value);
+}
+
+const HOSTED_OAUTH_ERROR_CODES = new Map<string, BlinkHostedOAuthSupportCode>([
+  ['invalid_request', 'BHO-HTTP-INVALID-REQUEST'],
+  ['invalid_client', 'BHO-HTTP-INVALID-CLIENT'],
+  ['invalid_grant', 'BHO-HTTP-INVALID-GRANT'],
+  ['unauthorized_client', 'BHO-HTTP-UNAUTHORIZED-CLIENT'],
+  ['unsupported_grant_type', 'BHO-HTTP-UNSUPPORTED-GRANT'],
+  ['invalid_scope', 'BHO-HTTP-INVALID-SCOPE'],
+]);
+
 const isNodeError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
@@ -182,48 +224,70 @@ function removeUntrustedFragments(message: string, fragments: readonly string[])
   return sanitized || 'Blink authentication failed.';
 }
 
-function parseTokenResponse(
+type TokenResponseParseResult = {
+  ok: true;
+  body: BlinkOAuthV2TokenResponse;
+} | {
+  ok: false;
+  diagnosticCode: Extract<BlinkHostedOAuthSupportCode, `BHO-SCHEMA-${string}`>;
+};
+
+function parseTokenResponseDetailed(
   value: unknown,
   options: { requireRefreshToken: boolean },
-): BlinkOAuthV2TokenResponse | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+): TokenResponseParseResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, diagnosticCode: 'BHO-SCHEMA-OBJECT' };
+  }
   const body = value as Record<string, unknown>;
 
   if (typeof body.access_token !== 'string' || body.access_token.trim().length === 0) {
-    return null;
+    return { ok: false, diagnosticCode: 'BHO-SCHEMA-ACCESS' };
   }
   if (typeof body.expires_in !== 'number'
       || !Number.isFinite(body.expires_in)
       || body.expires_in <= 0) {
-    return null;
+    return { ok: false, diagnosticCode: 'BHO-SCHEMA-EXPIRY' };
   }
-  if (body.token_type !== 'Bearer') return null;
+  if (body.token_type !== 'Bearer') {
+    return { ok: false, diagnosticCode: 'BHO-SCHEMA-TYPE' };
+  }
 
   const refreshToken = body.refresh_token;
   if (refreshToken !== undefined
       && (typeof refreshToken !== 'string' || refreshToken.trim().length === 0)) {
-    return null;
+    return { ok: false, diagnosticCode: 'BHO-SCHEMA-REFRESH' };
   }
-  if (options.requireRefreshToken && typeof refreshToken !== 'string') return null;
+  if (options.requireRefreshToken && typeof refreshToken !== 'string') {
+    return { ok: false, diagnosticCode: 'BHO-SCHEMA-REFRESH' };
+  }
 
   for (const key of ['scope', 'id_token', 'region', 'tier'] as const) {
     const optionalString = body[key];
     if (optionalString !== undefined
         && (typeof optionalString !== 'string' || optionalString.trim().length === 0)) {
-      return null;
+      return { ok: false, diagnosticCode: 'BHO-SCHEMA-OPTIONAL' };
     }
   }
   for (const key of ['account_id', 'client_id'] as const) {
     const optionalNumber = body[key];
     if (optionalNumber !== undefined
-        && (typeof optionalNumber !== 'number'
+      && (typeof optionalNumber !== 'number'
           || !Number.isSafeInteger(optionalNumber)
           || optionalNumber <= 0)) {
-      return null;
+      return { ok: false, diagnosticCode: 'BHO-SCHEMA-OPTIONAL' };
     }
   }
 
-  return body as unknown as BlinkOAuthV2TokenResponse;
+  return { ok: true, body: body as unknown as BlinkOAuthV2TokenResponse };
+}
+
+function parseTokenResponse(
+  value: unknown,
+  options: { requireRefreshToken: boolean },
+): BlinkOAuthV2TokenResponse | null {
+  const result = parseTokenResponseDetailed(value, options);
+  return result.ok ? result.body : null;
 }
 
 interface BlinkAuthErrorDetail {
@@ -285,6 +349,13 @@ export class BlinkAuthenticationError extends Error {
 
     lines.push(`${'='.repeat(60)}\n`);
     return lines.join('\n');
+  }
+}
+
+export class BlinkHostedTokenExchangeError extends Error {
+  constructor(public readonly diagnosticCode: BlinkHostedOAuthSupportCode) {
+    super(HOSTED_TOKEN_EXCHANGE_FAILED);
+    this.name = 'BlinkHostedTokenExchangeError';
   }
 }
 
@@ -590,12 +661,7 @@ export class BlinkAuth {
       );
     } catch {
       this.log.warn('[Auth] Blink hosted token exchange failed.');
-      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
-    }
-
-    if (!response.ok) {
-      this.log.warn('[Auth] Blink hosted token exchange failed.');
-      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
+      throw new BlinkHostedTokenExchangeError('BHO-NETWORK');
     }
 
     let rawBody: unknown;
@@ -603,14 +669,38 @@ export class BlinkAuth {
       rawBody = await response.json();
     } catch {
       this.log.warn('[Auth] Blink hosted token exchange failed.');
-      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
+      throw new BlinkHostedTokenExchangeError('BHO-JSON');
     }
-    const body = parseTokenResponse(rawBody, { requireRefreshToken: true });
-    if (!body) {
+
+    if (rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)) {
+      const oauthError = (rawBody as Record<string, unknown>).error;
+      if (typeof oauthError === 'string') {
+        const diagnosticCode = HOSTED_OAUTH_ERROR_CODES.get(oauthError);
+        if (diagnosticCode) {
+          this.log.warn('[Auth] Blink hosted token exchange failed.');
+          throw new BlinkHostedTokenExchangeError(diagnosticCode);
+        }
+      }
+    }
+
+    if (!response.ok) {
+      const diagnosticCode: BlinkHostedOAuthSupportCode = response.status === 400
+        ? 'BHO-HTTP-400'
+        : response.status === 401
+          ? 'BHO-HTTP-401'
+          : response.status === 403
+            ? 'BHO-HTTP-403'
+            : 'BHO-HTTP-OTHER';
       this.log.warn('[Auth] Blink hosted token exchange failed.');
-      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
+      throw new BlinkHostedTokenExchangeError(diagnosticCode);
     }
-    await this.captureTokensUnlocked(body, null, request.oauthClientId, {
+
+    const parsed = parseTokenResponseDetailed(rawBody, { requireRefreshToken: true });
+    if (!parsed.ok) {
+      this.log.warn('[Auth] Blink hosted token exchange failed.');
+      throw new BlinkHostedTokenExchangeError(parsed.diagnosticCode);
+    }
+    await this.captureTokensUnlocked(parsed.body, null, request.oauthClientId, {
       newAccountBoundary: true,
     });
   }
