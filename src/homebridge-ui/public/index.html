@@ -795,8 +795,8 @@
       const errorDescriptions = url.searchParams.getAll('error_description');
       const hasCode = codes.length === 1 && codes[0].length > 0;
       const hasError = errors.length === 1 && errors[0].length > 0;
+      // The server owns the constant-time state comparison and consumes a mismatched transaction.
       return states.length === 1
-        && states[0].length > 0
         && hasCode !== hasError
         && codes.length <= 1
         && errors.length <= 1

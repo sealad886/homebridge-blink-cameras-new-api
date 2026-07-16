@@ -276,7 +276,7 @@ describe('schema auth UI regression', () => {
     expect(authResponse).toContain("showStep('success')");
   });
 
-  it('locally rejects partial callbacks without discarding the active hosted flow', () => {
+  it('locally rejects malformed callbacks while deferring OAuth state semantics to the server', () => {
     const html = readText('src/homebridge-ui/public/index.html');
     const validation = sectionBetween(
       html,
@@ -305,14 +305,17 @@ describe('schema auth UI regression', () => {
     expect(validation).toContain("url.searchParams.getAll('error_description')");
     expect(validation).toContain('codes.length > 0 && errors.length > 0');
     expect(validation).toContain('errorDescriptions.length === 1 && !hasError');
+    expect(validation).not.toContain('states[0].length > 0');
     const validate = new Function(`${validation}\nreturn isPlausibleBlinkCallback;`)() as (value: string) => boolean;
     expect(validate('https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code')).toBe(true);
+    expect(validate('https://applinks.blink.com/signin/callback?state=&code=one-time-code')).toBe(true);
     expect(validate('https://applinks.blink.com/signin/callback?state=opaque&error=access_denied&error_description=denied')).toBe(true);
     for (const invalid of [
       'https://example.com/signin/callback?state=opaque&code=one-time-code',
       'HTTPS://applinks.blink.com/signin/callback?state=opaque&code=one-time-code',
       'https://applinks.blink.com/signin/./callback?state=opaque&code=one-time-code',
-      'https://applinks.blink.com/signin/callback?state=&code=one-time-code',
+      'https://applinks.blink.com/signin/callback?code=one-time-code',
+      'https://applinks.blink.com/signin/callback?state=opaque&state=duplicate&code=one-time-code',
       'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code&error=',
       'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code&error_description=denied',
       'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code#fragment',
