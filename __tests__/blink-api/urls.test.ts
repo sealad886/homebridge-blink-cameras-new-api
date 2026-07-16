@@ -29,33 +29,55 @@ describe('Blink API URL builders', () => {
     expect(getSharedRestBaseUrl(config)).toBe('https://rest-prsg.immedia-semi.com/api/');
   });
 
-  it('maps OAuth env subdomain for sqa1', () => {
-    const config: BlinkConfig = { ...baseConfig, tier: 'sqa1' };
-    expect(getOAuthTokenUrl(config)).toBe('https://api.qa.oauth.blink.com/oauth/token');
-  });
-
-  it('uses production OAuth base for prod tiers', () => {
-    const config: BlinkConfig = { ...baseConfig, tier: 'prod' };
-    expect(getOAuthTokenUrl(config)).toBe('https://api.oauth.blink.com/oauth/token');
+  // ProductionTier explicitly defines prod/prde/prsg/a001/cemp/srf1. The
+  // numbered e001-e006 targets are best-effort routing cases accepted by
+  // TierRepository's four-alphanumeric-character regex, not live validation.
+  it.each([
+    ['prod', 'https://rest-prod.immedia-semi.com/api/'],
+    ['prde', 'https://rest-prde.immedia-semi.com/api/'],
+    ['prsg', 'https://rest-prsg.immedia-semi.com/api/'],
+    ['a001', 'https://rest-a001.immedia-semi.com/api/'],
+    ['cemp', 'https://rest-cemp.immedia-semi.com/api/'],
+    ['srf1', 'https://rest-srf1.immedia-semi.com/api/'],
+    ['e001', 'https://rest-e001.immedia-semi.com/api/'],
+    ['e002', 'https://rest-e002.immedia-semi.com/api/'],
+    ['e003', 'https://rest-e003.immedia-semi.com/api/'],
+    ['e004', 'https://rest-e004.immedia-semi.com/api/'],
+    ['e005', 'https://rest-e005.immedia-semi.com/api/'],
+    ['e006', 'https://rest-e006.immedia-semi.com/api/'],
+  ])('routes APK-accepted tier %s to %s', (tier, expected) => {
+    expect(getRestBaseUrl({ ...baseConfig, tier })).toBe(expected);
   });
 
   it.each([
-    'prod',
-    'prde',
-    'prsg',
-    'a001',
-    'cemp',
-    'srf1',
-    'e001',
-    'e002',
-    'e003',
-    'e004',
-    'e005',
-    'e006',
-  ])('uses the shared production OAuth host for APK-supported tier %s', (tier) => {
+    ['prod', 'https://api.oauth.blink.com/oauth/token'],
+    ['prde', 'https://api.oauth.blink.com/oauth/token'],
+    ['prsg', 'https://api.oauth.blink.com/oauth/token'],
+    ['a001', 'https://api.oauth.blink.com/oauth/token'],
+    ['cemp', 'https://api.oauth.blink.com/oauth/token'],
+    ['srf1', 'https://api.oauth.blink.com/oauth/token'],
+    ['e001', 'https://api.oauth.blink.com/oauth/token'],
+    ['e002', 'https://api.oauth.blink.com/oauth/token'],
+    ['e003', 'https://api.oauth.blink.com/oauth/token'],
+    ['e004', 'https://api.oauth.blink.com/oauth/token'],
+    ['e005', 'https://api.oauth.blink.com/oauth/token'],
+    ['e006', 'https://api.oauth.blink.com/oauth/token'],
+    ['sqa1', 'https://api.qa.oauth.blink.com/oauth/token'],
+  ])('maps APK tier %s to OAuth endpoint %s', (tier, expected) => {
     const config: BlinkConfig = { ...baseConfig, tier };
 
-    expect(getOAuthTokenUrl(config)).toBe('https://api.oauth.blink.com/oauth/token');
-    expect(getOAuthAuthorizeUrl(config)).toBe('https://api.oauth.blink.com/oauth/v2/authorize');
+    expect(getOAuthTokenUrl(config)).toBe(expected);
+    expect(getOAuthAuthorizeUrl(config)).toBe(expected.replace('/oauth/token', '/oauth/v2/authorize'));
+  });
+
+  it.each([
+    'prod.evil.example',
+    '../x',
+    'e01',
+    'abcde',
+    'pr_de',
+  ])('rejects unsafe tier value %s before forming a host', (tier) => {
+    expect(() => getRestBaseUrl({ ...baseConfig, tier })).toThrow('Invalid Blink tier');
+    expect(() => getSharedRestBaseUrl({ ...baseConfig, sharedTier: tier })).toThrow('Invalid Blink tier');
   });
 });

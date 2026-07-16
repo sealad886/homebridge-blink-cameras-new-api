@@ -9,13 +9,20 @@
 
 import { BlinkAuth } from './auth';
 import { BlinkHttp } from './http';
-import { getRestBaseUrl, getSharedRestBaseUrl, getSharedRestRootUrl } from './urls';
+import {
+  getRestBaseUrl,
+  getSharedRestBaseUrl,
+  getSharedRestRootUrl,
+  normalizeBlinkTier,
+} from './urls';
 import {
   BlinkAccountInfo,
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
   BlinkGeneratePinResponse,
+  BlinkHostedLoginResult,
+  BlinkHostedOAuthStart,
   BlinkHomescreen,
   BlinkLiveVideoResponse,
   BlinkLogger,
@@ -28,15 +35,15 @@ import {
   BlinkVerifyPinResponse,
 } from '../types';
 
-const KNOWN_TIERS = ['prod', 'sqa1', 'cemp', 'prde', 'prsg', 'a001', 'srf1', 'e006', 'e001', 'e002', 'e003', 'e004', 'e005'] as const;
-type KnownTier = (typeof KNOWN_TIERS)[number];
-
-const normalizeTier = (tier?: string | null): string | null => {
-  if (!tier) {
-    return null;
+export class BlinkRestVerificationRequiredError extends Error {
+  constructor(
+    public readonly type: 'client' | 'account',
+    message = `Blink ${type} verification required`,
+  ) {
+    super(message);
+    this.name = 'BlinkRestVerificationRequiredError';
   }
-  return tier.toLowerCase();
-};
+}
 
 export class BlinkApi {
   private readonly auth: BlinkAuth;
@@ -73,6 +80,62 @@ export class BlinkApi {
    */
   getAuthHeaders(): Record<string, string> {
     return this.auth.getAuthHeaders();
+  }
+
+  async beginHostedLogin(): Promise<BlinkHostedOAuthStart> {
+    return this.auth.beginHostedLogin();
+  }
+
+  async completeHostedLogin(
+    flowId: string,
+    callbackUrl: string,
+  ): Promise<BlinkHostedLoginResult> {
+    await this.auth.completeHostedLogin(flowId, callbackUrl);
+    this.accountId = this.auth.getAccountId();
+    this.clientId = this.auth.getClientId();
+
+    try {
+      await this.syncAccountInfoAndVerify({
+        useProductionBootstrap: true,
+        strictAccountInfo: true,
+        persistMetadata: false,
+      });
+      const homescreen = await this.getHomescreen();
+      await this.auth.persistCurrentState();
+      return {
+        authenticated: true,
+        verified: true,
+        accountId: this.accountId ?? undefined,
+        clientId: this.clientId ?? undefined,
+        email: this.config.email || undefined,
+        tier: this.config.tier,
+        networkCount: homescreen.networks?.length ?? 0,
+        cameraCount: homescreen.cameras?.length ?? 0,
+      };
+    } catch (error) {
+      await this.auth.persistCurrentState();
+      return this.buildUnverifiedHostedResult(error);
+    }
+  }
+
+  async cancelHostedLogin(): Promise<void> {
+    await this.auth.cancelHostedLogin();
+  }
+
+  private buildUnverifiedHostedResult(error: unknown): BlinkHostedLoginResult {
+    return {
+      authenticated: true,
+      verified: false,
+      verificationRequirement: error instanceof BlinkRestVerificationRequiredError
+        ? error.type
+        : 'connection',
+      accountId: this.accountId ?? undefined,
+      clientId: this.clientId ?? undefined,
+      email: this.config.email || undefined,
+      tier: this.config.tier,
+      networkCount: 0,
+      cameraCount: 0,
+    };
   }
 
   /**
@@ -138,32 +201,53 @@ export class BlinkApi {
   /**
    * Fetch account info and handle any first-time verification requirements.
    */
-  private async syncAccountInfoAndVerify(): Promise<void> {
+  private async syncAccountInfoAndVerify(options: {
+    useProductionBootstrap?: boolean;
+    strictAccountInfo?: boolean;
+    persistMetadata?: boolean;
+  } = {}): Promise<void> {
+    this.logDebug('syncAccountInfoAndVerify → syncing tier info');
+    const tierInfo = await this.syncTierInfo(options.useProductionBootstrap ?? false);
+    if (tierInfo?.account_id) {
+      this.accountId = tierInfo.account_id;
+    }
+
     this.logDebug('syncAccountInfoAndVerify → fetching account info');
     let accountInfo: BlinkAccountInfo | null = null;
     try {
       accountInfo = await this.getAccountInfo();
       this.logDebug(`syncAccountInfoAndVerify → account_id=${accountInfo?.account_id}, client_id=${accountInfo?.client_id}`);
     } catch (error) {
-      this.logDebug(`syncAccountInfoAndVerify → account info fetch failed: ${(error as Error).message}`);
+      if (options.strictAccountInfo) {
+        throw error;
+      }
+      this.logDebug('syncAccountInfoAndVerify → account info fetch failed');
       this.config.logger?.warn(
-        `Failed to fetch Blink account info: ${(error as Error).message}. Continuing with fallback tier info.`,
+        'Failed to fetch Blink account info. Continuing with fallback tier info.',
       );
     }
 
     if (accountInfo) {
       this.accountId = accountInfo.account_id ?? this.accountId;
       this.clientId = accountInfo.client_id ?? this.clientId;
-      this.auth.setAccountId(this.accountId);
-      this.auth.setClientId(this.clientId);
+      if (!tierInfo?.tier && accountInfo.tier) {
+        try {
+          this.applyTier(normalizeBlinkTier(accountInfo.tier) ?? 'prod');
+        } catch {
+          this.config.logger?.warn(
+            'Blink account info returned an invalid tier. Continuing with the bootstrap tier.',
+          );
+        }
+      }
     }
 
-    this.logDebug('syncAccountInfoAndVerify → syncing tier info');
-    const tierInfo = await this.syncTierInfo();
-    if (tierInfo?.account_id && !this.accountId) {
-      this.accountId = tierInfo.account_id;
-      this.auth.setAccountId(this.accountId);
-    }
+    this.auth.setAccountMetadata({
+      accountId: this.accountId,
+      clientId: this.clientId,
+      region: accountInfo?.region,
+      tier: this.config.tier ?? 'prod',
+      email: accountInfo?.email,
+    });
 
     if (accountInfo?.client_verification_required) {
       this.logDebug('syncAccountInfoAndVerify → client verification required');
@@ -173,6 +257,9 @@ export class BlinkApi {
     if (accountInfo?.phone_verification_required || accountInfo?.account_verification_required) {
       this.logDebug('syncAccountInfoAndVerify → account/phone verification required');
       await this.handleAccountVerification(accountInfo);
+    }
+    if (options.persistMetadata ?? true) {
+      await this.auth.persistCurrentState();
     }
     this.logDebug('syncAccountInfoAndVerify → complete');
   }
@@ -189,7 +276,7 @@ export class BlinkApi {
       await this.requestClientVerificationPin();
       log?.warn('Blink client verification required. A verification code has been sent.');
       log?.warn('Add "clientVerificationCode" to your Homebridge config and restart.');
-      throw new Error('Blink client verification required');
+      throw new BlinkRestVerificationRequiredError('client');
     }
 
     const trustDevice = this.config.trustDevice ?? true;
@@ -222,17 +309,23 @@ export class BlinkApi {
       }
       log?.warn(`Blink requires ${requirement} verification (phone/email).`);
       log?.warn('Add "accountVerificationCode" to your Homebridge config and restart.');
-      throw new Error('Blink account verification required');
+      throw new BlinkRestVerificationRequiredError('account');
     }
 
     const response = await this.verifyAccountVerificationPin(code);
     if (!response.valid) {
       log?.warn('Blink account verification failed. Request a new code and try again.');
-      throw new Error('Blink account verification failed');
+      throw new BlinkRestVerificationRequiredError(
+        'account',
+        'Blink account verification failed',
+      );
     }
     if (response.require_new_pin) {
       log?.warn('Blink requires a new verification PIN. Request another code and retry.');
-      throw new Error('Blink account verification requires a new PIN');
+      throw new BlinkRestVerificationRequiredError(
+        'account',
+        'Blink account verification requires a new PIN',
+      );
     }
 
     log?.info('Blink account verification successful.');
@@ -244,40 +337,43 @@ export class BlinkApi {
     this.sharedRootHttp.setBaseUrl(getSharedRestRootUrl(this.config));
   }
 
-  private async syncTierInfo(): Promise<BlinkTierInfo | null> {
+  private applyTier(tier: string): void {
+    const previousTier = this.config.tier ?? 'prod';
+    const previousSharedTier = this.config.sharedTier;
+    this.config.tier = tier;
+    if (!previousSharedTier || previousSharedTier === previousTier) {
+      this.config.sharedTier = tier;
+    }
+    this.updateBaseUrls();
+    if (tier !== previousTier) {
+      this.config.logger?.info(`Blink tier updated from ${previousTier} to ${tier}.`);
+    }
+  }
+
+  private async syncTierInfo(useProductionBootstrap: boolean): Promise<BlinkTierInfo | null> {
     const log = this.config.logger;
+    if (useProductionBootstrap) {
+      const bootstrapTier = this.config.tier === 'sqa1' ? 'sqa1' : 'prod';
+      this.applyTier(bootstrapTier);
+    }
     try {
       const tierInfo = await this.getTierInfo();
-      this.logDebug(`syncTierInfo → received tier: ${tierInfo?.tier ?? 'none'}`);
+      this.logDebug('syncTierInfo → received tier info');
       if (!tierInfo?.tier) {
         return tierInfo ?? null;
       }
-      const normalizedTier = normalizeTier(tierInfo.tier);
+      const normalizedTier = normalizeBlinkTier(tierInfo.tier);
       if (!normalizedTier) {
         return tierInfo ?? null;
       }
-
-      const previousTier = this.config.tier ?? 'prod';
-      const previousSharedTier = this.config.sharedTier;
-      const isKnownTier = KNOWN_TIERS.includes(normalizedTier as KnownTier);
-
-      if (!isKnownTier) {
-        log?.warn(
-          `Blink tier_info returned unrecognized tier "${tierInfo.tier}". Using reported tier for routing.`,
-        );
-      }
-
-      if (normalizedTier !== previousTier) {
-        this.config.tier = normalizedTier;
-        if (!previousSharedTier || previousSharedTier === previousTier) {
-          this.config.sharedTier = normalizedTier;
-        }
-        this.updateBaseUrls();
-        log?.info(`Blink tier updated from ${previousTier} to ${normalizedTier}.`);
-      }
+      this.applyTier(normalizedTier);
+      this.auth.setAccountMetadata({
+        accountId: tierInfo.account_id,
+        tier: normalizedTier,
+      });
       return tierInfo;
-    } catch (error) {
-      log?.debug?.(`Failed to fetch Blink tier info: ${(error as Error).message}`);
+    } catch {
+      log?.warn('Failed to fetch Blink tier info. Continuing with the bootstrap tier.');
       return null;
     }
   }

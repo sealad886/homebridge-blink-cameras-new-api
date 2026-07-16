@@ -9,22 +9,28 @@ import { BlinkConfig } from '../types';
 
 const DEFAULT_TIER = 'prod';
 type OAuthTierConfig = Pick<BlinkConfig, 'tier'>;
+const TIER_PATTERN = /^[A-Za-z0-9]{4}$/;
 
 const normalizeBase = (base: string): string => (base.endsWith('/') ? base : `${base}/`);
 
 /**
  * Resolve tier identifier from configuration
- * Source: API Dossier Section 1.2 - {tier} token placeholder
- * Evidence: smali_classes9/com/immediasemi/blink/core/api/RestApiKt.smali
+ * Source: Blink Android 57.1 TierRepository.isTierValid
+ * Evidence: TierRepository.java uses Regex("[a-zA-Z\\d]{4}")
  */
-const resolveTier = (tier?: string): string => {
+export const normalizeBlinkTier = (tier?: string | null): string | null => {
   const normalized = tier?.trim().toLowerCase();
   if (!normalized) {
-    return DEFAULT_TIER;
+    return null;
+  }
+  if (!TIER_PATTERN.test(normalized)) {
+    throw new Error('Invalid Blink tier.');
   }
 
   return normalized;
 };
+
+const resolveTier = (tier?: string): string => normalizeBlinkTier(tier) ?? DEFAULT_TIER;
 
 const resolveSharedTier = (tier?: string, sharedTier?: string): string => {
   return resolveTier(sharedTier ?? tier);
@@ -67,8 +73,8 @@ export const getSharedRestRootUrl = (config: BlinkConfig): string => {
 
 /**
  * Build OAuth base URL
- * Source: blinkpy - OAUTH_HOST = "api.oauth.blink.com"
- * Evidence: Production uses empty subdomain, QA uses "qa."
+ * Source: Blink Android 57.1 BaseUrls.OAUTH and TierRepository.getEnvSubdomain
+ * Evidence: production uses an empty subdomain; sqa1 uses staging "qa."
  */
 const getOAuthBaseUrl = (config: OAuthTierConfig): string => {
   const tier = resolveTier(config.tier);

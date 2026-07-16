@@ -38,7 +38,13 @@ const buildBlinkApi = (): MockedBlinkApi => ({
 });
 
 describe('BlinkCamerasPlatform', () => {
-  type TestConfig = PlatformConfig & { username: string; password: string; twoFactorCode?: string };
+  type TestConfig = PlatformConfig & {
+    username?: string;
+    password?: string;
+    twoFactorCode?: string;
+    persistAuth?: boolean;
+    tier?: string;
+  };
   let hapApi: MockAPI | null = null;
 
   const config: TestConfig = {
@@ -53,6 +59,32 @@ describe('BlinkCamerasPlatform', () => {
     jest.resetAllMocks();
     jest.useFakeTimers();
     hapApi = null;
+  });
+
+  it('starts credential-free from persisted auth with a runtime tier and no hosted pending path', () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const log = createLogger() as unknown as Logger;
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const tokenConfig: TestConfig = {
+      platform: 'BlinkCameras',
+      name: 'Blink',
+      persistAuth: true,
+      tier: 'e005',
+    };
+
+    new BlinkCamerasPlatform(log, tokenConfig, hapApi);
+
+    expect(BlinkApi).toHaveBeenCalledWith(expect.objectContaining({
+      email: '',
+      password: '',
+      tier: 'e005',
+    }));
+    const apiConfig = (BlinkApi as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
+    expect(apiConfig).not.toHaveProperty('hostedOAuthPendingPath');
+    expect(log.info).toHaveBeenCalledWith(
+      'No credentials in config; using persisted token authentication via custom UI.',
+    );
   });
 
   afterEach(() => {

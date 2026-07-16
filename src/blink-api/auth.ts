@@ -1494,11 +1494,27 @@ export class BlinkAuth {
   }
 
   setAccountId(accountId: number | null): void {
-    this.accountId = accountId ?? this.accountId;
+    this.setAccountMetadata({ accountId });
   }
 
   setClientId(clientId: number | null): void {
-    this.clientId = clientId ?? this.clientId;
+    this.setAccountMetadata({ clientId });
+  }
+
+  setAccountMetadata(metadata: {
+    accountId?: number | null;
+    clientId?: number | null;
+    region?: string | null;
+    tier?: string | null;
+    email?: string | null;
+  }): void {
+    this.accountId = metadata.accountId ?? this.accountId;
+    this.clientId = metadata.clientId ?? this.clientId;
+    this.region = metadata.region ?? this.region;
+    this.tier = metadata.tier ?? this.tier;
+    if (metadata.email) {
+      this.config.email = metadata.email;
+    }
   }
 
   /**

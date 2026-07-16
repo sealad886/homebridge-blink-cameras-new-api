@@ -430,6 +430,19 @@ export interface BlinkHostedOAuthStart {
   expiresAt: string;
 }
 
+/** Redacted outcome after hosted token exchange and REST verification. */
+export interface BlinkHostedLoginResult {
+  authenticated: true;
+  verified: boolean;
+  verificationRequirement?: 'client' | 'account' | 'connection';
+  accountId?: number;
+  clientId?: number;
+  email?: string;
+  tier?: string;
+  networkCount: number;
+  cameraCount: number;
+}
+
 export interface BlinkHostedOAuthTokenRequest {
   authorizationCode: string;
   codeVerifier: string;

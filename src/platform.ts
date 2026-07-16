@@ -60,8 +60,8 @@ interface BlinkPlatformConfig extends PlatformConfig {
   accountVerificationCode?: string;
   persistAuth?: boolean;
   trustDevice?: boolean;
-  tier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
-  sharedTier?: 'prod' | 'sqa1' | 'cemp' | 'prde' | 'prsg' | 'a001' | 'srf1';
+  tier?: string;
+  sharedTier?: string;
   pollInterval?: number;
   motionTimeout?: number;
   enableMotionPolling?: boolean;
