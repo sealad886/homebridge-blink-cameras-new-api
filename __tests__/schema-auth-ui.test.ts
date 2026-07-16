@@ -131,6 +131,16 @@ describe('schema auth UI regression', () => {
     expect(html).toContain('delete config.password');
   });
 
+  it('handles verification requirements returned directly by login and verify requests', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+
+    expect(html).toContain('function handleAuthResponse(response)');
+    expect(html).toContain("handleVerificationRequired('2fa', response)");
+    expect(html).toContain("handleVerificationRequired('client', response)");
+    expect(html).toContain("handleVerificationRequired('account', response)");
+    expect(html.match(/handleAuthResponse\(response\);/g)).toHaveLength(2);
+  });
+
   it('does not expose auth credentials/codes in schema properties or layout', () => {
     const schema = readJson<SchemaDocument>('config.schema.json');
     const properties = schema.schema?.properties ?? {};

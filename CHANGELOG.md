@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1] - 2026-07-16
+
+### Fixed
+
+- Made the custom authentication UI transition reliably to Blink's emailed or
+  device verification-code step when the requirement is returned by the login
+  or verification request.
+
 ## [0.8.0] - 2026-07-16
 
 ### Added

@@ -654,10 +654,7 @@
         tier
       });
 
-      if (response.authenticated) {
-        handleAuthSuccess(response);
-      }
-      // Other cases handled via events
+      handleAuthResponse(response);
     } catch (e) {
       showError(e.message || 'Login failed');
     } finally {
@@ -686,10 +683,7 @@
         trustDevice
       });
 
-      if (response.authenticated) {
-        handleAuthSuccess(response);
-      }
-      // Other cases handled via events
+      handleAuthResponse(response);
     } catch (e) {
       showError(e.message || 'Verification failed');
     } finally {
@@ -731,6 +725,20 @@
 
     document.getElementById('verifyCode').value = '';
     showStep('verify');
+  }
+
+  // Handle the request response directly as events may arrive before listeners
+  // are ready in some Homebridge UI environments.
+  function handleAuthResponse(response) {
+    if (response.authenticated) {
+      handleAuthSuccess(response);
+    } else if (response.requires2FA) {
+      handleVerificationRequired('2fa', response);
+    } else if (response.requiresClientVerification) {
+      handleVerificationRequired('client', response);
+    } else if (response.requiresAccountVerification) {
+      handleVerificationRequired('account', response);
+    }
   }
 
   // Handle successful authentication
