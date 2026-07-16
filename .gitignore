@@ -76,6 +76,7 @@ homebridge-config.json
 .DS_Store
 .fastembed_cache
 .codanna/
+.worktrees/
 
 # Logs
 logs
