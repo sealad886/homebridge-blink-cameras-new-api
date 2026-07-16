@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
 import { BlinkHostedReauthenticationRequiredError } from '../blink-api/auth';
@@ -18,7 +19,10 @@ import type {
   BlinkLogger,
   BlinkOAuthClientId,
 } from '../types';
-import { loadPersistedAuthStateFromFiles } from './auth-state';
+import {
+  loadPersistedAuthStateFromFiles,
+  type PersistedAuthStateLoadResult,
+} from './auth-state';
 
 const DEFAULT_HARDWARE_ID = 'homebridge-blink';
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
@@ -140,9 +144,34 @@ const safeMetadata = (state: Pick<BlinkAuthState, 'email' | 'accountId' | 'tier'
   return metadata;
 };
 
+const durableSessionIdentity = (state: BlinkAuthState): string => {
+  const encode = (value: unknown): [boolean, unknown] => (
+    value === undefined ? [false, null] : [true, value]
+  );
+  const canonicalState = [
+    encode(state.accessToken),
+    encode(state.refreshToken),
+    encode(state.tokenAuth),
+    encode(state.tokenExpiry),
+    encode(state.accountId),
+    encode(state.clientId),
+    encode(state.oauthClientId),
+    encode(state.region),
+    encode(state.tier),
+    encode(state.email),
+    encode(state.hardwareId),
+    encode(state.updatedAt),
+  ];
+  return createHash('sha256')
+    .update('blink-hosted-session-v1\0')
+    .update(JSON.stringify(canonicalState))
+    .digest('hex');
+};
+
 export class HostedAuthService {
   private readonly apiFactory: (config: BlinkConfig) => BlinkApi;
   private api: BlinkApi | null = null;
+  private apiSessionIdentity: string | null = null;
   private lastStatus: AuthStatus | null = null;
 
   constructor(private readonly options: HostedAuthServiceOptions) {
@@ -156,6 +185,7 @@ export class HostedAuthService {
     try {
       const result = await api.beginHostedLogin();
       this.api = api;
+      this.apiSessionIdentity = null;
       this.lastStatus = null;
       return {
         authorizationUrl: result.authorizationUrl,
@@ -187,9 +217,15 @@ export class HostedAuthService {
     try {
       const api = this.api ?? await this.createApiFromPendingTransaction();
       const result = await api.completeHostedLogin(request.flowId, request.callbackUrl);
-      this.api = api;
-      this.lastStatus = this.mapHostedResult(result);
-      return { ...this.lastStatus };
+      const status = this.mapHostedResult(result);
+      const persisted = await this.loadPersistedAuthState();
+      if (persisted.state) {
+        this.bindApiToState(api, persisted.state);
+        this.lastStatus = status;
+      } else {
+        this.invalidateRetainedSession();
+      }
+      return { ...status };
     } catch (error) {
       if (error instanceof HostedAuthServiceError) {
         throw error;
@@ -200,10 +236,8 @@ export class HostedAuthService {
   }
 
   async status(): Promise<AuthStatus> {
-    const loaded = await loadPersistedAuthStateFromFiles(
-      [this.authStoragePath, this.legacyAuthStoragePath],
-      message => this.options.logger.debug(message),
-    );
+    const loaded = await this.loadPersistedAuthState();
+    this.reconcileRetainedSession(loaded.state);
     if (!loaded.state) {
       return {
         authenticated: false,
@@ -220,15 +254,21 @@ export class HostedAuthService {
       };
     }
 
+    let api: BlinkApi | null = null;
     try {
-      const api = this.createApiFromState(loaded.state);
-      this.api = api;
+      api = this.createApiFromState(loaded.state);
+      this.bindApiToState(api, loaded.state);
       await api.login();
-      const refreshed = await loadPersistedAuthStateFromFiles(
-        [this.authStoragePath, this.legacyAuthStoragePath],
-        message => this.options.logger.debug(message),
-      );
-      const refreshedMetadata = safeMetadata(refreshed.state ?? loaded.state);
+      const refreshed = await this.loadPersistedAuthState();
+      if (!refreshed.state) {
+        this.invalidateRetainedSession();
+        return {
+          authenticated: false,
+          message: refreshed.message ?? NO_STORED_AUTH_MESSAGE,
+        };
+      }
+      this.bindApiToState(api, refreshed.state);
+      const refreshedMetadata = safeMetadata(refreshed.state);
       this.lastStatus = {
         authenticated: true,
         verified: true,
@@ -246,11 +286,9 @@ export class HostedAuthService {
       }
       this.options.logger.warn('[Hosted Auth] Stored authentication refresh failed.');
       try {
-        const recovered = await loadPersistedAuthStateFromFiles(
-          [this.authStoragePath, this.legacyAuthStoragePath],
-          message => this.options.logger.debug(message),
-        );
-        if (recovered.state && !recovered.requiresRefresh) {
+        const recovered = await this.loadPersistedAuthState();
+        if (api && recovered.state && !recovered.requiresRefresh) {
+          this.bindApiToState(api, recovered.state);
           this.lastStatus = {
             authenticated: true,
             verified: false,
@@ -259,7 +297,9 @@ export class HostedAuthService {
           };
           return { ...this.lastStatus };
         }
+        this.reconcileRetainedSession(recovered.state);
       } catch {
+        this.invalidateRetainedSession();
         this.options.logger.warn('[Hosted Auth] Persisted authentication recovery check failed.');
       }
       return {
@@ -298,10 +338,13 @@ export class HostedAuthService {
         }
       }
       await context.api.login();
-      this.api = context.api;
-      const metadata = this.lastStatus
-        ? safeMetadata(this.lastStatus)
-        : safeMetadata(context.state);
+      const persisted = await this.loadPersistedAuthState();
+      if (!persisted.state) {
+        this.invalidateRetainedSession();
+        throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
+      }
+      this.bindApiToState(context.api, persisted.state);
+      const metadata = safeMetadata(persisted.state);
       this.lastStatus = {
         authenticated: true,
         verified: true,
@@ -313,7 +356,7 @@ export class HostedAuthService {
       if (error instanceof BlinkRestVerificationRequiredError && context) {
         this.lastStatus = this.mapVerificationRequirement(
           error.type,
-          this.lastStatus ?? context.state,
+          context.state,
         );
         return { ...this.lastStatus };
       }
@@ -334,7 +377,12 @@ export class HostedAuthService {
       const context = await this.getPersistedApiContext(request.deviceId);
       await context.api.login();
       await context.api.getHomescreen();
-      this.api = context.api;
+      const persisted = await this.loadPersistedAuthState();
+      if (!persisted.state) {
+        this.invalidateRetainedSession();
+        throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
+      }
+      this.bindApiToState(context.api, persisted.state);
       return {
         success: true,
         message: 'Connected to Blink using stored tokens.',
@@ -359,8 +407,7 @@ export class HostedAuthService {
       removeOwnerOnlyFile(this.legacyAuthStoragePath),
       removeOwnerOnlyFile(this.pendingStoragePath),
     ]);
-    this.api = null;
-    this.lastStatus = null;
+    this.invalidateRetainedSession();
     if (
       currentResult.status === 'rejected'
       || legacyResult.status === 'rejected'
@@ -368,6 +415,34 @@ export class HostedAuthService {
     ) {
       this.options.logger.warn('[Hosted Auth] Authentication file cleanup failed.');
       throw new HostedAuthServiceError(CLEAR_FAILED_MESSAGE, 'storage', 500);
+    }
+  }
+
+  private loadPersistedAuthState(): Promise<PersistedAuthStateLoadResult> {
+    return loadPersistedAuthStateFromFiles(
+      [this.authStoragePath, this.legacyAuthStoragePath],
+      message => this.options.logger.debug(message),
+    );
+  }
+
+  private bindApiToState(api: BlinkApi, state: BlinkAuthState): void {
+    this.api = api;
+    this.apiSessionIdentity = durableSessionIdentity(state);
+  }
+
+  private invalidateRetainedSession(): void {
+    this.api = null;
+    this.apiSessionIdentity = null;
+    this.lastStatus = null;
+  }
+
+  private reconcileRetainedSession(state: BlinkAuthState | null): void {
+    if (
+      !state
+      || !this.api
+      || this.apiSessionIdentity !== durableSessionIdentity(state)
+    ) {
+      this.invalidateRetainedSession();
     }
   }
 
@@ -442,21 +517,19 @@ export class HostedAuthService {
   }
 
   private async getPersistedApiContext(fallbackHardwareId?: unknown): Promise<PersistedApiContext> {
-    const loaded = await loadPersistedAuthStateFromFiles(
-      [this.authStoragePath, this.legacyAuthStoragePath],
-      message => this.options.logger.debug(message),
-    );
+    const loaded = await this.loadPersistedAuthState();
     if (!loaded.state) {
-      if (this.api && this.lastStatus) {
-        return { api: this.api, state: this.lastStatus };
-      }
+      this.invalidateRetainedSession();
       throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
     }
+    this.reconcileRetainedSession(loaded.state);
     if (this.api) {
       return { api: this.api, state: loaded.state };
     }
+    const api = this.createApiFromState(loaded.state, fallbackHardwareId);
+    this.bindApiToState(api, loaded.state);
     return {
-      api: this.createApiFromState(loaded.state, fallbackHardwareId),
+      api,
       state: loaded.state,
     };
   }

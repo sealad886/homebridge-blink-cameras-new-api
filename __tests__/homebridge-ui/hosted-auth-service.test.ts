@@ -84,13 +84,16 @@ const createApiDouble = (result: BlinkHostedLoginResult = {
   tier: 'prde',
   networkCount: 1,
   cameraCount: 2,
-}): ApiDouble => ({
+}, onComplete?: () => Promise<void>): ApiDouble => ({
   beginHostedLogin: jest.fn().mockResolvedValue({
     authorizationUrl: 'https://api.oauth.blink.com/oauth/v2/authorize?safe=1',
     flowId: 'opaque-flow-id',
     expiresAt: '2026-07-16T12:15:00.000Z',
   }),
-  completeHostedLogin: jest.fn().mockResolvedValue(result),
+  completeHostedLogin: jest.fn().mockImplementation(async () => {
+    await onComplete?.();
+    return result;
+  }),
   login: jest.fn().mockResolvedValue(undefined),
   getAccountInfo: jest.fn().mockResolvedValue({
     account_id: 123,
@@ -477,6 +480,221 @@ describe('HostedAuthService', () => {
     });
   });
 
+  it('reconstructs from replacement account state before account verification', async () => {
+    const stateA = persistedState({
+      accessToken: 'accountAAccessSentinel_1Jq4',
+      refreshToken: 'accountARefreshSentinel_2Kr5',
+      email: 'account-a@example.com',
+      accountId: 111,
+      clientId: 211,
+      hardwareId: 'account-a-device',
+      updatedAt: '2026-07-16T10:00:00.000Z',
+    });
+    const stateB = persistedState({
+      accessToken: 'accountBAccessSentinel_3Ls6',
+      refreshToken: 'accountBRefreshSentinel_4Mt7',
+      email: 'account-b@example.com',
+      accountId: 222,
+      clientId: 322,
+      hardwareId: 'account-b-device',
+      tier: 'e001',
+      updatedAt: '2026-07-16T11:00:00.000Z',
+    });
+    const apiA = createApiDouble({
+      authenticated: true,
+      verified: true,
+      email: 'account-a@example.com',
+      accountId: 111,
+      tier: 'prde',
+      networkCount: 1,
+      cameraCount: 2,
+    }, () => writeOwnerOnlyState(authStoragePath, stateA));
+    const apiB = createApiDouble();
+    apiB.getAccountInfo.mockResolvedValue({
+      account_id: 222,
+      client_id: 322,
+      email: 'account-b@example.com',
+      region: 'eu',
+      tier: 'e001',
+      trust_device_enabled: true,
+    });
+    const apiFactory = jest.fn()
+      .mockReturnValueOnce(asBlinkApi(apiA))
+      .mockReturnValueOnce(asBlinkApi(apiB));
+    const { logger, entries } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory });
+    await service.start({});
+    await service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    });
+    await writeOwnerOnlyState(authStoragePath, stateB);
+
+    await service.status();
+    const verified = await service.verify({ type: 'account', code: '987654' });
+
+    expect(verified).toEqual({
+      authenticated: true,
+      verified: true,
+      email: 'account-b@example.com',
+      accountId: 222,
+      tier: 'e001',
+      message: 'Blink verification completed.',
+    });
+    expect(apiA.getAccountInfo).not.toHaveBeenCalled();
+    expect(apiA.verifyAccountVerificationPin).not.toHaveBeenCalled();
+    expect(apiB.getAccountInfo).toHaveBeenCalledTimes(1);
+    expect(apiB.verifyAccountVerificationPin).toHaveBeenCalledWith('987654');
+    expect(apiFactory).toHaveBeenCalledTimes(2);
+    expect(apiFactory).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      email: '',
+      password: '',
+      hardwareId: 'account-b-device',
+      tier: 'e001',
+    }));
+    const secrets = [stateA.accessToken, stateA.refreshToken, stateB.accessToken, stateB.refreshToken]
+      .filter((value): value is string => typeof value === 'string');
+    for (const secret of secrets) {
+      expect(containsSecret(verified, secret)).toBe(false);
+      expect(entries.join('\n')).not.toContain(secret);
+    }
+  });
+
+  it('invalidates a retained API when replacement tokens change but account metadata matches', async () => {
+    const stateA = persistedState({
+      accessToken: 'sameMetadataAccessA_5Nu8',
+      refreshToken: 'sameMetadataRefreshA_6Ov9',
+      updatedAt: '2026-07-16T10:00:00.000Z',
+    });
+    const stateB = persistedState({
+      accessToken: 'sameMetadataAccessB_7Pw1',
+      refreshToken: 'sameMetadataRefreshB_8Qx2',
+      tokenExpiry: '2099-07-17T14:00:00.000Z',
+      updatedAt: '2026-07-16T11:00:00.000Z',
+    });
+    const apiA = createApiDouble(undefined, () => writeOwnerOnlyState(authStoragePath, stateA));
+    const apiB = createApiDouble();
+    apiB.getAccountInfo.mockResolvedValue({
+      account_id: 123,
+      client_id: 456,
+      email: 'persisted@example.com',
+      region: 'eu',
+      tier: 'prde',
+      trust_device_enabled: false,
+    });
+    const apiFactory = jest.fn()
+      .mockReturnValueOnce(asBlinkApi(apiA))
+      .mockReturnValueOnce(asBlinkApi(apiB));
+    const { logger, entries } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory });
+    await service.start({});
+    await service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    });
+    await writeOwnerOnlyState(authStoragePath, stateB);
+
+    const status = await service.status();
+    const verified = await service.verify({
+      type: 'client',
+      code: 'ABCD-1234',
+      trustDevice: false,
+    });
+
+    expect(apiA.getAccountInfo).not.toHaveBeenCalled();
+    expect(apiA.verifyClientVerificationPin).not.toHaveBeenCalled();
+    expect(apiB.getAccountInfo).toHaveBeenCalledTimes(1);
+    expect(apiB.verifyClientVerificationPin).toHaveBeenCalledWith('ABCD-1234', false, false);
+    expect(apiFactory).toHaveBeenCalledTimes(2);
+    const secrets = [stateA.accessToken, stateA.refreshToken, stateB.accessToken, stateB.refreshToken]
+      .filter((value): value is string => typeof value === 'string');
+    for (const secret of secrets) {
+      expect(containsSecret(status, secret)).toBe(false);
+      expect(containsSecret(verified, secret)).toBe(false);
+      expect(entries.join('\n')).not.toContain(secret);
+    }
+  });
+
+  it('reconstructs from replacement durable state before testing the connection', async () => {
+    const stateA = persistedState({
+      accessToken: 'connectionAccessA_9Ry3',
+      refreshToken: 'connectionRefreshA_1Sz4',
+      hardwareId: 'connection-device-a',
+      updatedAt: '2026-07-16T10:00:00.000Z',
+    });
+    const stateB = persistedState({
+      accessToken: 'connectionAccessB_2Ta5',
+      refreshToken: 'connectionRefreshB_3Ub6',
+      hardwareId: 'connection-device-b',
+      updatedAt: '2026-07-16T11:00:00.000Z',
+    });
+    const apiA = createApiDouble(undefined, () => writeOwnerOnlyState(authStoragePath, stateA));
+    const apiB = createApiDouble();
+    const apiFactory = jest.fn()
+      .mockReturnValueOnce(asBlinkApi(apiA))
+      .mockReturnValueOnce(asBlinkApi(apiB));
+    const { logger } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory });
+    await service.start({});
+    await service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    });
+    await writeOwnerOnlyState(authStoragePath, stateB);
+
+    await service.status();
+    await expect(service.testConnection({})).resolves.toEqual({
+      success: true,
+      message: 'Connected to Blink using stored tokens.',
+    });
+
+    expect(apiA.login).not.toHaveBeenCalled();
+    expect(apiA.getHomescreen).not.toHaveBeenCalled();
+    expect(apiB.login).toHaveBeenCalledTimes(1);
+    expect(apiB.getHomescreen).toHaveBeenCalledTimes(1);
+    expect(apiFactory).toHaveBeenCalledTimes(2);
+    expect(apiFactory).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      email: '',
+      password: '',
+      hardwareId: 'connection-device-b',
+    }));
+  });
+
+  it('invalidates retained API and status when durable authentication disappears', async () => {
+    const stateA = persistedState({
+      accessToken: 'removedAccessSentinel_4Vc7',
+      refreshToken: 'removedRefreshSentinel_5Wd8',
+    });
+    const apiA = createApiDouble(undefined, () => writeOwnerOnlyState(authStoragePath, stateA));
+    const apiFactory = jest.fn(() => asBlinkApi(apiA));
+    const { logger, entries } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory });
+    await service.start({});
+    await service.complete({
+      flowId: 'opaque-flow-id',
+      callbackUrl: 'https://applinks.blink.com/signin/callback?code=hidden&state=hidden',
+    });
+    await fs.rm(authStoragePath);
+
+    const status = await service.status();
+
+    expect(status).toEqual({
+      authenticated: false,
+      message: 'No stored Blink authentication was found. Sign in securely with Blink.',
+    });
+    await expect(service.verify({ type: 'account', code: '987654' })).rejects.toMatchObject({
+      message: 'No stored Blink authentication was found. Sign in securely with Blink.',
+      category: 'storage',
+      status: 400,
+    });
+    expect(apiA.getAccountInfo).not.toHaveBeenCalled();
+    expect(apiA.verifyAccountVerificationPin).not.toHaveBeenCalled();
+    expect(apiFactory).toHaveBeenCalledTimes(1);
+    expect(containsSecret(status, stateA.accessToken)).toBe(false);
+    expect(entries.join('\n')).not.toContain(stateA.accessToken);
+    expect(entries.join('\n')).not.toContain(stateA.refreshToken);
+  });
+
   it('omits invalid persisted email metadata from status and logs', async () => {
     const emailSecret = 'persistedEmailSentinel_7Lq2';
     await writeOwnerOnlyState(authStoragePath, persistedState({ email: emailSecret }));
@@ -802,11 +1020,12 @@ describe('HostedAuthService', () => {
       tier: 'prde',
       networkCount: 0,
       cameraCount: 0,
-    });
+    }, () => writeOwnerOnlyState(authStoragePath, persistedState()));
+    const apiFactory = jest.fn(() => asBlinkApi(api));
     const service = new HostedAuthService({
       storageRoot,
       logger,
-      apiFactory: () => asBlinkApi(api),
+      apiFactory,
     });
     await service.start({});
     await service.complete({
@@ -826,6 +1045,7 @@ describe('HostedAuthService', () => {
     expect(api.verifyClientVerificationPin).toHaveBeenCalledWith('ABCD-1234', true, false);
     expect(api.getAccountInfo).toHaveBeenCalledTimes(1);
     expect(api.login).toHaveBeenCalledTimes(1);
+    expect(apiFactory).toHaveBeenCalledTimes(1);
 
     await expect(service.verify({ type: '2fa', code: '123456' } as never)).rejects.toMatchObject({
       category: 'invalid_request',
@@ -880,7 +1100,7 @@ describe('HostedAuthService', () => {
       tier: 'prde',
       networkCount: 0,
       cameraCount: 0,
-    });
+    }, () => writeOwnerOnlyState(authStoragePath, persistedState()));
     const service = new HostedAuthService({
       storageRoot,
       logger,
