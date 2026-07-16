@@ -188,8 +188,21 @@ describe('HostedOAuthCoordinator', () => {
     ['wrong hostname', pending => `https://example.com/signin/callback?state=${pending.state}&code=${VALID_CODE}`],
     ['explicit port', pending => `https://applinks.blink.com:443/signin/callback?state=${pending.state}&code=${VALID_CODE}`],
     ['wrong path', pending => `https://applinks.blink.com/signin/other?state=${pending.state}&code=${VALID_CODE}`],
+    ['literal dot-segment path', pending => `https://applinks.blink.com/signin/./callback?state=${pending.state}&code=${VALID_CODE}`],
+    ['percent-encoded dot-segment path', pending => `https://applinks.blink.com/signin/%2e/callback?state=${pending.state}&code=${VALID_CODE}`],
+    ['backslash path separator', pending => `https://applinks.blink.com/signin\\callback?state=${pending.state}&code=${VALID_CODE}`],
+    ['TAB normalized from path', pending => `https://applinks.blink.com/sig\tnin/callback?state=${pending.state}&code=${VALID_CODE}`],
+    ['CR normalized from path', pending => `https://applinks.blink.com/sig\rnin/callback?state=${pending.state}&code=${VALID_CODE}`],
+    ['LF normalized from path', pending => `https://applinks.blink.com/sig\nnin/callback?state=${pending.state}&code=${VALID_CODE}`],
     ['fragment', pending => `${callbackFor(pending)}#fragment`],
+    ['empty fragment marker', pending => `${callbackFor(pending)}#`],
+    ['fragment containing only stripped TAB', pending => `${callbackFor(pending)}#\t`],
+    ['fragment containing only stripped CR', pending => `${callbackFor(pending)}#\r`],
+    ['fragment containing only stripped LF', pending => `${callbackFor(pending)}#\n`],
     ['username and password', pending => `https://user:password@applinks.blink.com/signin/callback?state=${pending.state}&code=${VALID_CODE}`],
+    ['TAB normalized from code parameter name', pending => `${CALLBACK_BASE}?state=${pending.state}&co\tde=${VALID_CODE}`],
+    ['CR normalized from code parameter name', pending => `${CALLBACK_BASE}?state=${pending.state}&co\rde=${VALID_CODE}`],
+    ['LF normalized from code parameter name', pending => `${CALLBACK_BASE}?state=${pending.state}&co\nde=${VALID_CODE}`],
     ['duplicate state', pending => `${callbackFor(pending)}&state=${pending.state}`],
     ['duplicate code', pending => `${callbackFor(pending)}&code=second-code`],
     ['duplicate error', pending => `${CALLBACK_BASE}?state=${pending.state}&error=access_denied&error=server_error`],
@@ -199,6 +212,11 @@ describe('HostedOAuthCoordinator', () => {
     ['code plus error', pending => `${callbackFor(pending)}&error=access_denied`],
     ['empty code plus error', pending => `${CALLBACK_BASE}?state=${pending.state}&code=&error=access_denied`],
     ['code plus empty error', pending => `${callbackFor(pending)}&error=`],
+    ['trailing NUL', pending => `${callbackFor(pending)}\0`],
+    ['trailing vertical tab', pending => `${callbackFor(pending)}\v`],
+    ['trailing form feed', pending => `${callbackFor(pending)}\f`],
+    ['trailing space', pending => `${callbackFor(pending)} `],
+    ['trailing DEL', pending => `${callbackFor(pending)}\x7f`],
     ['more than 2,048 UTF-8 bytes', pending => `${CALLBACK_BASE}?state=${pending.state}&code=${'£'.repeat(MAX_HOSTED_CALLBACK_BYTES)}`],
     ['malformed URL', () => 'not a URL'],
   ];
@@ -214,6 +232,17 @@ describe('HostedOAuthCoordinator', () => {
       [callbackUrl, pending.flowId, pending.state, pending.codeVerifier, VALID_CODE],
     );
     expect(await readOwnerOnlyJsonFile<BlinkHostedOAuthTransaction>(pendingPath)).toEqual(pending);
+  });
+
+  it('classifies a normalized raw callback as malformed before loading pending state', async () => {
+    const callbackUrl = `${CALLBACK_BASE}?state=${WRONG_STATE}&code=${VALID_CODE}#`;
+
+    await expectValidationError(
+      createCoordinator().consumeCallback(WRONG_FLOW_ID, callbackUrl),
+      'malformed',
+      [callbackUrl, WRONG_FLOW_ID, WRONG_STATE, VALID_CODE],
+    );
+    await expectPendingMissing(pendingPath);
   });
 
   const securityFailures: Array<[
@@ -282,6 +311,19 @@ describe('HostedOAuthCoordinator', () => {
 
     await expect(restartedCoordinator.consumeCallback(pending.flowId, callbackUrl)).resolves.toEqual({
       authorizationCode: VALID_CODE,
+      codeVerifier: pending.codeVerifier,
+      oauthClientId: 'android',
+      redirectUri: CALLBACK_BASE,
+    });
+    await expectPendingMissing(pendingPath);
+  });
+
+  it('accepts correctly percent-encoded query values', async () => {
+    const { pending } = await startTransaction();
+    const callbackUrl = `${CALLBACK_BASE}?state=${pending.state}&code=one%20time%2Bcode%23value`;
+
+    await expect(createCoordinator().consumeCallback(pending.flowId, callbackUrl)).resolves.toEqual({
+      authorizationCode: 'one time+code#value',
       codeVerifier: pending.codeVerifier,
       oauthClientId: 'android',
       redirectUri: CALLBACK_BASE,

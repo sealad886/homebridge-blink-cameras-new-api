@@ -27,6 +27,7 @@ export const MAX_HOSTED_CALLBACK_BYTES = 2048;
 const FLOW_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CALLBACK_AUTHORITY = 'applinks.blink.com';
 const CALLBACK_PATH = '/signin/callback';
+const CALLBACK_QUERY_PREFIX = `https://${CALLBACK_AUTHORITY}${CALLBACK_PATH}?`;
 const TRANSACTION_KEYS = [
   'codeChallenge',
   'codeVerifier',
@@ -96,9 +97,14 @@ const parseCanonicalTimestamp = (value: unknown): number | null => {
   return timestamp;
 };
 
-const hasRawExpectedAuthority = (callbackUrl: string): boolean => {
-  const authorityMatch = /^https:\/\/([^/?#]*)(?:[/?#]|$)/.exec(callbackUrl);
-  return authorityMatch?.[1] === CALLBACK_AUTHORITY;
+const hasForbiddenRawCallbackCharacter = (callbackUrl: string): boolean => {
+  for (let index = 0; index < callbackUrl.length; index += 1) {
+    const codeUnit = callbackUrl.charCodeAt(index);
+    if (codeUnit <= 0x20 || codeUnit === 0x23 || codeUnit === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 };
 
 const throwValidation = (
@@ -233,6 +239,8 @@ export class HostedOAuthCoordinator {
       typeof callbackUrl !== 'string'
       || callbackUrl.length === 0
       || Buffer.byteLength(callbackUrl, 'utf8') > MAX_HOSTED_CALLBACK_BYTES
+      || !callbackUrl.startsWith(CALLBACK_QUERY_PREFIX)
+      || hasForbiddenRawCallbackCharacter(callbackUrl)
     ) {
       throwValidation('malformed', MALFORMED_MESSAGE);
     }
@@ -245,8 +253,7 @@ export class HostedOAuthCoordinator {
     }
 
     if (
-      !hasRawExpectedAuthority(callbackUrl)
-      || url.protocol !== 'https:'
+      url.protocol !== 'https:'
       || url.hostname !== CALLBACK_AUTHORITY
       || url.port !== ''
       || url.username !== ''
