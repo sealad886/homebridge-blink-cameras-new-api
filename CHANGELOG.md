@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-07-16
+
+### Added
+
+- Added Blink-hosted OAuth authorization-code sign-in with Pi-owned PKCE/state,
+  the registered Blink App-Link, clipboard-assisted completion, and a manual
+  paste fallback for browsers that deny clipboard access.
+- Added owner-only, 15-minute pending-transaction persistence that can recover
+  across process restarts, is consumed before exchange, and records durable
+  OAuth profile metadata only after success.
+
+### Changed
+
+- Made new hosted sessions use Blink's Android OAuth profile, including the
+  exact Android refresh form (`client_id=android`, `scope=client`).
+- Made hosted completion save token-only configuration with
+  `persistAuth=true` and `authLocked=true`; ephemeral hosted-UI sessions are not
+  supported.
+- Made post-token `tier_info` discovery authoritative for regional and shared
+  REST routing, with APK-derived and parameterized coverage for non-EU targets.
+- Revalidated the authentication workflow, dynamically constructed targets,
+  trust boundary, recovery behavior, and operator instructions against Blink
+  Android 57.1 and the implemented custom UI.
+
+### Removed
+
+- Removed direct Blink credential and hosted-MFA collection from the supported
+  Homebridge UI flow; those values are entered only on Blink's hosted page.
+
+### Validation status
+
+- An earlier authorized Ireland-account proof established the hosted protocol
+  and `prde` routing. Live acceptance of the packaged `0.9.0` build remains Task
+  8; non-EU targets have APK/static and mocked coverage, not live-account tests.
+
 ## [0.8.1] - 2026-07-16
 
 ### Fixed

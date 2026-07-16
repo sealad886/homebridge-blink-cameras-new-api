@@ -1,9 +1,14 @@
-# Blink API Dossier (APK Evidence) — WIP
+# Blink API Dossier (APK Evidence)
 
-This dossier is built from the decompiled Blink Android APK splits in **Root B**: `/Users/andrew/zzApps/blink-home-monitor`.
-All statements below are evidence-backed with file paths + minimal snippets. Unknowns are explicitly marked.
+This dossier combines the earlier endpoint inventory with the locally retained,
+git-ignored Blink Android 57.1 (`versionCode` 29715642) JADX/apktool snapshot
+under `logs/blink-apk/57.1-29715642/decompiled/`. APK/decompilation artifacts
+are evidence only: they are never staged or included in the npm package.
 
-URL construction was revalidated against Blink Android 57.1 (`versionCode` 29715642), extracted on 2026-07-16. The refreshed APK confirms request-time token replacement and adds an API Gateway base not represented in the older evidence snapshot:
+Statements below cite decompiled classes or repository tests; unknowns remain
+explicit. URL construction was revalidated on 2026-07-16. Android 57.1 confirms
+request-time token replacement and adds an API Gateway base not represented in
+the older evidence snapshot:
 
 ```java
 public static final String API_GATEWAY = "https://api.{env}blink.com/blink/";
@@ -12,27 +17,28 @@ public static final String API_GATEWAY = "https://api.{env}blink.com/blink/";
 ## Evidence Index
 
 **E1 — Base URLs (REST, shared REST, OAuth, event stream, local)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/api/BaseUrls.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/api/BaseUrls.java`
 ```java
 public static final String EVENT_STREAM_DEV = "https://dev.eventstream.immedia-semi.com/";
 public static final String EVENT_STREAM_PROD = "https://prod.eventstream.immedia-semi.com/";
-public static final String LOCAL = "http://172.16.97.199/";
+public static final String LOCAL_DEVICE = "http://172.16.97.199/";
 public static final String OAUTH = "https://api.{env}oauth.blink.com/";
 public static final String REST = "https://rest-{tier}.immedia-semi.com/api/";
 public static final String SHARED_REST = "https://rest-{shared_tier}.immedia-semi.com/api/";
 ```
 
 **E2 — Base URL providers (DI module)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/BaseUrlModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/BaseUrlModule.java`
 ```java
 @Provides @Singleton public final String provideRestUrl() { return BaseUrls.REST; }
 @Provides @Singleton public final String provideSharedRestUrl() { return BaseUrls.SHARED_REST; }
 @Provides @Singleton public final String provideOauthUrl() { return BaseUrls.OAUTH; }
-@Provides @Singleton public final String provideLocalUrl() { return BaseUrls.LOCAL; }
+@Provides @Singleton public final String provideApiGatewayUrl() { return BaseUrls.API_GATEWAY; }
+@Provides @Singleton public final String provideLocalDeviceUrl() { return BaseUrls.LOCAL_DEVICE; }
 ```
 
 **E3 — URL tokens and host detection**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/api/RestApiKt.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/api/RestApiKt.java`
 ```java
 public static final String ENV_SUBDOMAIN_TOKEN = "{env}";
 public static final String IMMEDIA_SEMI_DOMAIN = "immedia-semi.com";
@@ -45,7 +51,7 @@ public static final boolean isBlinkHost(String str) {
 ```
 
 **E4 — Tier/env token replacement in OkHttp (base + OAuth)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/NetworkModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/NetworkModule.java`
 ```java
 return new OkHttpClient.Builder()
   .addInterceptor(headersInterceptor)
@@ -71,7 +77,7 @@ OauthApi oauthApi = (OauthApi) retrofitBuilder.baseUrl(oauthUrl)
 ```
 
 **E5 — Core HTTP header names**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/api/HttpHeader.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/api/HttpHeader.java`
 ```java
 public static final String APP_BUILD = "APP-BUILD";
 public static final String USER_AGENT = "User-Agent";
@@ -82,7 +88,7 @@ public static final String AUTHORIZATION = "Authorization";
 ```
 
 **E6 — Default header injection**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/network/HeadersInterceptor.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/network/HeadersInterceptor.java`
 ```java
 Request.Builder builder = chain.request().newBuilder()
   .addHeader(HttpHeader.APP_BUILD, BuildUtils.INSTANCE.getVersionCodeHeader())
@@ -94,11 +100,11 @@ return chain.proceed(builder2.addHeader(HttpHeader.TIME_ZONE, id).build());
 ```
 
 **E7 — User-Agent, client type, version code header**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/util/BuildUtils.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/util/BuildUtils.java`
 ```java
 public final String getClientType() { return isAmazonDevice() ? "amazon" : "android"; }
 public final String getUserAgent() {
-  return "Blink/51.0 (" + Build.MANUFACTURER + " " + Build.MODEL + "; Android "
+  return "Blink/57.1 (" + Build.MANUFACTURER + " " + Build.MODEL + "; Android "
          + getAndroidOsVersion() + ")";
 }
 public final String getVersionCodeHeader() {
@@ -107,31 +113,34 @@ public final String getVersionCodeHeader() {
 ```
 
 **E8 — OAuth environment → subdomain mapping**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/network/OauthEnvironment.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/network/Environment.java`
 ```java
-public static final OauthEnvironment PRODUCTION = new OauthEnvironment("PRODUCTION", 0, "production", null);
-public static final OauthEnvironment STAGING = new OauthEnvironment("STAGING", 1, "staging", "qa.");
-public static final OauthEnvironment DEVELOPMENT = new OauthEnvironment("DEVELOPMENT", 2, "development", "dev.");
+public static final Environment PRODUCTION =
+  new Environment("PRODUCTION", 0, "production", "prod", null, null);
+public static final Environment STAGING =
+  new Environment("STAGING", 1, "staging", "gamma", "qa.", "gamma.");
+public static final Environment DEVELOPMENT =
+  new Environment("DEVELOPMENT", 2, "development", "beta", "dev.", "beta.");
 public final String getSubdomain() { return this.subdomain; }
 ```
 
 **E9 — Tier repository (tier codes + env subdomain)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/network/tier/TierRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/network/tier/TierRepository.java`
 ```java
 private static final Map<String, Tier> tierCodes = MapsKt.mapOf(
   TuplesKt.to("regression_sqa1", new Tier(){
     private final String tierName = "sqa1";
     private final AwsRegion region = AwsRegion.US_EAST_1;
-    private final OauthEnvironment oauthEnvironment = OauthEnvironment.STAGING; ... }),
+    private final Environment oauthEnvironment = Environment.STAGING; ... }),
   TuplesKt.to("regression_cemp", ProductionTier.CEMP));
 ```
 ```java
-String subdomain = ((OauthEnvironment) obj).getSubdomain();
+String subdomain = ((Environment) obj).getSubdomain();
 return subdomain == null ? "" : subdomain;
 ```
 
 **E10 — OAuth login & refresh endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/auth/OauthApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/auth/OauthApi.java`
 ```java
 @FormUrlEncoded @POST("oauth/token")
 Object postLogin(@Field("username") String email,
@@ -150,14 +159,14 @@ Call<RefreshTokensResponse> postRefreshTokens(@Field("refresh_token") String ref
 ```
 
 **E11 — Path parameter placeholders**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/api/UrlPathParam.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/api/UrlPathParam.java`
 ```java
 public static final String ACCOUNT_ID = "%7Binjected_account_id%7D";
 public static final String CLIENT_ID = "%7Binjected_client_id%7D";
 ```
 
 **E12 — Account/client ID path injection**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/network/AccountIdInterceptor.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/network/AccountIdInterceptor.java`
 ```java
 private final Request getPathInjectedRequest(Request request) {
   return request.newBuilder()
@@ -166,7 +175,7 @@ private final Request getPathInjectedRequest(Request request) {
     .build();
 }
 ```
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/network/ClientIdInterceptor.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/network/ClientIdInterceptor.java`
 ```java
 private final Request getPathInjectedRequest(Request request) {
   return request.newBuilder()
@@ -176,14 +185,14 @@ private final Request getPathInjectedRequest(Request request) {
 ```
 
 **E13 — Local onboarding endpoint (cleartext)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/activities/onboarding/OnboardingBaseActivity.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/activities/onboarding/OnboardingBaseActivity.java`
 ```java
 httpURLConnection = (HttpURLConnection)
     new URL("http://172.16.97.199/api/set/app_fw_update").openConnection();
 ```
 
 **E14 — Authenticated client adds Authorization + TOKEN-AUTH on Blink hosts**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/NetworkModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/NetworkModule.java`
 ```java
 return okHttpClient.newBuilder().addInterceptor(clientIdInterceptor)
   .addInterceptor(chain -> {
@@ -201,7 +210,7 @@ return okHttpClient.newBuilder().addInterceptor(clientIdInterceptor)
 ```
 
 **E15 — Authenticator refresh flow (Blink hosts only; no priorResponse)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/network/BlinkAuthenticator$authenticate$1$1.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/network/BlinkAuthenticator$authenticate$1$1.java`
 ```java
 request = response.request();
 if (!RestApiKt.isBlinkHost(request.url().host())) { request = null; }
@@ -214,7 +223,7 @@ if (response.priorResponse() == null) {
 ```
 
 **E16 — Refresh token call + token persistence**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/auth/RefreshTokensUseCase$invoke$2.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/auth/RefreshTokensUseCase$invoke$2.java`
 ```java
 Response responseExecute =
   OauthApi.postRefreshTokens$default(this.this$0.oauthApi, refreshToken, null, null, null, 14, null)
@@ -225,17 +234,17 @@ credentialRepository.setTokens(body.getAccessToken(), body.getRefreshToken(), th
 ```
 
 **E17 — Local SyncModuleService base URL + encryption interceptor**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/adddevice/AddDeviceViewModel.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/adddevice/AddDeviceViewModel.java`
 ```java
 builder.addInterceptor(new EncryptionInterceptor());
 return (SyncModuleService) this.retrofitBuilder
-  .baseUrl(BaseUrls.LOCAL)
+  .baseUrl(BaseUrls.LOCAL_DEVICE)
   .client(builder.build())
   .build().create(SyncModuleService.class);
 ```
 
 **E18 — Local SyncModuleService endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/api/retrofit/SyncModuleService.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/api/retrofit/SyncModuleService.java`
 ```java
 @GET("api/ssids") Observable<AccessPoints> getSsids();
 @POST("/api/set/app_fw_update") Observable<BlinkData> setFirmwareUpdate(...);
@@ -243,7 +252,7 @@ return (SyncModuleService) this.retrofitBuilder
 ```
 
 **E19 — Live view command endpoint**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/CameraApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/CameraApi.java`
 ```java
 @POST("v6/accounts/%7Binjected_account_id%7D/networks/{networkId}/cameras/{cameraId}/liveview")
 Object postLiveViewCommand(@Path("networkId") long networkId,
@@ -252,7 +261,7 @@ Object postLiveViewCommand(@Path("networkId") long networkId,
 ```
 
 **E20 — Live view request body fields**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/video/live/LiveViewCommandPostBody.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/video/live/LiveViewCommandPostBody.java`
 ```java
 private String intent;
 @SerializedName("motion_event_start_time")
@@ -260,7 +269,7 @@ private String motionEventStartTime;
 ```
 
 **E21 — Live view response fields (server, token, polling, duration)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/video/live/LiveViewCommandResponse.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/video/live/LiveViewCommandResponse.java`
 ```java
 private final String server;
 @SerializedName("polling_interval") private final long pollingIntervalInSeconds;
@@ -269,7 +278,7 @@ private final String server;
 ```
 
 **E22 — Live video response fields (legacy/alt response)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/models/LiveVideoResponse.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/models/LiveVideoResponse.java`
 ```java
 public String server;
 public int duration;
@@ -279,13 +288,13 @@ public boolean is_multi_client_live_view;
 ```
 
 **E23 — Live stream scheme marker**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/video/live/sessionmanager/WalnutSignalling.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/video/live/sessionmanager/walnut/WalnutSignalling.java`
 ```java
 private static final String LV_SCHEME_RTSPS = "rtsps";
 ```
 
 **E24 — EventStream client base URL + auth token provider**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/LibraryModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/LibraryModule.java`
 ```java
 EventStreamApi eventStreamApi = (EventStreamApi) new Retrofit.Builder()
   .baseUrl(BaseUrls.EVENT_STREAM_PROD)
@@ -297,7 +306,7 @@ AuthInfoProvider authInfoProvider = new AuthInfoProvider() {
 ```
 
 **E28 — EventStream API endpoints (client.device events)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/ring/android/eventstream/storage/api/EventStreamApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/ring/android/eventstream/storage/api/EventStreamApi.java`
 ```java
 @POST("1.0.0/batch/client.device/{appSubGroup}")
 Object sendBatchEvents(@Header("Authorization") String authToken,
@@ -308,19 +317,19 @@ Object trackEvent(@Header("Authorization") String authToken,
 ```
 
 **E29 — Shared authenticated REST Retrofit bindings (shared_tier base + accountId interceptor)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/AuthenticatedSharedRestApiModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/SharedUsersRestApiModule.java`
 ```java
 @Provides @Singleton
-public final HomeScreenApi provideHomeScreenApi(@Named(NetworkModule.SHARED_AUTHENTICATED_RETROFIT) Retrofit retrofit)
+public final HomeScreenApi provideHomeScreenApi(@Named(SHARED_USERS_RETROFIT) Retrofit retrofit)
 { return (HomeScreenApi) retrofit.create(HomeScreenApi.class); }
 @Provides @Singleton
-public final CommandApi provideCommandApi(@Named(NetworkModule.SHARED_AUTHENTICATED_RETROFIT) Retrofit retrofit)
+public final CommandApi provideCommandApi(@Named(SHARED_USERS_RETROFIT) Retrofit retrofit)
 { return (CommandApi) retrofit.create(CommandApi.class); }
-... (DeviceApi, CameraApi, NetworkApi, etc. all via SHARED_AUTHENTICATED_RETROFIT)
+... (DeviceApi, CameraApi, NetworkApi, etc. all via SHARED_USERS_RETROFIT)
 ```
 
 **E30 — Non‑shared authenticated REST Retrofit bindings (rest tier base)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/AuthenticatedNotSharedRestApiModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/AuthenticatedRestApiModule.java`
 ```java
 @Provides @Singleton
 public final AccountApi provideAccountApi(Retrofit retrofit)
@@ -332,7 +341,7 @@ public final NotificationApi provideNotificationApi(Retrofit retrofit)
 ```
 
 **E31 — Unauthenticated REST Retrofit (public/auth/password reset)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/inject/NetworkModule.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/inject/NetworkModule.java`
 ```java
 @Named(UNAUTHENTICATED_RETROFIT)
 public final Retrofit provideRestRetrofit(String restUrl, @Named(BASE_CLIENT) OkHttpClient okHttpClient, ...)
@@ -340,7 +349,7 @@ public final Retrofit provideRestRetrofit(String restUrl, @Named(BASE_CLIENT) Ok
 ```
 
 **E25 — Command polling + update/done endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/network/command/CommandApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/network/command/CommandApi.java`
 ```java
 @GET("/accounts/%7Binjected_account_id%7D/networks/{network}/commands/{command}")
 Object commandPoll(...);
@@ -351,7 +360,7 @@ Call<BlinkData> terminateCommand(...);
 ```
 
 **E26 — Arm/disarm + network state endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/network/NetworkApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/network/NetworkApi.java`
 ```java
 @POST("v1/accounts/%7Binjected_account_id%7D/networks/{networkId}/state/{type}")
 Observable<Command> armDisarmNetwork(@Path("networkId") long networkId, @Path("type") String type);
@@ -360,14 +369,14 @@ Object disarmNetwork(...);
 ```
 
 **E27 — Homescreen sync (device summary)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/utils/sync/HomeScreenApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/utils/sync/HomeScreenApi.java`
 ```java
 @GET("v4/accounts/%7Binjected_account_id%7D/homescreen")
 Object getHomeScreen(...);
 ```
 
 **E32 — AccessApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/AccessApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/AccessApi.java`
 ```java
 @DELETE("v1/shared/invitations/{invitationId}/decline")
 Object m16017deleteDeclineInvitegIAlus(@Path("invitationId") String str, Continuation<? super Result<Unit>> continuation);
@@ -392,7 +401,7 @@ Object m16026postSendInvitegIAlus(@Body SendInviteBody sendInviteBody, Continuat
 ```
 
 **E33 — AccessoryApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/accessory/AccessoryApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/accessory/AccessoryApi.java`
 ```java
 @POST("v1/accounts/%7Binjected_account_id%7D/networks/{network}/accessories/add")
 Object m16411addAccessory0E7RQCE(@Body AddAccessoryBody addAccessoryBody, @Path(ProcessNotification.KEY_NETWORK) long j, Continuation<? super Result<? extends Kommand>> continuation);
@@ -401,7 +410,7 @@ Object m16412delete0E7RQCE(@Path("network_id") long j, @Body DeleteAccessoryBody
 ```
 
 **E34 — AccountApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/AccountApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/AccountApi.java`
 ```java
 @POST("v1/users/authenticate_password")
 Object m16037authenticatePasswordgIAlus(@Body AuthenticatePasswordBody authenticatePasswordBody, Continuation<? super Result<AuthenticatePasswordResponse>> continuation);
@@ -436,7 +445,7 @@ Object m16051updateUserCountrygIAlus(@Body CountryBody countryBody, Continuation
 ```
 
 **E35 — AlexaLinkingApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/account/alexa/AlexaLinkingApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/account/alexa/AlexaLinkingApi.java`
 ```java
 @DELETE("v1/alexa/link")
 Object m17513deleteLinkIoAF18A(Continuation<? super Result<Unit>> continuation);
@@ -449,7 +458,7 @@ Object m17516postLinkgIAlus(@Body AlexaLinkingLinkPostBody alexaLinkingLinkPostB
 ```
 
 **E36 — AuthApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/auth/AuthApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/auth/AuthApi.java`
 ```java
 @POST("v7/users/register")
 Object m16053postRegistergIAlus(@Body RegisterBody registerBody, Continuation<? super Result<AuthenticationResponse>> continuation);
@@ -460,7 +469,7 @@ Object m16055postValidatePasswordgIAlus(@Body ValidatePasswordPostBody validateP
 ```
 
 **E37 — CameraApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/CameraApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/CameraApi.java`
 ```java
 @POST("/accounts/%7Binjected_account_id%7D/networks/{network}/cameras/add")
 Object m16110addCamera0E7RQCE(@Body AddCameraBody addCameraBody, @Path(ProcessNotification.KEY_NETWORK) long j, Continuation<? super Result<? extends AddCameraResponseBody>> continuation);
@@ -523,7 +532,7 @@ Object m16131unSnoozeCamera0E7RQCE(@Path("network_id") long j, @Path("camera_id"
 ```
 
 **E38 — ClientApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/client/ClientApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/client/ClientApi.java`
 ```java
 @GET("v1/clients/%7Binjected_client_id%7D/options")
 Object m16065getClientOptionsIoAF18A(Continuation<? super Result<ClientOptionsBody>> continuation);
@@ -540,7 +549,7 @@ Object m16070verifyClientPINgIAlus(@Body VerifyPinBody verifyPinBody, Continuati
 ```
 
 **E39 — ClientDeviceManagementApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java`
 ```java
 @POST("v1/clients/%7Binjected_client_id%7D/control_panel/delete")
 Object m17603deleteClientgIAlus(@Body DeleteClientBody deleteClientBody, Continuation<? super Result<Unit>> continuation);
@@ -555,7 +564,7 @@ Object m17607postManageClientsPinVerifygIAlus(@Body VerifyPinPostBody verifyPinP
 ```
 
 **E40 — CommandApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/network/command/CommandApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/network/command/CommandApi.java`
 ```java
 @GET("/accounts/%7Binjected_account_id%7D/networks/{network}/commands/{command}")
 Object m16202commandPoll0E7RQCE(@Path(ProcessNotification.KEY_NETWORK) long j, @Path(ProcessNotification.KEY_COMMAND) long j2, Continuation<? super Result<? extends SupervisorKommand>> continuation);
@@ -576,7 +585,7 @@ Observable<BlinkData> terminateOnboardingCommand(@Body TerminateOnboardingBody t
 ```
 
 **E41 — CustomerSupportAccessApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java`
 ```java
 @POST("v2/clients/%7Binjected_client_id%7D/tiv")
 Object m17650postTivLockgIAlus(@Body TivLockBody tivLockBody, Continuation<? super Result<SetTivLockResponse>> continuation);
@@ -589,7 +598,7 @@ Object m17653postTivUnlockPinVerifygIAlus(@Body VerifyPinPostBody verifyPinPostB
 ```
 
 **E42 — DeviceApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/DeviceApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/DeviceApi.java`
 ```java
 @GET("v2/accounts/%7Binjected_account_id%7D/devices/identify/{serialNumber}")
 Object m16108getDeviceIdentitygIAlus(@Path("serialNumber") String str, Continuation<? super Result<IdentifyDeviceResponse>> continuation);
@@ -599,7 +608,7 @@ Single<IdentifyDeviceResponseOld> identifyDevice(@Path("serialNumber") String se
 ```
 
 **E43 — DoorbellApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java`
 ```java
 @POST("v1/accounts/%7Binjected_account_id%7D/networks/{network}/doorbells/add")
 Object m16149addLotus0E7RQCE(@Body AddLotusBody addLotusBody, @Path(ProcessNotification.KEY_NETWORK) long j, Continuation<? super Result<AddLotusResponse>> continuation);
@@ -678,7 +687,7 @@ Object m16176unSnoozeLotus0E7RQCE(@Path("network_id") long j, @Path("lotus_id") 
 ```
 
 **E44 — EmailChangeApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/email/EmailChangeApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/email/EmailChangeApi.java`
 ```java
 @POST("v4/clients/%7Binjected_client_id%7D/email_change")
 Object m17629postEmailChangegIAlus(@Body ChangeEmailPostBody changeEmailPostBody, Continuation<? super Result<Unit>> continuation);
@@ -689,14 +698,14 @@ Object m17631postEmailChangePinVerifygIAlus(@Body VerifyPinPostBody verifyPinPos
 ```
 
 **E45 — EventApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/track/event/EventApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/track/event/EventApi.java`
 ```java
 @POST("v1/events/app")
 Object m16255trackEventsgIAlus(@Body TrackingEvents trackingEvents, Continuation<? super Result<Unit>> continuation);
 ```
 
 **E46 — EventStreamApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/ring/android/eventstream/storage/api/EventStreamApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/ring/android/eventstream/storage/api/EventStreamApi.java`
 ```java
 @POST("1.0.0/batch/client.device/{appSubGroup}")
 Object sendBatchEvents(@Header("Authorization") String str, @Path("appSubGroup") String str2, @Body RequestBody requestBody, Continuation<? super Unit> continuation);
@@ -705,21 +714,21 @@ Object trackEvent(@Header("Authorization") String str, @Path("appSubGroup") Stri
 ```
 
 **E47 — FeatureFlagApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/flag/FeatureFlagApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/flag/FeatureFlagApi.java`
 ```java
 @GET("v1/accounts/%7Binjected_account_id%7D/feature_flags/enabled")
 Object m16211getFeatureFlagsIoAF18A(Continuation<? super Result<FeatureFlagsResponse>> continuation);
 ```
 
 **E48 — HomeScreenApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/utils/sync/HomeScreenApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/utils/sync/HomeScreenApi.java`
 ```java
 @GET("v4/accounts/%7Binjected_account_id%7D/homescreen")
 Object m17741getHomeScreenIoAF18A(Continuation<? super Result<HomeScreen>> continuation);
 ```
 
 **E49 — LogApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/log/LogApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/log/LogApi.java`
 ```java
 @POST("/app/logs/upload")
 Observable<BlinkData> sendLogs(@Body LogsBody body);
@@ -728,7 +737,7 @@ Call<BlinkData> sendLogsCall(@Body LogsBody body);
 ```
 
 **E50 — ManageDataApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/account/managedata/ManageDataApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/account/managedata/ManageDataApi.java`
 ```java
 @GET("v1/data_request/list")
 Object m17550getDataRequestsIoAF18A(Continuation<? super Result<DataRequests>> continuation);
@@ -741,7 +750,7 @@ Object m17553postRevokegIAlus(@Path("thirdPartyId") String str, Continuation<? s
 ```
 
 **E51 — MediaApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/video/clip/media/MediaApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/video/clip/media/MediaApi.java`
 ```java
 @DELETE("v4/accounts/%7Binjected_account_id%7D/media/{mediaId}/delete")
 Object m17899deleteCloudMediagIAlus(@Path("mediaId") long j, Continuation<? super Result<Unit>> continuation);
@@ -772,7 +781,7 @@ Object m17911postMediayxL6bBk(@Query("start_time") String str, @Query("end_time"
 ```
 
 **E52 — NetworkApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/network/NetworkApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/network/NetworkApi.java`
 ```java
 @POST("v1/accounts/%7Binjected_account_id%7D/networks/{networkId}/state/{type}")
 Observable<Command> armDisarmNetwork(@Path("networkId") long networkId, @Path("type") String type);
@@ -797,14 +806,14 @@ Observable<BlinkData> updateTimezone(@Body UpdateTimezoneBody updateTimezoneBody
 ```
 
 **E53 — NotificationApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/notification/NotificationApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/notification/NotificationApi.java`
 ```java
 @POST("v2/notification")
 Observable<Object> acknowledgeNotification(@Body AcknowledgeNotificationBody body);
 ```
 
 **E54 — OauthApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/auth/OauthApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/auth/OauthApi.java`
 ```java
 @FormUrlEncoded
 @POST("oauth/token")
@@ -815,7 +824,7 @@ Call<RefreshTokensResponse> postRefreshTokens(@Field(GrantTypeValues.REFRESH_TOK
 ```
 
 **E55 — OwlApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/wired/OwlApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/wired/OwlApi.java`
 ```java
 @POST("v1/accounts/%7Binjected_account_id%7D/networks/{network_id}/accessories/rosie/owl/{owl_id}/calibrate")
 Object m16181calibrateRosie0E7RQCE(@Path("network_id") long j, @Path("owl_id") long j2, Continuation<? super Result<? extends Kommand>> continuation);
@@ -868,7 +877,7 @@ Object m16199unSnoozeOwl0E7RQCE(@Path("network_id") long j, @Path("owl_id") long
 ```
 
 **E56 — PasswordChangeApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/password/PasswordChangeApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/password/PasswordChangeApi.java`
 ```java
 @POST("v4/clients/%7Binjected_client_id%7D/password_change")
 Object m17642changePasswordgIAlus(@Body ResetPasswordPostBody resetPasswordPostBody, Continuation<? super Result<Unit>> continuation);
@@ -881,7 +890,7 @@ Object m17645postPasswordChangePinVerifygIAlus(@Body VerifyPinPostBody verifyPin
 ```
 
 **E57 — PasswordResetApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/account/password/PasswordResetApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/account/password/PasswordResetApi.java`
 ```java
 @POST("v4/users/password_change")
 Object m15681postPasswordResetgIAlus(@Body ResetPasswordPostBody resetPasswordPostBody, Continuation<? super Result<Unit>> continuation);
@@ -892,7 +901,7 @@ Object m15683postPasswordResetPinVerifygIAlus(@Body VerifyPinPostBody verifyPinP
 ```
 
 **E58 — PhoneNumberChangeApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java`
 ```java
 @POST("v5/clients/%7Binjected_client_id%7D/phone_number_change")
 Object m16076changePhoneNumbergIAlus(@Body ChangePhoneNumberBody changePhoneNumberBody, Continuation<? super Result<ChangePhoneNumberResponse>> continuation);
@@ -903,7 +912,7 @@ Object m16078postPhoneNumberChangePinVerifygIAlus(@Body SubmitVerificationReques
 ```
 
 **E59 — ProgramApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/network/program/ProgramApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/network/program/ProgramApi.java`
 ```java
 @POST("v1/accounts/%7Binjected_account_id%7D/networks/{network}/programs/create")
 Observable<BlinkData> createProgram(@Body Program program, @Path(ProcessNotification.KEY_NETWORK) long network);
@@ -920,7 +929,7 @@ Observable<BlinkData> updateProgram(@Body UpdateProgramRequest updateProgramRequ
 ```
 
 **E60 — PublicApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/network/PublicApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/network/PublicApi.java`
 ```java
 @GET("v1/version")
 Object m16213getAppVersionCheckIoAF18A(Continuation<? super Result<AppVersionCheckResponse>> continuation);
@@ -933,7 +942,7 @@ Object m16216getRegionsIoAF18A(Continuation<? super Result<RegionsResponse>> con
 ```
 
 **E61 — ReadSubscriptionApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java`
 ```java
 @GET("v1/accounts/%7Binjected_account_id%7D/access")
 Object m16219getAccessIoAF18A(Continuation<? super Result<AccessResponse>> continuation);
@@ -946,7 +955,7 @@ Object m16222getSubscriptionsOldIoAF18A(Continuation<? super Result<Subscription
 ```
 
 **E63 — SmartVideoDescriptionsApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/settings/SmartVideoDescriptionsApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/settings/SmartVideoDescriptionsApi.java`
 ```java
 @GET("v1/accounts/%7Binjected_account_id%7D/smart_video_descriptions")
 Object m17330getSmartVideoDescriptionsIoAF18A(Continuation<? super Result<SmartVideoDescriptionsResponse>> continuation);
@@ -955,7 +964,7 @@ Object m17331postUpdateSmartVideoDescriptionsgIAlus(@Body SmartVideoDescriptions
 ```
 
 **E64 — SyncModuleApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/sync/SyncModuleApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/sync/SyncModuleApi.java`
 ```java
 @POST("/accounts/%7Binjected_account_id%7D/networks/{networkId}/sync_modules/{syncModuleId}/delete")
 Object m17015deleteSyncModule0E7RQCE(@Path("networkId") long j, @Path("syncModuleId") long j2, Continuation<? super Result<Unit>> continuation);
@@ -984,7 +993,7 @@ Object m17020startSyncModuleOnboardingBWLJW6A(@Body OnboardingBody onboardingBod
 ```
 
 **E65 — SyncModuleService endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/api/retrofit/SyncModuleService.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/api/retrofit/SyncModuleService.java`
 ```java
 @GET(GET_FW_VERSION)
 Observable<GetFirmwareEndpointResponse> getFirmwareVersion();
@@ -1003,14 +1012,14 @@ Observable<BlinkData> setSSid(@HeaderMap Map<String, String> headers, @Body SetS
 ```
 
 **E66 — VideoApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/video/VideoApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/video/VideoApi.java`
 ```java
 @GET
 Object m17790getVideogIAlus(@Url String str, Continuation<? super Result<? extends ResponseBody>> continuation);
 ```
 
 **E67 — Live view polling default interval (1s)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/video/live/LiveViewKommandPolling.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/video/live/LiveViewKommandPolling.java`
 ```java
 public static final long DEFAULT_LIVE_VIEW_POLLING_INTERVAL_IN_SECONDS = 1;
 ...
@@ -1021,7 +1030,7 @@ if ((i & 32) != 0) {
 ```
 
 **E68 — Live view polling delay waits for interval changes (with timeout)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/video/live/LiveViewKommandPolling.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/device/camera/video/live/LiveViewKommandPolling.java`
 ```java
 @Override
 public Object delayBetweenPolls(Continuation<? super Unit> continuation) {
@@ -1034,7 +1043,7 @@ if (LiveViewKommandPolling.this.pollingIntervalChanged.receive(this) == coroutin
 ```
 
 **E69 — Command polling delay + error retry handling**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/network/command/AbstractKommandPolling.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/network/command/AbstractKommandPolling.java`
 ```java
 if (Result.m19017isFailureimpl(value)) {
     intRef.element++;
@@ -1052,7 +1061,7 @@ static <T extends SupervisorKommand> Object delayBetweenPolls$suspendImpl(Abstra
 ```
 
 **E70 — WifiApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/wifi/WifiApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/wifi/WifiApi.java`
 ```java
 @GET("api/get_fw_version")
 Object m17034getFwVersionIoAF18A(Continuation<? super Result<GetFwVersionResponse>> continuation);
@@ -1061,7 +1070,7 @@ Object m17035sendEncryptionKeygIAlus(@Body RequestBody requestBody, Continuation
 ```
 
 **E71 — WifiSecureApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/device/wifi/WifiSecureApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/device/wifi/WifiSecureApi.java`
 ```java
 @GET("api/ssids")
 Object m17042getSsidsIoAF18A(Continuation<? super Result<AccessPoints>> continuation);
@@ -1070,7 +1079,7 @@ Object m17043setSsid0E7RQCE(@HeaderMap Map<String, String> map, @Body SetSSIDBod
 ```
 
 **E72 — WriteSubscriptionApi endpoints**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java`
 ```java
 @POST("v1/subscriptions/plans/{subscriptionId}/attach")
 Object m16239attachPlan0E7RQCE(@Path("subscriptionId") long j, @Body AttachPlanBody attachPlanBody, Continuation<? super Result<DspSubscriptionResponse>> continuation);
@@ -1093,14 +1102,14 @@ Object m16247unlinkAmazonAccountgIAlus(@Body VerifyLinkAccountBody verifyLinkAcc
 ```
 
 **E73 — BuildConfig defaults (tier + OAuth env)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/BuildConfig.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/BuildConfig.java`
 ```java
 public static final String DEFAULT_TIER = "prod";
 public static final String OAUTH_ENV = "production";
 ```
 
 **E74 — Production tier codes ↔ AWS regions (prod/prde/prsg/a001/cemp/srf1)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/network/tier/ProductionTier.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/network/tier/ProductionTier.java`
 ```java
 public static final ProductionTier CEMP = new ProductionTier(... "cemp", ... AwsRegion.US_EAST_1, ...);
 public static final ProductionTier PROD = new ProductionTier(... "prod", ... AwsRegion.US_EAST_1, ...);
@@ -1111,7 +1120,7 @@ public static final ProductionTier SRF1 = new ProductionTier(... "srf1", ... Aws
 ```
 
 **E75 — AWS region string values**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/network/AwsRegion.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/network/AwsRegion.java`
 ```java
 public static final AwsRegion US_EAST_1 = new AwsRegion("US_EAST_1", 0, "us-east-1", "Virginia");
 public static final AwsRegion EU_CENTRAL_1 = new AwsRegion("EU_CENTRAL_1", 3, "eu-central-1", "Germany");
@@ -1120,7 +1129,7 @@ public static final AwsRegion AP_SOUTHEAST_2 = new AwsRegion("AP_SOUTHEAST_2", 5
 ```
 
 **E76 — TierRepository default tier key + fallback to "prod"**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/network/tier/TierRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/network/tier/TierRepository.java`
 ```java
 private static final String DEFAULT_TIER_KEY = "DEFAULT_TIER";
 ...
@@ -1134,7 +1143,7 @@ if (str == null) {
 ```
 
 **E77 — TierRepository fallback order (tier → default; shared tier → tier)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/network/tier/TierRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/network/tier/TierRepository.java`
 ```java
 obj = FlowKt.firstOrNull(TierRepository.this.getTierStream(), this);
 ...
@@ -1149,40 +1158,40 @@ obj = TierRepository.this.getTier(this);
 ```
 
 **E78 — OAuth env lookup + subdomain fallback**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/network/tier/TierRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/network/tier/TierRepository.java`
 ```java
-OauthEnvironment oauthEnvironment = OauthEnvironment.INSTANCE.get((String) obj);
+Environment environment = Environment.INSTANCE.get((String) obj);
 ```
 ```java
-String subdomain = ((OauthEnvironment) obj).getSubdomain();
+String subdomain = ((Environment) obj).getSubdomain();
 return subdomain == null ? "" : subdomain;
 ```
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/network/OauthEnvironment.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/network/Environment.java`
 ```java
-return oauthEnvironment == null ? OauthEnvironment.PRODUCTION : oauthEnvironment;
+return environment == null ? Environment.PRODUCTION : environment;
 ```
 
 **E79 — Region model + mode values (tier is `dns`)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/country/Region.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/country/Region.java`
 ```java
 @SerialName("dns")
 public static void getTier$annotations() { }
 private final String tier;
 ```
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/country/RegionsResponse.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/country/RegionsResponse.java`
 ```java
 private final String preferred;
 private final String mode;
 private final Map<String, Region> regions;
 ```
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/country/RegionSelectionMode.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/country/RegionSelectionMode.java`
 ```java
 public static final RegionSelectionMode AUTO = new RegionSelectionMode("AUTO", 0, "auto");
 public static final RegionSelectionMode MANUAL = new RegionSelectionMode("MANUAL", 1, "manual");
 ```
 
 **E80 — Registration region selection logic (preferred/order + auto‑select)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/account/registration/RegistrationViewModel.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/account/registration/RegistrationViewModel.java`
 ```java
 RegionsResponse regionsResponse = (RegionsResponse) value;
 List<Region> list = CollectionsKt.toList(regionsResponse.getRegions().values());
@@ -1194,7 +1203,7 @@ if (RegionSelectionMode.INSTANCE.get(regionsResponse.getMode()) != RegionSelecti
 ```
 
 **E81 — Registration confirms tier from selected region**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/account/registration/RegistrationViewModel.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/account/registration/RegistrationViewModel.java`
 ```java
 TierRepository tierRepository = RegistrationViewModel.this.tierRepository;
 Region selectedRegion2 = ((RegistrationUiState) RegistrationViewModel.this._uiState.getValue()).getSelectedRegion();
@@ -1203,7 +1212,7 @@ if (tierRepository.setTier(selectedRegion2.getTier(), this) == coroutine_suspend
 ```
 
 **E82 — Login flow fetches tier_info and passes to TierRepository**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/account/auth/LoginViewModel.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/account/auth/LoginViewModel.java`
 ```java
 objM16043getTierInfoIoAF18A = accountApi.m16043getTierInfoIoAF18A(loginViewModel$authenticate$12);
 ...
@@ -1213,28 +1222,28 @@ if (tierRepository.setTierInfo(tierInfo, loginViewModel$authenticate$12) != coro
 ```
 
 **E83 — TierInfo persistence writes account_id only**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/network/tier/TierRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/network/tier/TierRepository.java`
 ```java
 if (TierRepository.this.accountPreferences.put(AccountKeys.ACCOUNT_ID_KEY,
     Boxing.boxLong(this.$tierInfo.getAccountId()), this) != coroutine_suspended) { ... }
 ```
 
 **E84 — AccountRepository persists account tier**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/AccountRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/AccountRepository.java`
 ```java
 if (AccountRepository.this.getAccountPreferences().put(TierRepository.TIER_KEY,
     this.$account.getTier(), this) != coroutine_suspended) { ... }
 ```
 
 **E85 — Shared account persistence writes shared_account_id only**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/AccountRepository.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/AccountRepository.java`
 ```java
 if (AccountRepository.this.getAccountPreferences().putNullable(
     AccountKeys.SHARED_ACCOUNT_ID_KEY, this.$sharedAccountId, this) != coroutine_suspended) { ... }
 ```
 
 **E86 — Account model includes tier field**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/Account.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/Account.java`
 ```java
 @SerializedName("ring_user_id")
 private final long ringUserId;
@@ -1244,7 +1253,7 @@ public final String getTier() { return this.tier; }
 ```
 
 **E87 — Account info fetch persists account (tier source)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/account/GetAccountInfoUseCase$invoke$2.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/GetAccountInfoUseCase$invoke$2.java`
 ```java
 objM16039getAccountInfoIoAF18A = this.this$0.accountApi.m16039getAccountInfoIoAF18A(this);
 ...
@@ -1256,7 +1265,7 @@ if (Result.m19018isSuccessimpl(obj2)) {
 ```
 
 **E88 — Live view response → WalnutLiveInfo (server + liveview_token)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/video/live/sessionmanager/WalnutSignalling.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/video/live/sessionmanager/walnut/WalnutSignalling.java`
 ```java
 String server = liveViewCommandResponse3.getServer();
 LiveVideoResponse liveVideoResponse = new LiveVideoResponse(commandId, jLongValue2, server, ...);
@@ -1268,7 +1277,7 @@ walnutLiveViewSessionManager.startLive(walnutLiveInfo2, walnutLiveInfo);
 ```
 
 **E89 — Live stream player uses server URI + auth token + device serial**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/video/live/sessionmanager/BlinkWalnutLiveViewSessionManager.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/video/live/sessionmanager/walnut/BlinkWalnutLiveViewSessionManager.java`
 ```java
 player.setURI(new URI(primary.getLiveViewResponse().server));
 ...
@@ -1280,7 +1289,7 @@ if (deviceSerial2 != null) { player.setDeviceSerial(deviceSerial2); }
 ```
 
 **E90 — Local onboarding encryption (AES-CBC + HMAC; secure endpoints only)**
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/utils/onboarding/EncryptionInterceptor.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/utils/onboarding/EncryptionInterceptor.java`
 ```java
 if (SMEncryptionData.getInstance().encryptData && request.method().equals("POST")
     && isSecureRequest(request.url().getUrl())) { ... calculateHmac(...); ... }
@@ -1297,7 +1306,7 @@ private static boolean isSecureRequest(String request) {
 
 **E91 — EventStream client config (subgroup + batch + flush)**
 
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/event/ESConfig.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/event/ESConfig.java`
 
 ```java
 public static final String EVENT_STREAM_SUBGROUP = "blink.mobile.app";
@@ -1310,7 +1319,7 @@ public final ESClientConfig getClient() {
 
 **E92 — EventStream core metadata (device/app identity + platform + locale)**
 
-- File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/core/event/ESConfig.java`
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/core/event/ESConfig.java`
 
 ```java
 MetaData metaData = new MetaData(MANUFACTURER, MODEL, uuid,
@@ -1320,6 +1329,72 @@ Platform platform = BuildUtils.isAmazonDevice() ? Platform.FIRE_OS : Platform.AN
 String string = Locale.getDefault().toString();
 return new ESCoreConfig(metaData, platform, string);
 ```
+
+## Blink Android 57.1 Hosted OAuth Trace
+
+This trace is the authentication and dynamic-routing contract implemented by the
+repository. It follows the complete construction path rather than searching for
+fully assembled URLs, because the APK builds each request from a base, relative
+path, AppAuth/Retrofit fields, and request-time tier/environment substitutions.
+
+| Behavior | APK 57.1 source | Repository contract |
+|---|---|---|
+| Hosted authorize path/metadata | `UnifiedSignInUtils.signInIntent` | Android profile and coordinator URL |
+| HTTPS callback | `AppLinkUrls.SIGN_IN_CALLBACK` | strict callback allow-list |
+| AppAuth code form | `TokenRequest` + `NoClientAuthentication` | exact five fields, no extras |
+| Refresh form | `OauthApi.postRefreshTokens` | Android client + scope |
+| Dynamic REST host | `BaseUrls.REST` / `SHARED_REST` | `rest-{tier}` / `rest-{shared_tier}` |
+| Explicit production tiers | `ProductionTier` | prod, prde, prsg, a001, cemp, srf1 |
+| Service-returned tier acceptance | `TierRepository` regex `[a-zA-Z\\d]{4}` | numbered e-tier routing without UI guess |
+
+### End-to-end construction paths
+
+1. **Authorize:** `UnifiedSignInUtils.signInIntent` appends
+   `/oauth/v2/authorize` to the authentication environment base and creates an
+   AppAuth `AuthorizationRequest`. It supplies the client, redirect, `client`
+   scope, `login` prompt, hardware ID, app/device metadata, and PKCE/state. The
+   repository's Android profile resolves this to
+   `https://api.oauth.blink.com/oauth/v2/authorize` for production.
+2. **Callback:** `AppLinkUrls.SIGN_IN_CALLBACK` fixes the redirect at
+   `https://applinks.blink.com/signin/callback`. The repository requires that
+   exact HTTPS authority/path, validates the opaque flow and state, and consumes
+   the pending transaction before exchange.
+3. **Code exchange:** `AuthorizationResponse.createTokenExchangeRequest` copies
+   `grant_type=authorization_code`, redirect, code, and PKCE verifier into
+   `TokenRequest`. `TokenRequest.getRequestParameters` emits those values;
+   `AuthorizationService.performTokenRequest` defaults to
+   `NoClientAuthentication`, which contributes only form `client_id`. The
+   repository therefore sends exactly those five form fields to
+   `https://api.oauth.blink.com/oauth/token`.
+4. **Refresh:** hosted refresh does not reuse the AppAuth code form.
+   `OauthApi.postRefreshTokens` defines `refresh_token`, `grant_type`,
+   `client_id`, and `scope`; the Android profile uses `client_id=android` and
+   `scope=client` exactly.
+5. **Tier bootstrap:** after token persistence, the repository starts from
+   production REST, calls `v1/users/tier_info`, validates the returned tier with
+   the APK's four-alphanumeric rule, and rebuilds REST/shared REST bases before
+   account information and homescreen requests.
+6. **Final REST target:** `BaseUrls.REST` and `SHARED_REST` contain `{tier}` and
+   `{shared_tier}` tokens. Android's network interceptors replace them at request
+   time. The repository constructs the equivalent
+   `https://rest-{tier}.immedia-semi.com/api/` and
+   `https://rest-{shared_tier}.immedia-semi.com/api/` bases from authoritative
+   persisted metadata.
+
+### Evidence boundary
+
+The owner's Ireland account is the only live account used for the protocol
+proof. It returned `prde`; hosted authorization, exact code exchange, refresh,
+user information, and homescreen requests succeeded without retaining secret
+values. This earlier proof is not live acceptance of the new `0.9.0` package;
+that deployment/restart acceptance remains Task 8.
+
+`prod`, `prsg`, `a001`, `cemp`, and `srf1` are explicit APK targets but have not
+been account-tested here. Numbered four-character e-tiers are accepted because
+`TierRepository` validates service-returned values with `[a-zA-Z\\d]{4}`; they
+are not explicit `ProductionTier` constants. Repository parameterized tests
+cover these hosts. The end-user hosted-sign-in journey is the same for every
+production tier; only post-token REST/shared-REST routing changes.
 
 ## Candidate Domains & Hosts (evidence-backed)
 
@@ -1375,13 +1450,27 @@ return new ESCoreConfig(metaData, platform, string);
 
 Generated apktool smali independently confirms each token interceptor calls Kotlin `replace`, then `okhttp3.Request$Builder.url(String)`. Thumbnail smali confirms the `replace` → remove `/api/` → append `.jpg` sequence.
 
-## Authentication (initial evidence only)
-- OAuth endpoint: `POST oauth/token` with fields `username`, `password`, `grant_type`, `client_id`, `scope` and headers `2fa-code`, `hardware_id`. (E10)
-- Refresh endpoint: `POST oauth/token` with `refresh_token`, `grant_type`, `client_id`, `scope`. (E10, E16)
-- Default headers injected into all requests: `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone`. (E5, E6, E7)
-- Authenticated client adds `Authorization: Bearer <access_token>` and `TOKEN-AUTH: <token>` for Blink hosts. (E14)
-- Authenticator refreshes tokens on Blink hosts when there is no priorResponse; uses `RefreshTokensUseCase` (OAuth refresh) and rebuilds request with updated `Authorization` header. (E15, E16)
-- BuildConfig defaults include `DEFAULT_TIER = "prod"` and `OAUTH_ENV = "production"`; initialization path for writing these into prefs is not yet located. (E73)
+## Authentication Contracts
+
+- Supported Homebridge sign-in follows the Android 57.1 hosted AppAuth trace
+  above. Blink receives account credentials and hosted MFA; Homebridge receives
+  only the final App-Link and exchanges its one-time code with Pi-owned PKCE.
+- `OauthApi.postLogin` still exposes a direct credential method inside the APK
+  (E10), but that method is an alternate/legacy surface, not evidence for the
+  plugin's current UI and not part of the `0.9.0` operator workflow.
+- Hosted code exchange uses AppAuth `TokenRequest` plus
+  `NoClientAuthentication`: exact grant type, redirect, code, verifier, and
+  Android client ID, with no extras.
+- Hosted refresh uses `OauthApi.postRefreshTokens` with refresh token, refresh
+  grant type, Android client ID, and `client` scope. (E10, E16)
+- The live Ireland proof showed hosted REST requests succeeding with bearer
+  authentication alone. The APK's general authenticated client can also add
+  `TOKEN-AUTH` for legacy/app sessions (E14); the repository preserves that only
+  for non-Android persisted profiles.
+- Authenticator recovery refreshes on Blink-host 401 responses and rebuilds the
+  request with the updated bearer token. (E15, E16)
+- BuildConfig defaults include `DEFAULT_TIER = "prod"` and
+  `OAUTH_ENV = "production"`. (E73)
 
 ## Retrofit Binding Map (auth + base host)
 - **Shared authenticated REST (`rest-{shared_tier}`)**: HomeScreenApi, CommandApi, DeviceApi, CameraApi, DoorbellApi, OwlApi, NetworkApi, SyncModuleApi, ProgramApi, AccessoryApi, FeatureFlagApi, MediaApi, SmartVideoDescriptionsApi, ReadSubscriptionApi. (E29)
@@ -1392,7 +1481,10 @@ Generated apktool smali independently confirms each token interceptor calls Kotl
 ## Endpoint Catalog (Blink API)
 
 **Header legend:** `default` = `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone` (E5–E7).  
-Authenticated REST calls add `Authorization: Bearer <access_token>` and `TOKEN-AUTH` on Blink hosts (E14).
+The APK's general authenticated Retrofit client adds bearer plus `TOKEN-AUTH`
+on Blink hosts (E14). The Homebridge hosted-Android profile uses bearer alone,
+matching the live Ireland proof; legacy persisted profiles can retain
+`TOKEN-AUTH` when present.
 
 | Method | Base Host | Path | Purpose (method) | Auth | Headers | Body Schema | Response Shape | Evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -1556,7 +1648,7 @@ Authenticated REST calls add `Authorization: Bearer <access_token>` and `TOKEN-A
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `/accounts/%7Binjected_account_id%7D/networks/{network}/update` | `NetworkApi.updateSystem` | Bearer + TOKEN-AUTH | default | UpdateSystemNameBody | Observable<BlinkData> | E52 |
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `/accounts/%7Binjected_account_id%7D/networks/{network}/update` | `NetworkApi.updateTimezone` | Bearer + TOKEN-AUTH | default | UpdateTimezoneBody | Observable<BlinkData> | E52 |
 | POST | https://rest-{tier}.immedia-semi.com/api/ | `v2/notification` | `NotificationApi.acknowledgeNotification` | Bearer + TOKEN-AUTH | default | AcknowledgeNotificationBody | Observable<Object> | E53 |
-| POST | https://api.{env}oauth.blink.com/ | `oauth/token` | `OauthApi.m16059postLogineH_QyT8` | None (OAuth) | default + 2fa-code, hardware_id | form fields: username, password, grant_type, client_id, scope | Result<RefreshTokensResponse> | E54 |
+| POST | https://api.{env}oauth.blink.com/ | `oauth/token` | `OauthApi.m16059postLogineH_QyT8` (alternate/legacy direct credential surface; not current plugin UI) | None (OAuth) | default + 2fa-code, hardware_id | form fields: username, password, grant_type, client_id, scope | Result<RefreshTokensResponse> | E54 |
 | POST | https://api.{env}oauth.blink.com/ | `oauth/token` | `OauthApi.postRefreshTokens` | None (OAuth) | default | form fields: refresh_token, grant_type, client_id, scope | Call<RefreshTokensResponse> | E54 |
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `v1/accounts/%7Binjected_account_id%7D/networks/{network_id}/accessories/rosie/owl/{owl_id}/calibrate` | `OwlApi.m16181calibrateRosie0E7RQCE` | Bearer + TOKEN-AUTH | default | — | Result<Kommand> | E55 |
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `v1/accounts/%7Binjected_account_id%7D/networks/{networkId}/owls/{owlId}/change_wifi` | `OwlApi.m16182changeOwlWifiBWLJW6A` | Bearer + TOKEN-AUTH | default | OnboardingBody | Result<OwlAddBody> | E55 |

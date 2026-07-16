@@ -5,16 +5,20 @@
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
 
-> Important: This plugin uses Blink's new (OAuth-based) API and has been validated to work in at least one European locale. It has not yet been tested in the United States. Feedback from multiple locales is welcome—the new API requires region-aware resolution.
+> Important: This plugin uses Blink's private OAuth and REST APIs. The protocol has
+> been observed with an Ireland account on Blink's `prde` tier. Other production
+> tiers are supported from Android 57.1 APK traces and automated routing tests, but
+> have not been exercised with non-EU accounts.
 
-Modern Blink platform plugin for Homebridge using the official OAuth endpoints. Exposes Blink devices as proper HomeKit accessories:
+Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Blink devices as proper HomeKit accessories:
 
 - **SecuritySystem** for arm/disarm control of networks
 - **MotionSensor** for motion detection events
 - **Doorbell** service for ring notifications
 - **Switch** for enabling/disabling motion detection per device
 
-All API interactions are based on reverse-engineered endpoints from the official Blink Android app (v50.1).
+API behavior is based on reverse-engineered endpoints from Blink Android 57.1
+(`versionCode` 29715642). Blink can change these private interfaces without notice.
 
 ## Two-Way Talk Status
 
@@ -27,7 +31,7 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 - ✅ **Doorbell Support** - Ring notifications appear as HomeKit doorbell events
 - ✅ **Status Polling** - Automatically syncs device states with Blink cloud
 - ✅ **OAuth Authentication** - Modern OAuth 2.0 with automatic token refresh
-- ✅ **2FA Support** - Works with Blink accounts that have two-factor authentication enabled
+- ✅ **Blink-hosted MFA** - Password and hosted MFA stay on Blink's sign-in page
 - ✅ **Retry Logic** - Automatic retry with exponential backoff for rate limits and server errors
 
 ## Requirements
@@ -69,9 +73,14 @@ Restart Homebridge after installing.
 
 ### Via Homebridge UI
 
-The plugin provides a full configuration UI. Navigate to `Plugins` → `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
+The plugin provides a full configuration UI. Open the remote Homebridge UI in
+Brave (for example, `http://raspberrypi.local:8581`), then navigate to `Plugins`
+→ `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
 
-Authentication is handled in the custom UI card (**Sign in to Blink**). The schema form intentionally hides credential and verification-code fields, and a successful sign-in now keeps the Blink password out of the platform config while storing reusable tokens in Homebridge's `.blink-auth.json` auth file with owner-only permissions. Temporary verification codes are cleared after successful login.
+Authentication uses Blink's hosted sign-in. Homebridge creates the PKCE/state
+transaction, but Blink alone receives the account credentials and hosted MFA code.
+After the callback is finished, Homebridge stores reusable tokens in its storage
+root and removes legacy credential/code fields from the plugin configuration.
 
 ### Manual Configuration
 
@@ -104,14 +113,12 @@ Add a platform entry to your Homebridge `config.json`:
 | ------ | -------- | ------- | ----------- |
 | `platform` | Yes | - | Must be `BlinkCameras` |
 | `name` | Yes | `Blink` | Platform name shown in logs |
-| `username` | No* | - | Manual fallback email address. The custom UI may populate this automatically after a successful sign-in |
-| `password` | No* | - | Manual fallback password for recovery-only flows; it is not re-saved by the custom UI after sign-in |
 | `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (`hardware_id`) |
 | `deviceName` | No | - | Friendly fallback name for this Homebridge instance |
-| `persistAuth` | No | `true` | Persist auth tokens across restarts in Homebridge's `.blink-auth.json` file |
+| `persistAuth` | No | `true` | Persist auth tokens across restarts in Homebridge's `.blink-auth.json` file; hosted-UI completion forces `true`, and `false` is not supported for a completed hosted session |
 | `trustDevice` | No | `true` | Trust this device during client verification |
-| `authLocked` | No | `false` | Ignore stored verification codes after a successful login until you explicitly unlock auth |
-| `tier` | No | `prod` | Blink API tier. Common UI values are `prod`, `prde`, `prsg`, `a001`, and `e001`-`e006`; advanced manual values such as `sqa1`, `cemp`, and `srf1` are also supported |
+| `authLocked` | No | `false` | Keep normal operation token-only; hosted sign-in sets this to `true` |
+| `tier` | No | `prod` | Last Blink tier discovered from `v1/users/tier_info`; do not guess it from locale |
 | `sharedTier` | No | - | Advanced manual override for shared REST routing; defaults to `tier` and is intentionally hidden from the UI schema |
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
@@ -136,47 +143,63 @@ Add a platform entry to your Homebridge `config.json`:
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
 | `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout }` (legacy `deviceSettings` is still accepted; `motionTimeout` is the currently applied runtime override) |
 
-When `persistAuth` is enabled, auth tokens are stored in a single `.blink-auth.json` file inside the Homebridge storage root. Pre-`0.6.x` installs using `blink-auth/auth-state.json` are migrated automatically.
-
-\* `username` and `password` are optional when you already have persisted tokens. They remain supported for manual recovery flows, but the custom UI no longer writes the plaintext password back into the saved platform config.
-
-\* `twoFactorCode`, `clientVerificationCode`, and `accountVerificationCode` are also supported for manual fallback flows even though they are intentionally hidden from the schema UI. Add them only temporarily when Blink requests a code, then remove them after successful authentication.
+When `persistAuth` is enabled, tokens and the originating `oauthClientId` are
+stored in `.blink-auth.json` inside the Homebridge storage root. The file is
+atomically replaced with owner-only mode `0600`. Pre-`0.6.x` state from
+`blink-auth/auth-state.json` is migrated automatically. Do not copy either file
+into the repository or expose its contents in logs or support requests.
 
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to force a new thumbnail capture.
 
-## Quick Start: Login & Authorization
+## Quick Start: Hosted Blink Sign-In
 
-Use Homebridge UI → plugin Settings → **Sign in to Blink**.
+1. Open this plugin's settings in the remote Homebridge UI and choose **Sign in
+   securely with Blink**. Keep the Homebridge settings tab open. If Brave blocks
+   the new tab, choose the revealed **Open Blink Sign-In** fallback.
+2. Finish the account-credential and MFA steps only in the separate
+   Blink-hosted Brave tab. Homebridge never receives either value.
+3. After Blink reaches its desktop **Unsupported Browser** page, copy the full
+   address beginning with
+   `https://applinks.blink.com/signin/callback` from Brave's address bar.
+4. Return to Homebridge and choose **Paste Blink Result and Finish**. This reads
+   the clipboard only from that click. If Brave denies clipboard access, reveal
+   the manual field, paste the complete address, and choose **Finish with Pasted Address**.
+5. If Blink asks for client or account verification after issuing tokens, enter
+   that distinct post-token code in Homebridge. This is not Blink's hosted MFA.
+6. Wait for stored-token connection verification, then continue to the normal
+   plugin schema. Restart Homebridge and confirm the stored session reconnects.
 
-1. Enter email/password in the custom UI login card.
-2. Complete any prompted 2FA/client/account verification in the same custom UI flow.
-3. Keep `persistAuth: true` so tokens survive restarts.
-4. Confirm the plugin remains authenticated after restart. Temporary verification-code fields should be cleared automatically, and the plaintext Blink password should not be written back into the platform config.
-
-Tips:
-
-- Ensure `deviceId` is unique per Homebridge instance.
-- Leave `trustDevice: true` so future sessions are approved automatically.
-- If you want restarts to ignore any stored verification codes after a successful login, enable `authLocked`.
-- If you keep seeing verification prompts, confirm that `persistAuth` is enabled and the Homebridge process can write to `.blink-auth.json`.
+The Raspberry Pi owns the PKCE verifier and expected state. While sign-in is in
+progress it stores only the pending transaction in `.blink-auth-pending.json`.
+A valid pending transaction can survive a custom-UI process or full Homebridge
+restart only within its 15-minute lifetime. A valid callback consumes and
+deletes the pending file before the one-time code exchange; if exchange fails,
+the operator must start a new sign-in. Success stores the final token state in
+`.blink-auth.json`, including `oauthClientId=android`, and hosted completion
+forces `persistAuth=true`. Both files are owner-only (`0600`). No public callback
+service or inbound port is required.
 
 ## Re-Authentication / Token Reset
 
-If you need to re-authenticate or switch Blink accounts:
+If you need to re-authenticate or switch Blink accounts, choose **Unlock &
+Re-authenticate** in the custom UI, then start hosted sign-in again. Unlocking
+clears the current token file, legacy auth state, and any pending transaction
+before returning to the signed-out screen. The custom-UI server's `/logout`
+route has the same local storage-clearing semantics for integrations, but the
+current operator UI does not expose a separate logout button. Neither action
+revokes tokens at Blink; it removes the plugin's local ability to reuse them.
 
-1. Stop Homebridge.
-2. Remove the persisted auth file from the Homebridge storage root: `.blink-auth.json`.
-   - If you are upgrading from a pre-`0.6.x` release and the legacy directory still exists, also remove `blink-auth/auth-state.json`.
-3. Start Homebridge and run **Sign in to Blink** again from the plugin custom UI.
-
-## Manual Smoke Checklist (Duplicate Auth UI Regression)
+## Manual Smoke Checklist (Hosted Authentication)
 
 - Open Homebridge UI → Plugins → this plugin → Settings.
-- Confirm there is exactly one auth flow: the custom UI **Sign in to Blink** card.
-- Confirm there is no schema auth fieldset containing username/password/verification code inputs.
-- Complete login and restart Homebridge.
-- Confirm authentication persists after restart and any temporary verification-code fields have been cleared from the config without re-saving the plaintext Blink password.
+- Confirm there is one hosted flow and no Homebridge username, password, or
+  hosted-MFA input.
+- Confirm Brave reaches the exact HTTPS App-Link and the clipboard/manual finish
+  returns to an authenticated status.
+- Confirm the saved plugin config contains no credentials or verification codes.
+- Restart Homebridge and confirm `.blink-auth.json` supplies the same account;
+  refresh uses its persisted OAuth profile.
 
 ## Live Streaming (FFmpeg)
 
@@ -227,66 +250,37 @@ The HomeKit SecuritySystem exposes standard modes:
 
 Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's armed state.
 
-## Two-Factor Authentication
+## Hosted MFA and Post-Token Verification
 
-> [!TIP]
-> If `authLocked` is enabled, unlock authentication in the custom UI before using temporary verification-code fields. Locked auth ignores stored codes on restart.
-
-When you first connect a new device to your Blink account:
-
-1. Blink sends an email with a verification code
-2. Add the code to `twoFactorCode` in your config
-3. Restart Homebridge
-4. After successful login, **remove the 2FA code** from your config
-5. Restart Homebridge again
-
-Future logins will use refresh tokens and won't require 2FA.
+Blink's sign-in page owns the account credential and hosted MFA steps. Do not
+put either value in Homebridge configuration.
 
 ## Client Verification (New Device Approval)
 
-Blink may require a one-time **client verification** for new devices, which is separate from 2FA:
-
-1. The plugin will request a verification code on first login.
-2. Check your email/SMS for the code.
-3. Add the code to `clientVerificationCode` in your config.
-4. Restart Homebridge.
-5. After successful verification, **remove the code** from your config.
-
-If you keep seeing verification prompts, ensure `persistAuth` is enabled and your `deviceId` is unique.
+After tokens exist, Blink may require one-time **client verification** for the
+new Homebridge device. The custom UI identifies this post-token requirement,
+accepts the code through its verification form, and never saves it in plugin
+configuration. Leave **Trust this device** enabled unless you intentionally want
+Blink to ask again.
 
 ## Account/Phone Verification
 
-Some accounts require an additional **account or phone verification** step:
-
-1. The plugin will request a verification code when required.
-2. Check your email/SMS for the code.
-3. Add the code to `accountVerificationCode` in your config.
-4. Restart Homebridge.
-5. After successful verification, **remove the code** from your config.
-
-### Example: Temporary Codes in Config
-
-Add only one code at a time when requested by Blink:
-
-```json
-{
-  "platform": "BlinkCameras",
-  "username": "you@example.com",
-  "password": "your-blink-password",
-  "deviceId": "homebridge-blink-01",
-  "persistAuth": true,
-  "twoFactorCode": "123456" // remove after success, then restart
-}
-```
+Some accounts require an additional **account or phone verification** after
+token issuance. Complete it only when the custom UI labels the request as
+account verification. If Blink asks for another PIN, request a new one and use
+the same form; the token state remains authenticated while verification is
+pending.
 
 ## Troubleshooting
 
 ### 401 Unauthorized / 403 Forbidden
 
 - Regenerate a unique `deviceId`
-- Check your email for the Blink device approval prompt
-- Provide a fresh `twoFactorCode` if prompted
-- If logs show `tier_info` with a different tier, restart after the plugin auto-updates routing
+- Use **Test Connection** to retry with stored tokens.
+- Complete any client/account verification shown by the custom UI.
+- If refresh has expired, use **Unlock & Re-authenticate** and start a fresh
+  hosted sign-in.
+- Do not manually choose a geographic tier; `tier_info` is authoritative.
 
 ### Rate Limits (429)
 
@@ -297,7 +291,7 @@ The plugin automatically backs off and retries. If you're hitting rate limits fr
 
 ### Node.js Version
 
-This plugin requires Node.js 18+ for the native `fetch` API. Check your version:
+This plugin requires Node.js 20, 22, or 24 LTS. Check your version:
 
 ```bash
 node --version
@@ -315,11 +309,14 @@ This plugin's API implementation is based on reverse engineering the official Bl
 
 ### Authentication
 
-- OAuth 2.0 authorization-code flow with PKCE via production `api.oauth.blink.com`; staging and development are built at request time as `api.qa.oauth.blink.com` and `api.dev.oauth.blink.com`
-- Automatic token refresh using the `refresh_token` grant
+- Hosted OAuth 2.0 authorization-code flow with Pi-owned PKCE through production
+  `api.oauth.blink.com` and the registered HTTPS App-Link callback
+- Android sessions refresh with `client_id=android` and `scope=client`; migrated
+  state without `oauthClientId` retains the legacy iOS refresh contract
 - Hardware ID required for device identification
 - Client verification and account verification flows for new device approval
-- Region-aware routing replaces `{tier}`, `{shared_tier}`, and `{env}` on the completed request URL immediately before network execution; behavior may differ by account and country
+- `v1/users/tier_info` selects `rest-{tier}.immedia-semi.com` after token issuance;
+  the hosted user journey does not require a region choice
 
 ### Endpoints
 
@@ -376,4 +373,5 @@ MIT - see [LICENSE](LICENSE) for details.
 
 - API documentation derived from reverse engineering the Blink Android app
 - Homebridge platform plugin architecture
-- Community feedback on locale-specific behavior (EU validated; US pending)
+- Ireland `prde` protocol evidence; non-EU behavior remains APK-derived and
+  mocked/parameterized pending authorized account validation
