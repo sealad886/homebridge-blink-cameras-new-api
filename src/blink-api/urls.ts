@@ -8,6 +8,7 @@
 import { BlinkConfig } from '../types';
 
 const DEFAULT_TIER = 'prod';
+type OAuthTierConfig = Pick<BlinkConfig, 'tier'>;
 
 const normalizeBase = (base: string): string => (base.endsWith('/') ? base : `${base}/`);
 
@@ -69,7 +70,7 @@ export const getSharedRestRootUrl = (config: BlinkConfig): string => {
  * Source: blinkpy - OAUTH_HOST = "api.oauth.blink.com"
  * Evidence: Production uses empty subdomain, QA uses "qa."
  */
-const getOAuthBaseUrl = (config: BlinkConfig): string => {
+const getOAuthBaseUrl = (config: OAuthTierConfig): string => {
   const tier = resolveTier(config.tier);
   const envSubdomain = tier === 'sqa1' ? 'qa.' : '';
   return normalizeBase(`https://api.${envSubdomain}oauth.blink.com/`);
@@ -80,7 +81,7 @@ const getOAuthBaseUrl = (config: BlinkConfig): string => {
  * Source: blinkpy - OAUTH_TOKEN_URL = f"https://{OAUTH_HOST}/oauth/token"
  * Evidence: Used for both authorization_code and refresh_token grants
  */
-export const getOAuthTokenUrl = (config: BlinkConfig): string => {
+export const getOAuthTokenUrl = (config: OAuthTierConfig): string => {
   return `${getOAuthBaseUrl(config)}oauth/token`;
 };
 
@@ -89,7 +90,7 @@ export const getOAuthTokenUrl = (config: BlinkConfig): string => {
  * Source: blinkpy - OAUTH_AUTHORIZE_URL = f"https://{OAUTH_HOST}/oauth/v2/authorize"
  * Evidence: Initiates Authorization Code + PKCE flow
  */
-export const getOAuthAuthorizeUrl = (config: BlinkConfig): string => {
+export const getOAuthAuthorizeUrl = (config: OAuthTierConfig): string => {
   return `${getOAuthBaseUrl(config)}oauth/v2/authorize`;
 };
 
@@ -98,7 +99,7 @@ export const getOAuthAuthorizeUrl = (config: BlinkConfig): string => {
  * Source: blinkpy - OAUTH_SIGNIN_URL = f"https://{OAUTH_HOST}/oauth/v2/signin"
  * Evidence: Web-based credential submission with CSRF token
  */
-export const getOAuthSigninUrl = (config: BlinkConfig): string => {
+export const getOAuthSigninUrl = (config: OAuthTierConfig): string => {
   return `${getOAuthBaseUrl(config)}oauth/v2/signin`;
 };
 
@@ -107,6 +108,6 @@ export const getOAuthSigninUrl = (config: BlinkConfig): string => {
  * Source: blinkpy - OAUTH_2FA_VERIFY_URL = f"https://{OAUTH_HOST}/oauth/v2/2fa/verify"
  * Evidence: Used when 2FA PIN is required
  */
-export const getOAuth2FAVerifyUrl = (config: BlinkConfig): string => {
+export const getOAuth2FAVerifyUrl = (config: OAuthTierConfig): string => {
   return `${getOAuthBaseUrl(config)}oauth/v2/2fa/verify`;
 };

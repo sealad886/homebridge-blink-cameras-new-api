@@ -48,7 +48,8 @@ describe('BlinkHttp', () => {
     const [url, options] = (fetch as jest.Mock).mock.calls[0];
     expect(url).toBe('https://rest-prod.immedia-semi.com/api/v1/example');
     const headers = options.headers as Record<string, string>;
-    expect(headers['APP-BUILD']).toBe('ANDROID_29426569');
+    expect(headers['APP-BUILD']).toBe('ANDROID_29715642');
+    expect(headers['User-Agent']).toBe('Blink/57.1 (samsung SM-G998B; Android 14)');
     expect(headers.Authorization).toBe('Bearer token');
     expect(headers['X-Blink-Time-Zone']).toBeTruthy();
     expect(auth.ensureValidToken).toHaveBeenCalled();

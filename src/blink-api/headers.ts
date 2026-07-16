@@ -11,9 +11,9 @@
  */
 
 // Android client constants (for REST API)
-export const APP_VERSION = '51.0';
-export const APP_BUILD = '29426569';
-export const APP_BUILD_HEADER = `ANDROID_${APP_BUILD}`;
+export const APP_VERSION = '57.1';
+export const APP_BUILD = '29715642';
+export const APP_BUILD_HEADER = 'ANDROID_29715642';
 export const USER_AGENT = `Blink/${APP_VERSION} (samsung SM-G998B; Android 14)`;
 export const DEFAULT_LOCALE = 'en_US';
 

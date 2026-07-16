@@ -1,4 +1,10 @@
-import { getOAuthTokenUrl, getRestBaseUrl, getSharedRestBaseUrl, getSharedRestRootUrl } from '../../src/blink-api/urls';
+import {
+  getOAuthAuthorizeUrl,
+  getOAuthTokenUrl,
+  getRestBaseUrl,
+  getSharedRestBaseUrl,
+  getSharedRestRootUrl,
+} from '../../src/blink-api/urls';
 import { BlinkConfig } from '../../src/types';
 
 describe('Blink API URL builders', () => {
@@ -31,5 +37,25 @@ describe('Blink API URL builders', () => {
   it('uses production OAuth base for prod tiers', () => {
     const config: BlinkConfig = { ...baseConfig, tier: 'prod' };
     expect(getOAuthTokenUrl(config)).toBe('https://api.oauth.blink.com/oauth/token');
+  });
+
+  it.each([
+    'prod',
+    'prde',
+    'prsg',
+    'a001',
+    'cemp',
+    'srf1',
+    'e001',
+    'e002',
+    'e003',
+    'e004',
+    'e005',
+    'e006',
+  ])('uses the shared production OAuth host for APK-supported tier %s', (tier) => {
+    const config: BlinkConfig = { ...baseConfig, tier };
+
+    expect(getOAuthTokenUrl(config)).toBe('https://api.oauth.blink.com/oauth/token');
+    expect(getOAuthAuthorizeUrl(config)).toBe('https://api.oauth.blink.com/oauth/v2/authorize');
   });
 });
