@@ -427,6 +427,7 @@
   let verifyType = '2fa';
   let savedUsername = '';
   let savedTier = 'prod';
+  let authSuccessHandled = false;
 
   // DOM Elements
   const steps = {
@@ -654,10 +655,7 @@
         tier
       });
 
-      if (response.authenticated) {
-        handleAuthSuccess(response);
-      }
-      // Other cases handled via events
+      handleAuthResponse(response);
     } catch (e) {
       showError(e.message || 'Login failed');
     } finally {
@@ -686,10 +684,7 @@
         trustDevice
       });
 
-      if (response.authenticated) {
-        handleAuthSuccess(response);
-      }
-      // Other cases handled via events
+      handleAuthResponse(response);
     } catch (e) {
       showError(e.message || 'Verification failed');
     } finally {
@@ -706,6 +701,7 @@
 
   // Handle verification required
   function handleVerificationRequired(type, data) {
+    const isSameVerificationStep = currentStep === 'verify' && verifyType === type;
     verifyType = type;
     document.getElementById('verifyType').value = type;
 
@@ -729,12 +725,35 @@
       trustDeviceCheck.classList.add('hidden');
     }
 
-    document.getElementById('verifyCode').value = '';
+    if (!isSameVerificationStep) {
+      document.getElementById('verifyCode').value = '';
+    }
     showStep('verify');
+  }
+
+  // Handle the request response directly as events may arrive before listeners
+  // are ready in some Homebridge UI environments.
+  function handleAuthResponse(response) {
+    if (!response) {
+      showError('Received an empty response from the server.');
+    } else if (response.authenticated) {
+      handleAuthSuccess(response);
+    } else if (response.requires2FA) {
+      handleVerificationRequired('2fa', response);
+    } else if (response.requiresClientVerification) {
+      handleVerificationRequired('client', response);
+    } else if (response.requiresAccountVerification) {
+      handleVerificationRequired('account', response);
+    } else {
+      showError(response.message || 'Authentication failed. Please try again.');
+    }
   }
 
   // Handle successful authentication
   async function handleAuthSuccess(data) {
+    if (authSuccessHandled) return;
+    authSuccessHandled = true;
+
     hideStatusError();
     setAuthLockVisibility(true);
     // Update config with credentials
@@ -775,6 +794,7 @@
     try {
       await homebridge.updatePluginConfig(pluginConfig);
     } catch (error) {
+      authSuccessHandled = false;
       showError('Failed to save config. Check Homebridge logs and try again.');
       // eslint-disable-next-line no-console
       console.error('[Blink UI] Config save failed:', error);
@@ -859,6 +879,7 @@
       pluginConfig[0] = config;
       await homebridge.updatePluginConfig(pluginConfig);
 
+      authSuccessHandled = false;
       updateLockUI(false);
       showStep('login');
       homebridge.toast.info('Authentication unlocked. You can re-authenticate now.', 'Unlocked');
