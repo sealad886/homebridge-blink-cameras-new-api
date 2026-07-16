@@ -700,6 +700,7 @@
 
   // Handle verification required
   function handleVerificationRequired(type, data) {
+    const isSameVerificationStep = currentStep === 'verify' && verifyType === type;
     verifyType = type;
     document.getElementById('verifyType').value = type;
 
@@ -723,7 +724,7 @@
       trustDeviceCheck.classList.add('hidden');
     }
 
-    if (currentStep !== 'verify') {
+    if (!isSameVerificationStep) {
       document.getElementById('verifyCode').value = '';
     }
     showStep('verify');

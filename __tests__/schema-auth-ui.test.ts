@@ -140,7 +140,8 @@ describe('schema auth UI regression', () => {
     expect(html).toContain("handleVerificationRequired('account', response)");
     expect(html).toContain('if (!response)');
     expect(html).toContain("showError(response.message || 'Authentication failed. Please try again.')");
-    expect(html).toContain("if (currentStep !== 'verify')");
+    expect(html).toContain("currentStep === 'verify' && verifyType === type");
+    expect(html).toContain('if (!isSameVerificationStep)');
     expect(html.match(/handleAuthResponse\(response\);/g)).toHaveLength(2);
   });
 
