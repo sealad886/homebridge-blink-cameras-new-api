@@ -160,6 +160,11 @@ interface ActiveStreamSession extends PendingStreamSession {
   ffmpegStderrBufferTruncated?: boolean;
 }
 
+interface FfmpegStderrState {
+  ffmpegStderrBuffer?: string;
+  ffmpegStderrBufferTruncated?: boolean;
+}
+
 const usedPorts = new Set<number>();
 
 /**
@@ -194,7 +199,8 @@ const redactFfmpegOutput = (value: string): string => {
   return value
     .replace(/\b(?:immis|rtsps?):\/\/[^\s'"]+/gi, (url) => redactStreamUrl(url))
     .replace(/(-srtp_(?:out|in)_params\s+)(\S+)/gi, '$1<redacted>')
-    .replace(/(\bsrtp_(?:out|in)_params[=:])(\S+)/gi, '$1<redacted>');
+    .replace(/(\bsrtp_(?:out|in)_params[=:])(\S+)/gi, '$1<redacted>')
+    .replace(/(\binline:)([^\s|]+)/gi, '$1<redacted>');
 };
 
 const redactStreamUrl = (value: string): string => {
@@ -892,20 +898,21 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
       stdio: ['pipe', 'ignore', 'pipe'],
     });
+    const stderrState: FfmpegStderrState = {};
     active.talkback = talkback;
     talkback.stdin?.end(sdp);
 
     talkback.stderr.on('data', (data) => {
-      if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg-talkback(${sessionId}): ${data.toString('utf8').trim()}`);
-      }
+      this.handleFfmpegStderr(sessionId, stderrState, data, 'FFmpeg-talkback');
     });
 
     talkback.on('error', (error) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
       this.log(`Talkback FFmpeg error for session ${sessionId}: ${error.message}`);
     });
 
     talkback.on('exit', (code, signal) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
       if (code !== 0) {
         this.log(`Talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
@@ -946,6 +953,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    const stderrState: FfmpegStderrState = {};
     active.talkback = talkback;
     talkback.stdin?.end(sdp);
 
@@ -958,16 +966,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     talkback.stderr.on('data', (data) => {
-      if (this.streamingConfig.ffmpegDebug) {
-        this.log(`FFmpeg-immis-talkback(${sessionId}): ${data.toString('utf8').trim()}`);
-      }
+      this.handleFfmpegStderr(sessionId, stderrState, data, 'FFmpeg-immis-talkback');
     });
 
     talkback.on('error', (error) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
       this.log(`IMMIS talkback FFmpeg error for session ${sessionId}: ${error.message}`);
     });
 
     talkback.on('exit', (code, signal) => {
+      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
       if (code !== 0) {
         this.log(`IMMIS talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
@@ -1078,7 +1086,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     });
   }
 
-  private handleFfmpegStderr(sessionId: string, active: ActiveStreamSession, data: Buffer): void {
+  private handleFfmpegStderr(
+    sessionId: string,
+    state: FfmpegStderrState,
+    data: Buffer,
+    label = 'FFmpeg',
+  ): void {
     if (!this.streamingConfig.ffmpegDebug) {
       return;
     }
@@ -1092,8 +1105,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         continue;
       }
 
-      this.appendFfmpegStderrSegment(active, chunk.slice(lineStart, index));
-      this.flushFfmpegStderrLine(sessionId, active);
+      this.appendFfmpegStderrSegment(state, chunk.slice(lineStart, index));
+      this.flushFfmpegStderrLine(sessionId, state, label);
 
       if (char === 13 && chunk.charCodeAt(index + 1) === 10) {
         index++;
@@ -1101,54 +1114,54 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       lineStart = index + 1;
     }
 
-    this.appendFfmpegStderrSegment(active, chunk.slice(lineStart));
+    this.appendFfmpegStderrSegment(state, chunk.slice(lineStart));
   }
 
-  private flushFfmpegStderr(sessionId: string, active: ActiveStreamSession): void {
+  private flushFfmpegStderr(sessionId: string, state: FfmpegStderrState, label = 'FFmpeg'): void {
     if (!this.streamingConfig.ffmpegDebug) {
       return;
     }
 
-    this.flushFfmpegStderrLine(sessionId, active);
+    this.flushFfmpegStderrLine(sessionId, state, label);
   }
 
-  private appendFfmpegStderrSegment(active: ActiveStreamSession, segment: string): void {
-    if (!segment || active.ffmpegStderrBufferTruncated) {
+  private appendFfmpegStderrSegment(state: FfmpegStderrState, segment: string): void {
+    if (!segment || state.ffmpegStderrBufferTruncated) {
       return;
     }
 
-    const currentBuffer = active.ffmpegStderrBuffer ?? '';
+    const currentBuffer = state.ffmpegStderrBuffer ?? '';
     if (currentBuffer.length + segment.length <= MAX_FFMPEG_STDERR_BUFFER_CHARS) {
-      active.ffmpegStderrBuffer = `${currentBuffer}${segment}`;
+      state.ffmpegStderrBuffer = `${currentBuffer}${segment}`;
       return;
     }
 
-    active.ffmpegStderrBuffer = '';
-    active.ffmpegStderrBufferTruncated = true;
+    state.ffmpegStderrBuffer = '';
+    state.ffmpegStderrBufferTruncated = true;
   }
 
-  private flushFfmpegStderrLine(sessionId: string, active: ActiveStreamSession): void {
-    if (active.ffmpegStderrBufferTruncated) {
+  private flushFfmpegStderrLine(sessionId: string, state: FfmpegStderrState, label: string): void {
+    if (state.ffmpegStderrBufferTruncated) {
       this.log(
-        `FFmpeg(${sessionId}): <stderr line omitted because it exceeded ${MAX_FFMPEG_STDERR_BUFFER_CHARS} characters>`,
+        `${label}(${sessionId}): <stderr line omitted because it exceeded ${MAX_FFMPEG_STDERR_BUFFER_CHARS} characters>`,
       );
-      active.ffmpegStderrBuffer = '';
-      active.ffmpegStderrBufferTruncated = false;
+      state.ffmpegStderrBuffer = '';
+      state.ffmpegStderrBufferTruncated = false;
       return;
     }
 
-    if (!active.ffmpegStderrBuffer) {
+    if (!state.ffmpegStderrBuffer) {
       return;
     }
 
-    this.logRedactedFfmpegLine(sessionId, active.ffmpegStderrBuffer);
-    active.ffmpegStderrBuffer = '';
+    this.logRedactedFfmpegLine(sessionId, state.ffmpegStderrBuffer, label);
+    state.ffmpegStderrBuffer = '';
   }
 
-  private logRedactedFfmpegLine(sessionId: string, line: string): void {
+  private logRedactedFfmpegLine(sessionId: string, line: string, label = 'FFmpeg'): void {
     const trimmed = line.trim();
     if (trimmed) {
-      this.log(`FFmpeg(${sessionId}): ${redactFfmpegOutput(trimmed)}`);
+      this.log(`${label}(${sessionId}): ${redactFfmpegOutput(trimmed)}`);
     }
   }
 

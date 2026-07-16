@@ -38,6 +38,7 @@ type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
     session: unknown,
     callback: (error?: Error) => void,
   ) => void;
+  startTalkback: (sessionId: string, request: unknown, session: unknown) => void;
   startStream: (sessionId: string, request: unknown, callback: (error?: Error) => void) => Promise<void>;
   pendingSessions: Map<string, unknown>;
   ongoingSessions: Map<string, unknown>;
@@ -485,6 +486,81 @@ describe('Accessory handlers', () => {
       expect(logs).not.toContain('stream-secret');
       expect(logs).not.toContain('conn-secret');
       expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.arrayContaining(['-i', sensitiveUrl]));
+    } finally {
+      spawnMock.mockClear();
+    }
+  });
+
+  it('redacts split live-view and SRTP secrets from talkback FFmpeg debug logs', () => {
+    const hap = createHap();
+    const logFn = jest.fn();
+    const spawnMock = spawn as unknown as jest.Mock;
+    spawnMock.mockClear();
+
+    try {
+      const source = new BlinkCameraSource(
+        {} as BlinkApi,
+        hap as unknown as HAP,
+        1,
+        2,
+        'camera',
+        'TEST_SERIAL',
+        jest.fn(),
+        () => true,
+        logFn,
+        { enabled: true, ffmpegDebug: true },
+      );
+      const sensitiveUrl = 'rtsp://user:password@stream.example/session-secret?token=stream-secret';
+      const session = {
+        address: '192.168.1.50',
+        addressVersion: 'ipv4',
+        sessionId: 'session',
+        videoPort: 5000,
+        localVideoPort: 5100,
+        videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        videoSRTP: Buffer.alloc(30, 1),
+        videoSSRC: 1234,
+        audioPort: 5001,
+        localAudioPort: 5101,
+        audioCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+        audioSRTP: Buffer.from('talkback-srtp-secret'.padEnd(30, '!')),
+        audioSSRC: 5678,
+        liveviewUrl: sensitiveUrl,
+      };
+      const request = {
+        type: 'start',
+        sessionID: 'session',
+        video: {},
+        audio: {
+          codec: 'OPUS',
+          channel: 1,
+          sample_rate: hap.AudioStreamingSamplerate.KHZ_24,
+          max_bit_rate: 24,
+          pt: 110,
+        },
+      };
+
+      (source as unknown as CameraSourcePrivateAccess).startTalkback('session', request, session);
+
+      const talkbackProcess = spawnMock.mock.results[0]?.value as {
+        stderr: { emit: (event: string, data: Buffer) => boolean };
+      };
+      talkbackProcess.stderr.emit('data', Buffer.from(`Opening '${sensitiveUrl.slice(0, 35)}`));
+      let logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain(sensitiveUrl.slice(0, 35));
+
+      talkbackProcess.stderr.emit(
+        'data',
+        Buffer.from(`${sensitiveUrl.slice(35)}'\na=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:talkback-`),
+      );
+      talkbackProcess.stderr.emit('data', Buffer.from('srtp-secret\n'));
+
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).toContain('<redacted>');
+      expect(logs).not.toContain('password');
+      expect(logs).not.toContain('session-secret');
+      expect(logs).not.toContain('stream-secret');
+      expect(logs).not.toContain('talkback-srtp-secret');
     } finally {
       spawnMock.mockClear();
     }

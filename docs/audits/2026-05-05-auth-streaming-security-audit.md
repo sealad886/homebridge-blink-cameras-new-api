@@ -98,6 +98,8 @@ Remediation:
 
 - Added stream URL redaction for `immis://`, `rtsp://`, and `rtsps://`.
 - Kept raw URL only in the actual FFmpeg spawn args.
+- Applied the same bounded, cross-chunk stderr redaction to video, standard
+  talkback, and IMMIS talkback FFmpeg processes, including SDP `inline:` keys.
 - Extended debug logging spec to require liveview URL and SRTP redaction.
 
 Proof:
@@ -264,7 +266,7 @@ Targeted commands after remediation:
 
 Final full gate:
 
-- `npm test -- --runInBand`: passed 13 suites, 93 tests.
+- `npm test -- --runInBand`: passed 14 suites, 105 tests.
 - `npm run build`: passed.
 - `npm run lint`: passed with no warnings.
 - `npm audit --omit=dev --json`: passed with 0 production vulnerabilities.
