@@ -6,9 +6,10 @@ import * as path from 'node:path';
 import process from 'node:process';
 
 const OWNER_ONLY_FILE_MODE = 0o600;
-const SHARED_FILE_MODE_MASK = 0o077;
 const POSIX_MODE_MASK = 0o777;
 const noFollowFlag = fsConstants.O_NOFOLLOW ?? 0;
+const nonBlockingFlag = fsConstants.O_NONBLOCK ?? 0;
+const secureReadOpenFlags = fsConstants.O_RDONLY | noFollowFlag | nonBlockingFlag;
 
 const isNodeError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
@@ -25,8 +26,8 @@ const formatFileMode = (mode: number): string => {
   return `0${(mode & POSIX_MODE_MASK).toString(8)}`;
 };
 
-const hasSharedFilePermissions = (mode: number): boolean => {
-  return (mode & SHARED_FILE_MODE_MASK) !== 0;
+const hasOwnerOnlyFileMode = (mode: number): boolean => {
+  return (mode & POSIX_MODE_MASK) === OWNER_ONLY_FILE_MODE;
 };
 
 const requireCurrentProcessOwner = (stats: Pick<Stats, 'uid'>, filePath: string): void => {
@@ -57,7 +58,7 @@ async function hardenOpenedOwnerOnlyFileMode(
   }
 
   const originalMode = originalStats.mode;
-  if (!hasSharedFilePermissions(originalMode)) {
+  if (hasOwnerOnlyFileMode(originalMode)) {
     return;
   }
 
@@ -78,7 +79,7 @@ async function hardenOpenedOwnerOnlyFileMode(
   }
 
   const hardenedMode = (await target.stat()).mode;
-  if (hasSharedFilePermissions(hardenedMode)) {
+  if (!hasOwnerOnlyFileMode(hardenedMode)) {
     throw new SecureJsonFileSecurityError(
       `Persisted auth state file permissions remain ${formatFileMode(hardenedMode)} ` +
       `after tightening to ${formatFileMode(OWNER_ONLY_FILE_MODE)}: ${filePath}`,
@@ -97,7 +98,15 @@ export async function hardenOwnerOnlyFileMode(
 
   let handle: FileHandle | null = null;
   try {
-    handle = await fs.open(target, fsConstants.O_RDONLY | noFollowFlag);
+    const initialStats = await fs.lstat(target);
+    if (initialStats.isSymbolicLink()) {
+      throw new SecureJsonFileSecurityError(`Refusing to harden symlinked auth state file: ${filePath}`);
+    }
+    if (!initialStats.isFile()) {
+      throw new SecureJsonFileSecurityError(`Auth state path is not a regular file: ${filePath}`);
+    }
+
+    handle = await fs.open(target, secureReadOpenFlags);
     const [pathStats, handleStats] = await Promise.all([
       fs.lstat(target),
       handle.stat(),
@@ -127,7 +136,15 @@ export async function hardenOwnerOnlyFileMode(
 export async function readOwnerOnlyJsonFile<T>(filePath: string): Promise<T> {
   let handle: FileHandle | null = null;
   try {
-    handle = await fs.open(filePath, fsConstants.O_RDONLY | noFollowFlag);
+    const initialStats = await fs.lstat(filePath);
+    if (initialStats.isSymbolicLink()) {
+      throw new SecureJsonFileSecurityError(`Refusing to use symlinked auth state file: ${filePath}`);
+    }
+    if (!initialStats.isFile()) {
+      throw new SecureJsonFileSecurityError(`Auth state path is not a regular file: ${filePath}`);
+    }
+
+    handle = await fs.open(filePath, secureReadOpenFlags);
     const [pathStats, handleStats] = await Promise.all([
       fs.lstat(filePath),
       handle.stat(),
