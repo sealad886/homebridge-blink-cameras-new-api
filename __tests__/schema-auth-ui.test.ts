@@ -30,6 +30,15 @@ const readJson = <T>(relativePath: string): T => {
   return JSON.parse(fs.readFileSync(absolutePath, 'utf8')) as T;
 };
 
+const sectionBetween = (source: string, startMarker: string, endMarker: string): string => {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) {
+    throw new Error(`Unable to find expected source section: ${startMarker}`);
+  }
+  return source.slice(start, end);
+};
+
 const findLayoutKeyReferences = (node: unknown, targetKeys: Set<string>, hits: string[] = []): string[] => {
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -124,28 +133,202 @@ describe('schema auth UI regression', () => {
     expect(schema.customUiPath).toBe('./dist/homebridge-ui');
   });
 
-  it('does not persist the Blink password back into plugin config', () => {
+  it('uses Blink hosted authentication and removes every legacy credential surface', () => {
     const html = readText('src/homebridge-ui/public/index.html');
 
-    expect(html).not.toContain('config.password = passwordValue');
+    expect(html).not.toMatch(/type=["']password["']/i);
+    expect(html).not.toContain("homebridge.request('/login'");
+    expect(html).not.toContain("type: '2fa'");
+    expect(html).not.toMatch(/id=["']username["']/i);
+    expect(html).toContain("homebridge.request('/auth/start'");
+    expect(html).toContain("homebridge.request('/auth/complete'");
+    expect(html).toContain("window.open('about:blank', '_blank'");
+    expect(html).toContain('blinkWindow.opener = null');
+    expect(html).toContain('navigator.clipboard.readText()');
+    expect(html).toContain('manualCallbackForm');
+    expect(html).toContain('callbackInput.value =');
+    expect(html).toContain('delete config.username');
     expect(html).toContain('delete config.password');
+    expect(html).toContain('delete config.twoFactorCode');
+    expect(html).toContain('delete config.clientVerificationCode');
+    expect(html).toContain('delete config.accountVerificationCode');
+    expect(html).toContain('Blink tokens are stored');
+    expect(html).toContain('data.verified === false');
+    expect(html).not.toContain('Your credentials have been saved');
   });
 
-  it('handles verification requirements returned directly by login and verify requests', () => {
+  it('opens a no-opener popup before the first await and uses only the returned authorization URL', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+    const handler = sectionBetween(
+      html,
+      "startAuthButton.addEventListener('click', async () => {",
+      "pasteCallbackButton.addEventListener('click', async () => {",
+    );
+
+    const popupIndex = handler.indexOf("window.open('about:blank', '_blank'");
+    const openerIndex = handler.indexOf('blinkWindow.opener = null');
+    const firstAwaitIndex = handler.indexOf('await ');
+    expect(html).toContain('maxlength="128"');
+    expect(html).toContain('pattern="[A-Za-z0-9._-]+"');
+    expect(handler).toContain('/^[A-Za-z0-9._-]{1,128}$/.test(deviceIdValue)');
+    expect(handler).toContain("deviceIdValue = document.getElementById('deviceId').value.trim() || 'homebridge-blink'");
+    expect(handler).toContain('deviceId: deviceIdValue');
+    expect(handler).not.toContain("deviceId: deviceIdValue || 'homebridge-blink'");
+    expect(popupIndex).toBeGreaterThanOrEqual(0);
+    expect(openerIndex).toBeGreaterThan(popupIndex);
+    expect(firstAwaitIndex).toBeGreaterThan(openerIndex);
+    expect(handler).toContain('blinkWindow.location.replace(response.authorizationUrl)');
+    expect(handler.match(/fallbackLink\.href\s*=\s*[^;]+/g) ?? []).toEqual([
+      'fallbackLink.href = response.authorizationUrl',
+    ]);
+  });
+
+  it('reads the clipboard only in its click handler and clears callback values before awaiting completion', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+    const clipboardHandler = sectionBetween(
+      html,
+      "pasteCallbackButton.addEventListener('click', async () => {",
+      "manualCallbackForm.addEventListener('submit', async (event) => {",
+    );
+    const completion = sectionBetween(
+      html,
+      'async function completeHostedAuth(callbackUrl) {',
+      'function isPlausibleBlinkCallback(callbackUrl) {',
+    );
+    const manualHandler = sectionBetween(
+      html,
+      "manualCallbackForm.addEventListener('submit', async (event) => {",
+      'async function completeHostedAuth(callbackUrl) {',
+    );
+
+    expect(html.match(/navigator\.clipboard\.readText\(\)/g) ?? []).toHaveLength(1);
+    expect(clipboardHandler).toContain('navigator.clipboard.readText()');
+    expect(clipboardHandler).toContain("manualCallbackForm.classList.remove('hidden')");
+    expect(clipboardHandler).toContain('callbackInput.focus()');
+    const guardSetIndex = clipboardHandler.indexOf('completionInFlight = true');
+    const clipboardReadIndex = clipboardHandler.indexOf('navigator.clipboard.readText()');
+    const guardResetIndex = clipboardHandler.indexOf('completionInFlight = false', clipboardReadIndex);
+    expect(clipboardHandler).toContain('if (completionInFlight)');
+    expect(guardSetIndex).toBeGreaterThanOrEqual(0);
+    expect(clipboardReadIndex).toBeGreaterThan(guardSetIndex);
+    expect(guardResetIndex).toBeGreaterThan(clipboardReadIndex);
+    const completionCallIndex = clipboardHandler.indexOf('const completionPromise = completeHostedAuth(pastedResult)');
+    const pastedClearIndex = clipboardHandler.indexOf("pastedResult = ''", completionCallIndex);
+    const completionAwaitIndex = clipboardHandler.indexOf('await completionPromise', pastedClearIndex);
+    expect(completionCallIndex).toBeGreaterThanOrEqual(0);
+    expect(pastedClearIndex).toBeGreaterThan(completionCallIndex);
+    expect(completionAwaitIndex).toBeGreaterThan(pastedClearIndex);
+    expect(manualHandler).toContain('if (completionInFlight)');
+    expect(manualHandler).toContain('completionInFlight = true');
+    expect(manualHandler).toContain('await completeHostedAuth(callbackInput.value)');
+    expect(manualHandler).toContain('completionInFlight = false');
+
+    const requestIndex = completion.indexOf("homebridge.request('/auth/complete'");
+    const submittedClearIndex = completion.indexOf("submitted = ''", requestIndex);
+    const responseAwaitIndex = completion.indexOf('await completionRequest');
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(submittedClearIndex).toBeGreaterThan(requestIndex);
+    expect(responseAwaitIndex).toBeGreaterThan(submittedClearIndex);
+    expect(completion).not.toContain("await homebridge.request('/auth/complete'");
+    expect(completion).toContain("callbackUrl = ''");
+    expect(completion).toContain("callbackInput.value = ''");
+    expect(completion.indexOf("activeFlowId = ''", responseAwaitIndex)).toBeGreaterThan(responseAwaitIndex);
+  });
+
+  it('keeps callbacks out of browser storage, plugin config, logs, and events', () => {
     const html = readText('src/homebridge-ui/public/index.html');
 
-    expect(html).toContain('function handleAuthResponse(response)');
-    expect(html).toContain("handleVerificationRequired('2fa', response)");
-    expect(html).toContain("handleVerificationRequired('client', response)");
-    expect(html).toContain("handleVerificationRequired('account', response)");
-    expect(html).toContain('if (!response)');
-    expect(html).toContain("showError(response.message || 'Authentication failed. Please try again.')");
-    expect(html).toContain("currentStep === 'verify' && verifyType === type");
-    expect(html).toContain('if (!isSameVerificationStep)');
-    expect(html).toContain('let authSuccessHandled = false');
-    expect(html).toContain('if (authSuccessHandled) return');
-    expect(html).toContain('authSuccessHandled = false');
-    expect(html.match(/handleAuthResponse\(response\);/g) ?? []).toHaveLength(2);
+    expect(html).not.toMatch(/(?:localStorage|sessionStorage)\s*\.\s*setItem\s*\([^)]*(?:callback|code|state|token)/is);
+    expect(html).not.toMatch(/config\.[A-Za-z0-9_]+\s*=\s*(?:callbackUrl|submitted|activeFlowId|callbackInput)/);
+    expect(html).not.toMatch(/(?:console\.(?:log|warn|error)|addLog|dispatchEvent)\s*\([^)]*(?:callbackUrl|submitted|activeFlowId)/s);
+  });
+
+  it('retains only client/account verification and saves sanitized token-only config before success', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+    const saveConfig = sectionBetween(
+      html,
+      'async function saveTokenOnlyConfig(data) {',
+      'async function handleAuthResponse(data) {',
+    );
+    const authResponse = sectionBetween(
+      html,
+      'async function handleAuthResponse(data) {',
+      'async function refreshAuthStatus() {',
+    );
+
+    expect(html).toContain("type !== 'client' && type !== 'account'");
+    expect(html).not.toContain("handleVerificationRequired('2fa'");
+    expect(saveConfig).toContain("config.deviceId = deviceIdValue || config.deviceId || 'homebridge-blink'");
+    expect(saveConfig).not.toContain("document.getElementById('deviceId').value.trim()");
+    expect(saveConfig).toContain("config.tier = data.tier || config.tier || 'prod'");
+    expect(saveConfig).toContain('config.persistAuth = true');
+    expect(saveConfig).toContain('delete config.email');
+    expect(saveConfig.indexOf('await homebridge.updatePluginConfig(pluginConfig)')).toBeGreaterThanOrEqual(0);
+    expect(saveConfig.indexOf('await homebridge.savePluginConfig()')).toBeGreaterThan(
+      saveConfig.indexOf('await homebridge.updatePluginConfig(pluginConfig)'),
+    );
+    expect(authResponse.indexOf('await saveTokenOnlyConfig(data)')).toBeLessThan(
+      authResponse.indexOf("showStep('success')"),
+    );
+    expect(authResponse).toContain('if (data.verified === false)');
+    expect(authResponse).toContain("handleVerificationRequired('client', data)");
+    expect(authResponse).toContain("handleVerificationRequired('account', data)");
+    expect(authResponse).toContain("showStep('success')");
+  });
+
+  it('locally rejects partial callbacks without discarding the active hosted flow', () => {
+    const html = readText('src/homebridge-ui/public/index.html');
+    const validation = sectionBetween(
+      html,
+      'function isPlausibleBlinkCallback(callbackUrl) {',
+      'function resetHostedFlow() {',
+    );
+    const completion = sectionBetween(
+      html,
+      'async function completeHostedAuth(callbackUrl) {',
+      'function isPlausibleBlinkCallback(callbackUrl) {',
+    );
+
+    expect(validation).toContain("url.protocol !== 'https:'");
+    expect(validation).toContain("url.hostname !== 'applinks.blink.com'");
+    expect(validation).toContain("callbackUrl.startsWith('https://applinks.blink.com/signin/callback?')");
+    expect(validation).toContain('new TextEncoder().encode(callbackUrl).length > 2048');
+    expect(validation).toContain('codeUnit <= 0x20 || codeUnit === 0x23 || codeUnit === 0x7f');
+    expect(validation).toContain("url.port !== ''");
+    expect(validation).toContain("url.username !== ''");
+    expect(validation).toContain("url.password !== ''");
+    expect(validation).toContain("url.pathname !== '/signin/callback'");
+    expect(validation).toContain("url.hash !== ''");
+    expect(validation).toContain("url.searchParams.getAll('state')");
+    expect(validation).toContain("url.searchParams.getAll('code')");
+    expect(validation).toContain("url.searchParams.getAll('error')");
+    expect(validation).toContain("url.searchParams.getAll('error_description')");
+    expect(validation).toContain('codes.length > 0 && errors.length > 0');
+    expect(validation).toContain('errorDescriptions.length === 1 && !hasError');
+    const validate = new Function(`${validation}\nreturn isPlausibleBlinkCallback;`)() as (value: string) => boolean;
+    expect(validate('https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code')).toBe(true);
+    expect(validate('https://applinks.blink.com/signin/callback?state=opaque&error=access_denied&error_description=denied')).toBe(true);
+    for (const invalid of [
+      'https://example.com/signin/callback?state=opaque&code=one-time-code',
+      'HTTPS://applinks.blink.com/signin/callback?state=opaque&code=one-time-code',
+      'https://applinks.blink.com/signin/./callback?state=opaque&code=one-time-code',
+      'https://applinks.blink.com/signin/callback?state=&code=one-time-code',
+      'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code&error=',
+      'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code&error_description=denied',
+      'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code#fragment',
+      'https://applinks.blink.com/signin/callback?state=opaque&code=one-time-code\n',
+    ]) {
+      expect(validate(invalid)).toBe(false);
+    }
+    expect(completion).toContain('if (!isPlausibleBlinkCallback(callbackUrl))');
+    const malformedBranch = sectionBetween(
+      completion,
+      'if (!isPlausibleBlinkCallback(callbackUrl))',
+      'let submitted = callbackUrl;',
+    );
+    expect(malformedBranch).not.toContain("activeFlowId = ''");
+    expect(malformedBranch).toContain("showStep('callback')");
+    expect(completion).toContain('resetHostedFlow()');
   });
 
   it('does not expose auth credentials/codes in schema properties or layout', () => {
