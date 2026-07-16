@@ -11,19 +11,14 @@ This checklist is derived from APK evidence summarized in `docs/blink_api_dossie
 - [ ] OAuth base uses `https://api.{env}oauth.blink.com/`, where production `{env}` is `""`, staging is `qa.`, and development is `dev.`.
 - [ ] OAuth targets resolve to `api.oauth.blink.com` in production and `api.qa.oauth.blink.com` for `sqa1`; do not use legacy `api.pdoauth` or `api.stgoauth` forms.
 - [ ] API Gateway uses `https://api.{env}blink.com/blink/`, resolving to `https://api.blink.com/blink/` in production.
-- [ ] Auth host detection uses exact-domain/subdomain-suffix checks, explicitly excludes OAuth hosts, and never uses substring matching.
+- [ ] Blink host detection only applies auth headers to Blink hosts (`*.immedia-semi.com`).
 
 ## Authentication & Headers
 
-- [ ] Interactive login opens `GET oauth/v2/authorize` with `response_type=code`, client ID, scope `client`, prompt `login`, callback, hardware/app/device metadata (including app brand `blink`), and AppAuth-generated PKCE challenge.
-- [ ] Credentials, MFA, passkeys, and other sign-in challenges remain inside hosted authorization UI; no current app login call sends a `2fa-code` header.
-- [ ] Authorization callback is exchanged at `POST oauth/token` with `grant_type=authorization_code`, authorization code, redirect URI, client ID, and PKCE verifier.
-- [ ] Access and refresh tokens are stored securely; authenticated `GET v1/users/tier_info` runs next and its result is persisted.
+- [ ] OAuth password grant: `POST oauth/token` with `username`, `password`, `grant_type=password`, `client_id`, `scope=client` and headers `hardware_id`, `2fa-code` (optional).
 - [ ] OAuth refresh grant: `POST oauth/token` with `refresh_token`, `grant_type=refresh_token`, `client_id`, `scope`.
 - [ ] Standard headers applied to REST calls: `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone`.
-- [ ] Authenticated allowlisted requests receive bearer access token; optional `TOKEN-AUTH` uses registration token, not OAuth response data.
-- [ ] Refresh retries the original request at most once; missing refresh token or refresh 401 wipes local state and returns to login.
-- [ ] Logout calls `POST v4/clients/{client}/logout`; successful response precedes local wipe, signaling shutdown, and login navigation.
+- [ ] Auth headers applied to Blink REST requests: `Authorization: Bearer <token>` and `TOKEN-AUTH`.
 
 ## Core Device & Network Operations
 
@@ -56,7 +51,7 @@ This checklist is derived from APK evidence summarized in `docs/blink_api_dossie
 ## Reliability & Retry Behavior
 
 - [ ] 401 refresh → retry once.
-- [ ] Non-refreshable authentication failures return to login; do not assume a generic 403 retry.
+- [ ] 403 re-login → retry once.
 - [ ] 429 exponential backoff.
 - [ ] 5xx linear backoff.
 - [ ] Command polling interval respects `polling_interval` response; live view defaults to 1s when missing.

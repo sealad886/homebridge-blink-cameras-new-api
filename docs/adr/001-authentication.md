@@ -2,43 +2,75 @@
 
 ## Status
 
-Accepted; revalidated against Blink Android 57.1 on 2026-07-16.
+Accepted
 
 ## Context
 
-Blink's current Android login is OAuth 2.0 authorization-code flow with PKCE. `LoginFragment` opens hosted `/oauth/v2/authorize`; Blink's UI handles passwords, MFA, passkeys, and other challenges. AppAuth exchanges the callback code at `/oauth/token`, stores access and refresh tokens securely, then the app fetches `v1/users/tier_info`.
+Blink Home Monitor uses OAuth 2.0 authentication with the following characteristics:
 
-The APK retains an `OauthApi.postLogin()` password-grant declaration, but no current interactive-login callsite was traced. `TOKEN-AUTH` is also not an OAuth response token: it is an optional registration token used during account creation/upgrade.
+1. **Password Grant**: Initial authentication uses username/password with `grant_type=password`
+2. **Two-Factor Authentication**: Optional 2FA via `2fa-code` header
+3. **Hardware ID**: Requires a `hardware_id` header to identify the client device
+4. **Token Refresh**: Supports `refresh_token` grant for token renewal
+5. **TOKEN-AUTH Header**: Server returns a special header used for subsequent API calls
+
+The Blink API is undocumented, so all knowledge comes from reverse engineering the Android app.
 
 ## Decision
 
-- Use authorization-code + PKCE for interactive authentication.
-- Keep credentials and verification challenges inside hosted Blink sign-in.
-- Persist access and refresh tokens in the owner-only Homebridge auth file; never persist the user's password after successful custom-UI sign-in.
-- Exchange the code, store tokens, then fetch and persist `tier_info` before normal regional REST work.
-- Refresh through `grant_type=refresh_token`; replace both tokens on success and retry the failed request at most once.
-- Attach bearer credentials only after exact-domain/subdomain-suffix allowlisting. Explicitly exclude OAuth hosts.
-- Send `TOKEN-AUTH` only when a registration token exists; do not derive it from OAuth token responses.
-- On logout, revoke the client session when possible, then clear local authentication state.
+We implement OAuth authentication with the following approach:
+
+### Token Storage
+
+- Access token, refresh token, and expiry are stored in memory
+- No persistent storage - tokens are re-obtained on each Homebridge restart
+- This avoids complexity of secure credential storage
+
+### Two-Factor Authentication
+
+- 2FA code is provided via the Homebridge config (`twoFactorCode` field)
+- Users must manually enter the code received via SMS/email
+- The code is used only for initial login; subsequent logins use refresh tokens
+
+### Token Refresh Strategy
+
+- Proactive refresh: tokens are refreshed 1 hour before expiry
+- The `ensureValidToken()` method checks expiry before each API call
+- If refresh fails, a full re-login is attempted
+
+### Hardware ID
+
+- Users can provide a custom `deviceId` or `deviceName` in config
+- Defaults to `'homebridge-blink'` if not specified
+- This identifies the Homebridge instance to Blink's servers
+
+### Request Authentication
+
+- The TOKEN-AUTH header from OAuth response is used for all API calls
+- Format: `Authorization: Bearer {access_token}` (some endpoints)
+- Format: `TOKEN-AUTH: {token_auth}` (most endpoints)
 
 ## Consequences
 
-- Users complete password, MFA, and passkey steps in Blink-controlled UI rather than Homebridge configuration fields.
-- Restart authentication can use persisted refresh tokens without storing plaintext credentials.
-- Tier discovery remains part of login completion, so non-EU and EU accounts share one routing workflow.
-- Refresh and host checks must prevent loops and credential leakage.
+### Positive
 
-## Evidence
+- Simple implementation without persistent token storage
+- Automatic token refresh minimizes authentication failures
+- Clear 2FA flow through config option
 
-- `com/ring/android/unifiedsignin/UnifiedSignInUtils.java`
-- `net/openid/appauth/AuthorizationRequest.java`
-- `com/immediasemi/blink/common/account/auth/AuthorizationRepository.java`
-- `com/immediasemi/blink/account/auth/LoginViewModel.java`
-- `com/immediasemi/blink/common/account/auth/CredentialRepository.java`
-- `com/immediasemi/blink/common/account/auth/RefreshTokensUseCase.java`
-- `com/immediasemi/blink/network/BlinkAuthInterceptor.java`
-- `com/immediasemi/blink/network/BlinkAuthenticator.java`
-- `com/immediasemi/blink/core/api/AuthorizationHelper.java`
-- `com/immediasemi/blink/common/account/auth/LogoutUseCase.java`
+### Negative
 
-See `docs/blink_api_dossier.md` evidence E93-E95 for traced details.
+- Users must handle 2FA manually on first setup
+- Credentials are stored in plaintext in Homebridge config
+- Token refresh during long polling intervals may cause brief interruptions
+
+### Risks
+
+- Blink may change OAuth flow without notice (API is undocumented)
+- Rate limiting on auth endpoints could block re-login attempts
+- 2FA codes have limited validity (~10 minutes)
+
+## References
+
+- API Dossier Section 2.1 (OAuth Flow)
+- Evidence: `smali_classes9/com/immediasemi/blink/common/account/auth/OauthApi.smali`

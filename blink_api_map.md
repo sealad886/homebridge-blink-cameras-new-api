@@ -30,7 +30,7 @@ The app automatically injects these headers via `HeadersInterceptor`:
 | `LOCALE` | `<locale>` | e.g., `en_US` |
 | `X-Blink-Time-Zone` | `<timezone_id>` | e.g., `America/New_York` |
 | `Authorization` | `Bearer <access_token>` | After login |
-| `TOKEN-AUTH` | `<registration_token>` | Optional registration token; separate from OAuth access/refresh tokens |
+| `TOKEN-AUTH` | `<token>` | Secondary auth token from login response |
 
 [HeadersInterceptor](jadx-out/sources/com/immediasemi/blink/network/HeadersInterceptor.java) / [HttpHeader](jadx-out/sources/com/immediasemi/blink/core/api/HttpHeader.java)
 
@@ -47,18 +47,28 @@ The app uses interceptors to replace placeholders in URLs:
 
 ## Auth & Session
 
-### Current Interactive Login Flow
+### Login Flow
 
-Blink 57.1 launches a browser/custom-tab OAuth 2.0 authorization-code flow. It does not submit the user's password from `LoginFragment`:
+**Endpoint:** `POST oauth/token` (on OAuth base URL)
 
-1. Build `GET oauth/v2/authorize` with `response_type=code`, client ID (`android` or `amazon`), scope `client`, prompt `login`, callback `https://applinks.blink.com/signin/callback`, and device/app metadata including `hardware_id` and app brand `blink`.
-2. AppAuth generates a PKCE verifier. The authorize request carries its challenge and method.
-3. User completes password, MFA, passkey, or other challenges inside Blink's hosted sign-in UI.
-4. Parse the callback's authorization code, create an `authorization_code` token request containing the original PKCE verifier, and `POST oauth/token`.
-5. Store returned access and refresh tokens in `SecureStorage`.
-6. Call authenticated `GET v1/users/tier_info`, then pass the response to `TierRepository.setTierInfo()`.
+**Request (form-urlencoded):**
 
-The token response shape is:
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `username` | string | Yes | - | Email address |
+| `password` | string | Yes | - | Password |
+| `grant_type` | string | Yes | `password` | OAuth grant type |
+| `client_id` | string | Yes | - | `android` or `amazon` (based on device manufacturer) |
+| `scope` | string | Yes | `client` | OAuth scope |
+
+**Headers:**
+
+| Header | Type | Required | Description |
+|--------|------|----------|-------------|
+| `2fa-code` | string | No | 2FA verification code if required |
+| `hardware_id` | string | Yes | Persistent UUID (generate once, store forever) |
+
+**Response Schema:**
 
 ```json
 {
@@ -70,11 +80,7 @@ The token response shape is:
 }
 ```
 
-`expires_in`, `scope`, and `token_type` are nullable; `86400` is illustrative, not a guaranteed lifetime.
-
-[UnifiedSignInUtils](jadx-out/sources/com/ring/android/unifiedsignin/UnifiedSignInUtils.java) / [AuthorizationRequest](jadx-out/sources/net/openid/appauth/AuthorizationRequest.java) / [AuthorizationRepository](jadx-out/sources/com/immediasemi/blink/common/account/auth/AuthorizationRepository.java) / [LoginViewModel](jadx-out/sources/com/immediasemi/blink/account/auth/LoginViewModel.java)
-
-`OauthApi.postLogin()` still exposes a password-grant signature with `2fa-code` and `hardware_id`, but no current interactive-login call path from `LoginFragment` was found. Treat it as retained/legacy surface, not the Blink 57.1 login workflow.
+[OauthApi](jadx-out/sources/com/immediasemi/blink/common/account/auth/OauthApi.java) / [RefreshTokensResponse](jadx-out/sources/com/immediasemi/blink/common/account/auth/RefreshTokensResponse.java)
 
 ### Token Refresh
 
@@ -88,18 +94,6 @@ The token response shape is:
 | `grant_type` | `refresh_token` |
 | `client_id` | `android` or `amazon` |
 | `scope` | `client` |
-
-On success, both replacement tokens are stored. `BlinkAuthenticator` serializes refresh, limits the original request to one retry, and replaces only its bearer header. A missing refresh token or refresh HTTP 401 wipes local app/session data and navigates to login.
-
-### Authenticated Request Headers
-
-`BlinkAuthInterceptor` adds `Authorization: Bearer <access_token>` and, when present, `TOKEN-AUTH: <registration_token>`. `TOKEN-AUTH` comes from account creation/upgrade state, not the OAuth token response; established OAuth logins may have no registration token.
-
-Authorization extras are added only to exact approved domains or their subdomains (`blink.com`, `immedia-semi.com`, WebRTC signaling, and Ava Vision), while OAuth hosts are explicitly excluded. Do not use substring host matching.
-
-### Logout
-
-`LogoutUseCase` calls authenticated `POST v4/clients/{injected_client_id}/logout`. After a successful server response it wipes local app data, stops signaling, navigates to login, and recreates session tracking.
 
 ### Client Type Detection
 
@@ -368,18 +362,15 @@ The app uses `BlinkAuthenticator` to automatically refresh tokens on 401 respons
 
 ### Host Validation
 
-The app adds authentication headers only to an explicit domain allowlist. OAuth hosts are excluded before suffix matching:
+The app only adds authentication headers for Blink hosts. Use `isBlinkHost()` logic:
 
 ```javascript
-function isAuthorizedHost(hostname) {
-  const host = hostname.toLowerCase();
-  if (host === "oauth.blink.com" || host.endsWith(".oauth.blink.com")) return false;
-  return ["blink.com", "immedia-semi.com", "signalling.ring.devices.a2z.com", "amazonvision.com"]
-    .some(domain => host === domain || host.endsWith(`.${domain}`));
+function isBlinkHost(hostname) {
+  return hostname.includes("immedia-semi.com") || hostname.includes("blink.com");
 }
 ```
 
-[AuthorizationHelper](jadx-out/sources/com/immediasemi/blink/core/api/AuthorizationHelper.java)
+[RestApiKt](jadx-out/sources/com/immediasemi/blink/core/api/RestApiKt.java)
 
 ---
 
@@ -407,10 +398,7 @@ function isAuthorizedHost(hostname) {
 
 | Method | Path | Description | Verified |
 |--------|------|-------------|----------|
-| `GET` | `oauth/v2/authorize` | Hosted authorization-code + PKCE sign-in (`scope=client`) | ✅ |
-| `POST` | `oauth/token` | Authorization-code exchange or refresh-token grant | ✅ |
-
-The APK also retains an untraced password-grant Retrofit declaration. It is not the current `LoginFragment` path.
+| `POST` | `oauth/token` | Login (grant_type=password) or refresh (grant_type=refresh_token) | ✅ |
 
 ### Account Endpoints (REST Base URL)
 
@@ -617,7 +605,7 @@ The APK also retains an untraced password-grant Retrofit declaration. It is not 
 
 ### Security Observations
 
-- Cloud calls use HTTPS; authorization headers use `AuthorizationHelper`'s exact-domain/subdomain allowlist and exclude OAuth hosts.
+- Cloud calls use HTTPS; bearer + TOKEN-AUTH headers injected only for Blink hosts (see `RestApiKt.isBlinkHost`).  
 - Tier/env placeholders are swapped in interceptors to avoid hardcoding per build.  
 - Local onboarding traffic is plain HTTP; payload optionally encrypted via `EncryptionInterceptor`, but no TLS — treat as untrusted network exposure.  
 - 426 responses trigger app-update navigation; 403 on shared tier triggers re-auth + redirect to home.  
@@ -631,14 +619,110 @@ The APK also retains an untraced password-grant Retrofit declaration. It is not 
 
 - `client_id`: `BuildUtils.getClientType()` → `"android"` or `"amazon"`. [BuildUtils](jadx-out/sources/com/immediasemi/blink/common/util/BuildUtils.java)
 - `hardware_id`: UUID from `GetDeviceUniqueIdUseCase` (`pref_device_unique_id`, created once and cached). [GetDeviceUniqueIdUseCase](jadx-out/sources/com/immediasemi/blink/common/account/client/GetDeviceUniqueIdUseCase.java)
-- OAuth scope is `"client"`; Blink passes `"blink"` separately as hosted UI's app-brand value. [AuthEnvironment](jadx-out/sources/com/ring/android/unifiedsignin/AuthEnvironment.java) / [OauthApi](jadx-out/sources/com/immediasemi/blink/common/account/auth/OauthApi.java)
+- `scope`: `"client"` (OauthApi defaults). [OauthApi](jadx-out/sources/com/immediasemi/blink/common/account/auth/OauthApi.java)
 - REST base: `https://rest-{tier}.immedia-semi.com/api/` where `{tier}` comes from `TierRepository` (production codes include `prod`, `prde`, `prsg`, `a001`, `cemp`, and `srf1`). [TierRepository](jadx-out/sources/com/immediasemi/blink/common/network/tier/TierRepository.java)
 - OAuth base: `https://api.{env}oauth.blink.com/` where `{env}` is the environment subdomain returned by `TierRepository`: `""`, `qa.`, or `dev.`. [NetworkModule](jadx-out/sources/com/immediasemi/blink/inject/NetworkModule.java)
 - App-added headers you may want to replicate: `APP-BUILD`=`BuildUtils.getVersionCodeHeader()`, `User-Agent`=`BuildUtils.getUserAgent()`, `LOCALE`, `X-Blink-Time-Zone`. [HeadersInterceptor](jadx-out/sources/com/immediasemi/blink/network/HeadersInterceptor.java)
 
-### Authentication Implementation Note
+### Python (requests)
 
-Use a standards-compliant authorization-code + PKCE client and a user agent for hosted sign-in. Do not reproduce the removed password-grant examples: they represented a retained Retrofit declaration, not the current Blink 57.1 login path. Persist access/refresh tokens securely, fetch `tier_info` immediately after exchange, and use exact/suffix host allowlisting before attaching credentials.
+```python
+import os, uuid, requests
+
+CLIENT_ID = "android"  # or "amazon" per BuildUtils.getClientType()
+HARDWARE_ID = os.environ.get("BLINK_HWID", str(uuid.uuid4()))  # mirror GetDeviceUniqueIdUseCase
+SCOPE = "client"
+TIER = "prod"  # replace with actual from TierRepository if known
+ENV = "qa." if TIER == "sqa1" else ""  # production tiers use empty env; development uses "dev."
+BASE = f"https://rest-{TIER}.immedia-semi.com/api/"
+OAUTH = f"https://api.{ENV}oauth.blink.com/"
+
+def login(email, password, twofa=""):
+    r = requests.post(
+        OAUTH + "oauth/token",
+        data={
+            "username": email,
+            "password": password,
+            "grant_type": "password",
+            "client_id": CLIENT_ID,
+            "scope": SCOPE,
+        },
+        headers={"2fa-code": twofa, "hardware_id": HARDWARE_ID},
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()
+
+def homescreen(tokens, account_id):
+    headers = {
+        "Authorization": f"Bearer {tokens['access_token']}",
+        # TOKEN-AUTH (second token) is stored in CredentialRepository in-app; include if your backend returns it.
+    }
+    r = requests.get(BASE + f"v4/accounts/{account_id}/homescreen", headers=headers, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+def start_liveview(tokens, account_id, network_id, doorbell_id):
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    cmd = requests.post(
+        BASE + f"v2/accounts/{account_id}/networks/{network_id}/doorbells/{doorbell_id}/liveview",
+        headers=headers, timeout=15
+    ).json()
+    command_id = cmd["command_id"]
+    status = requests.get(
+        BASE + f"accounts/{account_id}/networks/{network_id}/commands/{command_id}",
+        headers=headers, timeout=15
+    ).json()
+    return status
+
+if __name__ == "__main__":
+    tok = login("user@example.com", "pass", twofa="123456")
+    print(homescreen(tok, "YOUR_ACCOUNT_ID"))
+```
+
+### TypeScript (fetch, Node 18+)
+
+```ts
+import { randomUUID } from "crypto";
+
+const CLIENT_ID = "android"; // or "amazon" per BuildUtils.getClientType
+const HARDWARE_ID = process.env.BLINK_HWID ?? randomUUID(); // mirrors GetDeviceUniqueIdUseCase
+const SCOPE = "client";
+const TIER = "prod"; // from TierRepository
+const ENV = TIER === "sqa1" ? "qa." : ""; // production tiers use empty env; development uses "dev."
+const BASE = `https://rest-${TIER}.immedia-semi.com/api/`;
+const OAUTH = `https://api.${ENV}oauth.blink.com/`;
+
+async function login(email: string, password: string, twofa = "") {
+  const body = new URLSearchParams({
+    username: email,
+    password,
+    grant_type: "password",
+    client_id: CLIENT_ID,
+    scope: SCOPE,
+  });
+  const res = await fetch(OAUTH + "oauth/token", {
+    method: "POST",
+    headers: { "2fa-code": twofa, hardware_id: HARDWARE_ID },
+    body,
+  });
+  if (!res.ok) throw new Error(`login failed ${res.status}`);
+  return res.json() as Promise<{ access_token: string; refresh_token: string }>;
+}
+
+async function getUnwatched(accessToken: string, accountId: string) {
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const res = await fetch(BASE + `v4/accounts/${accountId}/unwatched_media`, { headers });
+  if (!res.ok) throw new Error(`unwatched ${res.status}`);
+  return res.json();
+}
+
+(async () => {
+  const tokens = await login("user@example.com", "pass", "123456");
+  const clips = await getUnwatched(tokens.access_token, "YOUR_ACCOUNT_ID");
+  console.log(clips);
+})();
+```
 
 ### Local Onboarding (Python)
 
@@ -655,6 +739,6 @@ print(fw)
 ### Notes for Practical Use
 
 - Replace `{account_id}`, `{network_id}`, `{cameraId}` placeholders with real IDs returned from homescreen/metadata calls.
-- Always send the bearer token to allowlisted authenticated hosts. Send `TOKEN-AUTH` only when a registration token actually exists.
-- Respect status-specific handling: one refresh attempt for 401, login navigation when refresh cannot recover, and forced upgrade for 426.
-- Apply exact-domain/subdomain-suffix validation before sending credentials; never use substring host matching.
+- Keep both bearer and TOKEN-AUTH headers; some endpoints (shared tier) rely on the latter.
+- Respect 401/403/426 handling similar to app: refresh tokens, redirect user, or force upgrade.
+- For production, pin hosts to `immedia-semi.com` to match app’s `isBlinkHost` safeguard.

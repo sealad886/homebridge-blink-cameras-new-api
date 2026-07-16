@@ -317,8 +317,8 @@ This plugin's API implementation is based on reverse engineering the official Bl
 
 - OAuth 2.0 authorization-code flow with PKCE via production `api.oauth.blink.com`; staging and development are built at request time as `api.qa.oauth.blink.com` and `api.dev.oauth.blink.com`
 - Automatic token refresh using the `refresh_token` grant
-- Hosted sign-in carries persistent hardware/app/device metadata; credentials, MFA, passkeys, and other challenges stay inside Blink's authorization UI in the Android app
-- Authorization code exchange is followed by authenticated tier discovery; access and refresh tokens are then used for regional REST calls
+- Hardware ID required for device identification
+- Client verification and account verification flows for new device approval
 - Region-aware routing replaces `{tier}`, `{shared_tier}`, and `{env}` on the completed request URL immediately before network execution; behavior may differ by account and country
 
 ### Endpoints

@@ -1,6 +1,7 @@
-# Blink API Dossier (APK Evidence)
+# Blink API Dossier (APK Evidence) — WIP
 
-This dossier records evidence from decompiled Blink Android APKs. Historical evidence paths below refer to the older extraction; authentication and URL-construction conclusions were revalidated directly against the local Blink 57.1 (`versionCode` 29715642) extraction under `logs/blink-apk/57.1-29715642/decompiled/jadx/sources` on 2026-07-16. Unknowns are explicitly marked.
+This dossier is built from the decompiled Blink Android APK splits in **Root B**: `/Users/andrew/zzApps/blink-home-monitor`.
+All statements below are evidence-backed with file paths + minimal snippets. Unknowns are explicitly marked.
 
 URL construction was revalidated against Blink Android 57.1 (`versionCode` 29715642), extracted on 2026-07-16. The refreshed APK confirms request-time token replacement and adds an API Gateway base not represented in the older evidence snapshot:
 
@@ -813,30 +814,6 @@ Object m16059postLogineH_QyT8(@Field(HintConstants.AUTOFILL_HINT_USERNAME) Strin
 Call<RefreshTokensResponse> postRefreshTokens(@Field(GrantTypeValues.REFRESH_TOKEN) String refreshToken, @Field("grant_type") String grantType, @Field("client_id") String clientId, @Field("scope") String scope);
 ```
 
-`postLogin` is present in Blink 57.1 but is not called by the current interactive-login path. It must not be treated as proof that password grant remains the active app login.
-
-**E93 — Current hosted authorization-code request with PKCE (Blink 57.1)**
-- Files: `com/ring/android/unifiedsignin/UnifiedSignInUtils.java`, `net/openid/appauth/AuthorizationRequest.java`
-```java
-new AuthorizationServiceConfiguration(
-    Uri.parse(environment.getAuthBaseUrl() + "/oauth/v2/authorize"),
-    Uri.parse(environment.getAuthBaseUrl() + "/oauth/token"));
-new AuthorizationRequest.Builder(configuration, environment.getAuthClientId(),
-    ResponseTypeValues.CODE, Uri.parse(environment.getAuthRedirectUri()));
-```
-
-`AuthorizationRequest.Builder` initializes a random state, nonce, and PKCE verifier. The authorize URL receives `code_challenge` and `code_challenge_method`; the later token request receives `code_verifier`. Blink adds scope `client`, app-brand value `blink`, prompt `login`, `hardware_id`, app/device metadata, dark mode, and optional passkey parameters. Password, MFA, passkey, and other challenges are handled inside the hosted authorization UI.
-
-**E94 — Code exchange, secure token storage, then tier discovery (Blink 57.1)**
-- Files: `common/account/auth/AuthorizationRepository$exchangeAuthorizationToken$2.java`, `account/auth/LoginViewModel.java`, `account/auth/LoginViewModel$authenticate$result$1$1.java`, `common/account/auth/CredentialRepository.java`
-
-The callback is parsed as `AuthorizationResponse`; `createTokenExchangeRequest()` creates an `authorization_code` request and `AuthorizationService.performTokenRequest()` exchanges it. Access and refresh tokens are written to `SecureStorage`. Only after that succeeds does `LoginViewModel` call `AccountApi.getTierInfo()` and `TierRepository.setTierInfo()`. Exchange/login failure invokes `WipeAppDataUseCase`.
-
-**E95 — Auth headers, refresh limits, and logout (Blink 57.1)**
-- Files: `network/BlinkAuthInterceptor.java`, `network/BlinkAuthenticator$authenticate$1$1.java`, `core/api/AuthorizationHelper.java`, `common/account/auth/RefreshTokensUseCase$invoke$2.java`, `common/account/auth/LogoutUseCase$invoke$2.java`
-
-`Authorization` uses the access token. Optional `TOKEN-AUTH` uses `CredentialRepository.getRegistrationToken()`, not a token returned by OAuth login. Authorization extras use exact-domain/subdomain-suffix allowlisting and explicitly exclude OAuth hosts. A 401 refresh is serialized and limited to one retry using `priorResponse`; successful refresh replaces stored access and refresh tokens. Missing refresh token or refresh HTTP 401 wipes local data and navigates to login. Logout calls `POST v4/clients/{injected_client_id}/logout`; on success it wipes app data, stops signaling, navigates to login, and recreates the session.
-
 **E55 — OwlApi endpoints**
 - File: `/Users/andrew/zzApps/blink-home-monitor/jadx-out/app/src/main/java/com/immediasemi/blink/common/device/camera/wired/OwlApi.java`
 ```java
@@ -1391,22 +1368,19 @@ return new ESCoreConfig(metaData, platform, string);
 
 1. **Authenticated REST:** `REST` (`https://rest-{tier}.immedia-semi.com/api/`) + `AccountApi` route `v1/users/tier_info` → base-client `{tier}` rewrite. With tier `prde`, final URL is `https://rest-prde.immedia-semi.com/api/v1/users/tier_info`.
 2. **Shared camera live view:** `SHARED_REST` + `CameraApi` route `v6/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/liveview` → `{shared_tier}` rewrite → account-ID interceptor → Retrofit path parameters. With shared tier `prod`, account `123`, network `456`, and camera `789`, final URL is `https://rest-prod.immedia-semi.com/api/v6/accounts/123/networks/456/cameras/789/liveview`.
-3. **OAuth:** `OAUTH` + hosted route `oauth/v2/authorize` or token route `oauth/token` → `{env}` rewrite. Production resolves to `https://api.oauth.blink.com/oauth/v2/authorize` and `https://api.oauth.blink.com/oauth/token`; staging uses `api.qa.oauth.blink.com`.
+3. **OAuth:** `OAUTH` + `OauthApi` route `oauth/token` → `{env}` rewrite. Production resolves to `https://api.oauth.blink.com/oauth/token`; staging resolves to `https://api.qa.oauth.blink.com/oauth/token`.
 4. **API Gateway:** `API_GATEWAY` + `LocationsCoreApi` route `location_info/v3/locations` → `{env}` rewrite. Production resolves to `https://api.blink.com/blink/location_info/v3/locations`.
 5. **Thumbnail image:** `ResolveThumbnailUrlUseCase` replaces `{tier}` in the REST template with `getSharedTier()`, removes `/api/`, then appends the backend thumbnail path and `.jpg`. Example: tier `prde` + `/media/example-thumb` → `https://rest-prde.immedia-semi.com/media/example-thumb.jpg`.
 6. **Clip/video download:** media responses supply the `media` address. `VideoRepository` passes it to `VideoApi.getVideo(@Url)`, so the backend-returned absolute URL is the final target; it is not reconstructable from a fixed route alone.
 
 Generated apktool smali independently confirms each token interceptor calls Kotlin `replace`, then `okhttp3.Request$Builder.url(String)`. Thumbnail smali confirms the `replace` → remove `/api/` → append `.jpg` sequence.
 
-## Authentication (Blink 57.1 full workflow)
-- Current interactive login opens hosted `GET oauth/v2/authorize` with authorization-code response, AppAuth-generated PKCE, scope `client`, app-brand value `blink`, prompt `login`, callback, and hardware/app/device metadata. Hosted UI owns credentials, MFA, passkeys, and other challenges. (E93)
-- Callback code is exchanged at `POST oauth/token`; access and refresh tokens are stored in secure storage. The retained `OauthApi.postLogin` password-grant declaration has no traced current-login callsite. (E54, E94)
-- After token storage, login calls authenticated `GET v1/users/tier_info` and persists the result with `TierRepository.setTierInfo()`. (E82, E94)
-- Refresh uses `POST oauth/token` with `refresh_token`, `grant_type=refresh_token`, client ID, and scope. Successful refresh stores both replacement tokens. (E10, E16, E95)
+## Authentication (initial evidence only)
+- OAuth endpoint: `POST oauth/token` with fields `username`, `password`, `grant_type`, `client_id`, `scope` and headers `2fa-code`, `hardware_id`. (E10)
+- Refresh endpoint: `POST oauth/token` with `refresh_token`, `grant_type`, `client_id`, `scope`. (E10, E16)
 - Default headers injected into all requests: `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone`. (E5, E6, E7)
-- Authenticated client adds bearer access token and optional `TOKEN-AUTH` registration token only to exact allowlisted domains/subdomains; OAuth hosts are excluded. (E14, E95)
-- Authenticator serializes refresh, refuses loops when `priorResponse` exists, and rebuilds the original request with updated `Authorization`. Missing refresh token or refresh HTTP 401 wipes local state and returns to login. (E15, E16, E95)
-- Successful server logout precedes local wipe, signaling shutdown, login navigation, and session recreation. (E95)
+- Authenticated client adds `Authorization: Bearer <access_token>` and `TOKEN-AUTH: <token>` for Blink hosts. (E14)
+- Authenticator refreshes tokens on Blink hosts when there is no priorResponse; uses `RefreshTokensUseCase` (OAuth refresh) and rebuilds request with updated `Authorization` header. (E15, E16)
 - BuildConfig defaults include `DEFAULT_TIER = "prod"` and `OAUTH_ENV = "production"`; initialization path for writing these into prefs is not yet located. (E73)
 
 ## Retrofit Binding Map (auth + base host)
@@ -1418,7 +1392,7 @@ Generated apktool smali independently confirms each token interceptor calls Kotl
 ## Endpoint Catalog (Blink API)
 
 **Header legend:** `default` = `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone` (E5–E7).  
-Authenticated REST calls add `Authorization: Bearer <access_token>` and, only when present, `TOKEN-AUTH: <registration_token>` on allowlisted hosts (E14, E95).
+Authenticated REST calls add `Authorization: Bearer <access_token>` and `TOKEN-AUTH` on Blink hosts (E14).
 
 | Method | Base Host | Path | Purpose (method) | Auth | Headers | Body Schema | Response Shape | Evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -1582,9 +1556,7 @@ Authenticated REST calls add `Authorization: Bearer <access_token>` and, only wh
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `/accounts/%7Binjected_account_id%7D/networks/{network}/update` | `NetworkApi.updateSystem` | Bearer + TOKEN-AUTH | default | UpdateSystemNameBody | Observable<BlinkData> | E52 |
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `/accounts/%7Binjected_account_id%7D/networks/{network}/update` | `NetworkApi.updateTimezone` | Bearer + TOKEN-AUTH | default | UpdateTimezoneBody | Observable<BlinkData> | E52 |
 | POST | https://rest-{tier}.immedia-semi.com/api/ | `v2/notification` | `NotificationApi.acknowledgeNotification` | Bearer + TOKEN-AUTH | default | AcknowledgeNotificationBody | Observable<Object> | E53 |
-| GET | https://api.{env}oauth.blink.com/ | `oauth/v2/authorize` | `UnifiedSignInUtils.signInIntent` | None (hosted OAuth) | hardware/app/device metadata + PKCE challenge | response_type=code, client ID, scope=client, app_brand=blink, prompt=login, redirect URI | Authorization callback | E93 |
-| POST | https://api.{env}oauth.blink.com/ | `oauth/token` | AppAuth token exchange | None (OAuth) | default | authorization code, redirect URI, client ID, PKCE verifier | TokenResponse | E93–E94 |
-| POST | https://api.{env}oauth.blink.com/ | `oauth/token` | `OauthApi.postLogin` (retained; no current login callsite traced) | None (OAuth) | default + 2fa-code, hardware_id | legacy password-grant fields | RefreshTokensResponse | E54 |
+| POST | https://api.{env}oauth.blink.com/ | `oauth/token` | `OauthApi.m16059postLogineH_QyT8` | None (OAuth) | default + 2fa-code, hardware_id | form fields: username, password, grant_type, client_id, scope | Result<RefreshTokensResponse> | E54 |
 | POST | https://api.{env}oauth.blink.com/ | `oauth/token` | `OauthApi.postRefreshTokens` | None (OAuth) | default | form fields: refresh_token, grant_type, client_id, scope | Call<RefreshTokensResponse> | E54 |
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `v1/accounts/%7Binjected_account_id%7D/networks/{network_id}/accessories/rosie/owl/{owl_id}/calibrate` | `OwlApi.m16181calibrateRosie0E7RQCE` | Bearer + TOKEN-AUTH | default | — | Result<Kommand> | E55 |
 | POST | https://rest-{shared_tier}.immedia-semi.com/api/ | `v1/accounts/%7Binjected_account_id%7D/networks/{networkId}/owls/{owlId}/change_wifi` | `OwlApi.m16182changeOwlWifiBWLJW6A` | Bearer + TOKEN-AUTH | default | OnboardingBody | Result<OwlAddBody> | E55 |
