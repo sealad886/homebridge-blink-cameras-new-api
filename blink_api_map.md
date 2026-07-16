@@ -1,6 +1,6 @@
 # Blink Cloud API Surface (from decompiled APK)
 
-Sources are linked to their decompiled locations under `jadx-out/…`.
+Sources are linked to their decompiled locations under `jadx-out/…`. URL construction and targets were refreshed against Blink Android 57.1 (`versionCode` 29715642) on 2026-07-16.
 
 ---
 
@@ -8,13 +8,16 @@ Sources are linked to their decompiled locations under `jadx-out/…`.
 
 ### Base URLs & Environment Configuration
 
-| Environment | REST API Base | OAuth Base | Notes |
+| Environment/tier | REST API Base after substitution | OAuth Base after substitution | Notes |
 |-------------|---------------|------------|-------|
-| Production (default) | `https://rest-prod.immedia-semi.com/api/` | `https://api.pdoauth.blink.com/` | Primary production tier |
-| SQA1 (staging) | `https://rest-sqa1.immedia-semi.com/api/` | `https://api.stgoauth.blink.com/` | Staging/test environment |
-| CEMP | `https://rest-cemp.immedia-semi.com/api/` | `https://api.pdoauth.blink.com/` | Production tier variant |
+| Production US/default (`prod`) | `https://rest-prod.immedia-semi.com/api/` | `https://api.oauth.blink.com/` | Production `{env}` is empty |
+| Production EU (`prde`) | `https://rest-prde.immedia-semi.com/api/` | `https://api.oauth.blink.com/` | EU regional REST tier |
+| Production AP/Singapore (`prsg`) | `https://rest-prsg.immedia-semi.com/api/` | `https://api.oauth.blink.com/` | AP regional REST tier |
+| Production Australia (`a001`) | `https://rest-a001.immedia-semi.com/api/` | `https://api.oauth.blink.com/` | AU regional REST tier |
+| SQA1/staging (`sqa1`) | `https://rest-sqa1.immedia-semi.com/api/` | `https://api.qa.oauth.blink.com/` | Staging `{env}` is `qa.` |
+| Development | Runtime tier | `https://api.dev.oauth.blink.com/` | Development `{env}` is `dev.` |
 
-The tier code is a 4-character alphanumeric string (regex: `[a-zA-Z\d]{4}`). [TierRepository](jadx-out/sources/com/immediasemi/blink/common/network/tier/TierRepository.java)
+These are results, not independent hard-coded bases. The APK starts with `https://rest-{tier}.immedia-semi.com/api/` and `https://api.{env}oauth.blink.com/`. Retrofit first adds the relative route; OkHttp then replaces `{tier}` and `{env}` immediately before transmission. The tier code is a 4-character alphanumeric string (regex: `[a-zA-Z\d]{4}`). [TierRepository](jadx-out/sources/com/immediasemi/blink/common/network/tier/TierRepository.java)
 
 ### Required HTTP Headers (All Requests)
 
@@ -383,12 +386,15 @@ function isBlinkHost(hostname) {
 
 3. **Client ID Placeholder**: Logout and some client endpoints use `%7Binjected_client_id%7D`, replaced by `ClientIdInterceptor`.
 
-4. **Base URL Construction**: Final URL = `https://rest-{tier}.immedia-semi.com/api/` + path
-   - Example: `https://rest-prod.immedia-semi.com/api/v4/accounts/12345/homescreen`
+4. **Base URL Construction**: Retrofit combines the tokenized base and route first; OkHttp replaces routing tokens on the completed request.
+   - Template + route: `https://rest-{tier}.immedia-semi.com/api/` + `v4/accounts/{account}/homescreen`
+   - Runtime substitution: `{tier}` → `TierRepository.getTier()`
+   - Example result: `https://rest-prde.immedia-semi.com/api/v4/accounts/12345/homescreen`
+   - Shared APIs use `{shared_tier}` → `TierRepository.getSharedTier()` and fall back to the normal tier.
 
 ### Authentication Endpoints (OAuth Base URL)
 
-> **Base URL**: `https://api.{env}oauth.blink.com/` where `{env}` = `pd` (production) or `stg` (staging)
+> **Base URL template**: `https://api.{env}oauth.blink.com/`, where `{env}` is `""` for production, `qa.` for staging, or `dev.` for development. Therefore production login is `https://api.oauth.blink.com/oauth/token` and staging login is `https://api.qa.oauth.blink.com/oauth/token`.
 
 | Method | Path | Description | Verified |
 |--------|------|-------------|----------|
@@ -614,8 +620,8 @@ function isBlinkHost(hostname) {
 - `client_id`: `BuildUtils.getClientType()` → `"android"` or `"amazon"`. [BuildUtils](jadx-out/sources/com/immediasemi/blink/common/util/BuildUtils.java)
 - `hardware_id`: UUID from `GetDeviceUniqueIdUseCase` (`pref_device_unique_id`, created once and cached). [GetDeviceUniqueIdUseCase](jadx-out/sources/com/immediasemi/blink/common/account/client/GetDeviceUniqueIdUseCase.java)
 - `scope`: `"client"` (OauthApi defaults). [OauthApi](jadx-out/sources/com/immediasemi/blink/common/account/auth/OauthApi.java)
-- REST base: `https://rest-{tier}.immedia-semi.com/api/` where `{tier}` comes from `TierRepository` (prod default; other codes include `sqa1`, `cemp`). [TierRepository](jadx-out/sources/com/immediasemi/blink/common/network/tier/TierRepository.java)
-- OAuth base: `https://api.{env}oauth.blink.com/` where `{env}` is derived from tier’s `OauthEnvironment` (prod vs staging). [NetworkModule](jadx-out/sources/com/immediasemi/blink/inject/NetworkModule.java)
+- REST base: `https://rest-{tier}.immedia-semi.com/api/` where `{tier}` comes from `TierRepository` (production codes include `prod`, `prde`, `prsg`, `a001`, `cemp`, and `srf1`). [TierRepository](jadx-out/sources/com/immediasemi/blink/common/network/tier/TierRepository.java)
+- OAuth base: `https://api.{env}oauth.blink.com/` where `{env}` is the environment subdomain returned by `TierRepository`: `""`, `qa.`, or `dev.`. [NetworkModule](jadx-out/sources/com/immediasemi/blink/inject/NetworkModule.java)
 - App-added headers you may want to replicate: `APP-BUILD`=`BuildUtils.getVersionCodeHeader()`, `User-Agent`=`BuildUtils.getUserAgent()`, `LOCALE`, `X-Blink-Time-Zone`. [HeadersInterceptor](jadx-out/sources/com/immediasemi/blink/network/HeadersInterceptor.java)
 
 ### Python (requests)
@@ -627,7 +633,7 @@ CLIENT_ID = "android"  # or "amazon" per BuildUtils.getClientType()
 HARDWARE_ID = os.environ.get("BLINK_HWID", str(uuid.uuid4()))  # mirror GetDeviceUniqueIdUseCase
 SCOPE = "client"
 TIER = "prod"  # replace with actual from TierRepository if known
-ENV = "pd" if TIER == "prod" else "stg"  # heuristic matching OauthEnvironment
+ENV = "qa." if TIER == "sqa1" else ""  # production tiers use empty env; development uses "dev."
 BASE = f"https://rest-{TIER}.immedia-semi.com/api/"
 OAUTH = f"https://api.{ENV}oauth.blink.com/"
 
@@ -683,7 +689,7 @@ const CLIENT_ID = "android"; // or "amazon" per BuildUtils.getClientType
 const HARDWARE_ID = process.env.BLINK_HWID ?? randomUUID(); // mirrors GetDeviceUniqueIdUseCase
 const SCOPE = "client";
 const TIER = "prod"; // from TierRepository
-const ENV = TIER === "prod" ? "pd" : "stg";
+const ENV = TIER === "sqa1" ? "qa." : ""; // production tiers use empty env; development uses "dev."
 const BASE = `https://rest-${TIER}.immedia-semi.com/api/`;
 const OAUTH = `https://api.${ENV}oauth.blink.com/`;
 

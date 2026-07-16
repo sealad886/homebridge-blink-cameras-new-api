@@ -7,7 +7,10 @@ This checklist is derived from APK evidence summarized in `docs/blink_api_dossie
 - [ ] REST base uses `https://rest-{tier}.immedia-semi.com/api/` with `{tier}` from account tier (fallback to `prod`).
 - [ ] Shared REST base uses `https://rest-{shared_tier}.immedia-semi.com/api/` for endpoints listed as shared in the dossier.
 - [ ] `sharedTier` override is honored when configured; defaults to `tier` when unset.
-- [ ] OAuth base uses `https://api.{env}oauth.blink.com/` with `{env}` derived from tier (e.g., `sqa1` → staging) or explicit env mapping.
+- [ ] Retrofit relative routes are joined to tokenized bases before OkHttp rewrites `{tier}`, `{shared_tier}`, and `{env}` on the complete request URL.
+- [ ] OAuth base uses `https://api.{env}oauth.blink.com/`, where production `{env}` is `""`, staging is `qa.`, and development is `dev.`.
+- [ ] OAuth targets resolve to `api.oauth.blink.com` in production and `api.qa.oauth.blink.com` for `sqa1`; do not use legacy `api.pdoauth` or `api.stgoauth` forms.
+- [ ] API Gateway uses `https://api.{env}blink.com/blink/`, resolving to `https://api.blink.com/blink/` in production.
 - [ ] Blink host detection only applies auth headers to Blink hosts (`*.immedia-semi.com`).
 
 ## Authentication & Headers
@@ -41,6 +44,8 @@ This checklist is derived from APK evidence summarized in `docs/blink_api_dossie
 
 - [ ] Media list: `POST v4/accounts/{account_id}/media` with time range and pagination key (preferred), or supported GET equivalent.
 - [ ] Unwatched media: `GET v4/accounts/{account_id}/unwatched_media`.
+- [ ] Thumbnail URLs replace `{tier}` with shared tier, remove the REST `/api/` suffix, then append the backend path and `.jpg`.
+- [ ] Clip/video downloads treat the media response's address as an absolute `@Url`; do not prepend the REST base a second time.
 - [ ] Motion event handling (if used) matches dossier and does not rely on undocumented endpoints.
 
 ## Reliability & Retry Behavior

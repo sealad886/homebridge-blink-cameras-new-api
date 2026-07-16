@@ -311,15 +311,15 @@ node --version
 
 ## API Documentation
 
-This plugin's API implementation is based on reverse engineering the official Blink Home Monitor Android app (v50.1). Key technical details:
+This plugin's API implementation is based on reverse engineering the official Blink Home Monitor Android app, with URL routing revalidated against Android app v57.1 (`versionCode` 29715642). Key technical details:
 
 ### Authentication
 
-- OAuth 2.0 authorization-code flow with PKCE via `api.oauth.blink.com`
+- OAuth 2.0 authorization-code flow with PKCE via production `api.oauth.blink.com`; staging and development are built at request time as `api.qa.oauth.blink.com` and `api.dev.oauth.blink.com`
 - Automatic token refresh using the `refresh_token` grant
 - Hardware ID required for device identification
 - Client verification and account verification flows for new device approval
-- Region-aware routing based on tier and locale; behavior may differ by country
+- Region-aware routing replaces `{tier}`, `{shared_tier}`, and `{env}` on the completed request URL immediately before network execution; behavior may differ by account and country
 
 ### Endpoints
 

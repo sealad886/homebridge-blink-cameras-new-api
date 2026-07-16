@@ -3,6 +3,12 @@
 This dossier is built from the decompiled Blink Android APK splits in **Root B**: `/Users/andrew/zzApps/blink-home-monitor`.
 All statements below are evidence-backed with file paths + minimal snippets. Unknowns are explicitly marked.
 
+URL construction was revalidated against Blink Android 57.1 (`versionCode` 29715642), extracted on 2026-07-16. The refreshed APK confirms request-time token replacement and adds an API Gateway base not represented in the older evidence snapshot:
+
+```java
+public static final String API_GATEWAY = "https://api.{env}blink.com/blink/";
+```
+
 ## Evidence Index
 
 **E1 — Base URLs (REST, shared REST, OAuth, event stream, local)**
@@ -1322,13 +1328,16 @@ return new ESCoreConfig(metaData, platform, string);
 | `https://rest-{tier}.immedia-semi.com/api/` | Primary REST base (tiered) | E1, E2, E3, E4 |
 | `https://rest-{shared_tier}.immedia-semi.com/api/` | Shared REST base (tiered) | E1, E2, E3 |
 | `https://api.{env}oauth.blink.com/` | OAuth base (env subdomain token) | E1, E2, E3, E4, E8, E9 |
+| `https://api.{env}blink.com/blink/` | API Gateway base (env subdomain token) | Blink 57.1 refresh |
 | `https://prod.eventstream.immedia-semi.com/` | EventStream client base (ring eventstream lib) | E1, E24 |
 | `https://dev.eventstream.immedia-semi.com/` | EventStream base (dev) | E1 |
 | `http://172.16.97.199/` | Local device onboarding host | E1, E13 |
 
 ## Base URL Composition / Token Replacement
-- `{tier}` and `{shared_tier}` are replaced in OkHttp interceptors before request execution. (E3, E4)
-- `{env}` is replaced using `TierRepository.getEnvSubdomain()` → `OauthEnvironment.getSubdomain()`; production has empty subdomain. (E4, E8, E9)
+- Retrofit combines a tokenized base with its relative annotation path first. OkHttp interceptors then rewrite the completed request URL immediately before `chain.proceed()`; the app does not need a separate Retrofit instance per tier. (E3, E4; Blink 57.1 refresh)
+- `{tier}` is replaced with `TierRepository.getTier()`. `{shared_tier}` is replaced by the shared Retrofit interceptor using `getSharedTier()`. (E3, E4)
+- `{env}` is replaced by the base-client interceptor using `TierRepository.getEnvSubdomain()`; production yields `""`, staging `qa.`, and development `dev.`. This produces `api.oauth.blink.com`, `api.qa.oauth.blink.com`, and `api.dev.oauth.blink.com`, not the older `api.pdoauth`/`api.stgoauth` forms. (E4, E8, E9; Blink 57.1 refresh)
+- The same `{env}` substitution applies to API Gateway: production `https://api.blink.com/blink/`, staging `https://api.qa.blink.com/blink/`, development `https://api.dev.blink.com/blink/`. (Blink 57.1 refresh)
 - Blink host detection is `immedia-semi.com` or any `*.immedia-semi.com`. (E3)
 - `TierRepository.getTier()` reads `TIER` from account prefs, falls back to `DEFAULT_TIER` (persistent client prefs), and if null uses `"prod"`. (E76, E77, E73)
 - OAuth environment uses `OAUTH_ENV` in persistent client prefs; unknown values fall back to PRODUCTION, whose subdomain is empty. (E78, E8)
@@ -1354,6 +1363,17 @@ return new ESCoreConfig(metaData, platform, string);
 | `cemp` | `us-east-1` | Production regression testing | E74, E75 |
 | `srf1` | `us-east-1` | Device refurbishment | E74, E75 |
 | `sqa1` | `us-east-1` | Staging (regression_sqa1) | E9, E75 |
+
+## Worked URL construction paths (Blink 57.1 refresh)
+
+1. **Authenticated REST:** `REST` (`https://rest-{tier}.immedia-semi.com/api/`) + `AccountApi` route `v1/users/tier_info` → base-client `{tier}` rewrite. With tier `prde`, final URL is `https://rest-prde.immedia-semi.com/api/v1/users/tier_info`.
+2. **Shared camera live view:** `SHARED_REST` + `CameraApi` route `v6/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/liveview` → `{shared_tier}` rewrite → account-ID interceptor → Retrofit path parameters. With shared tier `prod`, account `123`, network `456`, and camera `789`, final URL is `https://rest-prod.immedia-semi.com/api/v6/accounts/123/networks/456/cameras/789/liveview`.
+3. **OAuth:** `OAUTH` + `OauthApi` route `oauth/token` → `{env}` rewrite. Production resolves to `https://api.oauth.blink.com/oauth/token`; staging resolves to `https://api.qa.oauth.blink.com/oauth/token`.
+4. **API Gateway:** `API_GATEWAY` + `LocationsCoreApi` route `location_info/v3/locations` → `{env}` rewrite. Production resolves to `https://api.blink.com/blink/location_info/v3/locations`.
+5. **Thumbnail image:** `ResolveThumbnailUrlUseCase` replaces `{tier}` in the REST template with `getSharedTier()`, removes `/api/`, then appends the backend thumbnail path and `.jpg`. Example: tier `prde` + `/media/example-thumb` → `https://rest-prde.immedia-semi.com/media/example-thumb.jpg`.
+6. **Clip/video download:** media responses supply the `media` address. `VideoRepository` passes it to `VideoApi.getVideo(@Url)`, so the backend-returned absolute URL is the final target; it is not reconstructable from a fixed route alone.
+
+Generated apktool smali independently confirms each token interceptor calls Kotlin `replace`, then `okhttp3.Request$Builder.url(String)`. Thumbnail smali confirms the `replace` → remove `/api/` → append `.jpg` sequence.
 
 ## Authentication (initial evidence only)
 - OAuth endpoint: `POST oauth/token` with fields `username`, `password`, `grant_type`, `client_id`, `scope` and headers `2fa-code`, `hardware_id`. (E10)
