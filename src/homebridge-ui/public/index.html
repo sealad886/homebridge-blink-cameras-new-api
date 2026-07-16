@@ -723,7 +723,9 @@
       trustDeviceCheck.classList.add('hidden');
     }
 
-    document.getElementById('verifyCode').value = '';
+    if (currentStep !== 'verify') {
+      document.getElementById('verifyCode').value = '';
+    }
     showStep('verify');
   }
 
