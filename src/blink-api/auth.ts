@@ -18,7 +18,10 @@ import {
   BlinkAuthState,
   BlinkAuthStorage,
   BlinkConfig,
+  BlinkHostedOAuthStart,
+  BlinkHostedOAuthTokenRequest,
   BlinkLogger,
+  BlinkOAuthClientId,
   BlinkOAuthSessionState,
   BlinkOAuthV2TokenResponse,
   nullLogger,
@@ -49,12 +52,30 @@ import {
   SecureJsonFileSecurityError,
   writeOwnerOnlyJsonFile,
 } from './secure-json-file';
+import { HostedOAuthCoordinator } from './hosted-oauth';
+import { buildRefreshForm, resolveOAuthProfile } from './oauth-profile';
 
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;
+
+interface CapturedTokenState {
+  accessToken: string | null;
+  refreshToken: string | null;
+  tokenExpiry: Date | null;
+  tokenAuth: string | null;
+  oauthClientId: BlinkOAuthClientId | null;
+  accountId: number | null;
+  clientId: number | null;
+  region: string | null;
+  tier: string | null;
+}
 
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
 const REFRESH_MAX_RETRIES = 2;
 const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
+const HOSTED_OAUTH_NOT_CONFIGURED = 'Blink hosted sign-in is not configured.';
+const HOSTED_TOKEN_EXCHANGE_FAILED =
+  'Blink sign-in could not be completed. Start sign-in again.';
+const AUTH_STATE_LOAD_FAILED = 'Blink authentication state could not be loaded.';
 
 const isNodeError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
@@ -250,11 +271,19 @@ export class Blink2FARequiredError extends Error {
   }
 }
 
+export class BlinkHostedReauthenticationRequiredError extends Error {
+  constructor() {
+    super('Blink sign-in has expired. Open the plugin settings and sign in securely with Blink again.');
+    this.name = 'BlinkHostedReauthenticationRequiredError';
+  }
+}
+
 export class BlinkAuth {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
   private tokenExpiry: Date | null = null;
   private tokenAuth: string | null = null;
+  private oauthClientId: BlinkOAuthClientId | null;
   private accountId: number | null = null;
   private clientId: number | null = null;
   private region: string | null = null;
@@ -262,6 +291,7 @@ export class BlinkAuth {
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
   private readonly storage?: BlinkAuthStorage;
+  private readonly hostedOAuthCoordinator?: HostedOAuthCoordinator;
   private stateLoaded = false;
   private stateLoadPromise: Promise<void> | null = null;
 
@@ -272,10 +302,18 @@ export class BlinkAuth {
   constructor(private readonly config: BlinkConfig) {
     this.log = config.logger ?? nullLogger;
     this.debug = config.debugAuth ?? false;
+    this.oauthClientId = config.oauthClientId ?? null;
     if (config.authStorage) {
       this.storage = config.authStorage;
     } else if (config.authStoragePath) {
       this.storage = new FileAuthStorage(config.authStoragePath, config.legacyAuthStoragePath);
+    }
+    if (config.hostedOAuthPendingPath) {
+      this.hostedOAuthCoordinator = new HostedOAuthCoordinator({
+        pendingFilePath: config.hostedOAuthPendingPath,
+        hardwareId: config.hardwareId,
+        tier: config.tier,
+      });
     }
   }
 
@@ -292,9 +330,8 @@ export class BlinkAuth {
     const params = new URLSearchParams(body);
     const redacted = new URLSearchParams();
     for (const [key, value] of params.entries()) {
-      const sensitiveKeys = ['password', 'refresh_token', 'code', 'code_verifier', 'csrf-token', '2fa_code'];
-      if (sensitiveKeys.includes(key)) {
-        redacted.set(key, redact(value, 3));
+      if (/(?:password|refresh_token|access_token|authorization|token-auth|cookie|pin|code|csrf-token|2fa_code|secret)/i.test(key)) {
+        redacted.set(key, '<redacted>');
       } else {
         redacted.set(key, value);
       }
@@ -309,13 +346,27 @@ export class BlinkAuth {
     const result: Record<string, string> = {};
     headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
-      if (lowerKey === 'authorization' || lowerKey === 'token-auth' || lowerKey === 'cookie') {
-        result[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-4)}` : '***';
+      if (/(authorization|token-auth|cookie|set-cookie)/i.test(lowerKey)) {
+        result[key] = '<redacted>';
       } else {
         result[key] = value;
       }
     });
     return result;
+  }
+
+  private redactUrlForLogging(value: string): string {
+    try {
+      const url = new URL(value);
+      for (const key of [...new Set(url.searchParams.keys())]) {
+        if (/^(?:access_token|authorization|code|code_verifier|error|error_description|id_token|password|pin|refresh_token|secret|state|token)$/i.test(key)) {
+          url.searchParams.set(key, '<redacted>');
+        }
+      }
+      return url.toString();
+    } catch {
+      return '<redacted-url>';
+    }
   }
 
   /**
@@ -331,7 +382,7 @@ export class BlinkAuth {
     const method = init.method ?? 'GET';
 
     this.logDebug(`[${requestId}] ── ${stepLabel} ──`);
-    this.logDebug(`[${requestId}] ${method} ${url}`);
+    this.logDebug(`[${requestId}] ${method} ${this.redactUrlForLogging(url)}`);
     this.logDebug(`[${requestId}] Request headers: ${JSON.stringify(this.redactHeaders(init.headers as Headers))}`);
     if (init.body) {
       this.logDebug(`[${requestId}] Request body: ${this.redactFormBody(init.body as string)}`);
@@ -344,21 +395,15 @@ export class BlinkAuth {
     let response: FetchResponse;
     try {
       response = await fetch(url, init);
-    } catch (error) {
+    } catch {
       const elapsed = Date.now() - startTime;
-      const err = error as Error;
-      const causeMsg = err.cause ? ` | cause: ${(err.cause as Error).message ?? String(err.cause)}` : '';
-      this.log.error(
-        `[Auth] [${requestId}] Network error during "${stepLabel}" after ${elapsed}ms: ` +
-        `${method} ${url} → ${err.name}: ${err.message}${causeMsg}`,
-      );
-      this.logDebug(`[${requestId}] Full error: ${JSON.stringify({ name: err.name, message: err.message, cause: err.cause, stack: err.stack })}`);
+      this.log.error(`[Auth] [${requestId}] Network error during "${stepLabel}" after ${elapsed}ms.`);
+      this.logDebug(`[${requestId}] Network request failed.`);
       throw new BlinkAuthenticationError(
-        `Network error during ${stepLabel}: ${err.message}`,
+        `Network error during ${stepLabel}`,
         {
           status: 0,
           statusText: 'Network Error',
-          message: `${err.name}: ${err.message}${causeMsg}`,
           headers: {},
         },
       );
@@ -371,8 +416,10 @@ export class BlinkAuth {
     const respHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
-      if (lowerKey === 'token-auth' || lowerKey === 'authorization') {
-        respHeaders[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-4)}` : '***';
+      if (lowerKey === 'location') {
+        respHeaders[key] = '<redacted>';
+      } else if (lowerKey === 'token-auth' || lowerKey === 'authorization') {
+        respHeaders[key] = '<redacted>';
       } else if (lowerKey === 'set-cookie') {
         respHeaders[key] = `<${value.length} chars>`;
       } else {
@@ -390,9 +437,15 @@ export class BlinkAuth {
       await this.stateLoadPromise;
       return;
     }
-    this.stateLoadPromise = this.loadStateFromStorage();
-    await this.stateLoadPromise;
-    this.stateLoadPromise = null;
+    const loadPromise = this.loadStateFromStorage();
+    this.stateLoadPromise = loadPromise;
+    try {
+      await loadPromise;
+    } finally {
+      if (this.stateLoadPromise === loadPromise) {
+        this.stateLoadPromise = null;
+      }
+    }
   }
 
   private async loadStateFromStorage(): Promise<void> {
@@ -406,10 +459,10 @@ export class BlinkAuth {
         this.applyState(state);
         this.logDebug('Loaded persisted auth state');
       }
-    } catch (error) {
-      this.log.warn(`Failed to load persisted auth state: ${(error as Error).message}`);
-    } finally {
       this.stateLoaded = true;
+    } catch {
+      this.log.warn('[Auth] Failed to load persisted auth state.');
+      throw new Error(AUTH_STATE_LOAD_FAILED);
     }
   }
 
@@ -417,6 +470,7 @@ export class BlinkAuth {
     this.accessToken = state.accessToken ?? this.accessToken;
     this.refreshToken = state.refreshToken ?? this.refreshToken;
     this.tokenAuth = state.tokenAuth ?? this.tokenAuth;
+    this.oauthClientId = state.oauthClientId ?? 'ios';
     this.accountId = state.accountId ?? this.accountId;
     this.clientId = state.clientId ?? this.clientId;
     this.region = state.region ?? this.region;
@@ -429,7 +483,7 @@ export class BlinkAuth {
     }
   }
 
-  private async persistState(): Promise<void> {
+  async persistCurrentState(): Promise<void> {
     if (!this.storage || !this.accessToken) return;
     const state: BlinkAuthState = {
       accessToken: this.accessToken,
@@ -438,6 +492,7 @@ export class BlinkAuth {
       tokenExpiry: this.tokenExpiry?.toISOString() ?? null,
       accountId: this.accountId,
       clientId: this.clientId,
+      oauthClientId: this.oauthClientId,
       region: this.region,
       tier: this.tier,
       email: this.config.email ?? null,
@@ -447,8 +502,71 @@ export class BlinkAuth {
     try {
       await this.storage.save(state);
     } catch (error) {
-      this.log.warn(`Failed to persist auth state: ${(error as Error).message}`);
+      this.log.warn('[Auth] Failed to persist auth state.');
+      throw error;
     }
+  }
+
+  async beginHostedLogin(): Promise<BlinkHostedOAuthStart> {
+    return this.requireHostedOAuthCoordinator().start();
+  }
+
+  async completeHostedLogin(flowId: string, callbackUrl: string): Promise<void> {
+    const coordinator = this.requireHostedOAuthCoordinator();
+    await this.ensureStateLoaded();
+    const request = await coordinator.consumeCallback(flowId, callbackUrl);
+    await this.exchangeHostedCode(request);
+  }
+
+  async cancelHostedLogin(): Promise<void> {
+    await this.requireHostedOAuthCoordinator(false).cancel();
+  }
+
+  private requireHostedOAuthCoordinator(requireStorage = true): HostedOAuthCoordinator {
+    if (!this.hostedOAuthCoordinator || (requireStorage && !this.storage)) {
+      throw new Error(HOSTED_OAUTH_NOT_CONFIGURED);
+    }
+    return this.hostedOAuthCoordinator;
+  }
+
+  private async exchangeHostedCode(request: BlinkHostedOAuthTokenRequest): Promise<void> {
+    const formData = new URLSearchParams({
+      grant_type: 'authorization_code',
+      redirect_uri: request.redirectUri,
+      code: request.authorizationCode,
+      code_verifier: request.codeVerifier,
+      client_id: request.oauthClientId,
+    });
+    const headers = new Headers({
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    });
+
+    let response: FetchResponse;
+    try {
+      response = await this.authFetch(
+        'Hosted OAuth Token Exchange',
+        getOAuthTokenUrl(this.config),
+        { method: 'POST', headers, body: formData.toString() },
+      );
+    } catch {
+      this.log.warn('[Auth] Blink hosted token exchange failed.');
+      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
+    }
+
+    if (!response.ok) {
+      this.log.warn('[Auth] Blink hosted token exchange failed.');
+      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
+    }
+
+    let body: BlinkOAuthV2TokenResponse;
+    try {
+      body = (await response.json()) as BlinkOAuthV2TokenResponse;
+    } catch {
+      this.log.warn('[Auth] Blink hosted token exchange failed.');
+      throw new Error(HOSTED_TOKEN_EXCHANGE_FAILED);
+    }
+    await this.captureTokens(body, null, request.oauthClientId);
   }
 
   /**
@@ -501,7 +619,7 @@ export class BlinkAuth {
       try {
         const oauthArgs = JSON.parse(oauthArgsMatch[1]) as { 'csrf-token'?: string };
         if (oauthArgs['csrf-token']) {
-          this.logDebug(`Found CSRF token in oauth-args JSON: ${redact(oauthArgs['csrf-token'])}`);
+          this.logDebug('Found CSRF token in oauth-args JSON');
           return oauthArgs['csrf-token'];
         }
       } catch {
@@ -521,7 +639,7 @@ export class BlinkAuth {
     for (const pattern of patterns) {
       const match = html.match(pattern);
       if (match?.[1]) {
-        this.logDebug(`Found CSRF token: ${redact(match[1])}`);
+        this.logDebug('Found CSRF token');
         return match[1];
       }
     }
@@ -638,7 +756,6 @@ export class BlinkAuth {
     const csrfToken = this.extractCsrfToken(html);
 
     if (!csrfToken) {
-      this.logDebug('HTML content (first 500 chars):', html.substring(0, 500));
       throw new Error('Could not extract CSRF token from signin page');
     }
 
@@ -724,7 +841,7 @@ export class BlinkAuth {
     // Check for redirect (success or 2FA required)
     const location = response.headers.get('location');
     if (location) {
-      this.logDebug(`Redirect location: ${location}`);
+      this.logDebug('OAuth sign-in redirect received');
 
       // Check if redirected to 2FA page
       if (location.includes('2fa') || location.includes('verify')) {
@@ -823,7 +940,7 @@ export class BlinkAuth {
 
     const location = response.headers.get('location');
     if (location) {
-      this.logDebug(`2FA redirect: ${location}`);
+      this.logDebug('OAuth 2FA redirect received');
       // Check if redirected back to authorize (success)
       if (location.includes('authorize') || location.includes('code=')) {
         return true;
@@ -876,7 +993,7 @@ export class BlinkAuth {
 
     const location = response.headers.get('location');
     if (location) {
-      this.logDebug(`Authorization redirect: ${location}`);
+      this.logDebug('OAuth authorization redirect received');
       const code = this.extractAuthorizationCode(location);
       if (code) {
         this.oauthSession.authorizationCode = code;
@@ -943,7 +1060,7 @@ export class BlinkAuth {
     this.logDebug('Token exchange successful');
     this.logDebug(`  Token expires in: ${body.expires_in} seconds`);
 
-    this.captureTokens(body, response.headers.get('TOKEN-AUTH'));
+    await this.captureTokens(body, response.headers.get('TOKEN-AUTH'), 'ios');
 
     // Clear OAuth session after successful login
     this.oauthSession = null;
@@ -1028,7 +1145,7 @@ export class BlinkAuth {
       throw new Error('No OAuth session. Call login() first.');
     }
 
-    this.logDebug(`Completing 2FA with PIN: ${redact(pin, 2)}`);
+    this.logDebug('Completing 2FA verification');
 
     // Restore cookies from session if needed
     if (this.oauthSession.cookies && !this.sessionCookies) {
@@ -1058,25 +1175,26 @@ export class BlinkAuth {
     await this.ensureStateLoaded();
     if (!this.refreshToken) {
       this.logDebug('Cannot refresh: no refresh token available');
+      if (this.oauthClientId === 'android') {
+        throw new BlinkHostedReauthenticationRequiredError();
+      }
       throw new Error('Cannot refresh token before login');
     }
 
     const tokenUrl = getOAuthTokenUrl(this.config);
-    this.logDebug(`Refresh token: ${redact(this.refreshToken)}`);
+    const profile = resolveOAuthProfile(this.oauthClientId);
+    const formData = buildRefreshForm(profile.clientId, this.refreshToken);
+    const headers = profile.clientId === 'android'
+      ? new Headers({
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      })
+      : new Headers({
+        ...buildOAuthHeaders(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      });
 
-    const formData = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: this.refreshToken,
-      client_id: OAUTH_CLIENT_ID,
-    });
-
-    const headers = new Headers({
-      ...buildOAuthHeaders(),
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    });
-
-    let lastError: Error | null = null;
     for (let attempt = 0; attempt <= REFRESH_MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         const delay = REFRESH_RETRY_DELAYS_MS[attempt - 1] ?? 5000;
@@ -1084,86 +1202,81 @@ export class BlinkAuth {
         await new Promise(resolve => setTimeout(resolve, delay));
       }
 
+      let response: FetchResponse;
       try {
-        const response = await this.authFetch(
+        response = await this.authFetch(
           attempt === 0 ? 'Token Refresh' : `Token Refresh (retry ${attempt})`,
           tokenUrl,
           { method: 'POST', headers, body: formData.toString() },
         );
-
-        if (!response.ok) {
-          await this.handleAuthError('refresh', response);
-        }
-
-        const body = (await response.json()) as BlinkOAuthV2TokenResponse;
-        this.logDebug('Token refresh successful');
-        this.logDebug(`  Token expires in: ${body.expires_in} seconds`);
-        this.captureTokens(body, response.headers.get('TOKEN-AUTH'));
-        return;
       } catch (error) {
-        lastError = error as Error;
-        const isTransient = lastError instanceof BlinkAuthenticationError && lastError.details.status === 0;
-        if (!isTransient || attempt === REFRESH_MAX_RETRIES) {
-          throw lastError;
+        const requestError = error as Error;
+        const isTransient = requestError instanceof BlinkAuthenticationError
+          && requestError.details.status === 0;
+        if (isTransient && attempt < REFRESH_MAX_RETRIES) {
+          this.log.warn(`[Auth] Token refresh attempt ${attempt + 1} failed; retrying.`);
+          continue;
         }
-        this.log.warn(`[Auth] Token refresh attempt ${attempt + 1} failed (transient): ${lastError.message}`);
+        if (profile.clientId === 'android') {
+          throw new BlinkHostedReauthenticationRequiredError();
+        }
+        throw requestError;
       }
+
+      if (!response.ok) {
+        if (profile.clientId === 'android') {
+          this.log.warn('[Auth] Blink hosted token refresh failed.');
+          throw new BlinkHostedReauthenticationRequiredError();
+        }
+        await this.handleAuthError('refresh', response);
+      }
+
+      let body: BlinkOAuthV2TokenResponse;
+      try {
+        body = (await response.json()) as BlinkOAuthV2TokenResponse;
+      } catch {
+        if (profile.clientId === 'android') {
+          this.log.warn('[Auth] Blink hosted token refresh failed.');
+          throw new BlinkHostedReauthenticationRequiredError();
+        }
+        throw new Error('Blink OAuth refresh failed: invalid token response');
+      }
+      this.logDebug('Token refresh successful');
+      this.logDebug(`  Token expires in: ${body.expires_in} seconds`);
+      try {
+        await this.captureTokens(
+          body,
+          profile.clientId === 'android' ? null : response.headers.get('TOKEN-AUTH'),
+          profile.clientId,
+        );
+      } catch (error) {
+        if (profile.clientId === 'android') {
+          throw error instanceof BlinkHostedReauthenticationRequiredError
+            ? error
+            : new BlinkHostedReauthenticationRequiredError();
+        }
+        throw error;
+      }
+      return;
     }
   }
 
   private async handleAuthError(operation: string, response: FetchResponse): Promise<never> {
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
+      responseHeaders[key] = /(authorization|token-auth|cookie|set-cookie)/i.test(key)
+        ? '<redacted>'
+        : redactSensitiveText(value);
     });
-
-    let responseBody: unknown;
-    let errorMessage: string | undefined;
-    let errorCode: number | undefined;
-    let errorType: string | undefined;
-
-    try {
-      const text = await response.text();
-      try {
-        responseBody = JSON.parse(text);
-        if (typeof responseBody === 'object' && responseBody !== null) {
-          const body = responseBody as Record<string, unknown>;
-          errorMessage = (body.message ?? body.error ?? body.error_description) as string | undefined;
-          errorCode = body.code as number | undefined;
-          errorType = body.error as string | undefined;
-        }
-      } catch {
-        responseBody = text;
-        errorMessage = text.substring(0, 200);
-      }
-    } catch {
-      responseBody = '<could not read response body>';
-    }
-
-    const requiresUpdate =
-      response.status === 426 ||
-      (errorMessage?.toLowerCase().includes('update') ?? false) ||
-      (errorMessage?.toLowerCase().includes('upgrade') ?? false);
-
-    const requires2FA =
-      response.status === 401 &&
-      ((errorMessage?.toLowerCase().includes('verification') ?? false) ||
-        (errorMessage?.toLowerCase().includes('2fa') ?? false));
 
     const details: BlinkAuthErrorDetail = {
       status: response.status,
       statusText: response.statusText,
-      message: errorMessage,
-      code: errorCode,
-      errorType,
-      requiresUpdate,
-      requires2FA,
       headers: responseHeaders,
-      responseBody,
     };
 
     const error = new BlinkAuthenticationError(
-      `Blink OAuth ${operation} failed: ${response.status} ${response.statusText}${errorMessage ? ` - ${errorMessage}` : ''}`,
+      `Blink OAuth ${operation} failed: ${response.status} ${response.statusText}`,
       details,
     );
 
@@ -1174,7 +1287,18 @@ export class BlinkAuth {
   async ensureValidToken(): Promise<void> {
     await this.ensureStateLoaded();
     if (!this.accessToken) {
-      this.logDebug('ensureValidToken → no access token → initiating login');
+      if (this.oauthClientId === 'android') {
+        this.logDebug('ensureValidToken → hosted access token missing → refreshing');
+        await this.refreshTokens();
+        return;
+      }
+      if (!this.hasLegacyCredentials()) {
+        throw new Error(
+          'No credentials available for OAuth login. '
+          + 'Authenticate via the plugin Custom UI or add username/password to config.',
+        );
+      }
+      this.logDebug('ensureValidToken → no access token → initiating legacy login');
       await this.login();
       return;
     }
@@ -1184,8 +1308,16 @@ export class BlinkAuth {
       try {
         await this.refreshTokens();
       } catch (error) {
-        this.log.warn(`[Auth] Token refresh failed, falling back to full login: ${(error as Error).message}`);
-        this.logDebug('ensureValidToken → refresh failed → falling back to login()');
+        if (this.oauthClientId === 'android') {
+          throw error instanceof BlinkHostedReauthenticationRequiredError
+            ? error
+            : new BlinkHostedReauthenticationRequiredError();
+        }
+        if (!this.hasLegacyCredentials()) {
+          throw error;
+        }
+        this.log.warn('[Auth] Token refresh failed; attempting legacy credential login.');
+        this.logDebug('ensureValidToken → refresh failed → falling back to legacy login()');
         await this.login();
       }
     } else if (this.isTokenExpiringSoon()) {
@@ -1193,7 +1325,15 @@ export class BlinkAuth {
       try {
         await this.refreshTokens();
       } catch (error) {
-        this.log.warn(`[Auth] Proactive token refresh failed (non-critical): ${(error as Error).message}`);
+        if (this.oauthClientId === 'android') {
+          throw error instanceof BlinkHostedReauthenticationRequiredError
+            ? error
+            : new BlinkHostedReauthenticationRequiredError();
+        }
+        if (!this.hasLegacyCredentials()) {
+          throw error;
+        }
+        this.log.warn('[Auth] Proactive token refresh failed; continuing with current legacy token.');
         this.logDebug('ensureValidToken → proactive refresh failed → continuing with current token');
       }
     } else {
@@ -1211,6 +1351,10 @@ export class BlinkAuth {
     return this.tokenExpiry.getTime() - Date.now() < TOKEN_EXPIRY_BUFFER_MS;
   }
 
+  private hasLegacyCredentials(): boolean {
+    return this.config.email.trim().length > 0 && this.config.password.length > 0;
+  }
+
   getAuthHeaders(): Record<string, string> {
     if (!this.accessToken) {
       throw new Error('Access token not set. Call login first.');
@@ -1220,7 +1364,7 @@ export class BlinkAuth {
       Authorization: `Bearer ${this.accessToken}`,
     };
 
-    if (this.tokenAuth) {
+    if (this.tokenAuth && this.oauthClientId !== 'android') {
       headers['TOKEN-AUTH'] = this.tokenAuth;
     }
 
@@ -1294,19 +1438,56 @@ export class BlinkAuth {
     return this.oauthSession?.requires2FA ?? false;
   }
 
-  private captureTokens(body: BlinkOAuthV2TokenResponse, tokenAuthHeader: string | null): void {
+  private snapshotTokenState(): CapturedTokenState {
+    return {
+      accessToken: this.accessToken,
+      refreshToken: this.refreshToken,
+      tokenExpiry: this.tokenExpiry,
+      tokenAuth: this.tokenAuth,
+      oauthClientId: this.oauthClientId,
+      accountId: this.accountId,
+      clientId: this.clientId,
+      region: this.region,
+      tier: this.tier,
+    };
+  }
+
+  private restoreTokenState(snapshot: CapturedTokenState): void {
+    this.accessToken = snapshot.accessToken;
+    this.refreshToken = snapshot.refreshToken;
+    this.tokenExpiry = snapshot.tokenExpiry;
+    this.tokenAuth = snapshot.tokenAuth;
+    this.oauthClientId = snapshot.oauthClientId;
+    this.accountId = snapshot.accountId;
+    this.clientId = snapshot.clientId;
+    this.region = snapshot.region;
+    this.tier = snapshot.tier;
+  }
+
+  private async captureTokens(
+    body: BlinkOAuthV2TokenResponse,
+    tokenAuthHeader: string | null,
+    oauthClientId?: BlinkOAuthClientId,
+  ): Promise<void> {
+    const previous = this.snapshotTokenState();
     this.accessToken = body.access_token;
     this.refreshToken = body.refresh_token ?? this.refreshToken;
     this.tokenExpiry = new Date(Date.now() + body.expires_in * 1000);
     this.tokenAuth = tokenAuthHeader;
+    this.oauthClientId = oauthClientId ?? this.oauthClientId ?? 'ios';
     this.accountId = body.account_id ?? this.accountId;
     this.clientId = body.client_id ?? this.clientId;
     this.region = body.region ?? this.region;
     this.tier = body.tier ?? this.tier;
 
+    try {
+      await this.persistCurrentState();
+    } catch (error) {
+      this.restoreTokenState(previous);
+      throw error;
+    }
+
     this.logDebug('Tokens captured successfully');
-    this.logDebug(`  Access token: ${redact(this.accessToken)}`);
-    this.logDebug(`  Refresh token: ${redact(this.refreshToken ?? '')}`);
     this.logDebug(`  Expiry: ${this.tokenExpiry.toISOString()}`);
     if (this.accountId) {
       this.logDebug(`  Account ID: ${this.accountId}`);
@@ -1314,6 +1495,5 @@ export class BlinkAuth {
     if (this.clientId) {
       this.logDebug(`  Client ID: ${this.clientId}`);
     }
-    void this.persistState();
   }
 }

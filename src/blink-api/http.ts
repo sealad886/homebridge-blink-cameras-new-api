@@ -162,7 +162,7 @@ export class BlinkHttp {
    *
    * Retry strategy:
    * - 401: Refresh token and retry (token expired)
-   * - 403: Re-login and retry (session invalid)
+   * - 403: Refresh token and retry (session invalid)
    * - 429: Exponential backoff (rate limited)
    * - 5xx: Linear backoff (server error)
    *
@@ -200,17 +200,10 @@ export class BlinkHttp {
 
     this.logDebug(`[${requestId}] Response: ${response.status} ${response.statusText} (${elapsed}ms)`);
 
-    // Token expired - refresh and retry
-    if (response.status === 401 && attempt < 1) {
-      this.logDebug(`[${requestId}] Token expired (401), refreshing and retrying...`);
+    // Token expired or session invalid - refresh once and retry
+    if ((response.status === 401 || response.status === 403) && attempt < 1) {
+      this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
       await this.auth.refreshTokens();
-      return this.request<T>(method, path, body, attempt + 1);
-    }
-
-    // Session invalid - re-login and retry
-    if (response.status === 403 && attempt < 1) {
-      this.logDebug(`[${requestId}] Session invalid (403), re-logging in and retrying...`);
-      await this.auth.login();
       return this.request<T>(method, path, body, attempt + 1);
     }
 

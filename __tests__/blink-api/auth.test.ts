@@ -6,7 +6,12 @@ import {
   hardenAuthStateFileMode,
   readPersistedAuthStateFile,
 } from '../../src/blink-api/auth';
-import { BlinkAuthState, BlinkAuthStorage, BlinkConfig } from '../../src/types';
+import {
+  BlinkAuthState,
+  BlinkAuthStorage,
+  BlinkConfig,
+  BlinkLogger,
+} from '../../src/types';
 import { URL } from 'node:url';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
@@ -46,8 +51,46 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     return h;
   };
 
+  const createCapturingLogger = (): { logger: BlinkLogger; entries: string[] } => {
+    const entries: string[] = [];
+    const record = (message: string, ...parameters: unknown[]): void => {
+      entries.push([message, ...parameters.map((parameter) => String(parameter))].join(' '));
+    };
+    return {
+      entries,
+      logger: { debug: record, info: record, warn: record, error: record },
+    };
+  };
+
+  const expectSecretAbsent = (log: string, secret: string): void => {
+    expect(log).not.toContain(secret);
+    expect(log).not.toContain(`${secret.slice(0, 2)}...${secret.slice(-2)}`);
+    expect(log).not.toContain(`${secret.slice(0, 4)}...${secret.slice(-4)}`);
+    expect(log).not.toContain(`${secret.slice(0, 10)}...${secret.slice(-4)}`);
+  };
+
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('fully redacts OAuth callback parameters while preserving safe query values', () => {
+    const auth = new BlinkAuth(baseConfig);
+    const sanitized = (
+      auth as unknown as { redactUrlForLogging(value: string): string }
+    ).redactUrlForLogging(
+      'https://example.com/callback?code=code-secret&state=state-secret&error=error-secret&error_description=description-secret&safe=value',
+    );
+    const parsed = new URL(sanitized);
+
+    expect(parsed.searchParams.get('code')).toBe('<redacted>');
+    expect(parsed.searchParams.get('state')).toBe('<redacted>');
+    expect(parsed.searchParams.get('error')).toBe('<redacted>');
+    expect(parsed.searchParams.get('error_description')).toBe('<redacted>');
+    expect(parsed.searchParams.get('safe')).toBe('value');
+    expect(sanitized).not.toContain('code-secret');
+    expect(sanitized).not.toContain('state-secret');
+    expect(sanitized).not.toContain('error-secret');
+    expect(sanitized).not.toContain('description-secret');
   });
 
   describe('successful login flow', () => {
@@ -173,6 +216,136 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       expect(tokenBody.get('code_verifier')).toBeTruthy();
       expect(tokenBody.get('grant_type')).toBe('authorization_code');
     });
+
+    it('waits for legacy token persistence before login resolves', async () => {
+      const fetchMock = mockFetch();
+      let releaseSave = (): void => undefined;
+      const saveGate = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let markSaveStarted = (): void => undefined;
+      const saveStarted = new Promise<void>((resolve) => {
+        markSaveStarted = resolve;
+      });
+      const save = jest.fn(async (_state: BlinkAuthState) => {
+        markSaveStarted();
+        await saveGate;
+      });
+      const authStorage: BlinkAuthStorage = {
+        load: jest.fn(async () => null),
+        save,
+        clear: jest.fn(async () => undefined),
+      };
+
+      fetchMock
+        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '<input name="_token" value="csrf">',
+          headers: createMockHeaders(),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 302,
+          headers: createMockHeaders({ location: 'callback?code=abc' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'legacy-access-token',
+            refresh_token: 'legacy-refresh-token',
+            expires_in: 3600,
+            token_type: 'Bearer' as const,
+          }),
+          headers: createMockHeaders({ 'token-auth': 'legacy-token-auth' }),
+        });
+
+      const auth = new BlinkAuth({ ...baseConfig, authStorage });
+      let settled = false;
+      const login = auth.login();
+      void login.then(
+        () => { settled = true; },
+        () => { settled = true; },
+      );
+      await saveStarted;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(settled).toBe(false);
+      releaseSave();
+      await login;
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({
+        accessToken: 'legacy-access-token',
+        refreshToken: 'legacy-refresh-token',
+        tokenAuth: 'legacy-token-auth',
+        oauthClientId: 'ios',
+      }));
+    });
+
+    it('fully redacts legacy OAuth state, redirect code, CSRF, and token values from debug logs', async () => {
+      const fetchMock = mockFetch();
+      const { logger, entries } = createCapturingLogger();
+      const csrfToken = 'legacyCsrfSentinel_4Lp8Qx';
+      const authorizationCode = 'legacyCodeSentinel_5Mq7Pw';
+      const accessToken = 'legacyAccessSentinel_6Nr6Ov';
+      const refreshToken = 'legacyRefreshSentinel_7Os5Nu';
+      const tokenAuth = 'legacyTokenAuthSentinel_8Pt4Mt';
+      let generatedState = '';
+      let auth!: BlinkAuth;
+
+      fetchMock
+        .mockImplementationOnce(async () => {
+          generatedState = auth.getOAuthSession()?.state ?? '';
+          return { ok: true, status: 302, headers: createMockHeaders() };
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => `<input name="_token" value="${csrfToken}">`,
+          headers: createMockHeaders(),
+        })
+        .mockImplementationOnce(async () => {
+          return {
+            ok: true,
+            status: 302,
+            headers: createMockHeaders({
+              location: `immedia-blink://applinks.blink.com/signin/callback?code=${authorizationCode}&state=${generatedState}`,
+            }),
+          };
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            expires_in: 3600,
+            token_type: 'Bearer' as const,
+          }),
+          headers: createMockHeaders({ 'token-auth': tokenAuth }),
+        });
+
+      auth = new BlinkAuth({
+        ...baseConfig,
+        debugAuth: true,
+        logger,
+      });
+      await auth.login();
+
+      expect(generatedState).not.toBe('');
+      const log = entries.join('\n');
+      for (const secret of [
+        generatedState,
+        csrfToken,
+        authorizationCode,
+        accessToken,
+        refreshToken,
+        tokenAuth,
+      ]) {
+        expectSecretAbsent(log, secret);
+      }
+    });
   });
 
   describe('2FA flow', () => {
@@ -209,7 +382,14 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
 
     it('auto-uses 2FA code from config', async () => {
       const fetchMock = mockFetch();
-      const configWith2FA = { ...baseConfig, twoFactorCode: '123456' };
+      const { logger, entries } = createCapturingLogger();
+      const pin = 'legacyPinSentinel_9Qu3Ls';
+      const configWith2FA = {
+        ...baseConfig,
+        twoFactorCode: pin,
+        debugAuth: true,
+        logger,
+      };
 
       // Step 1: GET /oauth/v2/authorize
       fetchMock.mockResolvedValueOnce({
@@ -267,7 +447,8 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       // Verify 2FA verification was called with the PIN
       const verifyCall = fetchMock.mock.calls[3];
       const verifyBody = new URLSearchParams((verifyCall[1] as FetchOptions)!.body as string);
-      expect(verifyBody.get('2fa_code')).toBe('123456');
+      expect(verifyBody.get('2fa_code')).toBe(pin);
+      expectSecretAbsent(entries.join('\n'), pin);
     });
   });
 
@@ -354,18 +535,21 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
 
     it('throws error when CSRF token cannot be extracted', async () => {
       const fetchMock = mockFetch();
+      const { logger, entries } = createCapturingLogger();
+      const csrfToken = 'unparsedCsrfSentinel_9Qu3Ns';
 
       fetchMock
         .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => '<html>No CSRF token here</html>',
+          text: async () => `<html data-diagnostic="${csrfToken}">No token field here</html>`,
           headers: createMockHeaders(),
         });
 
-      const auth = new BlinkAuth(baseConfig);
+      const auth = new BlinkAuth({ ...baseConfig, debugAuth: true, logger });
       await expect(auth.login()).rejects.toThrow('Could not extract CSRF token');
+      expectSecretAbsent(entries.join('\n'), csrfToken);
     });
 
     it('throws when getAuthHeaders called before login', () => {

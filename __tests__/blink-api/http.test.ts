@@ -1,5 +1,8 @@
 import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
-import { BlinkAuth } from '../../src/blink-api/auth';
+import {
+  BlinkAuth,
+  BlinkHostedReauthenticationRequiredError,
+} from '../../src/blink-api/auth';
 import { BlinkConfig } from '../../src/types';
 
 describe('BlinkHttp', () => {
@@ -68,7 +71,7 @@ describe('BlinkHttp', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('re-authenticates and retries on 403', async () => {
+  it('refreshes tokens and retries on 403 without direct login', async () => {
     const auth = mockAuth();
     const http = new BlinkHttp(auth, mockConfig);
     (fetch as jest.Mock)
@@ -77,9 +80,41 @@ describe('BlinkHttp', () => {
 
     await http.get('v1/needs-login');
 
-    expect(auth.login).toHaveBeenCalledTimes(1);
+    expect(auth.refreshTokens).toHaveBeenCalledTimes(1);
+    expect(auth.login).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+
+  it.each([401, 403])('bounds authentication retry to one refresh for HTTP %s', async (status) => {
+    const auth = mockAuth();
+    const http = new BlinkHttp(auth, mockConfig);
+    (fetch as jest.Mock)
+      .mockResolvedValueOnce(response(status))
+      .mockResolvedValueOnce(response(status));
+
+    await expect(http.get('v1/still-unauthorized')).rejects.toBeInstanceOf(BlinkHttpError);
+
+    expect(auth.refreshTokens).toHaveBeenCalledTimes(1);
+    expect(auth.login).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 403])(
+    'propagates the fixed hosted reauthentication error from HTTP %s refresh',
+    async (status) => {
+      const auth = mockAuth();
+      const reauthenticationError = new BlinkHostedReauthenticationRequiredError();
+      (auth.refreshTokens as jest.Mock).mockRejectedValueOnce(reauthenticationError);
+      const http = new BlinkHttp(auth, mockConfig);
+      (fetch as jest.Mock).mockResolvedValueOnce(response(status));
+
+      await expect(http.get('v1/hosted-session-expired')).rejects.toBe(reauthenticationError);
+
+      expect(auth.refreshTokens).toHaveBeenCalledTimes(1);
+      expect(auth.login).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('backs off and retries on 429', async () => {
     const auth = mockAuth();
