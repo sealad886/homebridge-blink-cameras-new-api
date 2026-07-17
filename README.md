@@ -78,10 +78,11 @@ The plugin provides a full configuration UI. Open the remote Homebridge UI in
 Brave (for example, `http://raspberrypi.local:8581`), then navigate to `Plugins`
 → `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
 
-Authentication uses Blink's hosted sign-in. Homebridge creates the PKCE/state
-transaction, but Blink alone receives the account credentials and hosted MFA code.
-After the callback is finished, Homebridge stores reusable tokens in its storage
-root and removes legacy credential/code fields from the plugin configuration.
+The supported authentication path uses Blink's hosted sign-in. Homebridge
+creates the PKCE/state transaction, but Blink alone receives the account
+credentials and hosted MFA code. After the callback is finished, Homebridge
+stores reusable tokens in its storage root and removes legacy credential/code
+fields from the plugin configuration.
 
 Every production account, including the APK's US, EU, AP, and AU tiers, starts at
 the same production OAuth host:
@@ -161,6 +162,13 @@ stored in `.blink-auth.json` inside the Homebridge storage root. The file is
 atomically replaced with owner-only mode `0600`. Pre-`0.6.x` state from
 `blink-auth/auth-state.json` is migrated automatically. Do not copy either file
 into the repository or expose its contents in logs or support requests.
+
+For compatibility with older installations, the runtime still accepts a
+paired `username` and `password` in manually edited configuration and can use
+them for the legacy iOS-profile sign-in path when compatible token state is
+missing or unusable. That hidden fallback sends the credentials through
+Homebridge and is deprecated; it is not part of the supported custom-UI flow.
+Remove those fields after migrating to hosted sign-in.
 
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to force a new thumbnail capture.
@@ -305,8 +313,10 @@ pending.
 
 ### 401 Unauthorized / 403 Forbidden
 
-- Regenerate a unique `deviceId`
-- Use **Test Connection** to retry with stored tokens.
+- Keep `deviceId` stable and use **Test Connection** to retry with stored tokens.
+- Change `deviceId` only when intentionally registering a new client; first use
+  **Unlock & Re-authenticate**, then complete hosted sign-in and any verification
+  again.
 - Complete any client/account verification shown by the custom UI.
 - If refresh has expired, use **Unlock & Re-authenticate** and start a fresh
   hosted sign-in.

@@ -74,4 +74,23 @@ describe('authentication documentation', () => {
     expect(corpus).not.toContain('acceptance remains Task 8');
     expect(corpus).not.toContain('resolver-compatible `amazon` identities');
   });
+
+  it('keeps the documented post-token workflow aligned with APK persistence and auth headers', () => {
+    const readme = readText('README.md');
+    const adr = readText('docs/adr/001-authentication.md');
+    const dossier = readText('docs/blink_api_dossier.md');
+
+    expect(dossier).toContain('TierInfo persistence writes account_id, then tier');
+    expect(dossier).toMatch(/setTierInfo[\s\S]*immediately persists\s+both `account_id` and `tier`/i);
+    expect(dossier).not.toContain('TierInfo persistence writes account_id only');
+    expect(dossier).toMatch(/adds `TOKEN-AUTH` only when registration-token state exists/i);
+    expect(dossier).not.toContain('Bearer + TOKEN-AUTH');
+
+    expect(adr).toMatch(/Shared REST\s+defaults to the same discovered tier/i);
+    expect(adr).toMatch(/`sharedTier` is only an advanced manual\s+override/i);
+    expect(adr).toMatch(/hidden,\s+deprecated manual fallback/i);
+
+    expect(readme).toMatch(/Keep `deviceId` stable/i);
+    expect(readme).not.toMatch(/Regenerate a unique `deviceId`/i);
+  });
 });

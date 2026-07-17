@@ -141,11 +141,15 @@ and AU accounts all start at `https://api.oauth.blink.com/oauth/v2/authorize`
 and exchange at `https://api.oauth.blink.com/oauth/token`. After token
 persistence, the client first requests `v1/users/tier_info` through the
 production bootstrap host. Its four-alphanumeric tier is authoritative for
-`https://rest-{tier}.immedia-semi.com/api/`; shared REST uses the returned
-shared tier when supplied. The client then loads `v2/users/info`, handles any
-post-token client/account verification requirement, and requests the account
-homescreen as the connection proof. Failures after token issuance keep durable
-authentication and report an authenticated-but-unverified status for recovery.
+`https://rest-{tier}.immedia-semi.com/api/`. The APK immediately persists both
+the returned account identifier and tier before loading `v2/users/info`, so
+that request already uses the discovered regional REST host. Shared REST
+defaults to the same discovered tier; `sharedTier` is only an advanced manual
+override and is not a separate field returned by `tier_info`. The client then
+handles any post-token client/account verification requirement and requests
+the account homescreen as the connection proof. Failures after token issuance
+keep durable authentication and report an authenticated-but-unverified status
+for recovery.
 
 The APK explicitly defines `prod`, `prde`, `prsg`, `a001`, `cemp`, and `srf1`,
 and accepts other service-returned four-character tiers. The user journey does
@@ -169,9 +173,11 @@ not relabeled. Explicit `ios` state remains on that legacy contract:
 The repository's persisted-state type also accepts `amazon`, but the hosted UI
 never creates that value and the current resolver treats every non-`android`
 identity as legacy iOS compatibility state. This is not APK-equivalent Fire OS
-support and must not be presented as such. Legacy credential-driven internals
-remain only for compatible state recovery; they are not exposed as the
-supported UI.
+support and must not be presented as such. The runtime also retains a hidden,
+deprecated manual fallback: paired `username` and `password` configuration can
+perform a legacy iOS-profile credential sign-in when compatible state is absent
+or unusable. It is not exposed by, or part of, the supported hosted UI; unlike
+hosted sign-in, that fallback necessarily gives the credentials to Homebridge.
 
 ## Evidence boundary
 
@@ -208,8 +214,8 @@ mocked/parameterized.
 
 ### Positive
 
-- Homebridge never receives or stores the Blink account credentials or hosted
-  MFA code.
+- During the supported hosted-UI flow, Homebridge never receives or stores the
+  Blink account credentials or hosted MFA code.
 - PKCE/state and durable tokens stay on the remote Pi with owner-only storage.
 - Restart and refresh work without credential fields in plugin configuration.
 - The same user flow supports APK-known and service-returned production tiers.
