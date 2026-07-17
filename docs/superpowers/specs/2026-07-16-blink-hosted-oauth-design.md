@@ -1,8 +1,16 @@
 # Blink Hosted OAuth Login Design
 
+> Historical implementation artifact. The supported runtime contract is now
+> release `0.9.1`; use `docs/adr/001-authentication.md`, `blink_api_map.md`, and
+> `docs/integration_checklist.md` for current behavior and evidence. In
+> particular, a new production Homebridge session now tries the APK's ordinary
+> `prod`, `prde`, `prsg`, and `a001` REST defaults only after HTTP 406, because
+> the OAuth response itself supplies no account tier. Fresh packaged
+> authorization-code exchange acceptance remains open.
+
 **Date:** 2026-07-16
 
-**Status:** Approved for implementation
+**Status:** Implemented; retained as the approved design record
 
 **Decision owner:** Repository owner
 

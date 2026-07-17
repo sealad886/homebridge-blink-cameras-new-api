@@ -1,10 +1,18 @@
-# Blink API Integration Gap Analysis (Initial Pass)
+# Blink API Integration Gap Analysis
 
-This document captures the current parity review against `docs/blink_api_dossier.md` and the Homebridge plugin implementation.
+This document captures the remaining parity gaps against
+`docs/blink_api_dossier.md` and the Homebridge plugin implementation.
 
 ## Addressed in this pass
 
-- **Tier coverage expanded**: Added `prde`, `prsg`, `a001`, `srf1` to configuration and URL validation.
+- **Hosted authentication aligned**: The supported custom UI now launches
+  Blink-hosted Android-profile OAuth with Pi-owned PKCE/state and stores no
+  account credential or hosted-MFA field in plugin configuration.
+- **Tier coverage expanded**: URL validation accepts APK-known and safe
+  service-returned four-character tiers. Fresh hosted discovery advances only
+  through the ordinary production defaults `prod`, `prde`, `prsg`, and `a001`
+  after HTTP 406; it excludes the APK's special `cemp` regression and `srf1`
+  refurbishment targets.
 - **OAuth env mapping aligned**: OAuth base now matches APK behavior (`api.qa.oauth.blink.com` for `sqa1`, `api.oauth.blink.com` for production tiers).
 - **Thumbnail base fixed**: Thumbnails now resolve against the configured REST root instead of hardcoded `rest-prod`.
 
@@ -20,7 +28,7 @@ This document captures the current parity review against `docs/blink_api_dossier
 
 ## References
 
-- `docs/blink_api_dossier.md` (E1–E92)
+- `docs/blink_api_dossier.md` (E1–E95)
 - `docs/integration_checklist.md`
 
 ## Handoff Notes

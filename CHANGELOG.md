@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] - 2026-07-17
+
+### Fixed
+
+- Made hosted post-token discovery advance through the APK's ordinary
+  production account-region defaults (`prod`, `prde`, `prsg`, `a001`) only
+  when `tier_info` rejects a gateway with HTTP 406. The first successful
+  response supplies the service-authoritative account tier used thereafter.
+- Excluded the APK's regression (`cemp`) and refurbishment (`srf1`) targets from
+  ordinary account bootstrap attempts, and kept authentication, rate-limit,
+  transport, and server failures from triggering region fallback.
+- Preserved explicitly configured QA, regression, refurbishment, and safe
+  numbered/custom tiers as single-target bootstraps instead of silently
+  resetting them to the ordinary production search.
+- Fully redacted stable authentication identifiers (`hardware_id`,
+  `device_identifier`, username/email, and phone fields) from OAuth and HTTP
+  debug diagnostics, including request/error URL query parameters. Legacy 2FA
+  errors no longer retain contact hints or pass raw error objects to the
+  platform logger.
+
+### Changed
+
+- Corrected the authentication documentation: OAuth token responses do not
+  provide a Blink account region/tier, while the native app already has a
+  persistent default tier before it calls `tier_info`.
+- Added APK-grounded and parameterized US/EU/AP/AU bootstrap coverage while
+  retaining service-returned four-character tier validation.
+- Replaced the stale root API map and removed the obsolete migration audit so
+  the maintained documentation consistently describes hosted AppAuth,
+  conditional `TOKEN-AUTH`, immediate tier persistence, and the bounded live
+  evidence.
+
+### Validation status
+
+- A secret-blind native AppAuth harness reproduced Blink Android 57.1's exact
+  request and reached Blink's hosted sign-in page on Android. This proves the
+  native hosted surface and request construction, not a fresh packaged
+  Homebridge code exchange.
+- With the authorized EU/Ireland account, a valid legacy refresh session was
+  accepted by Blink's exact Android cross-client refresh form. The resulting
+  Android-profile state rotated again through the installed plugin, reached
+  user information and homescreen/device discovery, and survived two clean
+  Homebridge restarts without credentials in configuration.
+- A live Android-token `tier_info` probe returned HTTP 406 from `prod` and
+  `a001`, and HTTP 200 with a valid authoritative tier from `prde` and `prsg`.
+  Fresh packaged hosted code-exchange acceptance remains open. Non-EU accounts
+  are not live-validated; their account-region behavior remains APK-evidenced
+  and mocked/parameterized.
+
 ## [0.9.0] - 2026-07-16
 
 ### Added
@@ -40,11 +89,6 @@ All notable changes to this project will be documented in this file.
 - An earlier authorized EU/Ireland-account proof established hosted code
   exchange, refresh, `prde` routing, and homescreen access. Two later packaged
   flows reached token exchange but returned `BHO-HTTP-INVALID-GRANT`.
-- A 2026-07-17 matched-egress run verified the strict relay, reverse tunnel, Pi
-  proxy environment, endpoint reachability, and rollback, but its transaction
-  ended before the request: no token exchange occurred and no auth state was
-  created. The result was operationally inconclusive and does not resolve the
-  egress-binding hypothesis.
 - Packaged end-to-end acceptance remains open. Non-EU accounts are not
   live-validated; those targets have APK/static and mocked coverage only.
 

@@ -58,6 +58,93 @@ describe('BlinkHttp', () => {
     expect(auth.ensureValidToken).toHaveBeenCalled();
   });
 
+  it('fully redacts stable identity values from debug request and response bodies', async () => {
+    const hardwareId = 'hardwareHttpSecret_2Kq7Wy';
+    const deviceIdentifier = 'deviceHttpSecret_6Pt3Nz';
+    const email = 'privateHttpSecret_5Jm8Vr@example.com';
+    const phone = '+353870001234';
+    const entries: string[] = [];
+    const record = (message: string, ...parameters: unknown[]): void => {
+      entries.push([message, ...parameters.map((parameter) =>
+        typeof parameter === 'string' ? parameter : JSON.stringify(parameter),
+      )].join(' '));
+    };
+    const logger: BlinkLogger = {
+      debug: record,
+      info: record,
+      warn: record,
+      error: record,
+    };
+    const auth = mockAuth();
+    const http = new BlinkHttp(auth, { ...mockConfig, debugAuth: true, logger });
+    (fetch as jest.Mock).mockResolvedValue(response(200, {
+      hardware_id: hardwareId,
+      device_identifier: deviceIdentifier,
+      email,
+      phone_number: phone,
+      result: 'safe-response-value',
+    }));
+
+    await http.post(
+      `v1/identity-redaction?hardware_id=${encodeURIComponent(hardwareId)}&email=${encodeURIComponent(email)}&safe=safe-query-value`,
+      {
+      hardware_id: hardwareId,
+      device_identifier: deviceIdentifier,
+      email,
+      phone_number: phone,
+      safe: 'safe-request-value',
+      status_code: 'safe-status-code',
+      error_code: 'safe-error-code',
+      country_code: 'safe-country-code',
+      codec: 'safe-codec',
+      },
+    );
+
+    const diagnostic = entries.join('\n');
+    expect(diagnostic).not.toContain(hardwareId);
+    expect(diagnostic).not.toContain(deviceIdentifier);
+    expect(diagnostic).not.toContain(email);
+    expect(diagnostic).not.toContain(phone);
+    expect(diagnostic).toContain('safe-query-value');
+    expect(diagnostic).toContain('safe-request-value');
+    expect(diagnostic).toContain('safe-response-value');
+    expect(diagnostic).toContain('safe-status-code');
+    expect(diagnostic).toContain('safe-error-code');
+    expect(diagnostic).toContain('safe-country-code');
+    expect(diagnostic).toContain('safe-codec');
+  });
+
+  it('fully redacts stable identity values from HTTP error URLs and messages', async () => {
+    const hardwareId = 'hardwareErrorUrlSecret_7Qm4Xs';
+    const email = 'privateErrorUrlSecret_1Nv8Jk@example.com';
+    const entries: string[] = [];
+    const record = (message: string, ...parameters: unknown[]): void => {
+      entries.push([message, ...parameters.map(String)].join(' '));
+    };
+    const http = new BlinkHttp(mockAuth(), {
+      ...mockConfig,
+      debugAuth: true,
+      logger: { debug: record, info: record, warn: record, error: record },
+    });
+    (fetch as jest.Mock).mockResolvedValue(response(400));
+
+    let caught: unknown;
+    try {
+      await http.get(
+        `v1/fail?hardware_id=${encodeURIComponent(hardwareId)}&email=${encodeURIComponent(email)}&safe=safe-error-query`,
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BlinkHttpError);
+    const error = caught as BlinkHttpError;
+    const diagnostic = [error.message, error.url, error.toLogString(), entries.join('\n')].join('\n');
+    expect(diagnostic).not.toContain(hardwareId);
+    expect(diagnostic).not.toContain(email);
+    expect(diagnostic).toContain('safe-error-query');
+  });
+
   it('refreshes tokens and retries on 401', async () => {
     const auth = mockAuth();
     const http = new BlinkHttp(auth, mockConfig);

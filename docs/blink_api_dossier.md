@@ -1345,6 +1345,57 @@ String string = Locale.getDefault().toString();
 return new ESCoreConfig(metaData, platform, string);
 ```
 
+**E93 — OAuth persistence does not supply an account tier or region**
+
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/auth/AuthorizationRepository$exchangeAuthorizationToken$2.java`
+
+```java
+TokenResponse tokenResponse = (TokenResponse) obj;
+String accessToken = tokenResponse.accessToken;
+String refreshToken = tokenResponse.refreshToken;
+credentialRepository.setTokens(accessToken, refreshToken, ...);
+```
+
+- File: `logs/blink-apk/57.1-29715642/decompiled/jadx/sources/com/immediasemi/blink/common/account/auth/RefreshTokensResponse.java`
+
+```java
+private final String accessToken;
+private final String refreshToken;
+private final Long expiresIn;
+private final String scope;
+private final String tokenType;
+```
+
+The authorization repository persists only AppAuth's access and refresh tokens,
+and the APK refresh DTO has no account tier or region property. Region routing
+therefore cannot be derived from either token response; it comes from
+`TierRepository` state and the later `tier_info` response.
+
+**E94 — Native Android AppAuth hosted-page proof (bounded live result)**
+
+A git-ignored, secret-blind Java harness reproduced Android 57.1's AppAuth
+authorization request, exact App-Link, manufacturer-derived client choice, and
+same-device token callback handling. On an Android 36 emulator with the official
+Blink 57.1 split APK installed, the exact native request reached the production
+Blink hosted identity document. Five authorize variations also reached hosted
+sign-in. Deliberately invalid token forms reached the production token parser
+and returned the bounded `invalid_grant` category. No owner credential, MFA,
+callback, state, verifier, code, or token value was recorded. This proves
+native hosted-page launch and endpoint construction, not a fresh owner-account
+code exchange.
+
+**E95 — EU Android refresh and production-default gateway proof (bounded live result)**
+
+Using only the authorized EU/Ireland account, a still-valid legacy refresh
+session was accepted by the exact Android refresh form and rotated. The
+resulting Android-profile state refreshed again through the installed plugin,
+reached user information and homescreen/device discovery, and survived two
+clean Homebridge restarts with owner-only state and no credentials in config.
+A read-only `tier_info` probe using that Android state returned HTTP 406 from
+`prod` and `a001`, and HTTP 200 plus the same valid authoritative tier from
+`prde` and `prsg`. No account identifier, token, email, device name, serial, or
+network address was retained in this dossier.
+
 ## Blink Android 57.1 Hosted OAuth Trace
 
 This trace is the authentication and dynamic-routing contract implemented by the
@@ -1359,6 +1410,7 @@ path, AppAuth/Retrofit fields, and request-time tier/environment substitutions.
 | HTTPS callback | `AppLinkUrls.SIGN_IN_CALLBACK` | strict callback allow-list |
 | AppAuth code form | `TokenRequest` + `NoClientAuthentication` | exact five fields, no extras |
 | Refresh form | `OauthApi.postRefreshTokens` | Android client + scope |
+| OAuth-persisted values | `AuthorizationRepository` / `RefreshTokensResponse` | tokens/expiry/scope/type; no account tier or region |
 | Dynamic REST host | `BaseUrls.REST` / `SHARED_REST` | `rest-{tier}` / `rest-{shared_tier}` |
 | Explicit production tiers | `ProductionTier` | prod, prde, prsg, a001, cemp, srf1 |
 | Service-returned tier acceptance | `TierRepository` regex `[a-zA-Z\\d]{4}` | numbered e-tier routing without UI guess |
@@ -1391,10 +1443,13 @@ path, AppAuth/Retrofit fields, and request-time tier/environment substitutions.
    `client_id`, and `scope`. Native Android uses the same `android`/`amazon`
    manufacturer gate; Homebridge's non-Amazon profile uses `client_id=android`
    and `scope=client` exactly.
-5. **Tier bootstrap:** after token persistence, the repository starts from
-   production REST, calls `v1/users/tier_info`, validates the returned tier with
-   the APK's four-alphanumeric rule, and rebuilds REST/shared REST bases before
-   account information and homescreen requests.
+5. **Tier bootstrap:** the token response contains no account region or tier.
+   Native Android calls `v1/users/tier_info` through its already-persisted
+   default tier. Homebridge has no Android registration-region preference, so
+   it tries the ordinary APK production defaults `prod`, `prde`, `prsg`, and
+   `a001` in that order, advancing only after HTTP 406. It validates the first
+   successful response with the APK's four-alphanumeric rule and rebuilds
+   REST/shared REST bases before account information and homescreen requests.
 6. **Final REST target:** `BaseUrls.REST` and `SHARED_REST` contain `{tier}` and
    `{shared_tier}` tokens. Android's network interceptors replace them at request
    time. The repository constructs the equivalent
@@ -1407,23 +1462,30 @@ path, AppAuth/Retrofit fields, and request-time tier/environment substitutions.
 The owner's EU/Ireland account is the only live account used for the protocol
 proof. It returned `prde`; hosted authorization, exact code exchange, refresh,
 user information, and homescreen requests succeeded without retaining secret
-values. This earlier proof is not live acceptance of the packaged `0.9.0`
-Homebridge path.
+values. A later native AppAuth harness reproduced the exact Android request and
+reached Blink's hosted sign-in page. These prove the hosted native surface, not
+a fresh packaged `0.9.1` Homebridge code exchange.
 
 Two later packaged-flow callbacks reached the production token endpoint and
-returned `BHO-HTTP-INVALID-GRANT`. A 2026-07-17 matched-egress experiment then
-validated a loopback-only relay, reverse tunnel, Pi proxy environment, endpoint
-reachability, and complete rollback. Its single UI transaction ended before the
-token request: no token exchange occurred and no auth file was created. It was
-operationally inconclusive, so the egress-binding hypothesis is still open.
+returned `BHO-HTTP-INVALID-GRANT`. Separately, Blink accepted the authorized
+account's valid legacy refresh session with the exact Android cross-client form.
+The resulting Android-profile state rotated again through the installed plugin,
+reached user information and homescreen/device discovery, and survived two
+clean restarts. That proves the Android refresh/runtime path, not a new hosted
+authorization-code exchange.
 
-`prod`, `prsg`, `a001`, `cemp`, and `srf1` are explicit APK targets but have not
-been account-tested here. Numbered four-character e-tiers are accepted because
+A live Android-token gateway probe returned HTTP 406 from `prod` and `a001`, and
+HTTP 200 with a valid authoritative tier from `prde` and `prsg`. This is account
+reachability evidence for the EU token only; it is not live validation of US,
+AP, or AU accounts. `cemp` and `srf1` remain explicit APK targets but are
+regression/refurbishment targets and are not ordinary account bootstrap
+candidates. Numbered four-character e-tiers are accepted because
 `TierRepository` validates service-returned values with `[a-zA-Z\\d]{4}`; they
 are not explicit `ProductionTier` constants. Repository parameterized tests
 cover these hosts. Non-EU accounts are not live-validated. The end-user hosted
 sign-in journey and the same production OAuth host apply to every production
-tier; only post-token REST/shared-REST routing changes.
+tier; only post-token REST/shared-REST routing changes. Fresh packaged
+authorization-code exchange acceptance remains open.
 
 ## Candidate Domains & Hosts (evidence-backed)
 
@@ -1444,8 +1506,9 @@ tier; only post-token REST/shared-REST routing changes.
 - `{tier}` is replaced with `TierRepository.getTier()`. `{shared_tier}` is replaced by the shared Retrofit interceptor using `getSharedTier()`. (E3, E4)
 - `{env}` is replaced by the base-client interceptor using `TierRepository.getEnvSubdomain()`; production yields `""`, staging `qa.`, and development `dev.`. This produces `api.oauth.blink.com`, `api.qa.oauth.blink.com`, and `api.dev.oauth.blink.com`, not the older `api.pdoauth`/`api.stgoauth` forms. (E4, E8, E9; Blink 57.1 refresh)
 - EU, US, AP, and AU are production account tiers, not OAuth environments; all
-  therefore use the same production OAuth host before `tier_info` selects a
-  REST destination.
+  therefore use the same production OAuth host. OAuth responses have no account
+  tier or region; a current/default REST tier is needed before `tier_info`
+  returns the authoritative destination. (E93)
 - The same `{env}` substitution applies to API Gateway: production `https://api.blink.com/blink/`, staging `https://api.qa.blink.com/blink/`, development `https://api.dev.blink.com/blink/`. (Blink 57.1 refresh)
 - Blink host detection is `immedia-semi.com` or any `*.immedia-semi.com`. (E3)
 - `TierRepository.getTier()` reads `TIER` from account prefs, falls back to `DEFAULT_TIER` (persistent client prefs), and if null uses `"prod"`. (E76, E77, E73)
@@ -1464,6 +1527,11 @@ tier; only post-token REST/shared-REST routing changes.
   therefore already rewritten to the discovered regional host;
   `AccountRepository.setAccount()` later re-persists `Account.tier`. (E82,
   E83, E84, E86, E87)
+- Homebridge hosted completion lacks Android's persistent registration-region
+  selection. It probes only `prod`, `prde`, `prsg`, and `a001`, advances only on
+  HTTP 406, and stops at the first valid service tier. It never probes `cemp` or
+  `srf1` for an ordinary account. EU live evidence and non-EU mocked coverage are
+  recorded in E95.
 - Shared account persistence only writes `shared_account_id`; no shared tier persistence was observed in the decompiled shared-account path. (E85)
 - Production tier codes map to AWS regions: `prod`→us-east-1, `prde`→eu-central-1, `prsg`→ap-southeast-1, `a001`→ap-southeast-2, `cemp`→us-east-1, `srf1`→us-east-1. Regression tier `sqa1` is US-East-1 + STAGING env. (E74, E75, E9)
 
@@ -1500,7 +1568,7 @@ Generated apktool smali independently confirms each token interceptor calls Kotl
   Homebridge implements only the non-Amazon Android hosted profile.
 - `OauthApi.postLogin` still exposes a direct credential method inside the APK
   (E10), but that method is an alternate/legacy surface, not evidence for the
-  plugin's current UI and not part of the `0.9.0` operator workflow.
+  plugin's current UI and not part of the `0.9.1` operator workflow.
 - The plugin runtime separately retains a hidden, deprecated compatibility
   fallback for paired manual `username` and `password` configuration. It can
   execute legacy iOS-profile credential sign-in when compatible state is
@@ -1512,6 +1580,10 @@ Generated apktool smali independently confirms each token interceptor calls Kotl
   `api.oauth.blink.com` token host.
 - Hosted refresh uses `OauthApi.postRefreshTokens` with refresh token, refresh
   grant type, Android client ID, and `client` scope. (E10, E16)
+- The authorized EU account also accepted a legacy refresh token with that
+  Android form and produced working Android-profile state. This bounded
+  cross-client migration result is not treated as a Blink guarantee and is not
+  applied automatically to every legacy installation. (E95)
 - The live Ireland proof showed hosted REST requests succeeding with bearer
   authentication alone. The APK's general authenticated client can also add
   `TOKEN-AUTH` for legacy/app sessions (E14); the repository preserves that only

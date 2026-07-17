@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 import { BlinkApi } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
+import { BlinkHttpError } from '../../src/blink-api/http';
 import { readOwnerOnlyJsonFile } from '../../src/blink-api/secure-json-file';
 import {
   BlinkAuthState,
@@ -594,6 +595,164 @@ describe('BlinkApi', () => {
       email: 'hosted@example.com',
     }));
   });
+
+  it.each([
+    ['prod', 'e001', []],
+    ['prde', 'e002', ['prod']],
+    ['prsg', 'e003', ['prod', 'prde']],
+    ['a001', 'e004', ['prod', 'prde', 'prsg']],
+  ] as const)(
+    'discovers an account tier through the %s production-region bootstrap',
+    async (acceptedBootstrap, accountTier, rejectedBootstraps) => {
+      const { api, internals, events } = await createSeededHostedApi();
+      internals.http = createRoutedHttp(
+        'https://rest-prod.immedia-semi.com/api/',
+        events,
+        async (path) => {
+          const requestUrl = events.at(-1) ?? '';
+          if (path === 'v1/users/tier_info') {
+            const expectedUrl = `https://rest-${acceptedBootstrap}.immedia-semi.com/api/${path}`;
+            if (requestUrl !== expectedUrl) {
+              throw new BlinkHttpError(
+                'Blink tier bootstrap rejected.',
+                406,
+                '',
+                requestUrl,
+                'GET',
+              );
+            }
+            return { account_id: 42, tier: accountTier };
+          }
+          return {
+            account_id: 42,
+            client_id: 99,
+            region: 'test-region',
+            tier: accountTier,
+          };
+        },
+      );
+      internals.sharedHttp = createRoutedHttp(
+        'https://rest-prod.immedia-semi.com/api/',
+        events,
+        async () => ({
+          account: { account_id: 42 },
+          networks: [],
+          cameras: [],
+          doorbells: [],
+          owls: [],
+          sync_modules: [],
+        }),
+      );
+      internals.sharedRootHttp = createRoutedHttp(
+        'https://rest-prod.immedia-semi.com/',
+        events,
+        async () => ({}),
+      );
+
+      const result = await api.completeHostedLogin(
+        'opaque-flow',
+        'https://callback.invalid/redacted',
+      );
+
+      expect(events).toEqual([
+        ...rejectedBootstraps.map(
+          (tier) => `https://rest-${tier}.immedia-semi.com/api/v1/users/tier_info`,
+        ),
+        `https://rest-${acceptedBootstrap}.immedia-semi.com/api/v1/users/tier_info`,
+        `https://rest-${accountTier}.immedia-semi.com/api/v2/users/info`,
+        `https://rest-${accountTier}.immedia-semi.com/api/v4/accounts/42/homescreen`,
+        'persist',
+      ]);
+      expect(result).toEqual(expect.objectContaining({
+        authenticated: true,
+        verified: true,
+        tier: accountTier,
+      }));
+    },
+  );
+
+  it.each([401, 429, 500])(
+    'does not try another production region after a non-406 tier bootstrap response (%i)',
+    async (status) => {
+      const { api, internals, events } = await createSeededHostedApi();
+      internals.http = createRoutedHttp(
+        'https://rest-prod.immedia-semi.com/api/',
+        events,
+        async (path) => {
+          if (path === 'v1/users/tier_info') {
+            throw new BlinkHttpError(
+              'Blink tier bootstrap stopped.',
+              status,
+              '',
+              events.at(-1) ?? '',
+              'GET',
+            );
+          }
+          return { account_id: 42, client_id: 99 };
+        },
+      );
+      internals.sharedHttp = createRoutedHttp(
+        'https://rest-prod.immedia-semi.com/api/',
+        events,
+        async () => ({
+          account: { account_id: 42 },
+          networks: [],
+          cameras: [],
+          doorbells: [],
+          owls: [],
+          sync_modules: [],
+        }),
+      );
+      internals.sharedRootHttp = createRoutedHttp(
+        'https://rest-prod.immedia-semi.com/',
+        events,
+        async () => ({}),
+      );
+
+      await api.completeHostedLogin('opaque-flow', 'https://callback.invalid/redacted');
+
+      expect(events.filter((url) => url.endsWith('/v1/users/tier_info'))).toEqual([
+        'https://rest-prod.immedia-semi.com/api/v1/users/tier_info',
+      ]);
+    },
+  );
+
+  it.each(['sqa1', 'cemp', 'srf1', 'e005'])(
+    'keeps an explicit special bootstrap on its single %s tier',
+    async (explicitTier) => {
+    const { api, internals, events } = await createSeededHostedApi({ tier: explicitTier });
+    internals.http = createRoutedHttp(
+      `https://rest-${explicitTier}.immedia-semi.com/api/`,
+      events,
+      async (path) => path === 'v1/users/tier_info'
+        ? { account_id: 42, tier: explicitTier }
+        : { account_id: 42, client_id: 99, tier: explicitTier },
+    );
+    internals.sharedHttp = createRoutedHttp(
+      `https://rest-${explicitTier}.immedia-semi.com/api/`,
+      events,
+      async () => ({
+        account: { account_id: 42 },
+        networks: [],
+        cameras: [],
+        doorbells: [],
+        owls: [],
+        sync_modules: [],
+      }),
+    );
+    internals.sharedRootHttp = createRoutedHttp(
+      `https://rest-${explicitTier}.immedia-semi.com/`,
+      events,
+      async () => ({}),
+    );
+
+    await api.completeHostedLogin('opaque-flow', 'https://callback.invalid/redacted');
+
+    expect(events.filter((url) => url.endsWith('/v1/users/tier_info'))).toEqual([
+      `https://rest-${explicitTier}.immedia-semi.com/api/v1/users/tier_info`,
+    ]);
+    },
+  );
 
   it('preserves an explicitly different shared tier while discovering the account tier', async () => {
     const { api, internals, events } = await createSeededHostedApi({ sharedTier: 'e005' });

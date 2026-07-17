@@ -31,23 +31,30 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 
 ## Redaction Rules (Required)
 
-Always redact or partially mask sensitive values in logs:
+Always fully redact sensitive values in logs:
 
 - `Authorization` (Bearer tokens)
 - `TOKEN-AUTH`
 - `refresh_token` / `access_token`
 - `password`
 - `hardware_id`
+- `device_identifier`
 - `2fa-code`
-- user email / phone identifiers
+- username, email, and phone identifiers
 
-Recommended redaction pattern: show first 3–4 chars and last 3–4 chars, otherwise `***`.
+Use the literal `<redacted>` marker. Stable identity values must not be partially
+masked because even a prefix/suffix can correlate a Homebridge client or user
+across diagnostic bundles.
 
 ## Error Logging Requirements
 
-- HTTP errors must log method + URL, status, headers, and response body when safe.
-- Auth errors must include update/2FA guidance when present.
-- Do not log raw tokens or passwords in error contexts.
+- HTTP errors retain only method, URL, and numeric status. Untrusted status
+  text, response-header names/values, and response bodies are discarded rather
+  than copied into exception diagnostics.
+- Auth errors retain numeric status, allowlisted error categories, and boolean
+  update/2FA guidance. They discard untrusted headers and response bodies.
+- Do not log raw tokens, credentials, verification values, or stable identity
+  fields in error contexts.
 
 ## Streaming Diagnostics
 
@@ -62,6 +69,10 @@ Recommended redaction pattern: show first 3–4 chars and last 3–4 chars, othe
 
 ## Implementation Pointers
 
-- HTTP redaction: `src/blink-api/http.ts` (`redactHeaders`).
-- Auth redaction: `src/blink-api/auth.ts` (`redact`, `formatHeadersForLog`).
+- Canonical sensitive-key classification:
+  `src/blink-api/redaction.ts` (`isSensitiveDiagnosticKey`).
+- HTTP redaction: `src/blink-api/http.ts` (`redactHeaders`, `redactText`,
+  `redactBody`).
+- Auth redaction: `src/blink-api/auth.ts` (`redactFormBody`, `redactHeaders`,
+  `redactUrlForLogging`).
 - Error formatting: `BlinkHttpError.toLogString`, `BlinkAuthenticationError.toLogString`.

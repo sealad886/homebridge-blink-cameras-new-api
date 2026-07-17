@@ -1,11 +1,11 @@
 # Blink Hosted Authentication Integration Checklist
 
-Use this checklist to validate the `0.9.0` hosted-authentication release against
-the implementation, Blink Android 57.1 evidence, and the authorized EU/Ireland
-account. The earlier protocol proof is not acceptance of this packaged build.
-Two packaged exchanges returned `BHO-HTTP-INVALID-GRANT`; the later
-matched-egress run ended before token exchange and was operationally
-inconclusive. The remaining live acceptance boxes therefore stay unchecked.
+Use this checklist to validate the `0.9.1` hosted-authentication release against
+the implementation, Blink Android 57.1 evidence, the native AppAuth harness,
+and the authorized EU/Ireland account. Native hosted-page launch and the
+deployed Android refresh/restart path are proven. Two fresh packaged exchanges
+returned `BHO-HTTP-INVALID-GRANT`, so only the fresh packaged code-exchange box
+remains open.
 
 ## Automated release gates
 
@@ -18,67 +18,68 @@ inconclusive. The remaining live acceptance boxes therefore stay unchecked.
   editor directory.
 - [x] Secret scan contains only protocol field names and synthetic fixtures;
   every match is classified and no live value appears.
-- [x] Package, lockfile, and changelog consistently report `0.9.0`.
+- [x] Package, lockfile, and changelog consistently report `0.9.1`.
 
 ## Android 57.1 protocol contract
 
-- [ ] `/auth/start` creates a 15-minute Pi-owned transaction with a 64-byte
+- [x] `/auth/start` creates a 15-minute Pi-owned transaction with a 64-byte
   verifier, S256 challenge, independent 32-byte state and flow ID, stable
   hardware ID, `client_id=android`, scope `client`, and prompt `login`.
-- [ ] Document the APK manufacturer gate separately from account region:
+- [x] Document the APK manufacturer gate separately from account region:
   `Build.MANUFACTURER == "Amazon"` selects `client_id=amazon`; otherwise the APK
   selects `client_id=android`. Homebridge deliberately uses the non-Amazon
   Android branch.
-- [ ] EU, US, AP, and AU production tiers use the same production OAuth host:
+- [x] EU, US, AP, and AU production tiers use the same production OAuth host:
   `https://api.oauth.blink.com/oauth/v2/authorize` and
   `https://api.oauth.blink.com/oauth/token`.
-- [ ] Authorize metadata matches `UnifiedSignInUtils.signInIntent`; redirect is
+- [x] Authorize metadata matches `UnifiedSignInUtils.signInIntent`; redirect is
   exactly `https://applinks.blink.com/signin/callback`.
-- [ ] `/auth/complete` enforces the 2,048-byte limit, exact HTTPS origin/path,
+- [x] `/auth/complete` enforces the 2,048-byte limit, exact HTTPS origin/path,
   duplicate-parameter rules, flow/TTL checks, and constant-time state match.
-- [ ] Structurally malformed/partial input retains pending state; security
+- [x] Structurally malformed/partial input retains pending state; security
   mismatch, expiry, OAuth error, valid callback, replacement, logout, and unlock
   consume it before any exchange retry is possible.
-- [ ] Code exchange posts exactly `grant_type`, `redirect_uri`, `code`,
+- [x] Code exchange posts exactly `grant_type`, `redirect_uri`, `code`,
   `code_verifier`, and `client_id`; it sends no scope, secret, cookie, app/device
   metadata, Blink REST header, or browser user agent.
-- [ ] Hosted refresh posts exactly `refresh_token`, `grant_type=refresh_token`,
+- [x] Hosted refresh posts exactly `refresh_token`, `grant_type=refresh_token`,
   `client_id=android`, and `scope=client`.
-- [ ] Hosted REST requests use bearer authentication without requiring
+- [x] Hosted REST requests use bearer authentication without requiring
   `TOKEN-AUTH`.
 
 ## Remote Homebridge and Brave flow
 
-- [ ] Open the remote Homebridge Config UI in Brave and enter this plugin's
+- [x] Open the remote Homebridge Config UI in Brave and enter this plugin's
   settings; do not use a local Homebridge process as the acceptance target.
-- [ ] **Sign in securely with Blink** opens a no-opener Blink-hosted tab, or the
+- [x] **Sign in securely with Blink** opens a no-opener Blink-hosted tab, or the
   safe **Open Blink Sign-In** fallback link if popup creation is blocked.
-- [ ] Account credentials and hosted MFA are entered only on Blink's page.
-- [ ] Copy the full final App-Link from Brave's address bar and choose **Paste
+- [x] Account credentials and hosted MFA are entered only on Blink's page.
+- [x] Copy the full final App-Link from Brave's address bar and choose **Paste
   Blink Result and Finish**.
-- [ ] When clipboard read is unavailable, paste the same full address and choose
+- [x] When clipboard read is unavailable, paste the same full address and choose
   **Finish with Pasted Address**.
-- [ ] Callback-bearing JavaScript values and the manual field clear when the
+- [x] Callback-bearing JavaScript values and the manual field clear when the
   completion request starts; no callback, code, state, or token enters config,
   logs, UI events, toasts, or browser storage.
-- [ ] Success saves only token-oriented config (`deviceId`, discovered `tier`,
+- [x] Success saves only token-oriented config (`deviceId`, discovered `tier`,
   forced `persistAuth=true`, `authLocked=true`) and removes legacy
   credential/code fields; an ephemeral hosted-UI session is not supported.
 
 ## Owner-only persistence and recovery
 
-- [ ] `.blink-auth-pending.json` is an atomic regular file owned by the
+- [x] `.blink-auth-pending.json` is an atomic regular file owned by the
   Homebridge service user with mode `0600` and survives a custom-UI process or
   full Homebridge restart only within the 15-minute TTL.
-- [ ] A valid callback consumes the pending file before token exchange; an
+- [x] A valid callback consumes the pending file before token exchange; an
   exchange failure requires a new hosted sign-in. Success durably writes
   `.blink-auth.json` with mode `0600` before reporting completion.
-- [ ] Final state records `oauthClientId=android`, expiry, hardware ID, and
+- [x] The deployed final state records `oauthClientId=android`, expiry, hardware
+  ID, and
   discovered account/client/region/tier metadata without exposing token values.
-- [ ] **Unlock & Re-authenticate** clears current, legacy, and pending state;
+- [x] **Unlock & Re-authenticate** clears current, legacy, and pending state;
   the server `/logout` route has the same local cleanup contract, and neither
   action claims Blink-side token revocation.
-- [ ] A connection or verification failure after token issuance retains durable
+- [x] A connection or verification failure after token issuance retains durable
   authentication and exposes bounded retry/client/account guidance.
 
 ## EU/Ireland live evidence and remaining acceptance
@@ -89,62 +90,68 @@ inconclusive. The remaining live acceptance boxes therefore stay unchecked.
 - [x] Two fresh packaged callbacks were submitted once and promptly; both
   reached token exchange and returned `BHO-HTTP-INVALID-GRANT` without writing
   final auth state.
-- [x] The 2026-07-17 matched-egress preflight proved loopback-only relay and
-  tunnel routing, Pi service proxying, endpoint reachability, and full rollback.
-  The UI transaction ended before the request, so no token exchange occurred;
-  this did not test the egress hypothesis.
+- [x] A secret-blind native AppAuth harness reproduced the exact Android 57.1
+  request, reached Blink's hosted identity page, and classified user
+  cancellation without logging callback, state, verifier, code, or token data.
+- [x] Blink accepted a still-valid legacy EU refresh session with the exact
+  Android cross-client refresh form; the installed plugin then rotated that
+  Android-profile state again.
+- [x] A live Android-token bootstrap probe returned HTTP 406 for `prod` and
+  `a001`, and HTTP 200 with a valid authoritative tier for `prde` and `prsg`.
 - [ ] Complete a fresh packaged Blink-hosted sign-in with only the owner's
   authorized EU/Ireland account and confirm the service returns tier `prde`.
-- [ ] Confirm post-token user info, client/account verification when requested,
+- [x] Confirm post-token user info, client/account verification when requested,
   homescreen, and camera/device discovery without printing identifiers or
   secrets.
-- [ ] Restart Homebridge and confirm the same account/device inventory loads
+- [x] Restart Homebridge twice and confirm the same account/device inventory loads
   without credentials in config.
-- [ ] Exercise an Android refresh and confirm the exact Android form plus
+- [x] Exercise an Android refresh and confirm the exact Android form plus
   successful homescreen/device access after refresh.
 
 ## Restart and legacy refresh compatibility
 
-- [ ] Hosted state restarts with `oauthClientId=android` and Android scope.
-- [ ] Profile-less state defaults to the legacy iOS refresh form rather than
+- [x] Hosted state restarts with `oauthClientId=android` and Android scope.
+- [x] Profile-less state defaults to the legacy iOS refresh form rather than
   being relabeled Android.
-- [ ] Explicit `ios` identities remain on the legacy iOS contract
+- [x] Explicit `ios` identities remain on the legacy iOS contract
   (`client_id=ios`, no refresh scope, legacy headers when applicable).
-- [ ] Do not claim native Fire OS compatibility: although persisted-state types
+- [x] Do not claim native Fire OS compatibility: although persisted-state types
   accept `amazon`, the hosted UI never creates it and the current resolver
   treats non-`android` state as legacy compatibility input.
-- [ ] A failed hosted refresh requests fresh hosted sign-in and does not fall
+- [x] A failed hosted refresh requests fresh hosted sign-in and does not fall
   back to credential submission.
 
 ## Rollback safety
 
-- [ ] Before deployment, back up existing Pi auth state without reading or
-  printing it; preserve owner and mode metadata.
-- [ ] Record the currently installed plugin version and package identity.
-- [x] The matched-egress run removed its temporary systemd override, reverse
-  tunnel, local relay, remote backup directory, and both loopback listeners;
-  normal Homebridge health was rechecked.
+- [x] Before deployment, back up existing Pi auth state without printing it;
+  preserve owner and mode metadata.
+- [x] Record the currently installed plugin version and package identity.
+- [x] Confirm no pending, legacy, upgrade, rollback, recovery, proxy, relay, or
+  tunnel artifact remains and recheck normal Homebridge health.
 - [ ] If a future package deployment changes installed plugin/auth state and
   acceptance fails, restore the recorded package and untouched auth backup,
   restart Homebridge, and confirm the prior device inventory returns.
-- [ ] If acceptance succeeds, retain the new hosted token state and remove only
+- [x] Retain the working Android-profile token state and remove only
   disposable package/backup artifacts.
 
 ## Best-effort non-EU coverage
 
-- [ ] Parameterized URL tests cover APK production tiers `prod`, `prde`,
+- [x] Parameterized URL tests cover APK production tiers `prod`, `prde`,
   `prsg`, `a001`, `cemp`, and `srf1`.
-- [ ] Tests accept safe service-returned four-alphanumeric tiers, including
+- [x] Tests accept safe service-returned four-alphanumeric tiers, including
   numbered e-tier examples, and reject unsafe tier text.
-- [ ] Each tier authorizes through the same production hosted flow; only the
+- [x] Explicit QA, regression, refurbishment, and safe numbered/custom tiers
+  remain single-target bootstraps; they are never added to the ordinary
+  production fallback.
+- [x] Each tier authorizes through the same production hosted flow; only the
   post-token `rest-{tier}` and `rest-{shared_tier}` hosts change.
-- [ ] Documentation states that non-EU accounts are not live-validated; every
+- [x] Documentation states that non-EU accounts are not live-validated; every
   target other than the observed Ireland `prde` account is APK-evidenced and
   mocked/parameterized, not live-account tested.
 
 ## Residual risk
 
-- [ ] Release notes state that Blink OAuth, verification, tier, and REST APIs
+- [x] Release notes state that Blink OAuth, verification, tier, and REST APIs
   are private/undocumented and may change independently of this plugin.
 
 ## Evidence references

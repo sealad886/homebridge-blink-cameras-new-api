@@ -205,18 +205,35 @@ service or inbound port is required.
 
 ### Current Hosted-OAuth Validation Boundary
 
-An earlier EU/Ireland protocol proof completed Blink-hosted authorization, code
-exchange, refresh, `prde` discovery, and homescreen access. Two later end-to-end
-attempts through the packaged Homebridge UI reached the callback but Blink rejected
-the code exchange as `invalid_grant`. A 2026-07-17 matched-egress experiment then
-verified the relay, tunnel, Pi service routing, and rollback, but the browser/UI
-transaction ended before the exchange request: no token exchange occurred and no
-auth state was written. That run was operationally inconclusive, so it neither
-confirms nor rules out an authorization-versus-exchange egress constraint.
+Blink's own hosted UI is the native sign-in surface. A secret-blind Android
+AppAuth harness reproduced the exact Blink Android 57.1 authorization request
+and reached the hosted identity page. Five authorize variations reached the
+same hosted flow, while deliberately invalid token requests reached the token
+parser and were rejected. That proves native hosted-page launch and request
+construction; it does not replace a fresh authorized code exchange.
 
-Consequently, Blink's hosted UI is the correct and implemented sign-in surface,
-but packaged `0.9.0` end-to-end acceptance remains open. Only the EU/Ireland owner
-account is authorized for live testing; non-EU accounts are not live-validated.
+The remote Raspberry Pi now runs a valid Android-profile session for the
+authorized EU/Ireland account. Blink accepted a still-valid legacy refresh
+session with the exact Android refresh form, rotated it again through the
+installed plugin, returned user information and homescreen/device discovery,
+and survived two clean Homebridge restarts. The persisted state is owner-only,
+the plugin configuration contains no credential or verification-code fields,
+and no temporary relay, proxy, or pending-auth artifact remains.
+
+With that Android state, `tier_info` returned HTTP 406 from `prod` and `a001`,
+and HTTP 200 plus a valid authoritative tier from `prde` and `prsg`. Release
+`0.9.1` therefore advances through only `prod`, `prde`, `prsg`, and `a001` on
+HTTP 406; it stops at the first success and never probes the APK's special
+`cemp` regression or `srf1` refurbishment targets for an ordinary account.
+An explicitly configured safe tier outside that ordinary set—such as `sqa1`,
+`cemp`, `srf1`, or a numbered e-tier—remains a single-target bootstrap and does
+not enter the production-region fallback.
+
+This cross-client refresh proves that the Android token profile works for the
+owner's existing EU session, but it is not a fresh packaged hosted
+authorization-code exchange. Two earlier fresh packaged callbacks reached the
+production token endpoint and returned `invalid_grant`; that final fresh-login
+acceptance case remains open. Non-EU accounts are not live-validated.
 
 ## Re-Authentication / Token Reset
 
@@ -359,8 +376,11 @@ This plugin's API implementation is based on reverse engineering the official Bl
   state without `oauthClientId` retains the legacy iOS refresh contract
 - Hardware ID required for device identification
 - Client verification and account verification flows for new device approval
-- `v1/users/tier_info` selects `rest-{tier}.immedia-semi.com` after token issuance;
-  the hosted user journey does not require a region choice
+- OAuth token responses provide no account region or tier. For hosted
+  completion, HTTP 406 advances through the APK's ordinary production defaults
+  `prod`, `prde`, `prsg`, and `a001`; the first successful `v1/users/tier_info`
+  response selects the authoritative `rest-{tier}.immedia-semi.com` target.
+  The hosted user journey does not require a region choice.
 
 ### Endpoints
 
@@ -417,5 +437,6 @@ MIT - see [LICENSE](LICENSE) for details.
 
 - API documentation derived from reverse engineering the Blink Android app
 - Homebridge platform plugin architecture
-- EU/Ireland `prde` protocol evidence; non-EU accounts are not live-validated
-  and remain APK-derived plus mocked/parameterized pending authorized validation
+- EU/Ireland hosted, Android-refresh, REST-bootstrap, and restart evidence;
+  non-EU accounts are not live-validated and remain APK-derived plus
+  mocked/parameterized pending authorized validation

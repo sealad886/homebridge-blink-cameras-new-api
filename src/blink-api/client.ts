@@ -8,8 +8,9 @@
  */
 
 import { BlinkAuth } from './auth';
-import { BlinkHttp } from './http';
+import { BlinkHttp, BlinkHttpError } from './http';
 import {
+  BLINK_PRODUCTION_BOOTSTRAP_TIERS,
   getRestBaseUrl,
   getSharedRestBaseUrl,
   getSharedRestRootUrl,
@@ -173,7 +174,7 @@ export class BlinkApi {
     }
     this.accountId = this.auth.getAccountId();
     this.clientId = this.auth.getClientId();
-    this.logDebug(`login → authenticated (accountId=${this.accountId}, clientId=${this.clientId})`);
+    this.logDebug('login → authenticated; account/client metadata loaded');
     await this.syncAccountInfoAndVerify();
   }
 
@@ -227,7 +228,7 @@ export class BlinkApi {
     let accountInfo: BlinkAccountInfo | null = null;
     try {
       accountInfo = await this.getAccountInfo();
-      this.logDebug(`syncAccountInfoAndVerify → account_id=${accountInfo?.account_id}, client_id=${accountInfo?.client_id}`);
+      this.logDebug('syncAccountInfoAndVerify → account info received');
     } catch (error) {
       if (options.strictAccountInfo) {
         throw error;
@@ -369,30 +370,53 @@ export class BlinkApi {
 
   private async syncTierInfo(useProductionBootstrap: boolean): Promise<BlinkTierInfo | null> {
     const log = this.config.logger;
-    if (useProductionBootstrap) {
-      const bootstrapTier = this.config.tier === 'sqa1' ? 'sqa1' : 'prod';
-      this.applyTier(bootstrapTier);
-    }
-    try {
-      const tierInfo = await this.getTierInfo();
-      this.logDebug('syncTierInfo → received tier info');
-      if (!tierInfo?.tier) {
-        return tierInfo ?? null;
+    const configuredTier = normalizeBlinkTier(this.config.tier) ?? 'prod';
+    const usesOrdinaryProductionTier = BLINK_PRODUCTION_BOOTSTRAP_TIERS.some(
+      (tier) => tier === configuredTier,
+    );
+    const bootstrapTiers = useProductionBootstrap
+      ? usesOrdinaryProductionTier
+        ? BLINK_PRODUCTION_BOOTSTRAP_TIERS
+        : [configuredTier]
+      : [configuredTier];
+
+    for (const [index, bootstrapTier] of bootstrapTiers.entries()) {
+      if (useProductionBootstrap) {
+        this.applyTier(bootstrapTier);
       }
-      const normalizedTier = normalizeBlinkTier(tierInfo.tier);
-      if (!normalizedTier) {
-        return tierInfo ?? null;
+      try {
+        const tierInfo = await this.getTierInfo();
+        this.logDebug('syncTierInfo → received tier info');
+        if (!tierInfo?.tier) {
+          return tierInfo ?? null;
+        }
+        const normalizedTier = normalizeBlinkTier(tierInfo.tier);
+        if (!normalizedTier) {
+          return tierInfo ?? null;
+        }
+        this.applyTier(normalizedTier);
+        this.auth.setAccountMetadata({
+          accountId: tierInfo.account_id,
+          tier: normalizedTier,
+        });
+        return tierInfo;
+      } catch (error) {
+        const hasAnotherProductionRegion = useProductionBootstrap
+          && index < bootstrapTiers.length - 1;
+        if (
+          hasAnotherProductionRegion
+          && error instanceof BlinkHttpError
+          && error.status === 406
+        ) {
+          this.logDebug('syncTierInfo → production-region bootstrap rejected; trying next');
+          continue;
+        }
+        log?.warn('Failed to fetch Blink tier info. Continuing with the bootstrap tier.');
+        return null;
       }
-      this.applyTier(normalizedTier);
-      this.auth.setAccountMetadata({
-        accountId: tierInfo.account_id,
-        tier: normalizedTier,
-      });
-      return tierInfo;
-    } catch {
-      log?.warn('Failed to fetch Blink tier info. Continuing with the bootstrap tier.');
-      return null;
     }
+
+    return null;
   }
 
   /**

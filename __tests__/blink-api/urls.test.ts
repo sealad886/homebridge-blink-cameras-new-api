@@ -1,4 +1,5 @@
 import {
+  BLINK_PRODUCTION_BOOTSTRAP_TIERS,
   getOAuthAuthorizeUrl,
   getOAuthTokenUrl,
   getRestBaseUrl,
@@ -27,6 +28,12 @@ describe('Blink API URL builders', () => {
   it('falls back to tier when sharedTier is not set', () => {
     const config: BlinkConfig = { ...baseConfig, tier: 'prsg' };
     expect(getSharedRestBaseUrl(config)).toBe('https://rest-prsg.immedia-semi.com/api/');
+  });
+
+  it('uses only ordinary account-region defaults for hosted tier discovery', () => {
+    expect(BLINK_PRODUCTION_BOOTSTRAP_TIERS).toEqual(['prod', 'prde', 'prsg', 'a001']);
+    expect(BLINK_PRODUCTION_BOOTSTRAP_TIERS).not.toContain('cemp');
+    expect(BLINK_PRODUCTION_BOOTSTRAP_TIERS).not.toContain('srf1');
   });
 
   // ProductionTier explicitly defines prod/prde/prsg/a001/cemp/srf1. The

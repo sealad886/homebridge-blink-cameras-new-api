@@ -16,6 +16,7 @@ import { URL } from 'node:url';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { inspect } from 'node:util';
 
 // RequestInit is a global type in Node.js 18+ but may need explicit typing in tests
 type FetchOptions = Parameters<typeof fetch>[1];
@@ -73,12 +74,14 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     jest.restoreAllMocks();
   });
 
-  it('fully redacts OAuth callback parameters while preserving safe query values', () => {
+  it('fully redacts OAuth and stable identity parameters while preserving safe query values', () => {
     const auth = new BlinkAuth(baseConfig);
+    const hardwareId = 'hardwareIdentifierSecret_4Wd7Kp';
+    const email = 'privateAddressSecret_8Fm2Qv@example.com';
     const sanitized = (
       auth as unknown as { redactUrlForLogging(value: string): string }
     ).redactUrlForLogging(
-      'https://example.com/callback?code=code-secret&state=state-secret&error=error-secret&error_description=description-secret&safe=value',
+      `https://example.com/callback?code=code-secret&state=state-secret&error=error-secret&error_description=description-secret&hardware_id=${hardwareId}&email=${encodeURIComponent(email)}&code_challenge_method=S256&safe=value`,
     );
     const parsed = new URL(sanitized);
 
@@ -86,11 +89,56 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     expect(parsed.searchParams.get('state')).toBe('<redacted>');
     expect(parsed.searchParams.get('error')).toBe('<redacted>');
     expect(parsed.searchParams.get('error_description')).toBe('<redacted>');
+    expect(parsed.searchParams.get('hardware_id')).toBe('<redacted>');
+    expect(parsed.searchParams.get('email')).toBe('<redacted>');
+    expect(parsed.searchParams.get('code_challenge_method')).toBe('S256');
     expect(parsed.searchParams.get('safe')).toBe('value');
     expect(sanitized).not.toContain('code-secret');
     expect(sanitized).not.toContain('state-secret');
     expect(sanitized).not.toContain('error-secret');
     expect(sanitized).not.toContain('description-secret');
+    expect(sanitized).not.toContain(hardwareId);
+    expect(sanitized).not.toContain(email);
+  });
+
+  it('fully redacts stable identity values from authentication forms and headers', () => {
+    const auth = new BlinkAuth(baseConfig);
+    const hardwareId = 'hardwareFormSecret_3Hs8Nx';
+    const deviceIdentifier = 'deviceIdentifierSecret_9Jt5Lp';
+    const email = 'privateFormSecret_7Rc4Vm@example.com';
+    const phone = '+353860001234';
+    const form = (
+      auth as unknown as { redactFormBody(value: string): string }
+    ).redactFormBody(new URLSearchParams({
+      hardware_id: hardwareId,
+      device_identifier: deviceIdentifier,
+      username: email,
+      phone_number: phone,
+      grant_type: 'authorization_code',
+      status_code: 'safe-status-code',
+      error_code: 'safe-error-code',
+      country_code: 'safe-country-code',
+      codec: 'safe-codec',
+    }).toString());
+    const headers = (
+      auth as unknown as { redactHeaders(value: Headers): Record<string, string> }
+    ).redactHeaders(new Headers({
+      hardware_id: hardwareId,
+      'x-device-identifier': deviceIdentifier,
+      'x-safe-header': 'safe-value',
+    }));
+    const diagnostic = `${form}\n${JSON.stringify(headers)}`;
+
+    expect(diagnostic).not.toContain(hardwareId);
+    expect(diagnostic).not.toContain(deviceIdentifier);
+    expect(diagnostic).not.toContain(email);
+    expect(diagnostic).not.toContain(phone);
+    expect(new URLSearchParams(form).get('grant_type')).toBe('authorization_code');
+    expect(new URLSearchParams(form).get('status_code')).toBe('safe-status-code');
+    expect(new URLSearchParams(form).get('error_code')).toBe('safe-error-code');
+    expect(new URLSearchParams(form).get('country_code')).toBe('safe-country-code');
+    expect(new URLSearchParams(form).get('codec')).toBe('safe-codec');
+    expect(headers['x-safe-header']).toBe('safe-value');
   });
 
   describe('successful login flow', () => {
@@ -291,6 +339,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const accessToken = 'legacyAccessSentinel_6Nr6Ov';
       const refreshToken = 'legacyRefreshSentinel_7Os5Nu';
       const tokenAuth = 'legacyTokenAuthSentinel_8Pt4Mt';
+      const email = 'legacyEmailSentinel_9Qu3Ls@example.com';
       let generatedState = '';
       let auth!: BlinkAuth;
 
@@ -328,6 +377,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
 
       auth = new BlinkAuth({
         ...baseConfig,
+        email,
         debugAuth: true,
         logger,
       });
@@ -342,15 +392,18 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
         accessToken,
         refreshToken,
         tokenAuth,
+        email,
       ]) {
         expectSecretAbsent(log, secret);
       }
+      expect(log).not.toContain(`${email.slice(0, 3)}...${email.slice(-3)}`);
     });
   });
 
   describe('2FA flow', () => {
     it('throws Blink2FARequiredError when 2FA is needed', async () => {
       const fetchMock = mockFetch();
+      const email = 'legacyTwoFaEmailSecret_4Vn8Qp@example.com';
 
       // Step 1: GET /oauth/v2/authorize
       fetchMock.mockResolvedValueOnce({
@@ -375,8 +428,18 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
         headers: createMockHeaders(),
       });
 
-      const auth = new BlinkAuth(baseConfig);
-      await expect(auth.login()).rejects.toThrow(Blink2FARequiredError);
+      const auth = new BlinkAuth({ ...baseConfig, email });
+      let caught: unknown;
+      try {
+        await auth.login();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Blink2FARequiredError);
+      expect(inspect(caught)).not.toContain(email);
+      expect(JSON.stringify(caught)).not.toContain(email);
+      expect((caught as Blink2FARequiredError).email).toBeUndefined();
       expect(auth.is2FAPending()).toBe(true);
     });
 

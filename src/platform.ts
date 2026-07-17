@@ -336,8 +336,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);
       this.startPolling();
-    } catch (error) {
-      this.log.error('Device discovery failed', error);
+    } catch {
+      this.log.error(
+        'Device discovery failed. Check the preceding bounded authentication/API diagnostics.',
+      );
     }
   }
 

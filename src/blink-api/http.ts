@@ -11,6 +11,8 @@ import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
 import { randomUUID } from 'node:crypto';
+import { URL } from 'node:url';
+import { isSensitiveDiagnosticKey } from './redaction';
 
 /**
  * Standard headers for all Blink API requests
@@ -22,14 +24,28 @@ import { randomUUID } from 'node:crypto';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function redactUrlForLogging(value: string): string {
+  try {
+    const url = new URL(value);
+    for (const key of [...new Set(url.searchParams.keys())]) {
+      if (isSensitiveDiagnosticKey(key)
+          || /^(?:error|error_description|id_token|state|token)$/i.test(key)) {
+        url.searchParams.set(key, '<redacted>');
+      }
+    }
+    return url.toString();
+  } catch {
+    return '<redacted-url>';
+  }
+}
+
 /**
  * Redact authorization headers for logging
  */
 function redactHeaders(headers: Record<string, string>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    const lowerKey = key.toLowerCase();
-    if (/(authorization|token-auth|cookie|set-cookie)/i.test(lowerKey)) {
+    if (isSensitiveDiagnosticKey(key)) {
       result[key] = '<redacted>';
     } else {
       result[key] = redactText(value);
@@ -41,8 +57,18 @@ function redactHeaders(headers: Record<string, string>): Record<string, string> 
 function redactText(value: string): string {
   return value
     .replace(/(Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
-    .replace(/((?:access_token|refresh_token|authorization|token-auth|cookie|password|pin|code|secret)\s*[=:]\s*)[^\s,;]+/gi, '$1<redacted>')
-    .replace(/("(?:access_token|refresh_token|authorization|token-auth|cookie|password|pin|code|secret)"\s*:\s*")[^"]+(")/gi, '$1<redacted>$2');
+    .replace(
+      /("?)([A-Za-z][A-Za-z0-9_-]*)\1(\s*[=:]\s*)("[^"]*"|[^\s,;}&]+)/g,
+      (match, quote: string, key: string, separator: string, rawValue: string) => {
+        if (!isSensitiveDiagnosticKey(key)) {
+          return match;
+        }
+        const redactedValue = rawValue.startsWith('"')
+          ? '"<redacted>"'
+          : '<redacted>';
+        return `${quote}${key}${quote}${separator}${redactedValue}`;
+      },
+    );
 }
 
 function redactBody(body: unknown): unknown {
@@ -60,7 +86,7 @@ function redactBody(body: unknown): unknown {
 
   return Object.fromEntries(
     Object.entries(body as Record<string, unknown>).map(([key, value]) => {
-      if (/(authorization|token|password|pin|code|secret|cookie)/i.test(key)) {
+      if (isSensitiveDiagnosticKey(key)) {
         return [key, '<redacted>'];
       }
       return [key, redactBody(value)];
@@ -75,12 +101,13 @@ export class BlinkHttpError extends Error {
   public readonly statusText = '';
   public readonly responseBody: string | undefined = undefined;
   public readonly responseHeaders: Record<string, string> | undefined = undefined;
+  public readonly url: string;
 
   constructor(
     message: string,
     public readonly status: number,
     statusText: string,
-    public readonly url: string,
+    url: string,
     public readonly method: string,
     _responseBody?: string,
     responseHeaders?: Record<string, string>,
@@ -97,6 +124,7 @@ export class BlinkHttpError extends Error {
     }
     super(safeMessage.replace(/\s+/g, ' ').trim() || 'Blink API request failed.');
     this.name = 'BlinkHttpError';
+    this.url = redactUrlForLogging(url);
   }
 
   toLogString(): string {
@@ -178,6 +206,10 @@ export class BlinkHttp {
     }
 
     const url = this.buildUrl(path);
+    const safeUrl = redactUrlForLogging(url);
+    const safePath = safeUrl.startsWith(this.baseUrl)
+      ? safeUrl.slice(this.baseUrl.length)
+      : '<redacted-path>';
     const requestId = randomUUID();
     const headers: Record<string, string> = {
       ...buildDefaultHeaders(),
@@ -186,13 +218,13 @@ export class BlinkHttp {
     };
 
     if (attempt === 0) {
-      this.logDebug(`[${requestId}] ${method} ${url}`);
+      this.logDebug(`[${requestId}] ${method} ${safeUrl}`);
       this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
       if (body) {
         this.logDebug(`[${requestId}] Request body:`, JSON.stringify(redactBody(body), null, 2));
       }
     } else {
-      this.logDebug(`[${requestId}] ${method} ${url} (retry attempt ${attempt})`);
+      this.logDebug(`[${requestId}] ${method} ${safeUrl} (retry attempt ${attempt})`);
     }
 
     const startTime = Date.now();
@@ -230,10 +262,10 @@ export class BlinkHttp {
 
     if (!response.ok) {
       const error = new BlinkHttpError(
-        `Blink API ${method} ${path} failed: ${response.status}`,
+        `Blink API ${method} ${safePath} failed: ${response.status}`,
         response.status,
         '',
-        url,
+        safeUrl,
         method,
       );
 

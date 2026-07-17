@@ -488,8 +488,10 @@ export interface BlinkOAuthSessionState {
 
 /**
  * OAuth v2 token response
- * Different from legacy password grant response
- * Source: blinkpy - oauth_exchange_code_for_token response
+ * Used by hosted code exchange and profile-specific refresh handling
+ * APK-native fields match RefreshTokensResponse; optional account metadata is
+ * retained only for compatible legacy responses and is not expected from the
+ * Android AppAuth exchange.
  */
 export interface BlinkOAuthV2TokenResponse {
   /** JWT access token */

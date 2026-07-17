@@ -52,6 +52,7 @@ import {
   SecureJsonFileSecurityError,
   writeOwnerOnlyJsonFile,
 } from './secure-json-file';
+import { isSensitiveDiagnosticKey } from './redaction';
 import { HostedOAuthCoordinator } from './hosted-oauth';
 import { buildRefreshForm, resolveOAuthProfile } from './oauth-profile';
 
@@ -199,12 +200,6 @@ class FileAuthStorage implements BlinkAuthStorage {
       // Directory not empty or already gone — ignore
     }
   }
-}
-
-function redact(value: string | undefined, showChars = 4): string {
-  if (!value) return '<empty>';
-  if (value.length <= showChars * 2) return '***';
-  return `${value.slice(0, showChars)}...${value.slice(-showChars)}`;
 }
 
 function authErrorCategory(value: unknown): string | undefined {
@@ -374,9 +369,9 @@ export class Blink2FARequiredError extends Error {
   }) {
     super(message);
     this.name = 'Blink2FARequiredError';
-    this.phoneLastFour = options?.phoneLastFour;
-    this.email = options?.email;
-    this.allowResendSeconds = options?.allowResendSeconds;
+    // Preserve the source-compatible constructor shape without retaining
+    // contact hints that generic Error/object logging could disclose.
+    void options;
   }
 }
 
@@ -441,7 +436,7 @@ export class BlinkAuth {
     const params = new URLSearchParams(body);
     const redacted = new URLSearchParams();
     for (const [key, value] of params.entries()) {
-      if (/(?:password|refresh_token|access_token|authorization|token-auth|cookie|pin|code|csrf-token|2fa_code|secret)/i.test(key)) {
+      if (isSensitiveDiagnosticKey(key)) {
         redacted.set(key, '<redacted>');
       } else {
         redacted.set(key, value);
@@ -456,8 +451,7 @@ export class BlinkAuth {
   private redactHeaders(headers: Headers): Record<string, string> {
     const result: Record<string, string> = {};
     headers.forEach((value, key) => {
-      const lowerKey = key.toLowerCase();
-      if (/(authorization|token-auth|cookie|set-cookie)/i.test(lowerKey)) {
+      if (isSensitiveDiagnosticKey(key)) {
         result[key] = '<redacted>';
       } else {
         result[key] = value;
@@ -470,7 +464,8 @@ export class BlinkAuth {
     try {
       const url = new URL(value);
       for (const key of [...new Set(url.searchParams.keys())]) {
-        if (/^(?:access_token|authorization|code|code_verifier|error|error_description|id_token|password|pin|refresh_token|secret|state|token)$/i.test(key)) {
+        if (isSensitiveDiagnosticKey(key)
+            || /^(?:error|error_description|id_token|state|token)$/i.test(key)) {
           url.searchParams.set(key, '<redacted>');
         }
       }
@@ -1208,8 +1203,8 @@ export class BlinkAuth {
     }
 
     this.logDebug('Starting OAuth 2.0 Authorization Code Flow with PKCE...');
-    this.logDebug(`  Email: ${redact(this.config.email, 3)}`);
-    this.logDebug(`  Client ID: ${OAUTH_CLIENT_ID} (iOS)`);
+    this.logDebug('  Email: <redacted>');
+    this.logDebug(`  OAuth profile: ${OAUTH_CLIENT_ID} (iOS)`);
 
     // Reset session state
     this.sessionCookies = '';
@@ -1244,10 +1239,6 @@ export class BlinkAuth {
       this.logDebug('login → no usable 2FA code → throwing Blink2FARequiredError');
       throw new Blink2FARequiredError(
         '2FA verification required. Call complete2FA(pin) with the PIN sent to your device.',
-        {
-          phoneLastFour: currentSession.phoneLastFour,
-          email: this.config.email,
-        }
       );
     }
 
@@ -1731,10 +1722,10 @@ export class BlinkAuth {
     this.logDebug('Tokens captured successfully');
     this.logDebug(`  Expiry: ${this.tokenExpiry.toISOString()}`);
     if (this.accountId) {
-      this.logDebug(`  Account ID: ${this.accountId}`);
+      this.logDebug('  Account metadata: present');
     }
     if (this.clientId) {
-      this.logDebug(`  Client ID: ${this.clientId}`);
+      this.logDebug('  Client metadata: present');
     }
   }
 }

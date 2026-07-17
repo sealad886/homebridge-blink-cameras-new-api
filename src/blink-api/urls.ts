@@ -11,6 +11,20 @@ const DEFAULT_TIER = 'prod';
 type OAuthTierConfig = Pick<BlinkConfig, 'tier'>;
 const TIER_PATTERN = /^[A-Za-z0-9]{4}$/;
 
+/**
+ * APK 57.1 production account-region defaults, in fallback order.
+ *
+ * ProductionTier also contains cemp (regression) and srf1 (device
+ * refurbishment); those special-purpose targets must not be probed while
+ * discovering an ordinary account's service-authoritative tier.
+ */
+export const BLINK_PRODUCTION_BOOTSTRAP_TIERS = [
+  'prod',
+  'prde',
+  'prsg',
+  'a001',
+] as const;
+
 const normalizeBase = (base: string): string => (base.endsWith('/') ? base : `${base}/`);
 
 /**

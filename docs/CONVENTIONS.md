@@ -110,7 +110,9 @@
 
 **Scope:** Custom UI build, publish, and runtime packaging.
 
-**Rule:** Source assets live in `src/homebridge-ui/public` and must be copied to `homebridge-ui/public` (runtime path) and `dist/homebridge-ui/public` during `npm run build`; `config.schema.json` expects `customUiPath: "./homebridge-ui"`, so publish must include that folder.
+**Rule:** Source assets live in `src/homebridge-ui/public` and must be copied to
+`dist/homebridge-ui/public` during `npm run build`. `config.schema.json` expects
+`customUiPath: "./dist/homebridge-ui"`, and the npm package must include `dist`.
 
 **Rationale (Why this exists):**
 
@@ -121,7 +123,8 @@
 **Examples:**
 
 - Good:
-  - `npm run build` copies `src/homebridge-ui/public` → `dist/homebridge-ui/public` and `homebridge-ui/public`, then publishes including those assets.
+  - `npm run build` copies `src/homebridge-ui/public` →
+    `dist/homebridge-ui/public`, then publishes `dist` including those assets.
 - Bad:
   - Copying from `homebridge-ui/public` (nonexistent in a clean repo) causes `cp: homebridge-ui/public/*: No such file or directory`, leaving the custom UI missing from the package and causing an infinite spinner in Homebridge UI.
 
@@ -143,11 +146,14 @@
 
 - Config UI X renders both schema fields and custom UI in plugin settings; defining auth fields in both creates duplicate and conflicting login flows.
 - Keeping credentials out of schema avoids persisting passwords and one-time verification codes in `config.json`.
-- Token persistence already exists via `blink-auth/auth-state.json`, so the custom UI can remain the single auth entry point.
+- Token persistence already exists via the owner-only `.blink-auth.json` file,
+  so the custom UI can remain the single auth entry point.
 
 **Examples:**
 
-- Good: `config.schema.json` keeps non-secret platform settings only, while `src/homebridge-ui/public/index.html` contains the sign-in + verification workflow.
+- Good: `config.schema.json` keeps non-secret platform settings only, while
+  `src/homebridge-ui/public/index.html` launches Blink's hosted sign-in and
+  contains only the distinct post-token verification workflow.
 - Bad: Reintroducing `username`, `password`, `twoFactorCode`, `clientVerificationCode`, or `accountVerificationCode` into schema properties or layout.
 
 **Related Files / Modules:**

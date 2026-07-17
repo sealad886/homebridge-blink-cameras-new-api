@@ -1,5 +1,13 @@
 # Blink Hosted OAuth Login Implementation Plan
 
+> Historical execution artifact. The implemented release is now `0.9.1`; use
+> `docs/adr/001-authentication.md`, `blink_api_map.md`, and
+> `docs/integration_checklist.md` for the current runtime contract and
+> validation boundary. The original single-`prod` bootstrap examples below are
+> superseded by the bounded `prod`, `prde`, `prsg`, `a001` fallback that advances
+> only on HTTP 406. Fresh packaged authorization-code exchange acceptance
+> remains open.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a Homebridge user authenticate through Blink's hosted Android OAuth UI in Brave, securely return the registered App-Link callback to the Raspberry Pi, and keep working after token refresh and restart in every APK-supported region.
