@@ -22,6 +22,10 @@ All notable changes to this project will be documented in this file.
   supported.
 - Made post-token `tier_info` discovery authoritative for regional and shared
   REST routing, with APK-derived and parameterized coverage for non-EU targets.
+- Documented that EU, US, AP, and AU use the same production OAuth host and that
+  the APK's `Build.MANUFACTURER == "Amazon"` manufacturer gate selects
+  `client_id=amazon` instead of the normal `client_id=android`; this gate is not
+  account-region routing, and Homebridge uses the non-Amazon Android branch.
 - Revalidated the authentication workflow, dynamically constructed targets,
   trust boundary, recovery behavior, and operator instructions against Blink
   Android 57.1 and the implemented custom UI.
@@ -33,9 +37,16 @@ All notable changes to this project will be documented in this file.
 
 ### Validation status
 
-- An earlier authorized Ireland-account proof established the hosted protocol
-  and `prde` routing. Live acceptance of the packaged `0.9.0` build remains Task
-  8; non-EU targets have APK/static and mocked coverage, not live-account tests.
+- An earlier authorized EU/Ireland-account proof established hosted code
+  exchange, refresh, `prde` routing, and homescreen access. Two later packaged
+  flows reached token exchange but returned `BHO-HTTP-INVALID-GRANT`.
+- A 2026-07-17 matched-egress run verified the strict relay, reverse tunnel, Pi
+  proxy environment, endpoint reachability, and rollback, but its transaction
+  ended before the request: no token exchange occurred and no auth state was
+  created. The result was operationally inconclusive and does not resolve the
+  egress-binding hypothesis.
+- Packaged end-to-end acceptance remains open. Non-EU accounts are not
+  live-validated; those targets have APK/static and mocked coverage only.
 
 ## [0.8.1] - 2026-07-16
 

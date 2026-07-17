@@ -1,28 +1,37 @@
 # Blink Hosted Authentication Integration Checklist
 
 Use this checklist to validate the `0.9.0` hosted-authentication release against
-the implementation, Blink Android 57.1 evidence, and the authorized Ireland
-account. The earlier protocol proof is not acceptance of this packaged build;
-the live sections remain unchecked until Task 8.
+the implementation, Blink Android 57.1 evidence, and the authorized EU/Ireland
+account. The earlier protocol proof is not acceptance of this packaged build.
+Two packaged exchanges returned `BHO-HTTP-INVALID-GRANT`; the later
+matched-egress run ended before token exchange and was operationally
+inconclusive. The remaining live acceptance boxes therefore stay unchecked.
 
 ## Automated release gates
 
-- [ ] Focused authentication documentation regression passes.
-- [ ] Full Jest suite passes serially.
-- [ ] ESLint and TypeScript/custom-UI build pass.
-- [ ] `npm audit --omit=dev` reports no known production vulnerability.
-- [ ] Package dry-run contains `dist/` and `config.schema.json`, and contains no
+- [x] Focused authentication documentation regression passes.
+- [x] Full Jest suite passes serially.
+- [x] ESLint and TypeScript/custom-UI build pass.
+- [x] `npm audit --omit=dev` reports no known production vulnerability.
+- [x] Package dry-run contains `dist/` and `config.schema.json`, and contains no
   APK, decompilation output, local auth file, callback/token artifact, log, or
   editor directory.
-- [ ] Secret scan contains only protocol field names and synthetic fixtures;
+- [x] Secret scan contains only protocol field names and synthetic fixtures;
   every match is classified and no live value appears.
-- [ ] Package, lockfile, and changelog consistently report `0.9.0`.
+- [x] Package, lockfile, and changelog consistently report `0.9.0`.
 
 ## Android 57.1 protocol contract
 
 - [ ] `/auth/start` creates a 15-minute Pi-owned transaction with a 64-byte
   verifier, S256 challenge, independent 32-byte state and flow ID, stable
   hardware ID, `client_id=android`, scope `client`, and prompt `login`.
+- [ ] Document the APK manufacturer gate separately from account region:
+  `Build.MANUFACTURER == "Amazon"` selects `client_id=amazon`; otherwise the APK
+  selects `client_id=android`. Homebridge deliberately uses the non-Amazon
+  Android branch.
+- [ ] EU, US, AP, and AU production tiers use the same production OAuth host:
+  `https://api.oauth.blink.com/oauth/v2/authorize` and
+  `https://api.oauth.blink.com/oauth/token`.
 - [ ] Authorize metadata matches `UnifiedSignInUtils.signInIntent`; redirect is
   exactly `https://applinks.blink.com/signin/callback`.
 - [ ] `/auth/complete` enforces the 2,048-byte limit, exact HTTPS origin/path,
@@ -72,13 +81,20 @@ the live sections remain unchecked until Task 8.
 - [ ] A connection or verification failure after token issuance retains durable
   authentication and exposes bounded retry/client/account guidance.
 
-## EU/Ireland live acceptance for Task 8
+## EU/Ireland live evidence and remaining acceptance
 
-- [ ] Install the unique local `0.9.0` acceptance package on
-  `raspberrypi.local`; verify service, child bridge, plugin UI, and installed
-  package identity before sign-in.
-- [ ] Complete Blink-hosted sign-in with only the owner's authorized Ireland
-  account and confirm the service returns tier `prde`.
+- [x] Earlier manual protocol proof completed Blink-hosted authorization, code
+  exchange, refresh, `prde` discovery, user information, and homescreen access
+  with the owner's authorized EU/Ireland account.
+- [x] Two fresh packaged callbacks were submitted once and promptly; both
+  reached token exchange and returned `BHO-HTTP-INVALID-GRANT` without writing
+  final auth state.
+- [x] The 2026-07-17 matched-egress preflight proved loopback-only relay and
+  tunnel routing, Pi service proxying, endpoint reachability, and full rollback.
+  The UI transaction ended before the request, so no token exchange occurred;
+  this did not test the egress hypothesis.
+- [ ] Complete a fresh packaged Blink-hosted sign-in with only the owner's
+  authorized EU/Ireland account and confirm the service returns tier `prde`.
 - [ ] Confirm post-token user info, client/account verification when requested,
   homescreen, and camera/device discovery without printing identifiers or
   secrets.
@@ -92,9 +108,11 @@ the live sections remain unchecked until Task 8.
 - [ ] Hosted state restarts with `oauthClientId=android` and Android scope.
 - [ ] Profile-less state defaults to the legacy iOS refresh form rather than
   being relabeled Android.
-- [ ] Explicit `ios` and resolver-compatible `amazon` identities remain on the
-  legacy iOS contract (`client_id=ios`, no refresh scope, legacy headers when
-  applicable).
+- [ ] Explicit `ios` identities remain on the legacy iOS contract
+  (`client_id=ios`, no refresh scope, legacy headers when applicable).
+- [ ] Do not claim native Fire OS compatibility: although persisted-state types
+  accept `amazon`, the hosted UI never creates it and the current resolver
+  treats non-`android` state as legacy compatibility input.
 - [ ] A failed hosted refresh requests fresh hosted sign-in and does not fall
   back to credential submission.
 
@@ -103,10 +121,14 @@ the live sections remain unchecked until Task 8.
 - [ ] Before deployment, back up existing Pi auth state without reading or
   printing it; preserve owner and mode metadata.
 - [ ] Record the currently installed plugin version and package identity.
-- [ ] If acceptance fails, reinstall `0.8.1`, restore the untouched auth backup,
+- [x] The matched-egress run removed its temporary systemd override, reverse
+  tunnel, local relay, remote backup directory, and both loopback listeners;
+  normal Homebridge health was rechecked.
+- [ ] If a future package deployment changes installed plugin/auth state and
+  acceptance fails, restore the recorded package and untouched auth backup,
   restart Homebridge, and confirm the prior device inventory returns.
 - [ ] If acceptance succeeds, retain the new hosted token state and remove only
-  disposable package/backup artifacts according to the approved Task 8 plan.
+  disposable package/backup artifacts.
 
 ## Best-effort non-EU coverage
 
@@ -116,8 +138,9 @@ the live sections remain unchecked until Task 8.
   numbered e-tier examples, and reject unsafe tier text.
 - [ ] Each tier authorizes through the same production hosted flow; only the
   post-token `rest-{tier}` and `rest-{shared_tier}` hosts change.
-- [ ] Documentation labels every target other than the observed Ireland `prde`
-  account as APK-evidenced and mocked/parameterized, not live-account tested.
+- [ ] Documentation states that non-EU accounts are not live-validated; every
+  target other than the observed Ireland `prde` account is APK-evidenced and
+  mocked/parameterized, not live-account tested.
 
 ## Residual risk
 

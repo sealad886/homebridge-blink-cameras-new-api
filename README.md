@@ -5,10 +5,11 @@
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
 
-> Important: This plugin uses Blink's private OAuth and REST APIs. The protocol has
-> been observed with an Ireland account on Blink's `prde` tier. Other production
-> tiers are supported from Android 57.1 APK traces and automated routing tests, but
-> have not been exercised with non-EU accounts.
+> Important: This plugin uses Blink's private OAuth and REST APIs. All APK-known
+> production regions use the same production OAuth host; geography changes only
+> the REST tier discovered after token issuance. Only an EU/Ireland account has
+> live-account evidence. Non-EU accounts are not live-validated and remain covered
+> by Android 57.1 APK traces plus automated routing tests.
 
 Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Blink devices as proper HomeKit accessories:
 
@@ -81,6 +82,18 @@ Authentication uses Blink's hosted sign-in. Homebridge creates the PKCE/state
 transaction, but Blink alone receives the account credentials and hosted MFA code.
 After the callback is finished, Homebridge stores reusable tokens in its storage
 root and removes legacy credential/code fields from the plugin configuration.
+
+Every production account, including the APK's US, EU, AP, and AU tiers, starts at
+the same production OAuth host:
+
+- `https://api.oauth.blink.com/oauth/v2/authorize`
+- `https://api.oauth.blink.com/oauth/token`
+
+Account geography does not select a different OAuth hostname. The APK's client-ID
+choice is a separate manufacturer gate: `Build.MANUFACTURER == "Amazon"` selects
+`client_id=amazon`; every other manufacturer selects `client_id=android`.
+Homebridge intentionally models a non-Amazon Android public client and therefore
+uses `client_id=android` for its hosted flow.
 
 ### Manual Configuration
 
@@ -165,6 +178,8 @@ snapshot fetch. Use the `Refresh Snapshot` switch in Home to force a new thumbna
 4. Return to Homebridge and choose **Paste Blink Result and Finish**. This reads
    the clipboard only from that click. If Brave denies clipboard access, reveal
    the manual field, paste the complete address, and choose **Finish with Pasted Address**.
+   Clipboard cleanup after completion is best effort: if the browser denies
+   clipboard write access, clear the copied callback address manually.
 5. If Blink asks for client or account verification after issuing tokens, enter
    that distinct post-token code in Homebridge. This is not Blink's hosted MFA.
 6. Wait for stored-token connection verification, then continue to the normal
@@ -179,6 +194,21 @@ the operator must start a new sign-in. Success stores the final token state in
 `.blink-auth.json`, including `oauthClientId=android`, and hosted completion
 forces `persistAuth=true`. Both files are owner-only (`0600`). No public callback
 service or inbound port is required.
+
+### Current Hosted-OAuth Validation Boundary
+
+An earlier EU/Ireland protocol proof completed Blink-hosted authorization, code
+exchange, refresh, `prde` discovery, and homescreen access. Two later end-to-end
+attempts through the packaged Homebridge UI reached the callback but Blink rejected
+the code exchange as `invalid_grant`. A 2026-07-17 matched-egress experiment then
+verified the relay, tunnel, Pi service routing, and rollback, but the browser/UI
+transaction ended before the exchange request: no token exchange occurred and no
+auth state was written. That run was operationally inconclusive, so it neither
+confirms nor rules out an authorization-versus-exchange egress constraint.
+
+Consequently, Blink's hosted UI is the correct and implemented sign-in surface,
+but packaged `0.9.0` end-to-end acceptance remains open. Only the EU/Ireland owner
+account is authorized for live testing; non-EU accounts are not live-validated.
 
 ## Re-Authentication / Token Reset
 
@@ -309,8 +339,12 @@ This plugin's API implementation is based on reverse engineering the official Bl
 
 ### Authentication
 
-- Hosted OAuth 2.0 authorization-code flow with Pi-owned PKCE through production
-  `api.oauth.blink.com` and the registered HTTPS App-Link callback
+- Hosted OAuth 2.0 authorization-code flow with Pi-owned PKCE through the same
+  production OAuth host for EU, US, AP, and AU accounts, plus the registered
+  HTTPS App-Link callback
+- APK manufacturer gate: `Build.MANUFACTURER == "Amazon"` selects
+  `client_id=amazon`; otherwise it selects `client_id=android`. Homebridge uses
+  the non-Amazon Android profile.
 - Android sessions refresh with `client_id=android` and `scope=client`; migrated
   state without `oauthClientId` retains the legacy iOS refresh contract
 - Hardware ID required for device identification
@@ -373,5 +407,5 @@ MIT - see [LICENSE](LICENSE) for details.
 
 - API documentation derived from reverse engineering the Blink Android app
 - Homebridge platform plugin architecture
-- Ireland `prde` protocol evidence; non-EU behavior remains APK-derived and
-  mocked/parameterized pending authorized account validation
+- EU/Ireland `prde` protocol evidence; non-EU accounts are not live-validated
+  and remain APK-derived plus mocked/parameterized pending authorized validation

@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted for release `0.9.0` implementation. Live acceptance of this build is
-reserved for Task 8.
+Accepted for release `0.9.0` implementation. End-to-end acceptance of the
+packaged build remains incomplete; the current evidence boundary is recorded
+below rather than delegated to a future task label.
 
 ## Context
 
@@ -33,11 +34,15 @@ field is the fallback when clipboard permission is unavailable. No callback,
 credential, MFA value, PKCE verifier, OAuth state, or token is written to
 Homebridge configuration, browser storage, analytics, events, or logs.
 
+The UI attempts to clear the clipboard after completion, but clipboard cleanup
+is best effort. If the browser denies clipboard write access, the callback can
+remain there and the operator must clear it manually.
+
 There is no public callback relay, inbound port, companion app, or browser
 extension. The callback travels only from Blink to Brave, then from the
 operator's clipboard to the authenticated Homebridge Config UI request channel.
 
-### Hosted Android profile
+### Hosted Android profile and manufacturer gate
 
 New sign-ins use `oauthClientId=android`, scope `client`, prompt `login`, and the
 HTTPS App-Link redirect. The authorization URL includes the APK-derived
@@ -47,6 +52,14 @@ comes from the plugin `deviceId`, defaulting to `homebridge-blink`.
 
 The Pi generates a verifier from 64 random bytes plus independent 32-byte state
 and flow identifiers. A transaction lasts exactly 15 minutes.
+
+The APK does not choose its OAuth client by account geography. Its manufacturer
+gate is `Build.MANUFACTURER == "Amazon"`: Amazon hardware uses
+`client_id=amazon`, while all other Android hardware uses `client_id=android`.
+Homebridge runs on a Raspberry Pi and deliberately models the ordinary
+non-Amazon Android public client, so its hosted transaction uses `android` for
+EU, US, AP, and AU accounts alike. Native Fire OS/`amazon` hosted sessions are
+not claimed as a supported Homebridge flow.
 
 ### Callback validation and one-time use
 
@@ -116,9 +129,16 @@ scope=client
 Hosted REST calls use the bearer token; this flow neither issues nor requires a
 `TOKEN-AUTH` value.
 
+All production regions use the same production OAuth host. Both the authorize
+and token requests above resolve through `api.oauth.blink.com`; the APK's
+`qa.` and `dev.` substitutions are deployment-environment choices, not EU/US/AP/AU
+region choices.
+
 ### Tier-first account discovery
 
-OAuth authorization is region-independent for production accounts. After token
+OAuth authorization is region-independent for production accounts. EU, US, AP,
+and AU accounts all start at `https://api.oauth.blink.com/oauth/v2/authorize`
+and exchange at `https://api.oauth.blink.com/oauth/token`. After token
 persistence, the client first requests `v1/users/tier_info` through the
 production bootstrap host. Its four-alphanumeric tier is authoritative for
 `https://rest-{tier}.immedia-semi.com/api/`; shared REST uses the returned
@@ -143,24 +163,46 @@ account-verification requirement without discarding the token session.
 
 New hosted state persists the Android profile. Older state without
 `oauthClientId` defaults to the legacy iOS refresh form so an existing token is
-not relabeled. Explicit `ios` and resolver-compatible `amazon` identities also
-remain on that legacy iOS contract: `client_id=ios`, no refresh `scope`, and
-legacy headers when applicable. Legacy credential-driven internals remain only
-for compatible state recovery; they are not exposed as the supported UI.
+not relabeled. Explicit `ios` state remains on that legacy contract:
+`client_id=ios`, no refresh `scope`, and legacy headers when applicable.
+
+The repository's persisted-state type also accepts `amazon`, but the hosted UI
+never creates that value and the current resolver treats every non-`android`
+identity as legacy iOS compatibility state. This is not APK-equivalent Fire OS
+support and must not be presented as such. Legacy credential-driven internals
+remain only for compatible state recovery; they are not exposed as the
+supported UI.
 
 ## Evidence boundary
 
-An earlier protocol proof on 2026-07-16 used the owner's authorized Ireland
+An earlier protocol proof on 2026-07-16 used the owner's authorized EU/Ireland
 account. It observed hosted sign-in and MFA in Brave, the exact App-Link,
 successful token exchange and refresh, `prde` discovery, user information, and
-homescreen access without recording secret values. That proof established the
-protocol, but it is not live acceptance of the new `0.9.0` package.
+homescreen access without recording secret values. That proof established that
+Blink's own hosted UI can produce a usable Android-profile session, but it was
+not acceptance of the packaged `0.9.0` Homebridge flow.
 
-Task 8 must still package and deploy this build to `raspberrypi.local`, exercise
-the full custom UI, verify owner/mode metadata, restart, Android refresh,
-homescreen, and device discovery, and prove rollback safety. Only the Ireland
-account is authorized for that live test. All non-EU targets remain
-APK-evidenced and mocked/parameterized, not live-account tested.
+Two subsequent fresh packaged-flow callbacks were submitted once and promptly;
+both reached the production token endpoint and returned
+`BHO-HTTP-INVALID-GRANT`. A fixed invalid-code probe sent the exact Android
+five-field form and also received `invalid_grant`. This is consistent with
+request parsing, but it does not independently validate the client or form;
+those failures therefore do not by themselves prove a wrong host or an
+extra/missing field.
+
+On 2026-07-17 a matched-egress proof routed the Pi's Node HTTPS requests through
+a strict loopback-only relay sharing Brave's network egress. Relay, reverse
+tunnel, service environment, endpoint reachability, and rollback checks all
+passed. The single browser/UI transaction ended before the service made its
+token request: no token exchange occurred, no auth state was created, and no
+bounded support code was produced. The run was operationally inconclusive and
+therefore neither confirms nor rules out an egress-binding hypothesis.
+
+Packaged end-to-end acceptance still requires a fresh authorized EU/Ireland
+flow that reaches code exchange, persists tokens, reconnects after restart,
+refreshes, and reaches homescreen/device discovery. Non-EU accounts are not
+live-validated; all non-EU targets remain APK-evidenced and
+mocked/parameterized.
 
 ## Consequences
 
@@ -176,7 +218,13 @@ APK-evidenced and mocked/parameterized, not live-account tested.
 
 - Desktop Brave cannot claim Blink's Android App Link, so the operator must copy
   the final address back to Homebridge.
-- Clipboard permission can fail, requiring the manual paste fallback.
+- APK AppAuth performs browser authorization and native token exchange on one
+  Android device. Homebridge splits those legs between Brave and the Pi; any
+  server-side coupling to network egress or browser session remains an unproven
+  compatibility risk.
+- Clipboard read permission can fail, requiring the manual paste fallback;
+  clipboard write permission can also prevent best-effort cleanup and require
+  the operator to clear the callback manually.
 - Blink's private OAuth, verification, tier, and REST behavior can change
   without a compatibility notice.
 - Non-EU behavior has static/APK and mocked coverage only until account owners
