@@ -77,6 +77,7 @@ homebridge-config.json
 .fastembed_cache
 .codanna/
 .worktrees/
+.superpowers/
 
 # Logs
 logs
