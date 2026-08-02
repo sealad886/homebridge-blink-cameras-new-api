@@ -310,6 +310,13 @@
           </div>
         </div>
 
+	<div class="form-group mt-3 text-left" id="networkSelectionSection">
+          <label><strong>Exclude Blink Networks</strong></label>
+          <div id="blinkNetworkList" class="p-3 border rounded bg-white" style="max-height: 150px; overflow-y: auto;">
+            <span class="text-muted">Loading networks...</span>
+          </div>
+          <small class="form-text text-muted">Select the networks you want this Homebridge instance to ignore.</small>
+        </div>
         <div class="mt-4">
           <p class="text-muted small">
             Blink tokens are stored in Homebridge's protected authentication file. You can now configure camera settings.
@@ -594,6 +601,7 @@
 
     showConnectionStatus(true, data);
     showStep('success');
+    loadBlinkNetworks();
     homebridge.toast.success('Blink tokens are stored and verified.', 'Connected');
   }
 
@@ -615,6 +623,82 @@
       showStep('login');
       showError('Unable to check stored Blink authentication. Check Homebridge logs and try again.');
       return null;
+    }
+  }
+
+  async function loadBlinkNetworks() {
+    const container = document.getElementById('blinkNetworkList');
+    if (!container) return;
+
+    try {
+      const networks = await homebridge.request('/getNetworks');
+      container.innerHTML = ''; // Clear the "Loading..." text
+
+      if (!networks || networks.length === 0) {
+        container.innerHTML = 'No networks found';
+        return;
+      }
+
+      // Get the existing excluded networks from config, or default to an empty array
+      const excludedNetworks = pluginConfig[0]?.excludedNetworks || [];
+
+      networks.forEach(networkName => {
+        // Create the Bootstrap custom checkbox wrapper
+        const div = document.createElement('div');
+        div.className = 'custom-control custom-checkbox mb-2';
+
+        // Create the input element
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'custom-control-input';
+        // Create a safe ID without spaces
+        input.id = 'exclude_net_' + networkName.replace(/\s+/g, '_');
+        input.value = networkName;
+      
+        // Check it if it was saved in the config previously
+        input.checked = excludedNetworks.includes(networkName);
+
+        // Save automatically whenever the user clicks it
+        input.addEventListener('change', updateExcludedNetworks);
+
+        // Create the label
+        const label = document.createElement('label');
+        label.className = 'custom-control-label';
+        label.htmlFor = input.id;
+        label.textContent = networkName;
+
+        // Assemble and add to the container
+        div.appendChild(input);
+        div.appendChild(label);
+        container.appendChild(div);
+      });
+    } catch (error) {
+      console.error('Failed to fetch networks:', error);
+      container.innerHTML = 'Failed to load networks';
+    }
+  }
+
+  async function updateExcludedNetworks() {
+    const container = document.getElementById('blinkNetworkList');
+    // Find every checkbox that is currently ticked
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]:checked');
+  
+    // Map them into an array of string names
+    const excludedNetworks = Array.from(checkboxes).map(cb => cb.value);
+  
+    const config = pluginConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
+    config.excludedNetworks = excludedNetworks;
+  
+    // Clean up the old single-select config key if it was saved previously
+    delete config.networkName; 
+  
+    pluginConfig[0] = config;
+
+    try {
+      await homebridge.updatePluginConfig(pluginConfig);
+      await homebridge.savePluginConfig();
+    } catch {
+      showError('Could not save the excluded networks.');
     }
   }
 

@@ -1330,6 +1330,7 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/lock',
       '/unlock',
       '/test-connection',
+      '/getNetworks',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });

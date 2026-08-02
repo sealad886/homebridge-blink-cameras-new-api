@@ -133,8 +133,9 @@ describe('BlinkCamerasPlatform', () => {
     );
     platform.accessories.push(cachedAccessory);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (platform as any).registerDevice(network, 'blink-network-', 'network', (platform as any).networkAccessories, NetworkAccessory);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-anyDevice
+    const claimedUuids = new Set<string>();
+    (platform as any).registerDevice(network, 'blink-network-', 'network', (platform as any).networkAccessories, NetworkAccessory, claimedUuids);
 
     expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
     // Handler is stored in Map, not in context (to avoid circular JSON serialization)

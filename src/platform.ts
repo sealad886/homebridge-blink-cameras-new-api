@@ -243,7 +243,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
-    const excludeList = this.config.excludeDevices ?? [];
+    const excludeList = [
+      ...(this.config.excludeDevices ?? []),
+      ...(this.config.excludedNetworks ?? []),
+    ];
     const excluded = excludeList.some(
       (entry) =>
         entry === device.name ||
@@ -345,36 +348,65 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private registerDevices(homescreen: BlinkHomescreen): void {
     let excludedCount = 0;
+    const claimedUuids = new Set<string>();
+    const excludedNetworkIds = new Set<number>();
 
+    // 1. Process Networks
     for (const network of homescreen.networks) {
       if (!this.isDeviceExcluded(network)) {
-        this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
+        this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory, claimedUuids);
       } else {
+        excludedNetworkIds.add(network.id);
         excludedCount++;
       }
     }
 
+    // Helper to check if a device belongs to an ignored system
+    const isParentNetworkExcluded = (device: { network_id?: number }) =>
+      device.network_id !== undefined && excludedNetworkIds.has(device.network_id);
+
+    // 2. Process Cameras
     for (const camera of homescreen.cameras) {
-      if (!this.isDeviceExcluded(camera)) {
-        this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
+      if (!isParentNetworkExcluded(camera) && !this.isDeviceExcluded(camera)) {
+        this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory, claimedUuids);
       } else {
         excludedCount++;
       }
     }
 
+    // 3. Process Doorbells
     for (const doorbell of homescreen.doorbells) {
-      if (!this.isDeviceExcluded(doorbell)) {
-        this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
+      if (!isParentNetworkExcluded(doorbell) && !this.isDeviceExcluded(doorbell)) {
+        this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory, claimedUuids);
       } else {
         excludedCount++;
       }
     }
 
+    // 4. Process Owls
     for (const owl of homescreen.owls) {
-      if (!this.isDeviceExcluded(owl)) {
-        this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
+      if (!isParentNetworkExcluded(owl) && !this.isDeviceExcluded(owl)) {
+        this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory, claimedUuids);
       } else {
         excludedCount++;
+      }
+    }
+
+    // 5. PURGE STALE / EXCLUDED ACCESSORIES FROM CACHE
+    const staleAccessories = this.accessories.filter((acc) => !claimedUuids.has(acc.UUID));
+
+    if (staleAccessories.length > 0) {
+      this.log.info(`Cleaning up ${staleAccessories.length} cached accessory/accessories that are no longer active or are excluded...`);
+
+      // Unregister from HomeKit
+      this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, staleAccessories);
+
+      // Mutate this.accessories in place to remove stale items
+      for (const stale of staleAccessories) {
+        const index = this.accessories.findIndex((a) => a.UUID === stale.UUID);
+        if (index !== -1) {
+          this.accessories.splice(index, 1);
+        }
       }
     }
 
@@ -393,8 +425,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     deviceLabel: string,
     accessoryMap: Map<number, THandler>,
     HandlerClass: new (platform: BlinkCamerasPlatform, accessory: PlatformAccessory, device: TDevice) => THandler,
+    claimedUuids: Set<string>,
   ): void {
     const uuid = this.api.hap.uuid.generate(`${uuidPrefix}${device.id}`);
+    claimedUuids.add(uuid); // <--- MARK THIS ACCESORY AS ACTIVE
     const existing = this.accessories.find((acc) => acc.UUID === uuid);
     const displayName = this.getDeviceDisplayName(device);
 

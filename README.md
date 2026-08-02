@@ -1,8 +1,8 @@
-# @sealad886/homebridge-blink-cameras-new-api
+# @lordjohnwhorfin/homebridge-blink-cameras-new-api
 
-[![npm](https://img.shields.io/npm/v/%40sealad886%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api)
+[![npm](https://img.shields.io/npm/v/%40lordjohnwhorfin%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@lordjohnwhorfin/homebridge-blink-cameras-new-api)
 [![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
-[![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
+[![Test](https://github.com/LordJohnWhorfin/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/LordJohnWhorfin/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
 
 > Important: This plugin uses Blink's private OAuth and REST APIs. All APK-known
@@ -10,6 +10,9 @@
 > the REST tier discovered after token issuance. Only an EU/Ireland account has
 > live-account evidence. Non-EU accounts are not live-validated and remain covered
 > by Android 57.1 APK traces plus automated routing tests.
+
+## Disclaimer
+This is @sealad886's plugin with a minor network rejection change to allow Blink users with multiple homes on the same account to selectively reject Blink networks on a homebridge instance. Works for me, but I'm not sure what the future holds for this branch, use at your own risk. Please don't use this branch if you want to see all or most of the devices connected to your account, it will not be helpful to you and at best it will be behind @sealad886's version.
 
 Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Blink devices as proper HomeKit accessories:
 
@@ -154,6 +157,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` always fetches a new snapshot |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
+| `excludedNetworks` | No | - | List of networks (Blink Sync module names) to exclude |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
 | `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout }` (legacy `deviceSettings` is still accepted; `motionTimeout` is the currently applied runtime override) |
 
