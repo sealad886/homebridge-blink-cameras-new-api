@@ -410,6 +410,47 @@ export class HostedAuthService {
     }
   }
 
+  async getNetworks(deviceId?: string): Promise<string[]> {
+	  this.options.logger.info('[Hosted Auth] getNetworks called! Checking status...');
+    const authStatus = await this.status();
+    if (!authStatus.authenticated) {
+      throw new Error('Not authenticated with Blink.');
+    }
+
+    // Fall back safely to default device ID string without checking state.deviceId
+    const resolvedDeviceId = deviceId || 'homebridge-blink';
+
+    try {
+      this.options.logger.info('[Hosted Auth] Connecting to Blink API...');
+      const context = await this.getPersistedApiContext(resolvedDeviceId);
+      await context.api.login();
+      const homescreen = await context.api.getHomescreen();
+
+      const persisted = await this.loadPersistedAuthState();
+      if (!persisted.state) {
+        this.invalidateRetainedSession();
+        throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
+      }
+
+      this.bindApiToState(context.api, persisted.state);
+
+      // Ensure we return an array of strings (network names) for the frontend
+      const rawNetworks = homescreen?.networks || {};
+      if (Array.isArray(rawNetworks)) {
+        return rawNetworks.map((net: { name: string }) => net.name);
+      } else {
+        const networksRecord = rawNetworks as Record<string, { name?: string }>;
+        return Object.keys(networksRecord).map((id: string) => networksRecord[id]?.name || id);
+      }
+    } catch (error: unknown) { // Use unknown instead of any
+      this.options.logger.warn('[Hosted Auth] Failed to fetch Blink networks.');
+
+      // Safely check if the error is a standard Error object before reading .message
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error('Could not fetch networks from Blink: ' + errorMessage);
+    }
+  }
+
   async clear(): Promise<void> {
     try {
       await this.api?.cancelHostedLogin();

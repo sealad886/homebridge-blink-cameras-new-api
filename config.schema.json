@@ -218,6 +218,15 @@
           "title": "Device Identifier"
         }
       },
+      "excludedNetworks": {
+        "title": "Excluded Networks",
+        "description": "List of networks (Blink Sync module names) to ignore.",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "title": "Network Identifier"
+        }
+      },
       "deviceNameOverrides": {
         "title": "Custom Device Names",
         "description": "Override display names for devices in HomeKit.",
