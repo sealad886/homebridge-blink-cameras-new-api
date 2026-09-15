@@ -967,8 +967,8 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
 
       expect(loaded).toEqual(sampleState);
       expect(openSpy).toHaveBeenCalledWith(dotFilePath, expect.any(Number));
-      expect(chmodMocks).toHaveLength(1);
-      expect(chmodMocks[0]).not.toHaveBeenCalled();
+      expect(chmodMocks.length).toBeGreaterThan(0);
+      for (const chmod of chmodMocks) expect(chmod).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
     }
