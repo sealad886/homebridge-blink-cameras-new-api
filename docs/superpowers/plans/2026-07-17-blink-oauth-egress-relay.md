@@ -1,5 +1,6 @@
 # Blink OAuth Egress-Matched Acceptance Implementation Plan
 
+> Historical implementation recipe. Beads was retired on 2026-09-15; use GitHub issues and `docs/RELEASE.md` for current tracking and release commands.
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Determine whether Blink accepts the Homebridge-hosted authorization-code flow when browser authorization and Pi-side token exchange share one public egress, persist any successful session through the real plugin path, roll back all temporary routing, and update canonical authentication documentation with the result.
@@ -10,7 +11,7 @@
 
 ## Global Constraints
 
-- Beads issue `homebridge-blinkcameras-2yh` remains the canonical task record; plan checkboxes are implementation-runbook structure required by the planning skill, not a second issue tracker.
+- Historical tracker reference: `homebridge-blinkcameras-2yh`; current outstanding work is reconciled in GitHub.
 - The live account is EU/Ireland. Non-EU conclusions remain APK-derived and parameterized/static unless separately live-tested.
 - Never emit, inspect, persist in diagnostics, or document credentials, MFA values, callback URLs or query parameters, authorization codes, state, PKCE material, tokens, account/email/phone/device identifiers, auth-file contents, or public IP addresses.
 - Never decrypt TLS. The relay may observe only a fixed allowlisted CONNECT authority and connection lifecycle.
@@ -720,17 +721,16 @@ git commit -m "docs(auth): record hosted OAuth acceptance evidence"
 
 If `CHANGELOG.md` did not require an edit, omit it from `git add`.
 
-- [ ] **Step 6: Close or update Beads and land the session**
+- [ ] **Step 6: Close or update the GitHub issue and land the session**
 
-Add a secret-free Beads comment with the bounded outcome, rollback verification, test counts, and residual gaps. Close `homebridge-blinkcameras-2yh` only if usable tokens were persisted, normal unproxied reconnect passed, docs are correct, and no required work remains. Otherwise leave it in progress and create a linked discovered-from issue for the Android AppAuth harness.
+Add a secret-free GitHub issue comment with the bounded outcome, rollback verification, test counts, and residual gaps. Close the related GitHub issue only if usable tokens were persisted, normal unproxied reconnect passed, docs are correct, and no required work remains. Otherwise leave it in progress and create a linked GitHub issue for the Android AppAuth harness.
 
 Then run:
 
 ```bash
 git pull --rebase
-bd dolt push
 git push
 git status --short --branch
 ```
 
-Expected: push succeeds and Git reports the branch up to date with `origin`, with only the preserved user-owned untracked files. If no Beads Dolt remote is configured, record that fixed condition and continue with Git push rather than treating it as a code failure.
+Expected: push succeeds and Git reports the branch up to date with `origin`, with only the preserved user-owned untracked files.

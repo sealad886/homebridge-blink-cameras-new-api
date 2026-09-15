@@ -1,5 +1,6 @@
 # Blink Hosted OAuth Login Implementation Plan
 
+> Historical implementation recipe. Beads was retired on 2026-09-15; use GitHub issues and `docs/RELEASE.md` for current tracking and release commands.
 > Historical execution artifact. The implemented release is now `0.9.1`; use
 > `docs/adr/001-authentication.md`, `blink_api_map.md`, and
 > `docs/integration_checklist.md` for the current runtime contract and
@@ -18,7 +19,7 @@
 
 ## Global Constraints
 
-- Beads issue `homebridge-blinkcameras-2yh` is the authoritative work tracker; these checkboxes are the execution recipe required by the planning workflow, not a second issue tracker.
+- Historical tracker reference: `homebridge-blinkcameras-2yh`; current outstanding work is reconciled in GitHub.
 - Follow red-green-refactor: every production change begins with a focused failing Jest assertion whose failure is observed before implementation.
 - Blink Android 57.1 build 29715642 is the exact protocol authority; retain source references to `UnifiedSignInUtils.java`, `TokenRequest.java`, `NoClientAuthentication.java`, `OauthApi.java`, `BaseUrls.java`, `TierRepository.java`, and `ProductionTier.java` in tests and documentation.
 - The hosted profile is `client_id=android`, `redirect_uri=https://applinks.blink.com/signin/callback`, `scope=client`, `prompt=login`, 64 random verifier bytes, S256, 32 random state bytes, and 32 random flow-ID bytes.
@@ -1090,7 +1091,7 @@ Review every secret-scan match as protocol prose or fixture placeholder; no live
 
 **Interfaces:**
 - Consumes: version 0.9.0 package, Homebridge service commands, Brave, iCloud Keychain operator action, Messages MFA operator action, and the owner’s EU/Ireland account.
-- Produces: live hosted login proof, file-mode/restart/refresh/device-discovery evidence, rollback capability, final Beads closure, conventional commit(s), and pushed `main`.
+- Produces: live hosted login proof, file-mode/restart/refresh/device-discovery evidence, rollback capability, final GitHub issue closure, conventional commit(s), and pushed `main`.
 
 - [ ] **Step 1: Create a metadata-only protected rollback backup on the Pi**
 
@@ -1148,26 +1149,23 @@ Reopen plugin settings in Brave; confirm it restores authenticated status withou
 
 - [ ] **Step 6: Execute rollback only if a live acceptance gate fails**
 
-If a gate fails, reinstall the known 0.8.1 package, stop Homebridge before restoring the untouched backup with `homebridge:homebridge` ownership and mode `0600`, remove pending state, restart, and verify service/device recovery. Record the failure category without secret-bearing data, create a Beads issue linked with `discovered-from:homebridge-blinkcameras-2yh`, and leave the main issue open.
+If a gate fails, reinstall the known 0.8.1 package, stop Homebridge before restoring the untouched backup with `homebridge:homebridge` ownership and mode `0600`, remove pending state, restart, and verify service/device recovery. Record the failure category without secret-bearing data, create or update the related GitHub issue with a reference to historical `homebridge-blinkcameras-2yh`, and leave the main issue open.
 
 If all gates pass, retain the new hosted token state and delete the temporary transferred tarball; retain the root-owned rollback backup until the user explicitly asks to remove it.
 
-- [ ] **Step 7: Update Beads, inspect the final diff, commit any acceptance-only correction, and push**
+- [ ] **Step 7: Update the GitHub issue, inspect the final diff, commit any acceptance-only correction, and push**
 
 Run:
 
 ```bash
-bd update homebridge-blinkcameras-2yh --notes "EU/Ireland live hosted OAuth accepted on raspberrypi.local: Homebridge UI launch, Blink-hosted credentials/MFA, clipboard callback completion, prde tier discovery, owner-only token persistence, restart, Android refresh, homescreen, and device rediscovery verified. Non-EU targets remain APK-evidenced plus parameterized/mocked, not live-account tested." --json
-bd close homebridge-blinkcameras-2yh --reason "Hosted OAuth implemented, documented, locally verified, and live-tested on the authorized EU account" --json
 git status --short --branch
 git log --oneline --decorate -8
 git pull --rebase
-bd dolt push
 git push
 git status --short --branch
 ```
 
-If live acceptance required a tracked correction, run the focused failing test first, implement it, rerun full gates, and commit it with a scoped Conventional Commit before closing Beads. Final status must show `main...origin/main` with only `.vscode/` and `__tests__/.DS_Store` untracked.
+If live acceptance required a tracked correction, run the focused failing test first, implement it, rerun full gates, and commit it with a scoped Conventional Commit before closing the GitHub issue. Final status must show `main...origin/main` with only `.vscode/` and `__tests__/.DS_Store` untracked.
 
 ---
 
@@ -1178,4 +1176,4 @@ If live acceptance required a tracked correction, run the focused failing test f
 - EU/Ireland live result on `raspberrypi.local`, including hosted flow, `prde` discovery, owner/mode metadata, restart, refresh, homescreen, and unchanged device discovery, without account secrets.
 - Non-EU evidence statement: explicit APK production tier constants and four-character dynamic tier acceptance, plus passing target matrix; no non-EU live-account claim.
 - Remaining bounded risk: Blink OAuth and REST APIs are private/undocumented and may change independently of this plugin.
-- Final Beads state, pushed commit hash, and confirmation that unrelated untracked files were untouched.
+- Final GitHub issue state, pushed commit hash, and confirmation that unrelated untracked files were untouched.
