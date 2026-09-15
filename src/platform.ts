@@ -363,7 +363,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         && this.isNetworkExcluded(device)) excludedNetworkIds.add(device.id);
     }
     const excluded = (device: { id: number; name: string; serial?: string; network_id?: number }) =>
-      this.isDeviceExcluded(device) || (device.network_id !== undefined && excludedNetworkIds.has(device.network_id));
+      this.isDeviceExcluded(device) || (device.network_id !== undefined && (
+        excludedNetworkIds.has(device.network_id) || (this.config.excludedNetworks ?? []).includes(String(device.network_id))
+      ));
 
     // Only explicit exclusions remove cached accessories. A temporarily absent
     // device must retain its HomeKit identity and automations.
@@ -377,7 +379,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, removed);
       for (const accessory of removed) {
         this.accessories.splice(this.accessories.indexOf(accessory), 1);
-        const id = accessory.context.device.id;
+        const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${id}`)) this.networkAccessories.delete(id);
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-camera-${id}`)) this.cameraAccessories.delete(id);
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-doorbell-${id}`)) this.doorbellAccessories.delete(id);
