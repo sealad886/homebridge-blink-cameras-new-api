@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileAuthStorage, AuthStateChangedError } from '../../src/blink-api/auth-storage';
 import { withAuthStorageLock } from '../../src/blink-api/auth-storage-lock';
+import * as secureFiles from '../../src/blink-api/secure-json-file';
 import { readOwnerOnlyJsonFile, writeOwnerOnlyJsonFile } from '../../src/blink-api/secure-json-file';
 import { InvalidAuthStateError } from '../../src/blink-api/auth-state';
 import { fork } from 'node:child_process';
@@ -17,6 +18,7 @@ describe('credential storage authority', () => {
     filePath = path.join(directory, '.blink-auth.json');
   });
   afterEach(async () => {
+    jest.restoreAllMocks();
     await fs.rm(directory, { recursive: true, force: true });
   });
 
@@ -109,6 +111,74 @@ describe('credential storage authority', () => {
     expect(backups).toHaveLength(1);
     expect(await readOwnerOnlyJsonFile(path.join(path.dirname(legacy), backups[0]))).toBe('damaged legacy contents');
     await expect(fs.stat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects failed legacy cleanup before committing a replacement and allows retry', async () => {
+    const legacy = path.join(directory, 'legacy', 'auth.json');
+    await writeOwnerOnlyJsonFile(filePath, state('old'));
+    await writeOwnerOnlyJsonFile(legacy, state('legacy'));
+    const storage = new FileAuthStorage(filePath, legacy);
+    await storage.load();
+    const remove = jest.spyOn(secureFiles, 'removeOwnerOnlyFile').mockRejectedValueOnce(new Error('cleanup failed'));
+    await expect(storage.replace(state('new'))).rejects.toThrow('cleanup failed');
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('old'));
+    expect(await storage.hasChanged()).toBe(false);
+    remove.mockRestore();
+    await storage.replace(state('new'));
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('new'));
+  });
+
+  it('preserves the migrated session and its writer baseline when legacy cleanup fails', async () => {
+    const legacy = path.join(directory, 'legacy', 'auth.json');
+    await writeOwnerOnlyJsonFile(legacy, state('old'));
+    const storage = new FileAuthStorage(filePath, legacy);
+    const remove = jest.spyOn(secureFiles, 'removeOwnerOnlyFile').mockRejectedValue(new Error('cleanup failed'));
+    await expect(storage.load()).rejects.toThrow('cleanup failed');
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('old'));
+    expect(await readOwnerOnlyJsonFile(legacy)).toEqual(state('old'));
+    expect(await storage.hasChanged()).toBe(false);
+    await expect(storage.replace(state('new'))).rejects.toThrow('cleanup failed');
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('old'));
+    remove.mockRestore();
+    await storage.replace(state('new'));
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('new'));
+  });
+
+  it('preserves a sole valid legacy session if replacement fails after migrating it', async () => {
+    const legacy = path.join(directory, 'legacy', 'auth.json');
+    await writeOwnerOnlyJsonFile(legacy, state('old'));
+    const storage = new FileAuthStorage(filePath, legacy);
+    const realWrite = secureFiles.writeOwnerOnlyJsonFile;
+    const write = jest.spyOn(secureFiles, 'writeOwnerOnlyJsonFile').mockRejectedValueOnce(new Error('migration failed'));
+    await expect(storage.load()).rejects.toThrow('migration failed');
+    expect(await readOwnerOnlyJsonFile(legacy)).toEqual(state('old'));
+    write.mockRestore();
+    const replacementWrite = jest.spyOn(secureFiles, 'writeOwnerOnlyJsonFile').mockImplementation(async (target, value) => {
+      if ((value as { accessToken?: string }).accessToken === 'new') throw new Error('replacement failed');
+      await realWrite(target, value);
+    });
+    await expect(storage.replace(state('new'))).rejects.toThrow('replacement failed');
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('old'));
+    expect(await storage.hasChanged()).toBe(false);
+    replacementWrite.mockRestore();
+    await storage.replace(state('new'));
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('new'));
+  });
+
+  it('keeps old primary credentials when replacement write fails after legacy cleanup', async () => {
+    const legacy = path.join(directory, 'legacy', 'auth.json');
+    await writeOwnerOnlyJsonFile(filePath, state('old'));
+    await writeOwnerOnlyJsonFile(legacy, state('legacy'));
+    const storage = new FileAuthStorage(filePath, legacy);
+    await storage.load();
+    const write = jest.spyOn(secureFiles, 'writeOwnerOnlyJsonFile').mockRejectedValueOnce(new Error('write failed'));
+    await expect(storage.replace(state('new'))).rejects.toThrow('write failed');
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('old'));
+    await expect(fs.stat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await storage.hasChanged()).toBe(false);
+    write.mockRestore();
+    await storage.replace(state('new'));
+    expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('new'));
   });
 
   it('releases a storage lock after an operation rejects', async () => {

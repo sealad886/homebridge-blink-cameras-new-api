@@ -10,6 +10,8 @@ import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfi
 import { BlinkApi } from '../src/blink-api';
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
+import { BlinkTokenRefreshError } from '../src/blink-api/auth';
+import { BlinkHttpError } from '../src/blink-api/http';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 
@@ -47,6 +49,42 @@ type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
 };
 
 describe('Accessory handlers', () => {
+  it.each([
+    new BlinkTokenRefreshError('temporary'),
+    new BlinkTokenRefreshError('storage'),
+    new BlinkHttpError('Unauthorized', 401, '', 'https://rest-prod.immedia-semi.com/', 'POST'),
+    new Error('Unrelated failure containing 409'),
+  ])('stops thumbnail download when refresh fails with %s', async (error) => {
+    const headers = jest.fn();
+    const source = new BlinkCameraSource({
+      requestCameraThumbnail: jest.fn().mockRejectedValue(error), getAuthHeaders: headers,
+    } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+    () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
+    const callback = jest.fn();
+    await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+    expect(callback).toHaveBeenCalledWith(error);
+    expect(headers).not.toHaveBeenCalled();
+  });
+
+  it('downloads the existing thumbnail only for a typed busy response', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([7]).buffer });
+    try {
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail: jest.fn().mockRejectedValue(new BlinkHttpError('Busy', 409, '',
+          'https://rest-prod.immedia-semi.com/', 'POST')),
+        getAuthHeaders: jest.fn().mockReturnValue({}),
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
+      const callback = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+      expect(callback).toHaveBeenCalledWith(undefined, Buffer.from([7]));
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each(['snapshot', 'manual refresh'])('rejects a late %s image after an offline update and recovers', async (operation) => {
     let available = true;
     let goOfflineDuringDownload = true;

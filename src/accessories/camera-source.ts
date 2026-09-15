@@ -21,7 +21,7 @@ import {
   StreamingRequest,
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
-import { AuthStateChangedError } from '../blink-api/auth-storage';
+import { BlinkHttpError } from '../blink-api/http';
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { Buffer } from 'node:buffer';
@@ -466,16 +466,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         }
       }
     } catch (error) {
-      // Log but don't fail - we may still have a cached thumbnail
-      // A logout/account switch must never fall through to a bearer-auth fetch.
-      if (error instanceof AuthStateChangedError) throw error;
-      // 409 Conflict means camera is busy (e.g., during live view) - this is expected
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (errorMsg.includes('409')) {
-        // Camera busy - don't log as error, just skip this refresh
-        return;
-      }
-      this.logError(`Thumbnail request failed: ${error}`);
+      // Only a typed HTTP conflict permits downloading the existing thumbnail.
+      // Authentication, persistence, and transport failures must stop before bearer use.
+      if (error instanceof BlinkHttpError && error.failure === 'http' && error.status === 409) return;
+      throw error;
     }
   }
 

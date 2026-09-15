@@ -651,7 +651,12 @@
       });
       if (!networks.length) container.textContent = 'No networks found.';
       document.getElementById('saveNetworks').classList.toggle('hidden', !networks.length);
+      document.getElementById('saveNetworks').disabled = !networks.length;
     } catch {
+      discoveredNetworks = [];
+      document.getElementById('blinkNetworkList').replaceChildren();
+      document.getElementById('saveNetworks').classList.toggle('hidden', true);
+      document.getElementById('saveNetworks').disabled = true;
       showError('Could not load Blink networks. Test the connection and try again.');
     } finally {
       button.disabled = false;
