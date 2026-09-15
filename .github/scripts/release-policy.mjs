@@ -66,3 +66,22 @@ export async function waitForTagRemoval(name, tags, before, options) {
   for (const tag of tags) assert(!metadata['dist-tags'][tag], `Dist-tag still exists: ${tag}`);
   return metadata;
 }
+
+
+export function compareStableVersions(left, right) {
+  assert.equal(releaseTag(left), 'latest');
+  assert.equal(releaseTag(right), 'latest');
+  const parts = right.split('.').map(BigInt);
+  for (const [index, value] of left.split('.').map(BigInt).entries()) {
+    if (value !== parts[index]) return value > parts[index] ? 1 : -1;
+  }
+  return 0;
+}
+
+export function assertTrustedPublishing(environment, npmVersion) {
+  assert(environment.ACTIONS_ID_TOKEN_REQUEST_URL && environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+    'GitHub OIDC is unavailable; grant id-token: write to the publish job');
+  assert(!environment.NODE_AUTH_TOKEN && !environment.NPM_TOKEN,
+    'Release publication must use OIDC without an npm token fallback');
+  assert(compareStableVersions(npmVersion, '11.5.1') >= 0, 'Trusted publishing requires npm >=11.5.1');
+}
