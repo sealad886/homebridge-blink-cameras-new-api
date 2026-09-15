@@ -79,6 +79,7 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
     this.registerRequest('/lock', this.handleLock.bind(this));
     this.registerRequest('/unlock', this.handleUnlock.bind(this));
     this.registerRequest('/test-connection', this.handleTestConnection.bind(this));
+    this.registerRequest('/getNetworks', this.handleGetNetworks.bind(this));
     this.ready();
     this.logDebug('Custom UI server ready.');
   }
@@ -134,6 +135,11 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
 
   async handleTestConnection(payload: unknown): Promise<{ success: boolean; message: string }> {
     return this.hostedAuthService.testConnection(payload as { deviceId?: string });
+  }
+
+  async handleGetNetworks(payload: unknown): Promise<Array<{ id: string; name: string }>> {
+    this.requireEmptyPayload(payload);
+    return this.hostedAuthService.getNetworks();
   }
 
   private requireEmptyPayload(payload: unknown): void {
