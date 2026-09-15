@@ -83,7 +83,10 @@ dispatch another release while that bounded wait is active.
 A recovery run also requires the existing dist-tag to match. If it does not, stop
 and arrange explicit authenticated tag maintenance; trusted publishing does not
 authorize `npm dist-tag add`. Do not repair a partial release by publishing locally
-or overwriting a Git tag.
+or overwriting a Git tag. New GitHub releases are created as drafts, receive their
+receipt asset, then publish. Recovery validates an immutable existing release's
+tag, source revision, and prerelease state, leaves it unchanged, and preserves the
+current receipt through the workflow artifact.
 
 Prereleases use `alpha`, `beta`, or `rc`; stable uses `latest`. Verify exact registry
 version, integrity, source identity, GitHub release, and dist-tags before installing.
