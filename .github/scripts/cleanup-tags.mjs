@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { registryMetadata, releaseTag, waitForTagRemoval } from './release-policy.mjs';
 
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main');
-assert(process.env.NODE_AUTH_TOKEN, 'NPM_TOKEN is not configured');
+assert(process.env.NODE_AUTH_TOKEN, 'NPM_MAINTENANCE_TOKEN is required for dist-tag maintenance; trusted publishing does not authorize this operation');
 const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
 const stable = process.env.STABLE_VERSION;
 assert.equal(releaseTag(stable), 'latest', 'Cleanup requires an accepted stable release');

@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, master]
   workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,7 +28,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
+          cache: ${{ !inputs.release && 'npm' || '' }}
+          package-manager-cache: ${{ !inputs.release }}
       - run: npm ci
       - run: npm run lint
       - run: npm run build
