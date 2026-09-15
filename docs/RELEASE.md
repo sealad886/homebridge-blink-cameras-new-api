@@ -33,6 +33,10 @@ An ordinary source push does not publish. The workflow validates the requested
 version against the manifest and runs clean-install, lint, tests, build, and
 package loadability checks on Node.js 20, 22, and 24 before publication.
 
+```sh
+gh workflow run publish.yml --ref main -f version=VERSION
+```
+
 The CI workflow alone uses the repository's npm credential. It validates registry
 responses, serializes releases, publishes the tested package, and records source
 SHA and registry integrity. Existing versions must match their original source;
@@ -79,3 +83,8 @@ After stable acceptance, use the CI cleanup workflow to remove obsolete prerelea
 dist-tags. Published versions remain available for reproducibility and rollback;
 routine cleanup must never call npm unpublish. Keep unresolved issue links open and
 separate code completion from deployed acceptance.
+
+```sh
+gh workflow run npm-prerelease-cleanup.yml --ref main \
+  -f stable_version=VERSION -f dist_tags=alpha,beta,rc
+```

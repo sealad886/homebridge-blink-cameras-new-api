@@ -36,3 +36,32 @@ export function verifyPublished(metadata, { name, version, sha, integrity, lates
   assert.equal(metadata['dist-tags'][tag], version, 'Release dist-tag is incorrect');
   if (tag !== 'latest') assert.equal(metadata['dist-tags'].latest, latestBefore, 'Prerelease changed latest');
 }
+
+async function waitForRegistry(name, ready, { readMetadata = registryMetadata, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  let metadata;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    metadata = await readMetadata(name);
+    if (ready(metadata)) return metadata;
+    if (attempt < 5) await sleep(5000);
+  }
+  return metadata;
+}
+
+export async function waitForPublished(expected, options) {
+  const tag = releaseTag(expected.version);
+  const metadata = await waitForRegistry(expected.name,
+    (current) => Boolean(current.versions[expected.version]) && current['dist-tags'][tag] === expected.version,
+    options);
+  verifyPublished(metadata, expected);
+  return metadata;
+}
+
+export async function waitForTagRemoval(name, tags, before, options) {
+  const metadata = await waitForRegistry(name, (current) => {
+    assert.equal(current['dist-tags'].latest, before['dist-tags'].latest, 'Cleanup changed latest');
+    for (const version of Object.keys(before.versions)) assert(current.versions[version], `Published version disappeared: ${version}`);
+    return tags.every((tag) => !current['dist-tags'][tag]);
+  }, options);
+  for (const tag of tags) assert(!metadata['dist-tags'][tag], `Dist-tag still exists: ${tag}`);
+  return metadata;
+}
