@@ -148,23 +148,30 @@ unchanged. This proves the baseline, not acceptance of the new release. Pi confi
 auth, and accessory persistence were backed up owner-only and key files compared
 successfully before any upgrade.
 
-Beads inventory is readable by connecting to the existing project Dolt server.
-Automatic startup had tried other ports despite the existing database lock.
-The recovered inventory contains 14 open/in-progress records; native Dolt backup
-and an all-79-record export were created before repair. Writes still require
-the operator's sole-migrator decision for schema v49 to v53.
+### Retired tracker intake
 
-| Existing records | Evidence and release disposition |
+The owner retired Beads on 2026-09-15. Its recovered 14 outstanding records are
+preserved below for GitHub reconciliation; historical IDs are references, not an
+active tracker. A verified owner-only archive preserves the complete local state,
+Git hook/config snapshots, the native database backup, and all 79 exported records.
+No schema migration is required for release. GitHub issues and release PRs now own
+acceptance evidence and remaining work.
+
+| Existing records | GitHub disposition and acceptance |
 |---|---|
-| `y0o`, `2yh`, `ct1` | Hosted sign-in, verification transition, and UI/browser evidence remain physical beta gates. |
-| `gq2` | Legacy npm/Travis credential revocation needs operator verification before release. Never include credentials in evidence. |
-| `c91` | Current `.travis.yml` contains no deploy credential; ready for evidence-backed reconciliation when Beads writes resume. |
-| `hb-blinkcameras-9cs`, `956`, `es1` | Hardware probing/fallback and negotiated frame-rate logic exist. Physical streaming and smoothness acceptance remain required. |
-| `r7d` | Native Android AppAuth harness is separate from this plugin release; defer native-device work unless needed to resolve a reproduced hosted-login blocker. |
-| `hb-blinkcameras-pes` | Release delivery remains open until stable CI publication, Pi installation, and observation gates finish. |
-| `4wg` | Unsupported Amazon OAuth profile is now explicitly rejected with tests; no Amazon vendor integration is added. |
-| `kuq`, `zqg` | Duplicate reports of ignored `enableMotion` UI control; removed that nonfunctional control while preserving saved config and actual Motion switches. |
-| `02y` | Retain historical issue IDs and prefixes; no destructive normalization is needed for release. |
+| `y0o`, `2yh`, `ct1` | [#23](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/23), open: fresh hosted sign-in, verification, UI diagnostics, token persistence, restart and natural refresh remain physical beta gates; related restart issue [#1](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/1). |
+| `gq2` | [#24](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/24), open: owner believes the old token was probably revoked, but account-side revocation remains unverified. OIDC replacement does not prove revocation. |
+| `c91` | Current `.travis.yml` contains no deploy credential; source cleanup is verified. Remaining external credential disposition is consolidated into [#24](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/24), without a duplicate cleanup issue. |
+| `hb-blinkcameras-9cs`, `956`, `es1` | Existing [#18](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/18), open, and release [PR #22](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/22): physical streaming, negotiated frame rate and hardware/software fallback acceptance remain outstanding. No duplicate streaming issue created. |
+| `r7d` | [#25](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/25), open and deferred: native Android AppAuth investigation only if needed for a reproduced hosted-login blocker. |
+| `hb-blinkcameras-pes` | [PR #22](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/22) owns current CI-to-npm release delivery, Pi installation and observation gates; no duplicate release issue created. |
+| `4wg` | Unsupported Amazon OAuth state is explicitly rejected with tests in [PR #22](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/22). No Amazon vendor integration is added; no outstanding design decision remains. |
+| `kuq`, `zqg` | Duplicate ignored `enableMotion` reports: [PR #22](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/22) removes the nonfunctional UI control while preserving saved config and actual Motion switches. No duplicate issues created. |
+| `02y` | Obsolete after tracker retirement; IDs are preserved in the archive and this intake. No prefix-normalization work or GitHub issue is needed. |
+
+GitHub intake was reconciled against all four existing issue records before
+creating #23–#25; all three were read back as open. No GitHub issue was closed by
+this migration. The retired record IDs above retain their original provenance.
 
 GitHub #17 is implemented by adapting PR #19 with contributor attribution,
 operation serialization, ID-based exclusions, and current-config preservation.
@@ -177,18 +184,27 @@ updated within declared ranges to reach zero reported vulnerabilities.
 
 CI publication now requires explicit exact-version dispatch on main, gated by
 Node 20/22/24 and package checks. The target is 0.10.0 because network exclusion
-adds a public capability. Release stage evidence and issue state remain in Beads
-and GitHub; this audit records findings and does not replace either tracker.
+adds a public capability. Release stage evidence and issue state belong in GitHub issues and PRs; this
+audit preserves historical findings and the retired tracker intake.
 
-Final local integration checks passed 513 tests across 22 suites, 23 release
-contract tests, lint, build, and npm audit (zero reported vulnerabilities).
-Review also corrected legacy-cleanup commit ordering, thumbnail fallback after
-authentication failure, stale network discovery controls, and registry propagation
-and retry receipts. Independent review cleared those corrections. CodeRabbit's
-final repeat is pending its reported rate-limit reset; prior findings are fixed,
-but an unavailable review is not a clean outcome. GitHub also requires an eligible
-approving review after the final push. No candidate publication or installation
-has occurred, and no observation window has started.
+### Updated release preparation evidence (2026-09-15)
+
+Current local integration checks passed **523 Jest tests across 22 suites**,
+**27 release-contract tests**, lint, build, and `git diff --check`. Independent
+release/CI review cleared the changes. The owner explicitly waived the final
+CodeRabbit run for this stage; that is an accepted gate waiver, not a claim that
+an unavailable review passed. Live defects may trigger later review runs.
+
+The repository now prepares npm trusted publishing through GitHub Actions OIDC,
+without relying on the uncertain legacy npm token. npm account-side publisher
+trust configuration is still pending private login. Legacy credential revocation
+remains separately open in [#24](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/24).
+
+The owner reported approvals for PRs #20 and #22; current GitHub state still
+reports `REVIEW_REQUIRED`. Reconcile the actual platform gate before merge rather
+than treating the statement as a successful merge or bypassing required review.
+No candidate publication or installation has occurred, and no observation window
+has started. Beads retirement is complete locally and is no longer a release gate.
 
 - Hosted OAuth retains exact callback authority/path, S256 PKCE, constant-time
   state validation, transaction expiry, hardware binding, and consume-before-
@@ -216,21 +232,17 @@ has occurred, and no observation window has started.
   acceptance are now authorized but **not yet completed for the candidate**. Existing
   hosted/native-probe issues `homebridge-blinkcameras-2yh` and `-r7d` retain that
   historical boundary; this audit does not claim to close them.
-- Beads reads succeeded, but issue creation was blocked: remote-backed database
-  schema v49 requires four migrations to v53, and the CLI requires one designated
-  migrator or adoption of another clone. No migration, remote sync, or replacement
-  database was attempted. This report is the required audit artifact, not a
-  replacement task tracker. Operator must resolve that migration gate before
-  Beads audit issue/status writes can be recorded.
-  `bd doctor` also found old hooks; `bd hooks install --force` refreshed only
-  local Git hooks successfully, without migrating or syncing the database.
+- The retired tracker initially blocked writes on a v49-to-v53 migration gate.
+  The owner subsequently authorized removing it instead. Local state was archived
+  and repository integration removed; no database migration or remote sync is
+  needed. Global tooling and other repositories remain outside this removal.
 
 Residual disposition: same-UID access, opaque-token verification at the provider,
 in-flight operations, fail-closed restart on session change, legacy omitted
 state under PKCE, and manual orphan-lock recovery are **accepted residual risk**
 as bounded implementation tradeoffs within this audit's delegated judgment.
-Candidate live acceptance is **pending** and Beads status writes are **blocked**, with next actions
-specified above. These dispositions do not certify a deployment or release.
+Candidate live acceptance is **pending**, with next actions recorded in the
+release PR. Tracker retirement does not waive physical or release acceptance. These dispositions do not certify a deployment or release.
 
 ## Primary references
 
