@@ -1,15 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { Console } from 'node:console';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import process from 'node:process';
 
 const logger = new Console({ stdout: process.stdout, stderr: process.stderr });
 
 const args = new Set(process.argv.slice(2));
+const releaseCommand = () => `gh workflow run publish.yml --ref main -f version=${JSON.parse(readFileSync('package.json', 'utf8')).version}`;
 
 if (args.has('--yes')) {
     logger.error('The --yes local publish mode has been removed.');
-    logger.error('Run `npm run release` for validation, then make sure the version bump commit is on main before pushing `git push origin main --follow-tags` to trigger publish.yml.');
+    logger.error(`Run npm run release for validation, merge the reviewed version bump to main, then dispatch: ${releaseCommand()}`);
     process.exit(1);
 }
 
@@ -39,7 +40,7 @@ const run = (command, commandArgs, options = {}) => {
 const ensureCleanWorkingTree = () => {
     const result = run('git', ['status', '--porcelain'], { capture: true });
     if (result.stdout.trim().length > 0) {
-        logger.error('Working tree is not clean. Commit or stash changes before releasing.');
+        logger.error('Working tree is not clean. Preserve unrelated changes and run release preflight in a dedicated clean clone of the reviewed source.');
         process.exit(1);
     }
 };
@@ -72,4 +73,4 @@ run('npm', ['run', 'clean']);
 run('npm', ['run', 'build']);
 packAndClean();
 
-logger.log('\nRelease checks complete. Once the version bump commit is on main, push `git push origin main --follow-tags` to trigger publish.yml.');
+logger.log(`\nRelease checks complete. After the reviewed version bump is merged to main, dispatch: ${releaseCommand()}`);
