@@ -47,6 +47,56 @@ type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
 };
 
 describe('Accessory handlers', () => {
+  it.each(['snapshot', 'manual refresh'])('rejects a late %s image after an offline update and recovers', async (operation) => {
+    let available = true;
+    let goOfflineDuringDownload = true;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockImplementation(async () => ({
+      ok: true,
+      arrayBuffer: async () => {
+        if (goOfflineDuringDownload) {
+          available = false;
+        }
+        return new Uint8Array([1, 2, 3]).buffer;
+      },
+    })) as unknown as typeof fetch;
+    const source = new BlinkCameraSource({
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10 }),
+      pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+      getAuthHeaders: jest.fn().mockReturnValue({}),
+    } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+    () => 'https://rest-e006.immedia-semi.com/thumbnail.jpg', () => available, jest.fn(),
+    { persistSnapshotCache: true });
+    try {
+      if (operation === 'snapshot') {
+        const callback = jest.fn();
+        await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, callback);
+        expect(callback).toHaveBeenCalledWith(expect.any(Error));
+      } else {
+        await expect(source.refreshSnapshotCache()).rejects.toThrow('unavailable');
+      }
+      available = true;
+      goOfflineDuringDownload = false;
+      const recovered = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, recovered);
+      expect(recovered).toHaveBeenCalledWith(undefined, Buffer.from([1, 2, 3]));
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([undefined, '', 'online', 'done', 'new-provider-status'])('does not infer offline from status %s and recovers after offline', (status) => {
+    const { hap, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: true, status: 'offline' };
+    const handler = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    handler.updateState({ ...device, status });
+    expect(accessory.getService(hap.Service.MotionSensor)
+      ?.getCharacteristic(hap.Characteristic.StatusActive).value).toBe(true);
+  });
+
   it('does not fetch a thumbnail with retained credentials after logout', async () => {
     const headers = jest.fn();
     const source = new BlinkCameraSource({

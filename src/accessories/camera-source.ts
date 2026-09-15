@@ -378,6 +378,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private cacheSnapshot(buffer: Buffer): void {
+    // Status polling can report the camera offline while its image is downloading.
+    // Never publish or retain that late response as an available snapshot.
+    if (!this.isDeviceAvailable()) {
+      this.cachedSnapshot = null;
+      this.cachedSnapshotTime = 0;
+      throw new Error('Camera is unavailable/offline');
+    }
     this.cachedSnapshot = buffer;
     this.cachedSnapshotTime = Date.now();
   }
