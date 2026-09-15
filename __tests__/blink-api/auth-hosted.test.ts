@@ -41,6 +41,8 @@ const UPSTREAM_BODY = 'upstreamBodySentinel_4Dt6Wu';
 const STORAGE_FAILURE = 'storageFailureSentinel_5Eu5Vt';
 const STORAGE_LOAD_FAILURE = 'storageLoadFailureSentinel_6Fv4Us';
 const AUTH_STATE_LOAD_FAILED = 'Blink authentication state could not be loaded.';
+const AUTH_LOCKED_REAUTHENTICATION_REQUIRED =
+  'Authentication is locked. Unlock it in the plugin settings before signing in again.';
 
 type FetchMock = jest.MockedFunction<typeof fetch>;
 
@@ -736,6 +738,50 @@ describe('BlinkAuth hosted OAuth', () => {
     expect(loginSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('does not fall back to configured legacy credentials when authentication is locked', async () => {
+    const storage = createStorage({
+      accessToken: 'legacyAccessSentinel_8Rh2Is',
+      refreshToken: 'legacyRefreshSentinel_9Si1Hr',
+      tokenExpiry: '2026-01-01T00:00:00.000Z',
+    });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      authLocked: true,
+    }));
+    const loginSpy = jest.spyOn(auth, 'login');
+    fetchMock.mockResolvedValueOnce(failedTokenResponse());
+
+    await expect(auth.ensureValidToken()).rejects.toThrow('Blink OAuth refresh failed: 400');
+
+    expect(loginSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects direct legacy sign-in while authentication is locked', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      authLocked: true,
+    }));
+
+    await expect(auth.login()).rejects.toThrow(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('directs locked token-only configurations to unlock before legacy sign-in', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { authLocked: true }));
+
+    await expect(auth.ensureValidToken()).rejects.toThrow(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('does not expose an upstream token response body in hosted completion errors or logs', async () => {
     const storage = createStorage(null);
     const { logger, entries } = createLogger();
@@ -1371,6 +1417,23 @@ describe('BlinkAuth hosted OAuth', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('keeps failed state loads strict when locked despite legacy credentials', async () => {
+    const storage = createStorage(null);
+    storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      authLocked: true,
+    }));
+    const loginSpy = jest.spyOn(auth, 'login').mockResolvedValue(undefined);
+
+    await expect(auth.ensureValidToken()).rejects.toThrow(AUTH_STATE_LOAD_FAILED);
+
+    expect(loginSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('keeps persisted-tier loading strict for configured Android despite legacy credentials', async () => {
     const storage = createStorage(null);
     storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
@@ -1441,6 +1504,33 @@ describe('BlinkAuth hosted OAuth', () => {
       await jest.runAllTimersAsync();
       await expect(result).resolves.toBeUndefined();
       expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(auth.getAccessToken()).toBe(ACCESS_TOKEN);
+      expect(storage.save).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('retains a valid locked token when proactive refresh is temporarily unavailable', async () => {
+    jest.useFakeTimers();
+    try {
+      const storage = createStorage({
+        accessToken: ACCESS_TOKEN,
+        refreshToken: REFRESH_TOKEN,
+        tokenExpiry: new Date(Date.now() + 1_800_000).toISOString(),
+      });
+      const { logger } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger, {
+        email: 'legacy@example.com',
+        password: 'legacy-password',
+        authLocked: true,
+      }));
+      const loginSpy = jest.spyOn(auth, 'login');
+      fetchMock.mockImplementation(async () => tokenResponse({}, { status: 503 }));
+
+      const result = auth.ensureValidToken();
+      await jest.runAllTimersAsync();
+
+      await expect(result).resolves.toBeUndefined();
+      expect(loginSpy).not.toHaveBeenCalled();
       expect(auth.getAccessToken()).toBe(ACCESS_TOKEN);
       expect(storage.save).not.toHaveBeenCalled();
     } finally { jest.useRealTimers(); }

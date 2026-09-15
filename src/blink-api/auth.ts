@@ -77,6 +77,8 @@ const HOSTED_TOKEN_EXCHANGE_FAILED =
   'Blink sign-in could not be completed. Start sign-in again.';
 const AUTH_STATE_LOAD_FAILED = 'Blink authentication state could not be loaded.';
 const LEGACY_TOKEN_RESPONSE_INVALID = 'Blink OAuth token response was invalid.';
+const AUTH_LOCKED_REAUTHENTICATION_REQUIRED =
+  'Authentication is locked. Unlock it in the plugin settings before signing in again.';
 
 const AUTH_ERROR_CATEGORIES = new Set([
   'account_verification_required',
@@ -1221,6 +1223,10 @@ export class BlinkAuth {
   }
 
   private async loginUnlocked(): Promise<void> {
+    if (this.config.authLocked) {
+      throw new Error(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+    }
+
     // Establish the durable baseline before the first network request. A clear or
     // replacement during sign-in must win over this older in-flight login.
     if (this.storage instanceof FileAuthStorage) {
@@ -1548,10 +1554,7 @@ export class BlinkAuth {
         return;
       }
       if (!this.canUseLegacyCredentialLogin()) {
-        throw new Error(
-          'No credentials available for OAuth login. '
-          + 'Authenticate via the plugin Custom UI or add username/password to config.',
-        );
+        throw this.legacyLoginUnavailableError();
       }
       this.logDebug('ensureValidToken → no access token → initiating legacy login');
       await this.login();
@@ -1614,8 +1617,17 @@ export class BlinkAuth {
   }
 
   private canUseLegacyCredentialLogin(): boolean {
-    return this.hasLegacyCredentials()
+    return !this.config.authLocked
+      && this.hasLegacyCredentials()
       && resolveOAuthProfile(this.oauthClientId).clientId === 'ios';
+  }
+
+  private legacyLoginUnavailableError(): Error {
+    if (this.config.authLocked) return new Error(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+    return new Error(
+      'No credentials available for OAuth login. '
+      + 'Authenticate via the plugin Custom UI or add username/password to config.',
+    );
   }
 
   getAuthHeaders(): Record<string, string> {
