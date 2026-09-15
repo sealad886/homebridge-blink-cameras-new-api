@@ -180,6 +180,16 @@ Node 20/22/24 and package checks. The target is 0.10.0 because network exclusion
 adds a public capability. Release stage evidence and issue state remain in Beads
 and GitHub; this audit records findings and does not replace either tracker.
 
+Final local integration checks passed 513 tests across 22 suites, 23 release
+contract tests, lint, build, and npm audit (zero reported vulnerabilities).
+Review also corrected legacy-cleanup commit ordering, thumbnail fallback after
+authentication failure, stale network discovery controls, and registry propagation
+and retry receipts. Independent review cleared those corrections. CodeRabbit's
+final repeat is pending its reported rate-limit reset; prior findings are fixed,
+but an unavailable review is not a clean outcome. GitHub also requires an eligible
+approving review after the final push. No candidate publication or installation
+has occurred, and no observation window has started.
+
 - Hosted OAuth retains exact callback authority/path, S256 PKCE, constant-time
   state validation, transaction expiry, hardware binding, and consume-before-
   exchange replay protection. TLS plus the token endpoint and authenticated REST
