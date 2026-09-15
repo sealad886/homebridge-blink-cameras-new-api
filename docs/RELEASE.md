@@ -1,63 +1,138 @@
 # Release Guide
 
-This document describes how to prepare and publish a new npm release for this plugin.
+All packages are built from reviewed GitHub source and published by
+`.github/workflows/publish.yml`. Installations, including prereleases and rollback,
+use exact versions from `https://registry.npmjs.org`; do not copy builds or install
+Git URLs or local tarballs on Homebridge.
 
-In this repository, the canonical publish path is a version bump pushed to `main`. GitHub Actions in `.github/workflows/publish.yml` then decides whether a remote npm publish is needed, selects the correct dist-tag, and performs the publish from CI.
+## Configure npm trusted publishing
 
-## Prerequisites
+Publication uses GitHub OIDC, not a stored npm publish token. In this package's
+npm settings, add a GitHub Actions trusted publisher with these exact values:
 
-- Node.js 20, 22, or 24 LTS and npm installed
-- GitHub access to push the release commit to `main`
-- Repository publish credentials configured for GitHub Actions (`NPM_TOKEN` today, or trusted publishing if the workflow is updated)
-- Clean working tree with all changes committed
+| Setting | Value |
+| --- | --- |
+| Package | `@sealad886/homebridge-blink-cameras-new-api` |
+| Organization or user | `sealad886` |
+| Repository | `homebridge-blink-cameras-new-api` |
+| Workflow filename | `publish.yml` |
+| Environment | Leave empty; this workflow declares no environment |
+| Allowed action | Direct `npm publish` |
 
-## Versioning
+Alternatively, use an authenticated npm CLI **11.15.0 or newer**, with package
+write access and account 2FA enabled:
 
-Use this order for a release candidate commit:
-
-1. Update `CHANGELOG.md` and any other release notes.
-2. Commit those release-note changes so the working tree is clean.
-3. Run local validation with `npm run release`.
-4. Use npm to bump the version and create a git tag:
-
-```bash
-npm version <patch|minor|major>
+```sh
+npm trust github @sealad886/homebridge-blink-cameras-new-api \
+  --file publish.yml \
+  --repo sealad886/homebridge-blink-cameras-new-api \
+  --allow-publish
 ```
 
-For prereleases, use the appropriate npm prerelease command such as `npm version preminor --preid=alpha` or `npm version prerelease --preid=beta`.
+The publish job runs on a GitHub-hosted runner with Node 24, requires npm
+**11.5.1 or newer**, and grants `id-token: write`. Release jobs and their test gates
+do not restore package-manager caches. No `NPM_TOKEN` or `NODE_AUTH_TOKEN` is passed
+to publishing; the script rejects token fallback. After trusted publication works,
+remove obsolete publish-token secrets and revoke the old npm token. Never expose
+credentials in release logs or PR comments.
 
-## Preflight (no publish)
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and
+[the npm trust command](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
 
-Run the release script without publishing to validate lint, tests, build, and package contents:
+## Prepare a version
 
-```bash
-npm run release
+Use a minor bump for new compatible capabilities, a patch for compatible fixes.
+The supported progression is `X.Y.Z-alpha.0`, `X.Y.Z-beta.0`, `X.Y.Z-rc.0`, then
+`X.Y.Z`. Increment the prerelease number after changes within a stage. Freeze the
+version target before alpha. Never reuse a published version for different code.
+
+Update `CHANGELOG.md` with a `## [VERSION] - YYYY-MM-DD` section describing user
+behavior, security fixes, upgrade notes, and known limitations. Keep package.json
+and package-lock.json versions identical. Commit version changes using Conventional
+Commits; the publishing workflow creates the Git tag at the validated source SHA.
+This intentionally avoids a local npm-version tag pointing to a pre-merge SHA.
+
+Use `npm version VERSION --no-git-tag-version`, inspect and commit the changes,
+then merge the reviewed PR to main. Resolve current-head reviews and CI before
+merging. Do not include unrelated editor files, credentials, or build artifacts.
+
+## Gates and publication
+
+Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
+build, and package contents. Use a dedicated clean clone when the working checkout
+contains unrelated user files; never stash or delete those files to satisfy it.
+
+Publication requires an explicit dispatch on main with the exact version input.
+An ordinary source push does not publish. The workflow validates the requested
+version against the manifest and runs clean-install, lint, tests, build, and
+package loadability checks on Node.js 20, 22, and 24 before publication.
+
+```sh
+gh workflow run publish.yml --ref main -f version=VERSION
 ```
 
-This is a local validation step only. It does not publish.
+The CI workflow obtains a short-lived publishing credential through OIDC. It
+validates registry responses, serializes releases, publishes the tested package,
+and records source SHA and registry integrity. Existing versions must match their original source;
+a failed post-publish release-record step can be retried at that same revision.
+A recovery run also requires the existing dist-tag to match. If it does not, stop
+and arrange explicit authenticated tag maintenance; trusted publishing does not
+authorize `npm dist-tag add`. Do not repair a partial release by publishing locally
+or overwriting a Git tag.
 
-The release helper no longer supports a local publish mode. Any previous `npm run release -- --yes` workflow has been removed.
+Prereleases use `alpha`, `beta`, or `rc`; stable uses `latest`. Verify exact registry
+version, integrity, source identity, GitHub release, and dist-tags before installing.
+A prerelease must leave the previous stable `latest` unchanged. Stable publication
+must not move `latest` backwards.
 
-## Publish
+## Homebridge upgrade and acceptance
 
-After validation and version bumping, make sure the version bump commit is on `main` and then push the release commit and tag:
+Before alpha, make an owner-only backup of config, auth state, and accessory
+persistence on the Homebridge host. Verify the backup without printing credentials.
+Record installed package versions and child-bridge identity. Preserve any other
+installed Blink plugin until ownership is understood.
 
-```bash
-git push origin main --follow-tags
+Install the exact registry version using Homebridge package management
+(`hb-service add @sealad886/homebridge-blink-cameras-new-api@VERSION`). Prefer a
+Blink child-bridge restart through Homebridge UI; record any full-service restart.
+Verify the running package version, authentication, discovery, and accessory set.
+
+Alpha requires snapshots, bounded live streams, normal/debug log inspection, and
+repeated child-bridge restarts. Beta additionally requires private hosted sign-in,
+logout/relogin, offline/recovery acceptance, at least 24 hours and one natural
+refresh. RC requires a feature freeze, current automated/review gates, physical
+critical paths, at least 48 hours and two natural refreshes. A runtime fix restarts
+the RC observation window. Keep corruption and hostile-token tests isolated.
+
+Stable must match the accepted RC runtime source except version and release notes.
+Publish and install it through the same CI/registry route. Repeat smoke acceptance
+and observe at least 24 hours including one natural refresh before completion.
+Record evidence and timestamps in the GitHub release PR, with links to issues, CI, and releases.
+
+## Rollback and cleanup
+
+Stop promotion for lost authentication, leaked credentials, recurring refresh
+failure, missing accessories, or material streaming regression. Reinstall the last
+known-good exact registry version. Preserve rotated credentials: an older backup
+may hold an invalid refresh token. Restore data only when its validity is established.
+Do not uninstall the plugin or clear Homebridge persistence as routine rollback.
+
+After stable acceptance, use the optional CI cleanup workflow to remove obsolete
+prerelease dist-tags. OIDC publishing does not authorize this maintenance operation.
+When cleanup is needed, provide a separate, short-lived granular npm token as the
+GitHub Actions secret `NPM_MAINTENANCE_TOKEN`. Limit it to read/write access for this
+package only, enable the 2FA bypass required for unattended maintenance, and use
+the shortest practical expiry. The cleanup workflow performs neither publication nor unpublication;
+it validates the accepted stable version before removing only `alpha`, `beta`, and
+`rc` tags. Remove the secret and revoke the maintenance token after cleanup.
+If the credential is absent, cleanup stops explicitly; release publication does
+not depend on it. Never reuse the old publish token as an implicit fallback.
+
+ Published versions remain available for reproducibility and rollback;
+routine cleanup must never call npm unpublish. Keep unresolved issue links open and
+separate code completion from deployed acceptance.
+
+```sh
+gh workflow run npm-prerelease-cleanup.yml --ref main \
+  -f stable_version=VERSION -f dist_tags=alpha,beta,rc
 ```
-
-If you versioned on a release branch, merge or cherry-pick that commit onto `main` before pushing.
-
-That push triggers `.github/workflows/publish.yml`, which:
-
-- compares `package.json` against the currently published npm version
-- skips publication if the version is already on npm
-- detects `alpha`, `beta`, and `rc` prerelease identifiers and publishes with the matching npm dist-tag
-- runs `npm run build` and `npm test` before publishing when a publish is required
-- creates a GitHub Release with generated release notes for the published version
-
-## After Publishing
-
-- Confirm the GitHub Actions publish workflow succeeded
-- Verify the new version and dist-tags appear on the npm registry
-- Check Homebridge loads the new version as expected

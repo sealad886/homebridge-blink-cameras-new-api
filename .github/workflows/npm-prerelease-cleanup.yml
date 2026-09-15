@@ -1,78 +1,43 @@
-name: Cleanup npm prerelease
+name: Cleanup npm prerelease tags
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Exact version to remove from npm
+      stable_version:
+        description: Exact stable version whose post-release acceptance has passed
         required: true
         type: string
-      dist_tag:
-        description: Dist-tag to remove if it still exists
-        required: false
-        default: ''
+      dist_tags:
+        description: Comma-separated prerelease tags to remove (alpha,beta,rc only)
+        default: alpha,beta,rc
+        required: true
         type: string
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   cleanup:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - name: Use Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-
-      - name: Ensure npm token present
+          package-manager-cache: false
+      # OIDC supports publication, not dist-tag maintenance. Supply a short-lived,
+      # package-scoped maintenance token only when this optional workflow is needed.
+      - name: Remove tags and verify retained versions
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN is not configured; set repository secret NPM_TOKEN to manage npm releases." >&2
-            exit 1
-          fi
-
-      - name: Configure npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-
-      - name: Remove prerelease from npm
-        env:
-          PACKAGE_NAME: '@sealad886/homebridge-blink-cameras-new-api'
-          TARGET_VERSION: ${{ inputs.version }}
-          DIST_TAG: ${{ inputs.dist_tag }}
-        run: |
-          set -euo pipefail
-
-          run_allow_missing() {
-            local output
-            local status
-
-            set +e
-            output="$("$@" 2>&1)"
-            status=$?
-            set -e
-
-            printf '%s\n' "$output"
-
-            if [ "$status" -eq 0 ]; then
-              return 0
-            fi
-
-            if printf '%s' "$output" | grep -Eq 'E404|404 Not Found|No dist-tag named|not found'; then
-              return 0
-            fi
-
-            return "$status"
-          }
-
-          if [ -n "${DIST_TAG}" ]; then
-            run_allow_missing npm dist-tag rm "${PACKAGE_NAME}" "${DIST_TAG}"
-          fi
-
-          run_allow_missing npm unpublish "${PACKAGE_NAME}@${TARGET_VERSION}"
-
-          npm view "${PACKAGE_NAME}" version dist-tags versions --json
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_MAINTENANCE_TOKEN }}
+          STABLE_VERSION: ${{ inputs.stable_version }}
+          DIST_TAGS: ${{ inputs.dist_tags }}
+        run: node .github/scripts/cleanup-tags.mjs
