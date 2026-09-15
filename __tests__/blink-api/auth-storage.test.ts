@@ -165,6 +165,29 @@ describe('credential storage authority', () => {
     expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('new'));
   });
 
+  it('backs up usable legacy credentials without activating them when malformed primary replacement fails', async () => {
+    const legacy = path.join(directory, 'legacy', 'auth.json');
+    await fs.writeFile(filePath, 'broken primary', { mode: 0o600 });
+    await writeOwnerOnlyJsonFile(legacy, state('legacy-account'));
+    const legacyContents = await fs.readFile(legacy, 'utf8');
+    const storage = new FileAuthStorage(filePath, legacy);
+    await expect(storage.load()).rejects.toThrow(InvalidAuthStateError);
+    const realWrite = secureFiles.writeOwnerOnlyJsonFile;
+    jest.spyOn(secureFiles, 'writeOwnerOnlyJsonFile').mockImplementation(async (target, value) => {
+      if (target === filePath) throw new Error('replacement write failed');
+      await realWrite(target, value);
+    });
+    await expect(storage.replace(state('new-account'))).rejects.toThrow('replacement write failed');
+    expect(await fs.readFile(filePath, 'utf8')).toBe('broken primary');
+    const backups = (await fs.readdir(path.dirname(legacy))).filter(name => name.includes('.recovery-'));
+    expect(backups).toHaveLength(1);
+    const backup = path.join(path.dirname(legacy), backups[0]);
+    expect(await readOwnerOnlyJsonFile(backup)).toBe(legacyContents);
+    if (process.platform !== 'win32') expect((await fs.stat(backup)).mode & 0o777).toBe(0o600);
+    expect(await storage.hasChanged()).toBe(false);
+    await expect(storage.load()).rejects.toThrow(InvalidAuthStateError);
+  });
+
   it('keeps old primary credentials when replacement write fails after legacy cleanup', async () => {
     const legacy = path.join(directory, 'legacy', 'auth.json');
     await writeOwnerOnlyJsonFile(filePath, state('old'));
@@ -179,6 +202,26 @@ describe('credential storage authority', () => {
     write.mockRestore();
     await storage.replace(state('new'));
     expect(await readOwnerOnlyJsonFile(filePath)).toEqual(state('new'));
+  });
+
+  it('does not resurrect leftover legacy credentials after a partially failed logout', async () => {
+    const legacy = path.join(directory, 'legacy', 'auth.json');
+    await writeOwnerOnlyJsonFile(filePath, state('old'));
+    await writeOwnerOnlyJsonFile(legacy, state('old-legacy'));
+    const realRemove = secureFiles.removeOwnerOnlyFile;
+    const remove = jest.spyOn(secureFiles, 'removeOwnerOnlyFile').mockImplementation(async target => {
+      if (target === legacy) throw new Error('legacy cleanup failed');
+      await realRemove(target);
+    });
+    await expect(new FileAuthStorage(filePath, legacy).clear()).rejects.toThrow('legacy cleanup failed');
+    const next = new FileAuthStorage(filePath, legacy);
+    await expect(next.load()).resolves.toBeNull();
+    await expect(fs.stat(filePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(next.replace(state('new'))).rejects.toThrow('legacy cleanup failed');
+    await expect(fs.stat(filePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    remove.mockRestore();
+    await next.replace(state('new'));
+    await expect(new FileAuthStorage(filePath, legacy).load()).resolves.toEqual(state('new'));
   });
 
   it('releases a storage lock after an operation rejects', async () => {

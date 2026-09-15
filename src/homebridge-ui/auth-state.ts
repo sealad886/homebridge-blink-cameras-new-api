@@ -62,6 +62,8 @@ export async function loadPersistedAuthStateFromFiles(
     );
   };
 
+  // Only an absent primary permits legacy lookup. Invalid or unreadable
+  // primary state remains authoritative; do not silently select another account.
   for (const [index, filePath] of filePaths.entries()) {
     processed = index + 1;
     logProgress(filePath, processed);
@@ -71,12 +73,12 @@ export async function loadPersistedAuthStateFromFiles(
       if (!isRecord(value) || typeof value.accessToken !== 'string' || value.accessToken.trim().length === 0) {
         ignoredMessage = `Persisted Blink authentication was ignored: ${uiFilePath} does not contain an access token`;
         logDebug(`Persisted Blink authentication was ignored: ${uiFilePath} does not contain an access token`);
-        continue;
+        break;
       }
       if (!isPersistedAuthState(value)) {
         ignoredMessage = `Persisted Blink authentication was ignored: ${uiFilePath} contains invalid authentication data`;
         logDebug(`Persisted Blink authentication was ignored: ${uiFilePath} contains invalid authentication data`);
-        continue;
+        break;
       }
       const state = value;
       if (state.tokenExpiry) {
@@ -87,7 +89,7 @@ export async function loadPersistedAuthStateFromFiles(
           logDebug(
             `Persisted Blink authentication was ignored: saved token in ${uiFilePath} has invalid expiry`,
           );
-          continue;
+          break;
         }
         if (expiryMs <= nowMs()) {
           if (typeof state.refreshToken === 'string' && state.refreshToken.trim().length > 0) {
@@ -99,7 +101,7 @@ export async function loadPersistedAuthStateFromFiles(
           logDebug(
             `Persisted Blink authentication was ignored: saved token in ${uiFilePath} is expired`,
           );
-          continue;
+          break;
         }
       }
       logDebug(`Loaded valid persisted auth state from ${uiFilePath}`);
@@ -122,6 +124,7 @@ export async function loadPersistedAuthStateFromFiles(
 
       ignoredMessage = `Persisted Blink authentication was ignored: failed to read ${uiFilePath}`;
       logDebug(`Persisted Blink authentication was ignored: failed to read ${uiFilePath}`);
+      break;
     }
   }
   complete();

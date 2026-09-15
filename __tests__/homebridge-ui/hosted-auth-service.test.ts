@@ -8,7 +8,8 @@ import {
   BlinkHostedTokenExchangeError,
   BlinkTokenRefreshError,
 } from '../../src/blink-api/auth';
-import { AuthStateChangedError } from '../../src/blink-api/auth-storage';
+import { AuthStateChangedError, FileAuthStorage } from '../../src/blink-api/auth-storage';
+import * as secureFiles from '../../src/blink-api/secure-json-file';
 import * as authState from '../../src/homebridge-ui/auth-state';
 import {
   BlinkApi,
@@ -1366,6 +1367,26 @@ describe('HostedAuthService', () => {
     await Promise.all([pending, logout]);
     await expect(fs.access(authStoragePath)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(service.status()).resolves.toMatchObject({ authenticated: false });
+  });
+
+  it('keeps UI and runtime logged out when primary cleanup succeeds but legacy cleanup fails', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    await writeOwnerOnlyState(legacyAuthStoragePath, persistedState());
+    const { logger } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(createApiDouble()) });
+    const realRemove = secureFiles.removeOwnerOnlyFile;
+    const remove = jest.spyOn(secureFiles, 'removeOwnerOnlyFile').mockImplementation(async target => {
+      if (target === legacyAuthStoragePath) throw new Error('legacy cleanup failed');
+      await realRemove(target);
+    });
+    try {
+      await expect(service.clear()).rejects.toThrow('could not be fully cleared');
+      const next = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(createApiDouble()) });
+      await expect(next.status()).resolves.toMatchObject({ authenticated: false });
+      await expect(new FileAuthStorage(authStoragePath, legacyAuthStoragePath).load()).resolves.toBeNull();
+    } finally {
+      remove.mockRestore();
+    }
   });
 
   it('continues queued authentication operations after an earlier operation fails', async () => {

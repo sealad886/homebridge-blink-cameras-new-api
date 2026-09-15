@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import type { BlinkAuthState, BlinkAuthStorage } from '../types';
-import { invalidateAuthStorageGeneration, withAuthStorageLock } from './auth-storage-lock';
+import { invalidateAuthStorageGeneration, legacyAuthStorageAllowed, withAuthStorageLock } from './auth-storage-lock';
 import { InvalidAuthStateError, isPersistedAuthState } from './auth-state';
 import {
   readOwnerOnlyTextFile,
@@ -64,7 +64,7 @@ export class FileAuthStorage implements BlinkAuthStorage {
       let text = await this.readText();
       this.expected = await this.currentFingerprint(Promise.resolve(text));
       try {
-        if (text === null && this.legacyPath) {
+        if (text === null && this.legacyPath && await legacyAuthStorageAllowed(this.filePath)) {
           const legacy = await this.readText(this.legacyPath);
           if (legacy !== null) {
             const state = parseState(legacy);
@@ -114,8 +114,9 @@ export class FileAuthStorage implements BlinkAuthStorage {
       }
       try {
         const previous = await this.readText();
-        const previousPath = previous === null && this.legacyPath ? this.legacyPath : this.filePath;
-        const previousContents = previous === null && this.legacyPath ? await this.readText(this.legacyPath) : previous;
+        const canUseLegacy = previous === null && this.legacyPath && await legacyAuthStorageAllowed(this.filePath);
+        const previousPath = canUseLegacy ? this.legacyPath! : this.filePath;
+        const previousContents = canUseLegacy ? await this.readText(this.legacyPath!) : previous;
         let previousState: BlinkAuthState | undefined;
         if (previousContents !== null) {
           try {
@@ -123,6 +124,15 @@ export class FileAuthStorage implements BlinkAuthStorage {
           } catch {
             // Preserve exact damaged contents as an owner-only JSON string.
             await writeOwnerOnlyJsonFile(`${previousPath}.invalid-${randomUUID()}.json`, previousContents);
+          }
+        }
+        if (previous !== null && !previousState && this.legacyPath) {
+          const legacy = await this.readText(this.legacyPath);
+          if (legacy !== null) {
+            // An invalid primary must not silently select a possibly different
+            // legacy account. Preserve its exact contents for recovery before
+            // cleanup, including when the replacement write later fails.
+            await writeOwnerOnlyJsonFile(`${this.legacyPath}.recovery-${randomUUID()}.json`, legacy);
           }
         }
         if (previous === null && previousState) {

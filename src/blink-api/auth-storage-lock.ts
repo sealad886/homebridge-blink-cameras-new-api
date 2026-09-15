@@ -1,11 +1,22 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { writeOwnerOnlyJsonFile } from './secure-json-file';
+import { readOwnerOnlyTextFile, writeOwnerOnlyJsonFile } from './secure-json-file';
 
 /** Called while holding the auth-file lock, including when no tokens exist yet. */
 export async function invalidateAuthStorageGeneration(filePath: string): Promise<void> {
   await writeOwnerOnlyJsonFile(`${filePath}.generation.json`, randomUUID());
+}
+
+/** Once logout invalidates storage, leftover legacy files cannot restore it. */
+export async function legacyAuthStorageAllowed(filePath: string): Promise<boolean> {
+  try {
+    await readOwnerOnlyTextFile(`${filePath}.generation.json`);
+    return false;
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return true;
+    throw error;
+  }
 }
 
 /** Coordinate short credential-file operations between the UI and child bridge. */
