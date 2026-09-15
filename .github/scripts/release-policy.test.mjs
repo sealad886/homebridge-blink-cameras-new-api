@@ -13,6 +13,11 @@ test('extracts only exact version curated notes', () => {
   assert.equal(releaseNotes(`## [0.10.0-alpha.0] - 2026-09-15\n${notes}\n\n## 0.9.1\nOld notes.`, '0.10.0-alpha.0'), notes);
   assert.throws(() => releaseNotes('## 0.10.0\nStable changes only.', '0.10.0-rc.0'));
 });
+test('rejects a long release heading without actual release notes', () => {
+  for (const ending of ['', '\n', '\n  \n']) {
+    assert.throws(() => releaseNotes('## [0.10.0-alpha.0] - 2026-09-15' + ending, '0.10.0-alpha.0'), /Release notes must describe/);
+  }
+});
 test('registry failures never mean version absent', async () => {
   for (const status of [401, 404, 429, 500]) await assert.rejects(registryMetadata('pkg', async () => ({ ok: false, status })), /Registry lookup failed/);
   await assert.rejects(registryMetadata('pkg', async () => { throw new Error('network'); }), /network/);

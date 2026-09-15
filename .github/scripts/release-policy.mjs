@@ -11,7 +11,8 @@ export function releaseNotes(changelog, version) {
   const sections = changelog.split(/^## /m).slice(1);
   const section = sections.find((entry) => entry.split('\n')[0].match(/^\[?([^\]\s]+)\]?/)?.[1] === version);
   assert(section, `CHANGELOG.md is missing a section for ${version}`);
-  const body = section.slice(section.indexOf('\n') + 1).trim();
+  const bodyStart = section.indexOf('\n');
+  const body = bodyStart === -1 ? '' : section.slice(bodyStart + 1).trim();
   assert(body.length > 20, 'Release notes must describe the release');
   return body;
 }
