@@ -50,7 +50,7 @@ if (release) {
     console.log('Existing immutable release verified; preserving release receipt through this workflow run artifact.');
   }
 } else {
-  run('gh', ['release', 'create', `v${version}`, '--draft', '--verify-tag', '--target', sha, '--title', `v${version}`, '--notes-file', 'release-notes.md', ...(tag !== 'latest' ? ['--prerelease', '--latest=false'] : ['--latest'])]);
+  run('gh', ['release', 'create', `v${version}`, '--draft', '--verify-tag', '--target', sha, '--title', `v${version}`, '--notes-file', 'release-notes.md', '--latest=false', ...(tag !== 'latest' ? ['--prerelease'] : [])]);
   release = { immutable: false };
 }
 if (!release.immutable) {
