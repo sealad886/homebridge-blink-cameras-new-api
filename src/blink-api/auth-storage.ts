@@ -63,17 +63,22 @@ export class FileAuthStorage implements BlinkAuthStorage {
     return withAuthStorageLock(this.filePath, async () => {
       let text = await this.readText();
       this.expected = await this.currentFingerprint(Promise.resolve(text));
-      if (text === null && this.legacyPath) {
-        const legacy = await this.readText(this.legacyPath);
-        if (legacy !== null) {
-          const state = parseState(legacy);
-          await writeOwnerOnlyJsonFile(this.filePath, state);
-          await this.removeLegacy();
-          text = await this.readText();
+      try {
+        if (text === null && this.legacyPath) {
+          const legacy = await this.readText(this.legacyPath);
+          if (legacy !== null) {
+            const state = parseState(legacy);
+            // Copy the same session before cleanup, so cleanup failures never
+            // remove the only durable credentials.
+            await writeOwnerOnlyJsonFile(this.filePath, state);
+            await this.removeLegacy();
+            text = await this.readText();
+          }
         }
+        return text === null ? null : parseState(text);
+      } finally {
+        this.expected = await this.currentFingerprint();
       }
-      this.expected = await this.currentFingerprint(Promise.resolve(text));
-      return text === null ? null : parseState(text);
     });
   }
 
@@ -107,20 +112,31 @@ export class FileAuthStorage implements BlinkAuthStorage {
       if (this.expected === undefined || await this.currentFingerprint() !== this.expected) {
         throw new AuthStateChangedError();
       }
-      const previous = await this.readText();
-      const previousPath = previous === null && this.legacyPath ? this.legacyPath : this.filePath;
-      const previousContents = previous === null && this.legacyPath ? await this.readText(this.legacyPath) : previous;
-      if (previousContents !== null) {
-        try {
-          parseState(previousContents);
-        } catch {
-          // Preserve exact damaged contents as an owner-only JSON string.
-          await writeOwnerOnlyJsonFile(`${previousPath}.invalid-${randomUUID()}.json`, previousContents);
+      try {
+        const previous = await this.readText();
+        const previousPath = previous === null && this.legacyPath ? this.legacyPath : this.filePath;
+        const previousContents = previous === null && this.legacyPath ? await this.readText(this.legacyPath) : previous;
+        let previousState: BlinkAuthState | undefined;
+        if (previousContents !== null) {
+          try {
+            previousState = parseState(previousContents);
+          } catch {
+            // Preserve exact damaged contents as an owner-only JSON string.
+            await writeOwnerOnlyJsonFile(`${previousPath}.invalid-${randomUUID()}.json`, previousContents);
+          }
         }
+        if (previous === null && previousState) {
+          // Establish the old session at the primary path before deleting its
+          // legacy source. A later failure must not activate the new session.
+          await writeOwnerOnlyJsonFile(this.filePath, previousState);
+        }
+        await this.removeLegacy();
+        await writeOwnerOnlyJsonFile(this.filePath, state);
+      } finally {
+        // Cleanup or migration may have changed storage even when replacement
+        // fails. Keep this instance's compare-and-swap baseline consistent.
+        this.expected = await this.currentFingerprint();
       }
-      await writeOwnerOnlyJsonFile(this.filePath, state);
-      this.expected = await this.currentFingerprint();
-      await this.removeLegacy();
     });
   }
 

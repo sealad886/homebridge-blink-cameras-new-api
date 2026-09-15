@@ -51,4 +51,11 @@ it('saves stable network IDs, preserves unrelated config and unavailable exclusi
   await elements.get('saveNetworks')!.handlers.click();
   expect(showError).toHaveBeenCalled();
   expect(elements.get('saveNetworks')!.disabled).toBe(false);
+  homebridge.request.mockRejectedValue(new Error('discovery unavailable'));
+  await elements.get('loadNetworks')!.handlers.click();
+  expect(elements.get('blinkNetworkList')!.children).toHaveLength(0);
+  expect(elements.get('saveNetworks')!.disabled).toBe(true);
+  homebridge.request.mockResolvedValue([{ id: '1', name: 'Home' }]);
+  await elements.get('loadNetworks')!.handlers.click();
+  expect(elements.get('saveNetworks')!.disabled).toBe(false);
 });
