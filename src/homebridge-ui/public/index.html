@@ -310,6 +310,14 @@
           </div>
         </div>
 
+        <div class="form-group mt-3 text-left">
+          <strong>Exclude Blink Networks</strong>
+          <p class="small text-muted">Excluded networks and their cameras are removed from this Homebridge instance. Restart the Blink child bridge after saving.</p>
+          <button type="button" class="btn btn-outline-secondary" id="loadNetworks">Choose Networks</button>
+          <div id="blinkNetworkList" class="mt-2"></div>
+          <button type="button" class="btn btn-outline-primary hidden" id="saveNetworks">Save Network Selection</button>
+        </div>
+
         <div class="mt-4">
           <p class="text-muted small">
             Blink tokens are stored in Homebridge's protected authentication file. You can now configure camera settings.
@@ -617,6 +625,60 @@
       return null;
     }
   }
+
+  let discoveredNetworks = [];
+  document.getElementById('loadNetworks').addEventListener('click', async () => {
+    const button = document.getElementById('loadNetworks');
+    button.disabled = true;
+    try {
+      const networks = await homebridge.request('/getNetworks');
+      discoveredNetworks = networks;
+      const container = document.getElementById('blinkNetworkList');
+      container.replaceChildren();
+      const excluded = pluginConfig[0]?.excludedNetworks || [];
+      networks.forEach((network, index) => {
+        const row = document.createElement('div');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = `exclude-network-${index}`;
+        input.value = network.id;
+        input.checked = excluded.includes(network.id) || excluded.includes(network.name);
+        const label = document.createElement('label');
+        label.htmlFor = input.id;
+        label.textContent = `${network.name} (${network.id})`;
+        row.append(input, label);
+        container.append(row);
+      });
+      if (!networks.length) container.textContent = 'No networks found.';
+      document.getElementById('saveNetworks').classList.toggle('hidden', !networks.length);
+    } catch {
+      showError('Could not load Blink networks. Test the connection and try again.');
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById('saveNetworks').addEventListener('click', async () => {
+    const button = document.getElementById('saveNetworks');
+    button.disabled = true;
+    try {
+      const latestConfig = await homebridge.getPluginConfig();
+      const previous = latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
+      // Keep exclusions for networks absent from this response.
+      const retained = (previous.excludedNetworks || []).filter(value =>
+        !discoveredNetworks.some(network => network.id === value || network.name === value));
+      const selected = Array.from(document.querySelectorAll('#blinkNetworkList input:checked')).map(input => input.value);
+      const next = [{ ...previous, excludedNetworks: [...new Set([...retained, ...selected])] }, ...latestConfig.slice(1)];
+      await homebridge.updatePluginConfig(next);
+      await homebridge.savePluginConfig();
+      pluginConfig = next;
+      homebridge.toast.success('Saved. Restart the Blink child bridge to apply network selection.');
+    } catch {
+      showError('Could not save excluded networks. Try again.');
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   function addLog(level, message) {
     const entry = document.createElement('div');

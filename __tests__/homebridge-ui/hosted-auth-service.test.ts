@@ -648,6 +648,19 @@ describe('HostedAuthService', () => {
     }
   });
 
+  it('lists only safe network identifiers through persisted authentication', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const api = createApiDouble();
+    api.getHomescreen.mockResolvedValue({ networks: [{ id: 1, name: 'Home', token: 'secret' }, { id: 2, name: 'Away' }] });
+    const { logger, entries } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+    await expect(service.getNetworks()).resolves.toEqual([{ id: '1', name: 'Home' }, { id: '2', name: 'Away' }]);
+    expect(api.login).toHaveBeenCalledTimes(1);
+    api.getHomescreen.mockRejectedValue(new Error('secret-provider-detail'));
+    await expect(service.getNetworks()).rejects.not.toThrow('secret-provider-detail');
+    expect(entries.join(' ')).not.toContain('secret-provider-detail');
+  });
+
   it('reconstructs from replacement durable state before testing the connection', async () => {
     const stateA = persistedState({
       accessToken: 'connectionAccessA_9Ry3',
@@ -1307,6 +1320,8 @@ describe('HostedAuthService', () => {
     ['verification', true],
     ['connection test', false],
     ['connection test', true],
+    ['network discovery', false],
+    ['network discovery', true],
   ] as const)('logout waits for pending %s persistence (separate service: %s)', async (
     operation,
     separateService,
@@ -1337,7 +1352,7 @@ describe('HostedAuthService', () => {
         ? service.status()
         : operation === 'verification'
           ? service.verify({ code: '123456', type: 'client' })
-          : service.testConnection({});
+          : operation === 'network discovery' ? service.getNetworks() : service.testConnection({});
     await started;
     // Equivalent paths share the barrier across service instances.
     const logoutService = separateService
@@ -1445,6 +1460,7 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/lock',
       '/unlock',
       '/test-connection',
+      '/getNetworks',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });

@@ -118,6 +118,71 @@ describe('BlinkCamerasPlatform', () => {
     expect(platform.accessories.length).toBeGreaterThanOrEqual(1);
   });
 
+  it.each(['1', 'Away'])('excludes a whole network by %s, removes its cached accessories, and supports re-enabling', async (identifier) => {
+    hapApi = createApi() as unknown as MockAPI;
+    hapApi.unregisterPlatformAccessories = jest.fn();
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const homescreen: BlinkHomescreen = {
+      account: { account_id: 1 },
+      networks: [{ id: 1, name: 'Away', armed: false }, { id: 2, name: 'Home', armed: false }],
+      cameras: [{ id: 3, network_id: 1, name: 'Away Camera', enabled: true }, { id: 4, network_id: 2, name: 'Home Camera', enabled: true }],
+      doorbells: [{ id: 5, network_id: 1, name: 'Away Doorbell', enabled: true }],
+      owls: [{ id: 6, network_id: 1, name: 'Away Owl', enabled: true }], sync_modules: [],
+    };
+    blinkApi.getHomescreen.mockResolvedValue(homescreen);
+    const settings = { ...config, excludedNetworks: [] as string[], enableStreaming: false, videoEncoder: 'libx264' as const };
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, settings, hapApi);
+    const discover = async () => {
+      hapApi?.emit('shutdown');
+      await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
+    };
+    await discover();
+    expect(platform.accessories).toHaveLength(6);
+    settings.excludedNetworks = [identifier];
+    await discover();
+    expect(platform.accessories.map(accessory => accessory.context.device.name)).toEqual(['Home', 'Home Camera']);
+    expect(hapApi.unregisterPlatformAccessories).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.arrayContaining([
+      expect.objectContaining({ context: expect.objectContaining({ device: expect.objectContaining({ name: 'Away Camera' }) }) }),
+    ]));
+    settings.excludedNetworks = [];
+    await discover();
+    expect(platform.accessories).toHaveLength(6);
+    expect(new Set(platform.accessories.map(accessory => accessory.UUID)).size).toBe(6);
+    // Missing devices alone must not be unregistered.
+    blinkApi.getHomescreen.mockResolvedValue({ ...homescreen, cameras: [], doorbells: [], owls: [] });
+    await discover();
+    expect(platform.accessories).toHaveLength(6);
+  });
+
+  it('uses fresh network names and camera membership when reconciling cached exclusions', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    hapApi.unregisterPlatformAccessories = jest.fn();
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const settings = { ...config, excludedNetworks: ['Away'], videoEncoder: 'libx264' as const };
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, settings, hapApi);
+    for (const [prefix, device] of [
+      ['network', { id: 1, name: 'Away', armed: false }],
+      ['network', { id: 2, name: 'Elsewhere', armed: false }],
+      ['camera', { id: 3, name: 'Moved Camera', network_id: 2, enabled: true }],
+    ] as const) {
+      const accessory = new hapApi.platformAccessory(device.name, hapApi.hap.uuid.generate(`blink-${prefix}-${device.id}`));
+      accessory.context.device = device;
+      platform.configureAccessory(accessory);
+    }
+    blinkApi.getHomescreen.mockResolvedValue({
+      account: { account_id: 1 }, networks: [{ id: 1, name: 'Home', armed: false }, { id: 2, name: 'Away', armed: false }],
+      cameras: [{ id: 3, name: 'Moved Camera', network_id: 1, enabled: true }], doorbells: [], owls: [], sync_modules: [],
+    });
+    await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
+    expect(platform.accessories.map(accessory => accessory.context.device.name)).toEqual(['Home', 'Moved Camera']);
+    expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(hapApi.unregisterPlatformAccessories).toHaveBeenCalledWith(expect.any(String), expect.any(String), [
+      expect.objectContaining({ UUID: hapApi.hap.uuid.generate('blink-network-2') }),
+    ]);
+  });
+
   it('restores cached accessories without re-registering', () => {
     hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;

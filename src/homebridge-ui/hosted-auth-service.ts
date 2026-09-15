@@ -442,6 +442,26 @@ export class HostedAuthService {
     }
   }
 
+  async getNetworks(): Promise<Array<{ id: string; name: string }>> {
+    return this.enqueueAuthOperation(async () => {
+      try {
+        const context = await this.getPersistedApiContext();
+        await context.api.login();
+        const homescreen = await context.api.getHomescreen();
+        const persisted = await this.loadPersistedAuthState();
+        if (!persisted.state) {
+          this.invalidateRetainedSession();
+          throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
+        }
+        this.bindApiToState(context.api, persisted.state);
+        return homescreen.networks.map(network => ({ id: String(network.id), name: network.name }));
+      } catch (error) {
+        this.options.logger.warn('[Hosted Auth] Network discovery failed.');
+        throw new HostedAuthServiceError(this.connectionFailureMessage(error), 'authentication', 400);
+      }
+    });
+  }
+
   private connectionFailureMessage(error: unknown): string {
     if (error instanceof BlinkHostedReauthenticationRequiredError) return REAUTHENTICATION_MESSAGE;
     if (error instanceof BlinkTokenRefreshError) {

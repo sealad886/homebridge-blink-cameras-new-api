@@ -209,6 +209,12 @@
         "type": "boolean",
         "default": true
       },
+      "excludedNetworks": {
+        "title": "Excluded Networks",
+        "description": "Network IDs or exact Blink network names to exclude, including all their cameras. Restart the Blink child bridge after changing this setting.",
+        "type": "array",
+        "items": { "type": "string", "title": "Network ID or Name" }
+      },
       "excludeDevices": {
         "title": "Excluded Devices",
         "description": "List of device serial numbers, IDs, or names to exclude from HomeKit.",
@@ -263,11 +269,6 @@
               "minimum": 5,
               "maximum": 300,
               "description": "Motion timeout in seconds for this device"
-            },
-            "enableMotion": {
-              "title": "Enable Motion Detection",
-              "type": "boolean",
-              "description": "Enable/disable motion detection for this device"
             }
           }
         }
@@ -334,6 +335,12 @@
       "expanded": false,
       "items": [
         {
+          "key": "excludedNetworks",
+          "type": "array",
+          "buttonText": "Exclude Network",
+          "items": ["excludedNetworks[]"]
+        },
+        {
           "key": "excludeDevices",
           "type": "array",
           "buttonText": "Add Device to Exclude",
@@ -356,8 +363,7 @@
           "buttonText": "Add Device Setting",
           "items": [
             "deviceSettingOverrides[].deviceIdentifier",
-            "deviceSettingOverrides[].motionTimeout",
-            "deviceSettingOverrides[].enableMotion"
+            "deviceSettingOverrides[].motionTimeout"
           ]
         }
       ]
