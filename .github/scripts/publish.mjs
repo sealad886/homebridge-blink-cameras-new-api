@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { releaseTag, releaseNotes, registryMetadata, verifyPublished } from './release-policy.mjs';
+import { releaseTag, releaseNotes, registryMetadata, waitForPublished } from './release-policy.mjs';
 
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Releases must run from main');
 assert(process.env.NODE_AUTH_TOKEN, 'NPM_TOKEN is not configured');
@@ -30,13 +30,7 @@ if (!existing || metadata['dist-tags'][tag] !== version) {
 if (!existing) run('npm', ['publish', filename, '--ignore-scripts', '--access', 'public', '--tag', tag, '--registry', 'https://registry.npmjs.org']);
 // Reruns finish a partially completed publication without republishing an immutable version.
 if (existing && metadata['dist-tags'][tag] !== version) run('npm', ['dist-tag', 'add', `${name}@${version}`, tag]);
-let published;
-for (let attempt = 0; attempt < 6; attempt++) {
-  published = await registryMetadata(name);
-  if (published.versions[version]) break;
-  await new Promise((resolve) => setTimeout(resolve, 5000));
-}
-verifyPublished(published, { name, version, sha, integrity, latestBefore });
+await waitForPublished({ name, version, sha, integrity, latestBefore });
 if (!tags) {
   run('git', ['tag', `v${version}`, sha]);
   run('git', ['push', 'origin', `refs/tags/v${version}`]);
