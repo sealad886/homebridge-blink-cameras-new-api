@@ -52,7 +52,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-receipt-${{ github.sha }}
+          name: release-receipt-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             release-receipt.json
             ${{ runner.temp }}/package-receipt.json
