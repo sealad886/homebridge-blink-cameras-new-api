@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { registryMetadata, releaseTag } from './release-policy.mjs';
+import { registryMetadata, releaseTag, waitForTagRemoval } from './release-policy.mjs';
 
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main');
 assert(process.env.NODE_AUTH_TOKEN, 'NPM_TOKEN is not configured');
@@ -16,8 +16,5 @@ assert(tags.length > 0 && tags.every((tag) => ['alpha', 'beta', 'rc'].includes(t
 for (const tag of new Set(tags)) {
   if (metadata['dist-tags'][tag]) execFileSync('npm', ['dist-tag', 'rm', name, tag], { stdio: 'inherit' });
 }
-const after = await registryMetadata(name);
-assert.equal(after['dist-tags'].latest, stable);
-for (const version of Object.keys(metadata.versions)) assert(after.versions[version], `Published version disappeared: ${version}`);
-for (const tag of tags) assert(!after['dist-tags'][tag], `Dist-tag still exists: ${tag}`);
+await waitForTagRemoval(name, tags, metadata);
 console.log('Removed selected prerelease tags; preserved all published versions and latest.');
