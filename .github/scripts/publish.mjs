@@ -42,11 +42,19 @@ writeFileSync('release-receipt.json', receiptText + '\n');
 writeFileSync('release-notes.md', `${notes}\n\n## Verified artifact\n\n\`\`\`json\n${receiptText}\n\`\`\`\n`);
 // gh api --paginate fails on transport/auth failures rather than treating them as missing releases.
 const releases = JSON.parse(run('gh', ['api', '--paginate', '--slurp', `repos/${process.env.GITHUB_REPOSITORY}/releases`]));
-const release = releases.flat().find((item) => item.tag_name === `v${version}`);
+let release = releases.flat().find((item) => item.tag_name === `v${version}`);
 if (release) {
-  run('gh', ['release', 'edit', `v${version}`, '--notes-file', 'release-notes.md', '--prerelease=' + (tag !== 'latest')]);
+  assert.equal(release.target_commitish, sha, 'Existing GitHub release belongs to a different source revision');
+  assert.equal(release.prerelease, tag !== 'latest', 'Existing GitHub release has the wrong prerelease state');
+  if (release.immutable) {
+    console.log('Existing immutable release verified; preserving release receipt through this workflow run artifact.');
+  }
 } else {
-  run('gh', ['release', 'create', `v${version}`, '--verify-tag', '--target', sha, '--title', `v${version}`, '--notes-file', 'release-notes.md', ...(tag !== 'latest' ? ['--prerelease', '--latest=false'] : ['--latest'])]);
+  run('gh', ['release', 'create', `v${version}`, '--draft', '--verify-tag', '--target', sha, '--title', `v${version}`, '--notes-file', 'release-notes.md', '--latest=false', ...(tag !== 'latest' ? ['--prerelease'] : [])]);
+  release = { immutable: false };
 }
-run('gh', ['release', 'upload', `v${version}`, 'release-receipt.json', '--clobber']);
+if (!release.immutable) {
+  run('gh', ['release', 'upload', `v${version}`, 'release-receipt.json', '--clobber']);
+  run('gh', ['release', 'edit', `v${version}`, '--draft=false', '--notes-file', 'release-notes.md', '--prerelease=' + (tag !== 'latest'), ...(tag !== 'latest' ? ['--latest=false'] : ['--latest'])]);
+}
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Published ${name}@${version} (${tag}) from ${sha}.\n\nIntegrity: \`${integrity}\`\n`);

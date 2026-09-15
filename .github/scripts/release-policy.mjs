@@ -27,23 +27,36 @@ export async function registryMetadata(name, fetcher = fetch) {
   return metadata;
 }
 
-export function verifyPublished(metadata, { name, version, sha, integrity, latestBefore }) {
+function verifyPublishedIdentity(metadata, { name, version, sha, integrity, latestBefore }) {
   const published = metadata.versions[version];
   assert(published, 'Published version is missing from the registry');
   assert.equal(published.name, name);
   assert.equal(published.gitHead, sha, 'Registry version belongs to a different source revision');
   assert.equal(published.dist?.integrity, integrity, 'Registry integrity differs from the verified package');
   const tag = releaseTag(version);
-  assert.equal(metadata['dist-tags'][tag], version, 'Release dist-tag is incorrect');
   if (tag !== 'latest') assert.equal(metadata['dist-tags'].latest, latestBefore, 'Prerelease changed latest');
 }
 
-async function waitForRegistry(name, ready, { readMetadata = registryMetadata, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+export function verifyPublished(metadata, expected) {
+  verifyPublishedIdentity(metadata, expected);
+  assert.equal(metadata['dist-tags'][releaseTag(expected.version)], expected.version, 'Release dist-tag is incorrect');
+}
+
+async function waitForRegistry(name, ready, {
+  readMetadata = registryMetadata,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  attempts = 6,
+  intervalMs = 5000,
+  onPending,
+} = {}) {
   let metadata;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     metadata = await readMetadata(name);
     if (ready(metadata)) return metadata;
-    if (attempt < 5) await sleep(5000);
+    if (attempt < attempts - 1) {
+      onPending?.({ attempt: attempt + 1, elapsedMs: attempt * intervalMs, intervalMs, attempts });
+      await sleep(intervalMs);
+    }
   }
   return metadata;
 }
@@ -51,8 +64,17 @@ async function waitForRegistry(name, ready, { readMetadata = registryMetadata, s
 export async function waitForPublished(expected, options) {
   const tag = releaseTag(expected.version);
   const metadata = await waitForRegistry(expected.name,
-    (current) => Boolean(current.versions[expected.version]) && current['dist-tags'][tag] === expected.version,
-    options);
+    (current) => {
+      if (current.versions[expected.version]) verifyPublishedIdentity(current, expected);
+      return Boolean(current.versions[expected.version]) && current['dist-tags'][tag] === expected.version;
+    }, {
+      attempts: 21,
+      intervalMs: 30000,
+      onPending: ({ attempt, elapsedMs }) => console.log(
+        `Waiting for npm registry propagation (${attempt}/20 retries; ${Math.floor(elapsedMs / 1000)}s elapsed)...`,
+      ),
+      ...options,
+    });
   verifyPublished(metadata, expected);
   return metadata;
 }
