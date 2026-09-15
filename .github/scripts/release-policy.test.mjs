@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { releaseTag, releaseNotes, registryMetadata, verifyPublished, waitForPublished, waitForTagRemoval } from './release-policy.mjs';
+import { releaseTag, releaseNotes, registryMetadata, verifyPublished, waitForPublished, waitForTagRemoval, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
 
 for (const [version, tag] of [['0.10.0-alpha.0', 'alpha'], ['0.10.0-beta.2', 'beta'], ['0.10.0-rc.0', 'rc'], ['0.10.0', 'latest']]) {
   test(`routes ${version} to ${tag}`, () => assert.equal(releaseTag(version), tag));
@@ -92,5 +92,27 @@ test('cleanup still fails closed if latest or a published version changes while 
     await assert.rejects(waitForTagRemoval('pkg', ['rc'], before, registry.options));
     assert.equal(registry.reads(), 1);
     assert.deepEqual(registry.delays, []);
+  }
+});
+
+
+test('stable comparison prevents backwards latest while accepting equal and forward releases', () => {
+  assert.equal(compareStableVersions('0.9.0', '0.9.1'), -1);
+  assert.equal(compareStableVersions('0.9.1', '0.9.1'), 0);
+  assert.equal(compareStableVersions('0.10.0', '0.9.1'), 1);
+  assert.equal(compareStableVersions('1.0.0', '0.99.99'), 1);
+  assert.throws(() => compareStableVersions('0.10.0-rc.0', '0.9.1'));
+});
+
+test('trusted publishing requires OIDC, supported npm and no token fallback', () => {
+  const oidc = { ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.test/oidc', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic' };
+  assertTrustedPublishing(oidc, '11.5.1');
+  assertTrustedPublishing(oidc, '12.0.0');
+  assert.throws(() => assertTrustedPublishing({}, '11.5.1'), /OIDC is unavailable/);
+  assert.throws(() => assertTrustedPublishing({ ...oidc, NODE_AUTH_TOKEN: 'XXXXX-XXXXX-XXXXX-XXXXX' }, '11.5.1'), /without an npm token fallback/);
+  assert.throws(() => assertTrustedPublishing(oidc, '11.5.0'), /npm >=11.5.1/);
+  assert.throws(() => assertTrustedPublishing(oidc, '10.9.0'), /npm >=11.5.1/);
+  for (const variable of ['NODE_AUTH_TOKEN', 'NPM_TOKEN']) {
+    assert.throws(() => assertTrustedPublishing({ ...oidc, [variable]: 'synthetic-old-token' }, '11.5.1'), /without an npm token fallback/);
   }
 });

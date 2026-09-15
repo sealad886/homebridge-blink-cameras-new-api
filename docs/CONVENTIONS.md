@@ -21,7 +21,7 @@
 
 **Examples:**
 
-- Good: Publish to npm (e.g., `npm publish`) and install via `npm install @sealad886/homebridge-blink-cameras-new-api`; the UI shows the publisher handle.
+- Good: Publish through GitHub Actions and install via `npm install @sealad886/homebridge-blink-cameras-new-api`; the UI shows the publisher handle.
 - Bad: Install via `hb-service add ./sealad886-homebridge-blink-cameras-new-api-0.1.x.tgz`; the UI shows `@` because registry metadata is unavailable.
 
 **Related Files / Modules:**
@@ -34,7 +34,7 @@
 
 **Scope:** Release tooling, version bumps, npm publication, and supported Pi deployment flows.
 
-**Rule:** Supported releases must be published by pushing the version bump to `main` and letting `.github/workflows/publish.yml` publish from CI; repo scripts may validate or install published versions, but must not perform direct local `npm publish` or tarball-based bypasses as the supported workflow.
+**Rule:** Merge the reviewed version bump into `main`, then explicitly dispatch `.github/workflows/publish.yml` with the exact version. Ordinary pushes do not publish. The workflow uses npm trusted publishing through GitHub OIDC; repo scripts may validate or install published versions, but must not perform direct local `npm publish` or tarball-based bypasses.
 
 **Rationale (Why this exists):**
 
@@ -44,7 +44,7 @@
 
 **Examples:**
 
-- Good: Commit release-note changes, run `npm run release`, bump the version with `npm version ...`, and then push once the version bump commit is on `main`.
+- Good: Update release notes, run `npm version VERSION --no-git-tag-version`, commit, and pass `npm run release` in a clean checkout. Merge the reviewed PR, then run `gh workflow run publish.yml --ref main -f version=VERSION`.
 - Good: Use `scripts/deploy-to-pi.sh` only after the target version is live on npm.
 - Bad: Reintroducing `npm run release -- --yes` or other direct `npm publish` paths in repo-managed scripts.
 - Bad: Reintroducing a tarball deployment mode that bypasses the registry for the supported release/deploy flow.
@@ -118,7 +118,7 @@
 
 - Homebridge Custom UI loads assets from `customUiPath`; if the folder is empty, the config modal spins forever with 404s instead of rendering the form.
 - The build step must succeed in a clean checkout; copying from the wrong source path (`homebridge-ui/public`) fails and yields an empty npm tarball.
-- Publishing relies on `prepublishOnly` to build; ensuring the correct source path prevents regressions when cutting releases.
+- CI explicitly builds and verifies the packed assets before publication; ensuring the correct source path prevents regressions when cutting releases.
 
 **Examples:**
 
@@ -172,6 +172,7 @@
 
 ## 5. Change History (Human-Readable)
 
+- 2026-09-15: Require explicit versioned CI dispatch, npm OIDC trusted publishing, and registry-only installation.
 - 2026-04-01: Added required convention that npm releases are CI-owned and removed supported local publish/tarball bypasses from repo-managed scripts.
 - 2026-02-14: Added required convention that auth credentials/codes must not be exposed in schema when custom UI auth is enabled.
 - 2026-01-20: Two-way talk is now forced off; HomeKit microphone UI is hidden and any config attempts log warnings.

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { releaseTag, releaseNotes, registryMetadata, waitForPublished } from './release-policy.mjs';
+import { releaseTag, releaseNotes, registryMetadata, waitForPublished, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
 
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Releases must run from main');
-assert(process.env.NODE_AUTH_TOKEN, 'NPM_TOKEN is not configured');
+
 const receipt = JSON.parse(readFileSync(process.env.PACKAGE_RECEIPT, 'utf8'));
 const { name, version, sha, integrity, filename } = receipt;
 assert.equal(sha, process.env.GITHUB_SHA);
@@ -12,24 +12,26 @@ assert.equal(version, process.env.RELEASE_VERSION, 'Requested version differs fr
 const tag = releaseTag(version);
 const notes = releaseNotes(readFileSync('CHANGELOG.md', 'utf8'), version);
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+assertTrustedPublishing(process.env, run('npm', ['--version']));
 const metadata = await registryMetadata(name);
 const latestBefore = metadata['dist-tags'].latest;
 if (tag !== 'latest') assert.equal(releaseTag(latestBefore), 'latest', 'Existing latest must be a stable release before prerelease publication');
+if (tag === 'latest') assert(compareStableVersions(version, latestBefore) >= 0, 'Stable publication cannot move latest backwards');
 const existing = metadata.versions[version];
 if (existing) {
   assert.equal(existing.gitHead, sha, 'Version already exists from a different revision; bump the version');
   assert.equal(existing.dist?.integrity, integrity, 'Existing version does not match the verified artifact');
+  assert.equal(metadata['dist-tags'][tag], version, 'Existing version has a different dist-tag; explicit authenticated maintenance is required before recovery');
 }
 // Fetch failure is fatal. Never create or move a tag until registry/source checks pass.
 run('git', ['fetch', 'origin', '--tags']);
 const tags = run('git', ['tag', '--list', `v${version}`]);
 if (tags) assert.equal(run('git', ['rev-parse', `v${version}^{commit}`]), sha, 'Release tag points to another revision');
-if (!existing || metadata['dist-tags'][tag] !== version) {
+if (!existing) {
   assert.equal(run('git', ['ls-remote', 'origin', 'refs/heads/main']).split(/\s+/)[0], sha, 'Source is no longer the main branch head; re-run gates on current main');
 }
 if (!existing) run('npm', ['publish', filename, '--ignore-scripts', '--access', 'public', '--tag', tag, '--registry', 'https://registry.npmjs.org']);
 // Reruns finish a partially completed publication without republishing an immutable version.
-if (existing && metadata['dist-tags'][tag] !== version) run('npm', ['dist-tag', 'add', `${name}@${version}`, tag]);
 await waitForPublished({ name, version, sha, integrity, latestBefore });
 if (!tags) {
   run('git', ['tag', `v${version}`, sha]);

@@ -5,6 +5,40 @@ All packages are built from reviewed GitHub source and published by
 use exact versions from `https://registry.npmjs.org`; do not copy builds or install
 Git URLs or local tarballs on Homebridge.
 
+## Configure npm trusted publishing
+
+Publication uses GitHub OIDC, not a stored npm publish token. In this package's
+npm settings, add a GitHub Actions trusted publisher with these exact values:
+
+| Setting | Value |
+| --- | --- |
+| Package | `@sealad886/homebridge-blink-cameras-new-api` |
+| Organization or user | `sealad886` |
+| Repository | `homebridge-blink-cameras-new-api` |
+| Workflow filename | `publish.yml` |
+| Environment | Leave empty; this workflow declares no environment |
+| Allowed action | Direct `npm publish` |
+
+Alternatively, use an authenticated npm CLI **11.15.0 or newer**, with package
+write access and account 2FA enabled:
+
+```sh
+npm trust github @sealad886/homebridge-blink-cameras-new-api \
+  --file publish.yml \
+  --repo sealad886/homebridge-blink-cameras-new-api \
+  --allow-publish
+```
+
+The publish job runs on a GitHub-hosted runner with Node 24, requires npm
+**11.5.1 or newer**, and grants `id-token: write`. Release jobs and their test gates
+do not restore package-manager caches. No `NPM_TOKEN` or `NODE_AUTH_TOKEN` is passed
+to publishing; the script rejects token fallback. After trusted publication works,
+remove obsolete publish-token secrets and revoke the old npm token. Never expose
+credentials in release logs or PR comments.
+
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and
+[the npm trust command](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
+
 ## Prepare a version
 
 Use a minor bump for new compatible capabilities, a patch for compatible fixes.
@@ -37,15 +71,19 @@ package loadability checks on Node.js 20, 22, and 24 before publication.
 gh workflow run publish.yml --ref main -f version=VERSION
 ```
 
-The CI workflow alone uses the repository's npm credential. It validates registry
-responses, serializes releases, publishes the tested package, and records source
-SHA and registry integrity. Existing versions must match their original source;
+The CI workflow obtains a short-lived publishing credential through OIDC. It
+validates registry responses, serializes releases, publishes the tested package,
+and records source SHA and registry integrity. Existing versions must match their original source;
 a failed post-publish release-record step can be retried at that same revision.
-Do not repair a partial release by publishing locally or overwriting a Git tag.
+A recovery run also requires the existing dist-tag to match. If it does not, stop
+and arrange explicit authenticated tag maintenance; trusted publishing does not
+authorize `npm dist-tag add`. Do not repair a partial release by publishing locally
+or overwriting a Git tag.
 
 Prereleases use `alpha`, `beta`, or `rc`; stable uses `latest`. Verify exact registry
 version, integrity, source identity, GitHub release, and dist-tags before installing.
-A prerelease must leave the previous stable `latest` unchanged.
+A prerelease must leave the previous stable `latest` unchanged. Stable publication
+must not move `latest` backwards.
 
 ## Homebridge upgrade and acceptance
 
@@ -69,7 +107,7 @@ the RC observation window. Keep corruption and hostile-token tests isolated.
 Stable must match the accepted RC runtime source except version and release notes.
 Publish and install it through the same CI/registry route. Repeat smoke acceptance
 and observe at least 24 hours including one natural refresh before completion.
-Record evidence and timestamps in Beads, with links to PRs, CI, and releases.
+Record evidence and timestamps in the GitHub release PR, with links to issues, CI, and releases.
 
 ## Rollback and cleanup
 
@@ -79,8 +117,18 @@ known-good exact registry version. Preserve rotated credentials: an older backup
 may hold an invalid refresh token. Restore data only when its validity is established.
 Do not uninstall the plugin or clear Homebridge persistence as routine rollback.
 
-After stable acceptance, use the CI cleanup workflow to remove obsolete prerelease
-dist-tags. Published versions remain available for reproducibility and rollback;
+After stable acceptance, use the optional CI cleanup workflow to remove obsolete
+prerelease dist-tags. OIDC publishing does not authorize this maintenance operation.
+When cleanup is needed, provide a separate, short-lived granular npm token as the
+GitHub Actions secret `NPM_MAINTENANCE_TOKEN`. Limit it to read/write access for this
+package only, enable the 2FA bypass required for unattended maintenance, and use
+the shortest practical expiry. The cleanup workflow performs neither publication nor unpublication;
+it validates the accepted stable version before removing only `alpha`, `beta`, and
+`rc` tags. Remove the secret and revoke the maintenance token after cleanup.
+If the credential is absent, cleanup stops explicitly; release publication does
+not depend on it. Never reuse the old publish token as an implicit fallback.
+
+ Published versions remain available for reproducibility and rollback;
 routine cleanup must never call npm unpublish. Keep unresolved issue links open and
 separate code completion from deployed acceptance.
 

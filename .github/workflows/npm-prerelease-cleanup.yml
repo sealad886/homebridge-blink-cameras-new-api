@@ -32,9 +32,12 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      # OIDC supports publication, not dist-tag maintenance. Supply a short-lived,
+      # package-scoped maintenance token only when this optional workflow is needed.
       - name: Remove tags and verify retained versions
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_MAINTENANCE_TOKEN }}
           STABLE_VERSION: ${{ inputs.stable_version }}
           DIST_TAGS: ${{ inputs.dist_tags }}
         run: node .github/scripts/cleanup-tags.mjs
