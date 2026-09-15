@@ -139,6 +139,47 @@ cases verify `2fa_code` and `_token` with unquoted and quoted keys/values. All
 
 ## Authenticity and remaining limits
 
+### Release follow-up evidence (2026-09-15)
+
+The owner authorized a complete CI-to-registry release cycle and physical Pi
+acceptance. The existing scoped 0.9.1 installation returned HTTP 200 for an
+authenticated homescreen request (one network, four cameras), with the token file
+unchanged. This proves the baseline, not acceptance of the new release. Pi config,
+auth, and accessory persistence were backed up owner-only and key files compared
+successfully before any upgrade.
+
+Beads inventory is readable by connecting to the existing project Dolt server.
+Automatic startup had tried other ports despite the existing database lock.
+The recovered inventory contains 14 open/in-progress records; native Dolt backup
+and an all-79-record export were created before repair. Writes still require
+the operator's sole-migrator decision for schema v49 to v53.
+
+| Existing records | Evidence and release disposition |
+|---|---|
+| `y0o`, `2yh`, `ct1` | Hosted sign-in, verification transition, and UI/browser evidence remain physical beta gates. |
+| `gq2` | Legacy npm/Travis credential revocation needs operator verification before release. Never include credentials in evidence. |
+| `c91` | Current `.travis.yml` contains no deploy credential; ready for evidence-backed reconciliation when Beads writes resume. |
+| `hb-blinkcameras-9cs`, `956`, `es1` | Hardware probing/fallback and negotiated frame-rate logic exist. Physical streaming and smoothness acceptance remain required. |
+| `r7d` | Native Android AppAuth harness is separate from this plugin release; defer native-device work unless needed to resolve a reproduced hosted-login blocker. |
+| `hb-blinkcameras-pes` | Release delivery remains open until stable CI publication, Pi installation, and observation gates finish. |
+| `4wg` | Unsupported Amazon OAuth profile is now explicitly rejected with tests; no Amazon vendor integration is added. |
+| `kuq`, `zqg` | Duplicate reports of ignored `enableMotion` UI control; removed that nonfunctional control while preserving saved config and actual Motion switches. |
+| `02y` | Retain historical issue IDs and prefixes; no destructive normalization is needed for release. |
+
+GitHub #17 is implemented by adapting PR #19 with contributor attribution,
+operation serialization, ID-based exclusions, and current-config preservation.
+GitHub #12 receives a late-download/offline race fix; physical outage/recovery
+must still pass. GitHub #18 includes streaming symptoms as well as command 404s,
+so logging suppression alone does not close it. GitHub #1 restart/storage/routing
+acceptance remains a live gate. PR #14's minimatch update is already present in
+the baseline; a fresh audit identified six other vulnerable development packages,
+updated within declared ranges to reach zero reported vulnerabilities.
+
+CI publication now requires explicit exact-version dispatch on main, gated by
+Node 20/22/24 and package checks. The target is 0.10.0 because network exclusion
+adds a public capability. Release stage evidence and issue state remain in Beads
+and GitHub; this audit records findings and does not replace either tracker.
+
 - Hosted OAuth retains exact callback authority/path, S256 PKCE, constant-time
   state validation, transaction expiry, hardware binding, and consume-before-
   exchange replay protection. TLS plus the token endpoint and authenticated REST
@@ -162,7 +203,7 @@ cases verify `2fa_code` and `_token` with unquoted and quoted keys/values. All
   requires both processes stopped before removing the empty lock directory;
   documented in README. Power-loss durability beyond atomic rename is unproven.
 - Fresh hosted sign-in, Blink refresh rotation behavior, and physical camera
-  acceptance remain **blocked on a separately authorized live session**. Existing
+  acceptance are now authorized but **not yet completed for the candidate**. Existing
   hosted/native-probe issues `homebridge-blinkcameras-2yh` and `-r7d` retain that
   historical boundary; this audit does not claim to close them.
 - Beads reads succeeded, but issue creation was blocked: remote-backed database
@@ -178,7 +219,7 @@ Residual disposition: same-UID access, opaque-token verification at the provider
 in-flight operations, fail-closed restart on session change, legacy omitted
 state under PKCE, and manual orphan-lock recovery are **accepted residual risk**
 as bounded implementation tradeoffs within this audit's delegated judgment.
-Live acceptance and Beads status writes are **blocked**, with next actions
+Candidate live acceptance is **pending** and Beads status writes are **blocked**, with next actions
 specified above. These dispositions do not certify a deployment or release.
 
 ## Primary references

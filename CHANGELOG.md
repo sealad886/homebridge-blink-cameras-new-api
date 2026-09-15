@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-alpha.0] - 2026-09-15
+
+### Added
+
+- Select Blink networks to exclude from this Homebridge instance. Filtering
+  removes only explicitly excluded accessories; clearing the selection restores
+  discovery on the next child-bridge restart.
+
+### Fixed
+
+- Serialize authentication UI operations and prevent stale processes from
+  overwriting credentials after logout or a new sign-in.
+- Validate saved authentication state consistently, preserve malformed files
+  before recovery, and distinguish temporary refresh failures from invalid
+  credentials and storage failures.
+- Reject snapshots that finish downloading after a camera becomes offline.
+- Suppress only expected command-update/completion 404 diagnostics; retain
+  unexpected failures and make operational stream errors visible in normal mode.
+
+### Security
+
+- Tighten OAuth callback validation, credential destination restrictions,
+  request deadlines, and secret redaction in normal and debug diagnostics.
+- Update vulnerable development dependencies within the declared version ranges.
+
+### Release engineering
+
+- Gate registry publication on the supported Node.js test matrix and package
+  checks, and bind releases to their validated source revision.
+- Include this changelog in the npm package. Prerelease installs and rollback
+  use exact registry versions through Homebridge package management.
+
+### Changed
+
+- Remove the nonfunctional per-device `enableMotion` configuration control.
+  Existing device Motion switches continue to control Blink motion detection;
+  saved configuration data is preserved.
+
+### Upgrade notes
+
+- Restart the Blink child bridge after updating or changing authentication.
+  Existing valid authentication is preserved during an ordinary upgrade.
+- Unsupported Amazon/Fire OS OAuth state is rejected explicitly; the hosted
+  Homebridge flow uses the Android profile. Sign in again through the plugin UI
+  if old state used an unsupported profile.
+- Provider status can lag a physical outage until the next status poll. A fresh
+  sign-in and physical acceptance remain release gates, not inferred from tests.
+
 ## [0.9.1] - 2026-07-17
 
 ### Fixed
