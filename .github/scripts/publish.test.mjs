@@ -85,6 +85,10 @@ test('publication preserves latest and records exact source and artifact', () =>
     assert.equal(state.releases[0].tag_name, 'v0.10.0-alpha.0');
     assert.equal(state.releases[0].draft, false);
     assert.deepEqual(state.releases[0].assets, ['release-receipt.json']);
+    const upload = state.calls.findIndex(([command, group, action]) => command === 'gh' && group === 'release' && action === 'upload');
+    const publish = state.calls.findIndex(([command, group, action, , draft]) => command === 'gh' && group === 'release' && action === 'edit' && draft === '--draft=false');
+    assert(upload >= 0 && publish > upload, 'release receipt uploads before final publication');
+    assert(state.calls[publish].includes('--latest=false'));
     assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
   } finally { testCase.cleanup(); }
 });
@@ -95,7 +99,7 @@ test('recovery validates an immutable release and leaves it unchanged', () => {
     assert.equal(result.status, 0, result.stderr);
     const state = testCase.state();
     assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 0);
-    assert(!state.calls.some(([command, action]) => command === 'gh' && ['create', 'edit', 'upload'].includes(action)));
+    assert(!state.calls.some(([command, group, action]) => command === 'gh' && group === 'release' && ['create', 'edit', 'upload'].includes(action)));
     assert.match(readFileSync(join(resolve(state.receipt.filename, '..'), 'release-receipt.json'), 'utf8'), /test-package/);
   } finally { testCase.cleanup(); }
 });

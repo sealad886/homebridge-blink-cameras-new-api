@@ -50,11 +50,11 @@ if (release) {
     console.log('Existing immutable release verified; preserving release receipt through this workflow run artifact.');
   }
 } else {
-  run('gh', ['release', 'create', `v${version}`, '--draft', '--verify-tag', '--target', sha, '--title', `v${version}`, ...(tag !== 'latest' ? ['--prerelease'] : [])]);
+  run('gh', ['release', 'create', `v${version}`, '--draft', '--verify-tag', '--target', sha, '--title', `v${version}`, '--notes-file', 'release-notes.md', ...(tag !== 'latest' ? ['--prerelease', '--latest=false'] : ['--latest'])]);
   release = { immutable: false };
 }
 if (!release.immutable) {
   run('gh', ['release', 'upload', `v${version}`, 'release-receipt.json', '--clobber']);
-  run('gh', ['release', 'edit', `v${version}`, '--draft=false', '--notes-file', 'release-notes.md', '--prerelease=' + (tag !== 'latest')]);
+  run('gh', ['release', 'edit', `v${version}`, '--draft=false', '--notes-file', 'release-notes.md', '--prerelease=' + (tag !== 'latest'), ...(tag !== 'latest' ? ['--latest=false'] : ['--latest'])]);
 }
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Published ${name}@${version} (${tag}) from ${sha}.\n\nIntegrity: \`${integrity}\`\n`);
