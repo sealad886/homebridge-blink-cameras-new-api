@@ -35,6 +35,7 @@ export interface ImmisProxyConfig {
   port?: number;
   /** Logger function */
   log?: (message: string) => void;
+  errorLog?: (message: string) => void;
   /** Debug logging enabled */
   debug?: boolean;
   /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
@@ -157,7 +158,7 @@ const CONN_ID_MAX_LENGTH = 16;
  * header, and proxies the decoded MPEG-TS stream to the client.
  */
 export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
-  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'debug' | 'saveStreamPath' | 'waitForReady'>;
+  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'waitForReady'>;
   private readonly parsedUrl: URL;
 
   private server: net.Server | null = null;
@@ -191,6 +192,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       host: config.host ?? '127.0.0.1',
       port: config.port ?? 0,
       log: config.log,
+      errorLog: config.errorLog,
       saveStreamPath: config.saveStreamPath,
       debug: config.debug,
       waitForReady: config.waitForReady,
@@ -226,6 +228,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   /**
    * Log a debug message if debug logging is enabled
    */
+  private logError(message: string): void {
+    (this.config.errorLog ?? this.config.log)?.(`[ImmisProxy] ${message}`);
+  }
+
   private debug(message: string): void {
     if (this.config.debug) {
       this.log(`[DEBUG] ${message}`);
@@ -298,8 +304,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       }
       try {
         await recordingDirHandle.chmod(0o700);
-      } catch (error) {
-        this.log(`Failed to set debug recording directory permissions: ${error}`);
+      } catch {
+        this.logError('Failed to set debug recording directory permissions.');
       }
 
       // Create timestamped filename
@@ -353,12 +359,12 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
       this.log(`Recording stream to: ${filename}`);
 
-      this.streamFile.on('error', (error) => {
-        this.log(`Stream recording error: ${error.message}`);
+      this.streamFile.on('error', () => {
+        this.logError('Stream recording error.');
         this.stopStreamRecording();
       });
-    } catch (error) {
-      this.log(`Failed to start stream recording: ${error}`);
+    } catch {
+      this.logError('Failed to start stream recording.');
     } finally {
       await recordingDirHandle?.close().catch(() => undefined);
     }

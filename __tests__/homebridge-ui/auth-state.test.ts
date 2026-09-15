@@ -129,7 +129,7 @@ describe('homebridge UI persisted auth state loading', () => {
     const result = await loadPersistedAuthStateFromFiles([primaryPath], logDebug, now);
 
     expect(result.state).toBeNull();
-    expect(result.message).toContain('invalid expiry');
+    expect(result.message).toContain('invalid authentication data');
     expect(JSON.stringify(result)).not.toContain(invalidExpirySentinel);
     expect(result.message).not.toContain(tmpDir);
     expect(logDebug).toHaveBeenCalledWith(expect.stringContaining('.blink-auth.json'));

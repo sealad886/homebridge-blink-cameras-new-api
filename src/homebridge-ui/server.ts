@@ -4,6 +4,7 @@ import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-ut
 
 import type { BlinkHostedOAuthStart, BlinkLogger } from '../types';
 import { isBlinkHostedOAuthSupportCode } from '../blink-api/auth';
+import { redactDiagnosticText } from '../blink-api/redaction';
 import {
   type AuthStatus,
   type HostedAuthCompleteRequest,
@@ -21,7 +22,7 @@ const EXPECTED_CATEGORIES = new Set([
 ]);
 
 export function redactSecrets(message: string): string {
-  return message
+  return redactDiagnosticText(message)
     .replace(
       /((?:^|[?&\s]|%26)(?:code|state|error_description)(?:=|%3D))([^&\s]*?)(?=(?:&|%26|\s|$))/gi,
       '$1<redacted>',
@@ -83,9 +84,15 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
   }
 
   pushLog(level: string, message: string): void {
+    const safeMessage = redactSecrets(message);
+    if (level === 'warn') {
+      console.warn(`[Blink UI] ${safeMessage}`);
+    } else if (level === 'error') {
+      console.error(`[Blink UI] ${safeMessage}`);
+    }
     this.pushEvent('log', {
       level,
-      message: redactSecrets(message),
+      message: safeMessage,
       timestamp: new Date().toISOString(),
     });
   }

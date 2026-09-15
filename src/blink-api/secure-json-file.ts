@@ -133,7 +133,7 @@ export async function hardenOwnerOnlyFileMode(
   }
 }
 
-export async function readOwnerOnlyJsonFile<T>(filePath: string): Promise<T> {
+export async function readOwnerOnlyTextFile(filePath: string): Promise<string> {
   let handle: FileHandle | null = null;
   try {
     const initialStats = await fs.lstat(filePath);
@@ -161,8 +161,7 @@ export async function readOwnerOnlyJsonFile<T>(filePath: string): Promise<T> {
     requireCurrentProcessOwner(handleStats, filePath);
 
     await hardenOwnerOnlyFileMode(handle, filePath);
-    const contents = await handle.readFile({ encoding: 'utf8' });
-    return JSON.parse(contents) as T;
+    return await handle.readFile({ encoding: 'utf8' });
   } catch (error) {
     if (isNodeError(error, 'ELOOP')) {
       throw new SecureJsonFileSecurityError(`Refusing to use symlinked auth state file: ${filePath}`);
@@ -171,6 +170,10 @@ export async function readOwnerOnlyJsonFile<T>(filePath: string): Promise<T> {
   } finally {
     await handle?.close().catch(() => undefined);
   }
+}
+
+export async function readOwnerOnlyJsonFile<T>(filePath: string): Promise<T> {
+  return JSON.parse(await readOwnerOnlyTextFile(filePath)) as T;
 }
 
 export async function writeOwnerOnlyJsonFile<T>(filePath: string, value: T): Promise<void> {

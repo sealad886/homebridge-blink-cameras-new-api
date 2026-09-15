@@ -231,7 +231,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         status: 302,
-        headers: createMockHeaders({ location: 'callback?code=abc' }),
+        headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
       });
 
       // Step 5: POST /oauth/token
@@ -296,7 +296,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 302,
-          headers: createMockHeaders({ location: 'callback?code=abc' }),
+          headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
         })
         .mockResolvedValueOnce({
           ok: true,
@@ -488,7 +488,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         status: 302,
-        headers: createMockHeaders({ location: 'callback?code=abc' }),
+        headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
       });
 
       // Step 6: POST /oauth/token
@@ -532,7 +532,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 302,
-          headers: createMockHeaders({ location: 'callback?code=abc' }),
+          headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
         })
         .mockResolvedValueOnce({
           ok: true,
@@ -903,6 +903,7 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
 
   it('save() writes state to the dot-file path with owner-only permissions', async () => {
     const storage = getStorage(makeAuth());
+    await storage.load();
     await storage.save(sampleState);
 
     const raw = await fs.readFile(dotFilePath, 'utf8');
@@ -921,6 +922,7 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
       updatedAt: '2026-01-02T00:00:00.000Z',
     };
 
+    await storage.load();
     await storage.save(sampleState);
     await storage.save(refreshedState);
 
@@ -1010,17 +1012,16 @@ describe('FileAuthStorage via BlinkAuth persistence', () => {
     }
   });
 
-  it('save() replaces a symlinked auth path without writing through it', async () => {
+  it('save() rejects a symlinked auth path without writing through it', async () => {
     const targetPath = path.join(tmpDir, 'target-auth-state.json');
     await fs.writeFile(targetPath, 'do-not-overwrite', 'utf8');
     await fs.symlink(targetPath, dotFilePath);
 
     const storage = getStorage(makeAuth());
-    await storage.save(sampleState);
+    await expect(storage.save(sampleState)).rejects.toThrow('symlinked auth state file');
 
     expect(await fs.readFile(targetPath, 'utf8')).toBe('do-not-overwrite');
-    expect((await fs.lstat(dotFilePath)).isSymbolicLink()).toBe(false);
-    expect(JSON.parse(await fs.readFile(dotFilePath, 'utf8'))).toEqual(sampleState);
+    expect((await fs.lstat(dotFilePath)).isSymbolicLink()).toBe(true);
   });
 
   it('load() returns null when no file exists', async () => {

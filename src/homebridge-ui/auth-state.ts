@@ -1,3 +1,4 @@
+import { isPersistedAuthState } from '../blink-api/auth-state';
 import {
   readOwnerOnlyJsonFile,
   SecureJsonFileSecurityError,
@@ -21,29 +22,6 @@ const describeUiFilePath = (filePath: string): string => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-};
-
-const isOptionalString = (value: unknown): boolean => {
-  return value === undefined || value === null || typeof value === 'string';
-};
-
-const isPersistedAuthState = (value: unknown): value is BlinkAuthState => {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return typeof value.accessToken === 'string'
-    && value.accessToken.trim().length > 0
-    && isOptionalString(value.refreshToken)
-    && isOptionalString(value.tokenAuth)
-    && isOptionalString(value.tokenExpiry)
-    && isOptionalString(value.oauthClientId)
-    && isOptionalString(value.email)
-    && isOptionalString(value.hardwareId)
-    && isOptionalString(value.region)
-    && isOptionalString(value.tier)
-    && (value.accountId === undefined || value.accountId === null || Number.isSafeInteger(value.accountId))
-    && (value.clientId === undefined || value.clientId === null || Number.isSafeInteger(value.clientId))
-    && isOptionalString(value.updatedAt);
 };
 
 const calculateEtaMs = (
