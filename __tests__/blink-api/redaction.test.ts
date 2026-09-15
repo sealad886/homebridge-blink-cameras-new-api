@@ -11,6 +11,8 @@ describe('diagnostic text redaction', () => {
     "{'2fa_code': 'secret-one', '_token': 'secret-two'}",
     "{'password': 'secret-one with spaces secret-two'}",
     '{"password":"secret-one with \\"quoted\\" secret-two"}',
+    'thumbnail available at https://rest-prod.immedia-semi.com/media/secret-one?opaque=secret-two',
+    'stream available at https://secret-one.example/secret-two',
   ])('removes complete credential values from %s', value => {
     const result = redactDiagnosticText(value);
     expect(result).not.toContain('secret-one');

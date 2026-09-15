@@ -82,7 +82,7 @@ describe('BlinkHttp', () => {
     for (const secret of ['path-secret', 'client-secret', 'password-secret', 'token-secret', 'fragment-secret', 'thumbnail-path-secret', 'liveview-value-secret', 'https-capability-secret', 'private-host-secret']) {
       expect(output).not.toContain(secret);
     }
-    expect(output).toContain('rtsps:');
+    expect(output).toContain('visible');
   });
 
   it('releases retry and ignored error responses without reporting expected 404s', async () => {

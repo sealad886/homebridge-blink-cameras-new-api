@@ -13,7 +13,7 @@ import {
   BlinkRestVerificationRequiredError,
 } from '../blink-api/client';
 import { AuthStateChangedError } from '../blink-api/auth-storage';
-import { invalidateAuthStorageGeneration, withAuthStorageLock } from '../blink-api/auth-storage-lock';
+import { invalidateAuthStorageGeneration, legacyAuthStorageAllowed, withAuthStorageLock } from '../blink-api/auth-storage-lock';
 import {
   readOwnerOnlyJsonFile,
   removeOwnerOnlyFile,
@@ -516,10 +516,12 @@ export class HostedAuthService {
   }
 
   private loadPersistedAuthState(): Promise<PersistedAuthStateLoadResult> {
-    return loadPersistedAuthStateFromFiles(
-      [this.authStoragePath, this.legacyAuthStoragePath],
+    return withAuthStorageLock(this.authStoragePath, async () => loadPersistedAuthStateFromFiles(
+      await legacyAuthStorageAllowed(this.authStoragePath)
+        ? [this.authStoragePath, this.legacyAuthStoragePath]
+        : [this.authStoragePath],
       message => this.options.logger.debug(message),
-    );
+    ));
   }
 
   private bindApiToState(api: BlinkApi, state: BlinkAuthState): void {

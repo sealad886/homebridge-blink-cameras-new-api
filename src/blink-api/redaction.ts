@@ -93,7 +93,9 @@ export function redactDiagnosticUrl(value: string): string {
 
 export function redactDiagnosticText(value: string): string {
   return value
-    .replace(/\b(?:https?|immis|rtsps?):\/\/[^\s'"<>]+/gi, redactDiagnosticUrl)
+    // Free-form provider text has no field contract: even a URL path can be
+    // a bearer capability. Keep endpoint detail only in structured diagnostics.
+    .replace(/\b(?:https?|immis|rtsps?):\/\/[^\s'"<>]+/gi, '<redacted>')
     .replace(/\b((?:x-)?(?:proxy-)?authorization\s*[:=]\s*)[^\r\n]*/gi, '$1<redacted>')
     .replace(/\b((?:set-)?cookie\s*[:=]\s*)[^\r\n]*/gi, '$1<redacted>')
     .replace(/(Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
