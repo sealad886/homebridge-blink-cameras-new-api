@@ -183,6 +183,29 @@ describe('BlinkCamerasPlatform', () => {
     ]);
   });
 
+  it('removes explicitly excluded children when their parent network is absent and cached context is missing', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    hapApi.unregisterPlatformAccessories = jest.fn();
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger,
+      { ...config, excludedNetworks: ['91'], videoEncoder: 'libx264' }, hapApi);
+    const missingContext = new hapApi.platformAccessory('Excluded', hapApi.hap.uuid.generate('blink-camera-3'));
+    platform.configureAccessory(missingContext);
+    const absentCamera = new hapApi.platformAccessory('Absent excluded', hapApi.hap.uuid.generate('blink-camera-4'));
+    absentCamera.context.device = { id: 4, name: 'Absent excluded', network_id: 91, enabled: true };
+    platform.configureAccessory(absentCamera);
+    const retained = new hapApi.platformAccessory('Retained', hapApi.hap.uuid.generate('blink-camera-5'));
+    retained.context.device = { id: 5, name: 'Retained', network_id: 92, enabled: true };
+    platform.configureAccessory(retained);
+    blinkApi.getHomescreen.mockResolvedValue({ account: { account_id: 1 }, networks: [],
+      cameras: [{ id: 3, name: 'Excluded', network_id: 91, enabled: true }], doorbells: [], owls: [], sync_modules: [] });
+    await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
+    expect(platform.accessories).toEqual([retained]);
+    expect(hapApi.unregisterPlatformAccessories).toHaveBeenCalledWith(expect.any(String), expect.any(String), [missingContext, absentCamera]);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+  });
+
   it('restores cached accessories without re-registering', () => {
     hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;
