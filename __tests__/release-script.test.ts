@@ -45,11 +45,13 @@ exit 0
   writeFileSync(logPath, '');
 };
 
-const runReleaseScript = (args: string[] = []): ScriptRunResult => {
+const runReleaseScript = (args: string[] = [], gitStatus = ''): ScriptRunResult => {
   const workspaceDir = mkdtempSync(join(tmpdir(), 'release-script-test-'));
   const binDir = join(workspaceDir, 'bin');
   const logPath = join(workspaceDir, 'commands.log');
 
+  writeFileSync(join(workspaceDir, 'package.json'), JSON.stringify({ version: '1.2.3-alpha.0' }));
+  writeFileSync(join(workspaceDir, 'user-work.txt'), 'preserve this work');
   mkdirSync(binDir);
   createFakeTooling(binDir, logPath);
 
@@ -59,7 +61,7 @@ const runReleaseScript = (args: string[] = []): ScriptRunResult => {
     env: {
       ...process.env,
       COMMAND_LOG_PATH: logPath,
-      GIT_STATUS_OUTPUT: '',
+      GIT_STATUS_OUTPUT: gitStatus,
       PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
     },
   });
@@ -103,7 +105,17 @@ describe('release script', () => {
       'npm run build',
       'npm pack',
     ]);
-    expect(result.stdout).toContain('Once the version bump commit is on main, push `git push origin main --follow-tags` to trigger publish.yml.');
+    expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f version=1.2.3-alpha.0');
+  });
+
+  it('stops preflight on unrelated changes and preserves their contents', () => {
+    const result = runReleaseScript([], '?? user-work.txt');
+    workspaceDirs.push(result.workspaceDir);
+    expect(result.status).toBe(1);
+    expect(result.commands).toEqual(['git status --porcelain']);
+    expect(readFileSync(join(result.workspaceDir, 'user-work.txt'), 'utf8')).toBe('preserve this work');
+    expect(result.stderr).toContain('clean clone');
+    expect(result.stderr).not.toContain('stash');
   });
 
   it('rejects the removed local publish mode', () => {
