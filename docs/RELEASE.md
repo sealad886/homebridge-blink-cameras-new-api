@@ -75,6 +75,11 @@ The CI workflow obtains a short-lived publishing credential through OIDC. It
 validates registry responses, serializes releases, publishes the tested package,
 and records source SHA and registry integrity. Existing versions must match their original source;
 a failed post-publish release-record step can be retried at that same revision.
+After npm accepts an upload, registry processing can delay exact-version and dist-tag
+visibility. The publish workflow polls for up to 10 minutes at 30-second intervals,
+reports each pending retry, and fails closed on lookup, source-identity, integrity,
+or tag mismatch. This is a bounded workflow wait, not an npm processing SLA. Do not
+dispatch another release while that bounded wait is active.
 A recovery run also requires the existing dist-tag to match. If it does not, stop
 and arrange explicit authenticated tag maintenance; trusted publishing does not
 authorize `npm dist-tag add`. Do not repair a partial release by publishing locally

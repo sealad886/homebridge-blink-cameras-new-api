@@ -47,6 +47,7 @@ function delayedRegistry(states) {
     options: {
       readMetadata: async () => structuredClone(states[Math.min(reads++, states.length - 1)]),
       sleep: async (ms) => { delays.push(ms); },
+      onPending: () => {},
     },
     reads: () => reads,
     delays,
@@ -61,11 +62,38 @@ test('publication waits for independently propagating version and dist-tag', asy
   const registry = delayedRegistry([missing, staleTag, ready]);
   assert.deepEqual(await waitForPublished(expected, registry.options), ready);
   assert.equal(registry.reads(), 3);
-  assert.deepEqual(registry.delays, [5000, 5000]);
+  assert.deepEqual(registry.delays, [30000, 30000]);
   const stuck = delayedRegistry([staleTag]);
   await assert.rejects(waitForPublished(expected, stuck.options), /Release dist-tag is incorrect/);
-  assert.equal(stuck.reads(), 6);
-  assert.equal(stuck.delays.length, 5);
+  assert.equal(stuck.reads(), 21);
+  assert.deepEqual(stuck.delays, Array(20).fill(30000));
+});
+
+test('publication reports every 30-second propagation retry without real waiting', async () => {
+  const expected = { name: 'pkg', version: '0.10.0-alpha.0', sha: 'abc', integrity: 'sha512-xyz', latestBefore: '0.9.1' };
+  const missing = { versions: {}, 'dist-tags': { latest: '0.9.1' } };
+  const ready = { versions: { [expected.version]: { name: 'pkg', gitHead: 'abc', dist: { integrity: 'sha512-xyz' } } }, 'dist-tags': { latest: '0.9.1', alpha: expected.version } };
+  const registry = delayedRegistry([missing, missing, ready]);
+  const progress = [];
+  registry.options.onPending = (status) => progress.push(status);
+  await waitForPublished(expected, registry.options);
+  assert.deepEqual(progress, [
+    { attempt: 1, elapsedMs: 0, intervalMs: 30000, attempts: 21 },
+    { attempt: 2, elapsedMs: 30000, intervalMs: 30000, attempts: 21 },
+  ]);
+});
+
+test('publication fails immediately on registry identity mismatch or network failure', async () => {
+  const expected = { name: 'pkg', version: '0.10.0-alpha.0', sha: 'abc', integrity: 'sha512-xyz', latestBefore: '0.9.1' };
+  const wrongIdentity = { versions: { [expected.version]: { name: 'pkg', gitHead: 'other', dist: { integrity: 'sha512-xyz' } } }, 'dist-tags': { latest: '0.9.1' } };
+  const mismatch = delayedRegistry([wrongIdentity]);
+  await assert.rejects(waitForPublished(expected, mismatch.options), /different source revision/);
+  assert.equal(mismatch.reads(), 1);
+  assert.deepEqual(mismatch.delays, []);
+  const network = delayedRegistry([]);
+  network.options.readMetadata = async () => { throw new Error('network unavailable'); };
+  await assert.rejects(waitForPublished(expected, network.options), /network unavailable/);
+  assert.deepEqual(network.delays, []);
 });
 
 test('cleanup waits for all removed tags and fails after bounded attempts', async () => {
