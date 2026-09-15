@@ -1,5 +1,9 @@
 # Migration Notes (Phase 2)
 
+> Historical restructuring proposal, not current deployment instructions. The
+> current release and rollback procedure is in [RELEASE.md](RELEASE.md). Keep the
+> existing `dist/homebridge-ui` layout and valid authentication during upgrades.
+
 > Note: Codanna MCP tools are not available in this environment, so this plan is derived from manual inspection + `rg`.
 
 ## Template reference (target feel)
