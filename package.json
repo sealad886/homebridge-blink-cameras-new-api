@@ -37,6 +37,7 @@
     "types": "dist/index.d.ts",
     "files": [
         "dist",
+        "CHANGELOG.md",
         "config.schema.json",
         "scripts/preuninstall.js"
     ],

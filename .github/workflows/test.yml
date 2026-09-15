@@ -5,32 +5,34 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node-version: [20, 22, 24]
-
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Run tests with coverage
-        run: npm test -- --coverage
-
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test -- --runInBand --coverage
+      - name: Test release safety contracts
+        run: node --test .github/scripts/*.test.mjs
+      - name: Verify package contents and loadability
+        run: node .github/scripts/verify-package.mjs
       - name: Upload coverage to Codecov
         if: matrix.node-version == 20
         uses: codecov/codecov-action@v6
