@@ -21,6 +21,8 @@ import {
   StreamingRequest,
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
+import { BlinkHttpError } from '../blink-api/http';
+import { redactDiagnosticText } from '../blink-api/redaction';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
@@ -302,8 +304,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly isDeviceAvailable: () => boolean = () => true,
     private readonly log: (message: string) => void,
     streamingConfig?: BlinkCameraStreamingConfigInput,
+    private readonly errorLog: (message: string) => void = log,
   ) {
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
+  }
+
+  private logError(message: string): void {
+    this.errorLog(redactDiagnosticText(redactFfmpegOutput(message)));
   }
 
   /**
@@ -351,7 +358,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       this.log(`Snapshot returned (${buffer.length} bytes)`);
       callback(undefined, buffer);
     } catch (error) {
-      this.log(`Snapshot error: ${error}`);
+      this.logError(`Snapshot error: ${error}`);
       callback(error as Error);
     }
   }
@@ -371,6 +378,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private cacheSnapshot(buffer: Buffer): void {
+    // Status polling can report the camera offline while its image is downloading.
+    // Never publish or retain that late response as an available snapshot.
+    if (!this.isDeviceAvailable()) {
+      this.cachedSnapshot = null;
+      this.cachedSnapshotTime = 0;
+      throw new Error('Camera is unavailable/offline');
+    }
     this.cachedSnapshot = buffer;
     this.cachedSnapshotTime = Date.now();
   }
@@ -385,20 +399,43 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error('No thumbnail URL available');
     }
 
-    // Build full URL (thumbnails may be relative paths)
-    const fullUrl = url.startsWith('http')
-      ? url
-      : new URL(url, this.api.getSharedRestRootUrl()).toString();
-
-    // Fetch the thumbnail image with auth headers
-    const response = await fetch(fullUrl, {
-      headers: this.api.getAuthHeaders(),
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch thumbnail: ${response.status}`);
+    // Blink thumbnail resources use the regional REST origin. Never attach
+    // account credentials to an arbitrary resource URL or follow its redirects.
+    let resourceUrl: URL;
+    try {
+      try {
+        resourceUrl = new URL(url);
+      } catch {
+        resourceUrl = new URL(url, this.api.getSharedRestRootUrl());
+      }
+    } catch {
+      throw new Error('Blink returned an invalid thumbnail URL.');
+    }
+    if (resourceUrl.protocol !== 'https:'
+      || !/^rest-[a-z0-9]{4}\.immedia-semi\.com$/.test(resourceUrl.hostname)
+      || resourceUrl.username || resourceUrl.password || resourceUrl.port) {
+      throw new Error('Blink returned an untrusted thumbnail destination.');
     }
 
-    return Buffer.from(await response.arrayBuffer());
+    let response: Awaited<ReturnType<typeof fetch>>;
+    try {
+      response = await fetch(resourceUrl.toString(), {
+        headers: this.api.getAuthHeaders(),
+        redirect: 'error',
+        signal: globalThis.AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new Error('Blink thumbnail request failed or timed out.');
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`Failed to fetch thumbnail: ${response.status}`);
+    }
+    try {
+      return Buffer.from(await response.arrayBuffer());
+    } catch {
+      throw new Error('Blink thumbnail response could not be read.');
+    }
   }
 
   /**
@@ -429,14 +466,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         }
       }
     } catch (error) {
-      // Log but don't fail - we may still have a cached thumbnail
-      // 409 Conflict means camera is busy (e.g., during live view) - this is expected
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (errorMsg.includes('409')) {
-        // Camera busy - don't log as error, just skip this refresh
-        return;
-      }
-      this.log(`Thumbnail request failed: ${error}`);
+      // Only a typed HTTP conflict permits downloading the existing thumbnail.
+      // Authentication, persistence, and transport failures must stop before bearer use.
+      if (error instanceof BlinkHttpError && error.failure === 'http' && error.status === 409) return;
+      throw error;
     }
   }
 
@@ -515,7 +548,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       );
       callback(undefined, response);
     } catch (error) {
-      this.log(`Stream preparation failed: ${error}`);
+      this.logError(`Stream preparation failed: ${error}`);
       callback(error as Error);
     }
   }
@@ -612,6 +645,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           immisUrl: originalUrl,
           serial: this.serial,
           log: (msg) => this.log(msg),
+          errorLog: (msg) => this.logError(msg),
           debug: this.streamingConfig.ffmpegDebug,
           saveStreamPath: this.streamingConfig.debugStreamPath,
           verifyTls: this.streamingConfig.verifyImmisTls,
@@ -623,7 +657,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
             return;
           }
 
-          this.log(`IMMIS proxy error for session ${sessionId}: ${error.message}`);
+          this.logError(`IMMIS proxy error for session ${sessionId}: ${error.message}`);
           if (!active.readyNotified) {
             active.readyNotified = true;
             callback(error);
@@ -650,7 +684,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         if (!isImmisStream) {
           this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
             .catch((error) => {
-              this.log(`Live view readiness check failed: ${error}`);
+              this.logError(`Live view readiness check failed: ${error}`);
             });
         }
         // Start keep-alive immediately
@@ -668,7 +702,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         }
       }
     } catch (error) {
-      this.log(`Failed to start stream ${sessionId}: ${error}`);
+      this.logError(`Failed to start stream ${sessionId}: ${error}`);
       await this.stopStream(sessionId);
       callback(error as Error);
     }
@@ -699,20 +733,20 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     try {
       active.ffmpeg?.kill('SIGKILL');
     } catch (error) {
-      this.log(`Error stopping FFmpeg for session ${sessionId}: ${error}`);
+      this.logError(`Error stopping FFmpeg for session ${sessionId}: ${error}`);
     }
 
     try {
       active.talkback?.kill('SIGKILL');
     } catch (error) {
-      this.log(`Error stopping talkback FFmpeg for session ${sessionId}: ${error}`);
+      this.logError(`Error stopping talkback FFmpeg for session ${sessionId}: ${error}`);
     }
 
     // Signal IMMIS audio stop if applicable
     try {
       active.immisProxy?.stopAudio?.();
     } catch (error) {
-      this.log(`Error sending IMMIS stopAudio for session ${sessionId}: ${error}`);
+      this.logError(`Error sending IMMIS stopAudio for session ${sessionId}: ${error}`);
     }
 
     // Stop the IMMIS proxy if it was used
@@ -720,7 +754,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       try {
         active.immisProxy.stop();
       } catch (error) {
-        this.log(`Error stopping IMMIS proxy for session ${sessionId}: ${error}`);
+        this.logError(`Error stopping IMMIS proxy for session ${sessionId}: ${error}`);
       }
     }
 
@@ -733,7 +767,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       try {
         await this.api.completeCommand(this.networkId, active.commandId);
       } catch (error) {
-        this.log(`Failed to end live view command ${active.commandId}: ${error}`);
+        this.logError(`Failed to end live view command ${active.commandId}: ${error}`);
       }
     }
 
@@ -792,7 +826,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           }
         }
       } catch (error) {
-        this.log(`Failed to poll live view command ${commandId}: ${error}`);
+        this.logError(`Failed to poll live view command ${commandId}: ${error}`);
       }
     }, intervalMs);
   }
@@ -876,7 +910,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const sdp = this.buildTalkbackSdp(request.audio, active);
     if (!sdp) {
-      this.log(`Talkback SDP generation failed for session ${sessionId}`);
+      this.logError(`Talkback SDP generation failed for session ${sessionId}`);
       return;
     }
 
@@ -908,7 +942,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     talkback.on('error', (error) => {
       this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
-      this.log(`Talkback FFmpeg error for session ${sessionId}: ${error.message}`);
+      this.logError(`Talkback FFmpeg error for session ${sessionId}: ${error.message}`);
     });
 
     talkback.on('exit', (code, signal) => {
@@ -930,7 +964,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const sdp = this.buildTalkbackSdp(request.audio, active);
     if (!sdp) {
-      this.log(`IMMIS talkback SDP generation failed for session ${sessionId}`);
+      this.logError(`IMMIS talkback SDP generation failed for session ${sessionId}`);
       return;
     }
 
@@ -962,7 +996,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.immisProxy.attachAudioInput(talkback.stdout!);
       active.immisProxy.startAudio();
     } catch (error) {
-      this.log(`Failed to attach IMMIS audio input: ${error}`);
+      this.logError(`Failed to attach IMMIS audio input: ${error}`);
     }
 
     talkback.stderr.on('data', (data) => {
@@ -971,7 +1005,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     talkback.on('error', (error) => {
       this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
-      this.log(`IMMIS talkback FFmpeg error for session ${sessionId}: ${error.message}`);
+      this.logError(`IMMIS talkback FFmpeg error for session ${sessionId}: ${error.message}`);
     });
 
     talkback.on('exit', (code, signal) => {
@@ -982,7 +1016,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       try {
         active.immisProxy?.stopAudio();
       } catch (err) {
-        this.log(`IMMIS stopAudio error for session ${sessionId}: ${err}`);
+        this.logError(`IMMIS stopAudio error for session ${sessionId}: ${err}`);
       }
     });
   }
@@ -1042,7 +1076,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
       this.flushFfmpegStderr(sessionId, active);
 
-      this.log(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
+      this.logError(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
 
       if (!useSoftwareFallback && videoEncoder !== SOFTWARE_VIDEO_ENCODER && !active.fallbackVideoEncoderTried) {
         active.fallbackVideoEncoderTried = true;
@@ -1079,8 +1113,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         return;
       }
 
-      if (code !== 0 || signal) {
-        this.log(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
+      if (!active.stopped && (code !== 0 || signal)) {
+        this.logError(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
       void this.stopStream(sessionId);
     });

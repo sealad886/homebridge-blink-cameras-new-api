@@ -1,3 +1,4 @@
+import { AuthStateChangedError, FileAuthStorage } from '../../src/blink-api/auth-storage';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
@@ -6,6 +7,8 @@ import * as path from 'node:path';
 import {
   BlinkAuth,
   BlinkAuthenticationError,
+  Blink2FARequiredError,
+  BlinkTokenRefreshError,
   BlinkHostedTokenExchangeError,
   BlinkHostedReauthenticationRequiredError,
 } from '../../src/blink-api/auth';
@@ -38,6 +41,8 @@ const UPSTREAM_BODY = 'upstreamBodySentinel_4Dt6Wu';
 const STORAGE_FAILURE = 'storageFailureSentinel_5Eu5Vt';
 const STORAGE_LOAD_FAILURE = 'storageLoadFailureSentinel_6Fv4Us';
 const AUTH_STATE_LOAD_FAILED = 'Blink authentication state could not be loaded.';
+const AUTH_LOCKED_REAUTHENTICATION_REQUIRED =
+  'Authentication is locked. Unlock it in the plugin settings before signing in again.';
 
 type FetchMock = jest.MockedFunction<typeof fetch>;
 
@@ -201,7 +206,7 @@ const queueLegacyLoginResponses = (
       ok: true,
       status: 302,
       statusText: 'Found',
-      headers: responseHeaders({ location: 'callback?code=replacement-code' }),
+      headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=replacement-code' }),
     } as Response)
     .mockResolvedValueOnce({
       ...tokenResponse(tokenBody),
@@ -576,7 +581,7 @@ describe('BlinkAuth hosted OAuth', () => {
     }));
   });
 
-  it('maps hosted refresh persistence failure to fixed reauthentication and restores memory', async () => {
+  it('classifies hosted refresh persistence failure as storage failure and restores memory', async () => {
     const previousState: BlinkAuthState = {
       accessToken: 'priorHostedAccess_2Mb7Ny',
       refreshToken: 'priorHostedRefresh_3Nc6Mx',
@@ -602,8 +607,8 @@ describe('BlinkAuth hosted OAuth', () => {
       caught = error;
     }
 
-    expect(caught).toBeInstanceOf(BlinkHostedReauthenticationRequiredError);
-    expect((caught as Error).message).toBe(HOSTED_REAUTH_ERROR);
+    expect(caught).toBeInstanceOf(BlinkTokenRefreshError);
+    expect(caught).toMatchObject({ category: 'storage' });
     expect(tokenState(auth)).toEqual({
       accessToken: previousState.accessToken,
       refreshToken: previousState.refreshToken,
@@ -731,6 +736,50 @@ describe('BlinkAuth hosted OAuth', () => {
     await auth.ensureValidToken();
 
     expect(loginSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fall back to configured legacy credentials when authentication is locked', async () => {
+    const storage = createStorage({
+      accessToken: 'legacyAccessSentinel_8Rh2Is',
+      refreshToken: 'legacyRefreshSentinel_9Si1Hr',
+      tokenExpiry: '2026-01-01T00:00:00.000Z',
+    });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      authLocked: true,
+    }));
+    const loginSpy = jest.spyOn(auth, 'login');
+    fetchMock.mockResolvedValueOnce(failedTokenResponse());
+
+    await expect(auth.ensureValidToken()).rejects.toThrow('Blink OAuth refresh failed: 400');
+
+    expect(loginSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects direct legacy sign-in while authentication is locked', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      authLocked: true,
+    }));
+
+    await expect(auth.login()).rejects.toThrow(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('directs locked token-only configurations to unlock before legacy sign-in', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { authLocked: true }));
+
+    await expect(auth.ensureValidToken()).rejects.toThrow(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not expose an upstream token response body in hosted completion errors or logs', async () => {
@@ -1032,7 +1081,7 @@ describe('BlinkAuth hosted OAuth', () => {
     ['blank refresh token', validTokenBody({ refresh_token: '   ' })],
     ['wrong refresh token type', validTokenBody({ refresh_token: 123 })],
     ['invalid optional metadata', validTokenBody({ tier: '' })],
-  ])('maps Android refresh %s to fixed reauthentication without mutation', async (_description, body) => {
+  ])('classifies Android refresh %s as invalid response without mutation', async (_description, body) => {
     const previousState: BlinkAuthState = {
       accessToken: 'hostedAccess_5Qi5Ip',
       refreshToken: 'hostedRefresh_6Rh4Ho',
@@ -1050,7 +1099,7 @@ describe('BlinkAuth hosted OAuth', () => {
     fetchMock.mockResolvedValueOnce(tokenResponse(body));
 
     await expect(auth.refreshTokens()).rejects.toBeInstanceOf(
-      BlinkHostedReauthenticationRequiredError,
+      BlinkTokenRefreshError,
     );
 
     expect(tokenState(auth)).toEqual({
@@ -1262,7 +1311,7 @@ describe('BlinkAuth hosted OAuth', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     rejectOlderSave(new Error('older-save-rejected'));
 
-    expect(await olderOutcome).toBeInstanceOf(BlinkHostedReauthenticationRequiredError);
+    expect(await olderOutcome).toMatchObject({ category: 'storage' });
     await newerCompletion;
     expect(auth.getAccessToken()).toBe('newerHostedAccess_6Ll3Nu');
     expect(auth.getRefreshToken()).toBe('newerHostedRefresh_7Mm2Mt');
@@ -1327,7 +1376,6 @@ describe('BlinkAuth hosted OAuth', () => {
   it.each([
     ['profile-less', undefined],
     ['explicit iOS', 'ios' as const],
-    ['resolver-compatible Amazon', 'amazon' as const],
   ])(
     'recovers a failed legacy state load for %s configuration and persists one replacement',
     async (_description, oauthClientId) => {
@@ -1360,6 +1408,23 @@ describe('BlinkAuth hosted OAuth', () => {
       email: ' legacy@example.com ',
       password: 'legacy-password',
       oauthClientId: 'android',
+    }));
+    const loginSpy = jest.spyOn(auth, 'login').mockResolvedValue(undefined);
+
+    await expect(auth.ensureValidToken()).rejects.toThrow(AUTH_STATE_LOAD_FAILED);
+
+    expect(loginSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps failed state loads strict when locked despite legacy credentials', async () => {
+    const storage = createStorage(null);
+    storage.load.mockRejectedValue(new Error(STORAGE_LOAD_FAILURE));
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com',
+      password: 'legacy-password',
+      authLocked: true,
     }));
     const loginSpy = jest.spyOn(auth, 'login').mockResolvedValue(undefined);
 
@@ -1411,4 +1476,278 @@ describe('BlinkAuth hosted OAuth', () => {
     expect(auth.getAccessToken()).toBeNull();
     expect(storage.save).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    { accessToken: 123 }, { refreshToken: {} }, { tier: {} },
+    { oauthClientId: 'amazon' }, { oauthClientId: 'unknown' },
+    { tokenExpiry: 'invalid' }, { accountId: -1 },
+  ])('rejects malformed persisted state before token use: %j', async (invalid) => {
+    const storage = createStorage({
+      accessToken: ACCESS_TOKEN, tokenExpiry: new Date(Date.now() + 86_400_000).toISOString(),
+      ...invalid,
+    } as BlinkAuthState);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    await expect(auth.ensureValidToken()).rejects.toThrow(AUTH_STATE_LOAD_FAILED);
+    expect(auth.getAccessToken()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 503])('retains unexpired hosted token during temporary refresh HTTP %s', async (status) => {
+    jest.useFakeTimers();
+    try {
+      const storage = createStorage({ accessToken: ACCESS_TOKEN, refreshToken: REFRESH_TOKEN,
+        oauthClientId: 'android', tokenExpiry: new Date(Date.now() + 1_800_000).toISOString() });
+      const { logger } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger));
+      fetchMock.mockImplementation(async () => tokenResponse({}, { status }));
+      const result = auth.ensureValidToken();
+      await jest.runAllTimersAsync();
+      await expect(result).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(auth.getAccessToken()).toBe(ACCESS_TOKEN);
+      expect(storage.save).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('retains a valid locked token when proactive refresh is temporarily unavailable', async () => {
+    jest.useFakeTimers();
+    try {
+      const storage = createStorage({
+        accessToken: ACCESS_TOKEN,
+        refreshToken: REFRESH_TOKEN,
+        tokenExpiry: new Date(Date.now() + 1_800_000).toISOString(),
+      });
+      const { logger } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger, {
+        email: 'legacy@example.com',
+        password: 'legacy-password',
+        authLocked: true,
+      }));
+      const loginSpy = jest.spyOn(auth, 'login');
+      fetchMock.mockImplementation(async () => tokenResponse({}, { status: 503 }));
+
+      const result = auth.ensureValidToken();
+      await jest.runAllTimersAsync();
+
+      await expect(result).resolves.toBeUndefined();
+      expect(loginSpy).not.toHaveBeenCalled();
+      expect(auth.getAccessToken()).toBe(ACCESS_TOKEN);
+      expect(storage.save).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('does not relogin or use an expired token during a transport outage', async () => {
+    jest.useFakeTimers();
+    try {
+      const storage = createStorage({ accessToken: ACCESS_TOKEN, refreshToken: REFRESH_TOKEN,
+        oauthClientId: 'android', tokenExpiry: new Date(Date.now() - 1).toISOString() });
+      const { logger } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger));
+      fetchMock.mockRejectedValue(new Error('transport secret'));
+      const result = auth.ensureValidToken().catch(error => error);
+      await jest.runAllTimersAsync();
+      expect(await result).toMatchObject({ category: 'temporary' });
+      expect(storage.save).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('single-flights concurrent legacy login without overwriting the PKCE session', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      email: 'legacy@example.com', password: 'legacy-password',
+    }));
+    queueLegacyLoginResponses(fetchMock);
+    await Promise.all([auth.login(), auth.login(), auth.login()]);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+    expect(auth.getAccessToken()).toBe('replacementAccess_4Pd7Ku');
+  });
+
+  it.each(['headers', 'body'])('bounds a stalled OAuth %s request and releases refresh single-flight', async (phase) => {
+    jest.useFakeTimers();
+    try {
+      const storage = createStorage({ accessToken: ACCESS_TOKEN, refreshToken: REFRESH_TOKEN,
+        oauthClientId: 'android', tokenExpiry: new Date(Date.now() - 1).toISOString() });
+      const { logger } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger));
+      fetchMock.mockImplementation(async () => phase === 'headers'
+        ? new Promise<Response>(() => undefined)
+        : { ok: true, status: 200, json: () => new Promise(() => undefined) } as unknown as Response);
+      const failed = auth.refreshTokens().catch(error => error);
+      await jest.runAllTimersAsync();
+      expect(await failed).toBeInstanceOf(BlinkTokenRefreshError);
+      fetchMock.mockResolvedValueOnce(successfulTokenResponse());
+      await expect(auth.refreshTokens()).resolves.toBeUndefined();
+      expect(storage.save).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('recovers malformed durable auth through a new hosted sign-in and preserves a backup', async () => {
+    const authPath = path.join(directory, '.blink-auth.json');
+    await fs.writeFile(authPath, '{broken-json', { mode: 0o600 });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(createStorage(null), logger, {
+      authStorage: undefined, authStoragePath: authPath,
+    }));
+    const { pending, callbackUrl } = await startHostedLogin(auth);
+    fetchMock.mockResolvedValueOnce(successfulTokenResponse());
+    await auth.completeHostedLogin(pending.flowId, callbackUrl);
+    expect(await readOwnerOnlyJsonFile<BlinkAuthState>(authPath)).toMatchObject({ accessToken: ACCESS_TOKEN });
+    const backups = (await fs.readdir(directory)).filter(name => name.includes('.invalid-'));
+    expect(backups).toHaveLength(1);
+    expect(await readOwnerOnlyJsonFile(path.join(directory, backups[0]))).toBe('{broken-json');
+    expect((await fs.stat(path.join(directory, backups[0]))).mode & 0o777).toBe(0o600);
+  });
+
+  it('honors clear during an initial legacy sign-in even while the auth file is absent', async () => {
+    const authPath = path.join(directory, '.blink-auth.json');
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(createStorage(null), logger, {
+      authStorage: undefined, authStoragePath: authPath,
+      email: 'legacy@example.com', password: 'legacy-password',
+    }));
+    let started!: () => void;
+    let release!: () => void;
+    const startedPromise = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    queueLegacyLoginResponses(fetchMock);
+    // Gate the first queued response by wrapping the mock, preserving its response sequence.
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      const response = fetchMock(...args);
+      if (fetchMock.mock.calls.length === 1) { started(); await gate; }
+      return response;
+    }) as typeof fetch;
+    const outcome = auth.login().catch(error => error);
+    await startedPromise;
+    await new FileAuthStorage(authPath).clear();
+    release();
+    expect(await outcome).toBeInstanceOf(AuthStateChangedError);
+    await expect(fs.access(authPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(auth.getAccessToken()).toBeNull();
+  });
+
+  it('rejects an unsupported configured OAuth profile rather than submitting iOS credentials', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, {
+      oauthClientId: 'amazon', email: 'legacy@example.com', password: 'legacy-password',
+    }));
+    await expect(auth.ensureValidToken()).rejects.toThrow('Unsupported Blink OAuth client profile');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects token endpoint redirects while preserving manual legacy authorization redirects', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
+    queueLegacyLoginResponses(fetchMock);
+    await auth.login();
+    const tokenRequests = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/oauth/token'));
+    expect(tokenRequests).toHaveLength(1);
+    expect(tokenRequests[0][1]).toMatchObject({ method: 'POST', redirect: 'error' });
+    const authorizeRequests = fetchMock.mock.calls.filter(([url]) => String(url).includes('/oauth/v2/authorize'));
+    expect(authorizeRequests[0][1]).toMatchObject({ redirect: 'manual' });
+  });
+
+  it.each([new Error('response-body-secret'), new SyntaxError('response-body-secret')])(
+    'never exposes a rejected legacy response body read: %s', async (failure) => {
+      const storage = createStorage(null);
+      const { logger, entries } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders() } as Response);
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => { throw failure; } } as unknown as Response);
+      const outcome = await auth.login().catch(error => error);
+      expect(outcome).toBeInstanceOf(BlinkTokenRefreshError);
+      expect(outcome.category).toBe(failure instanceof SyntaxError ? 'response' : 'temporary');
+      expect(`${String(outcome)} ${JSON.stringify(outcome)} ${entries.join(' ')}`).not.toContain('response-body-secret');
+    },
+  );
+
+  it('cancels unused refresh response bodies before retrying', async () => {
+    jest.useFakeTimers();
+    try {
+      const storage = createStorage({ accessToken: ACCESS_TOKEN, refreshToken: REFRESH_TOKEN,
+        oauthClientId: 'android', tokenExpiry: new Date(Date.now() - 1).toISOString() });
+      const { logger } = createLogger();
+      const auth = new BlinkAuth(makeConfig(storage, logger));
+      let canceled = false;
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 503,
+        body: { cancel: async () => { canceled = true; } } } as unknown as Response);
+      fetchMock.mockImplementationOnce(async () => {
+        expect(canceled).toBe(true);
+        return successfulTokenResponse();
+      });
+      const result = auth.refreshTokens();
+      await jest.runAllTimersAsync();
+      await result;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('shares concurrent 2FA completion and login without resetting the active challenge', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders() } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf">' } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf2">2FA verification code' } as Response);
+    await expect(auth.login()).rejects.toBeInstanceOf(Blink2FARequiredError);
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location: '/oauth/v2/authorize' }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }) } as Response)
+      .mockResolvedValueOnce(successfulTokenResponse());
+    await Promise.all([auth.complete2FA('123456'), auth.complete2FA('123456'), auth.login()]);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/2fa/verify'))).toHaveLength(1);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+    expect(auth.getAccessToken()).toBe(ACCESS_TOKEN);
+  });
+
+  it.each([
+    'https://attacker.example/callback?code=callback-secret',
+    'immedia-blink://attacker.example/signin/callback?code=callback-secret',
+    'immedia-blink://applinks.blink.com/wrong?code=callback-secret',
+    'immedia-blink://user:password@applinks.blink.com/signin/callback?code=callback-secret',
+    'immedia-blink://applinks.blink.com/signin/callback?code=callback-secret#fragment',
+    'immedia-blink://applinks.blink.com/signin/callback?code=callback-secret&code=other',
+    'immedia-blink://applinks.blink.com/signin/callback?code=callback-secret&state=a&state=b',
+    'immedia-blink://applinks.blink.com/signin/callback?code=callback-secret&state=mismatch',
+    'callback?code=callback-secret',
+  ])('rejects an untrusted legacy callback before token exchange: %s', async (location) => {
+    const storage = createStorage(null);
+    const { logger, entries } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders() } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf">' } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location }) } as Response);
+    await expect(auth.login()).rejects.toThrow('Invalid Blink OAuth callback');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(storage.save).not.toHaveBeenCalled();
+    expect(entries.join(' ')).not.toContain('callback-secret');
+  });
+
+  it('discards unused manual redirect bodies during a successful legacy login', async () => {
+    const storage = createStorage(null);
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
+    const discarded: string[] = [];
+    const body = (name: string) => ({ cancel: async () => { discarded.push(name); } });
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders(), body: body('initial authorize') } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf">' } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location: '/oauth/v2/authorize' }), body: body('signin') } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, status: 302,
+        headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }), body: body('final authorize') } as unknown as Response)
+      .mockResolvedValueOnce(successfulTokenResponse());
+    await auth.login();
+    expect(discarded).toEqual(['initial authorize', 'signin', 'final authorize']);
+    expect(storage.save).toHaveBeenCalledTimes(1);
+  });
+
 });

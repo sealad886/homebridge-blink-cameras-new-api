@@ -206,10 +206,8 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
-# Beads local state
-.beads/*
-!.beads/.gitignore
-!.beads/config.yaml
+# Retired tracker state must not be recommitted
+.beads/
 
 # yarn v3
 .pnp.*
@@ -239,11 +237,11 @@ vite.config.ts.timestamp-*
 # Built Visual Studio Code Extensions
 *.vsix
 
-# Beads local credentials
+# Retired tracker credentials
 .beads-credential-key
 .beads/.beads-credential-key
 
-# Beads / Dolt database files
+# Local database files
 .dolt/
 *.db
 .github/hooks/

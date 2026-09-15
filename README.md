@@ -127,6 +127,7 @@ Add a platform entry to your Homebridge `config.json`:
 | ------ | -------- | ------- | ----------- |
 | `platform` | Yes | - | Must be `BlinkCameras` |
 | `name` | Yes | `Blink` | Platform name shown in logs |
+| `excludedNetworks` | No | `[]` | Network IDs (preferred) or exact network names to hide from this instance; restart the child bridge after saving |
 | `deviceId` | No | `homebridge-blink` | Unique identifier sent to Blink (`hardware_id`) |
 | `deviceName` | No | - | Friendly fallback name for this Homebridge instance |
 | `persistAuth` | No | `true` | Persist auth tokens across restarts in Homebridge's `.blink-auth.json` file; hosted-UI completion forces `true`, and `false` is not supported for a completed hosted session |
@@ -162,6 +163,34 @@ stored in `.blink-auth.json` inside the Homebridge storage root. The file is
 atomically replaced with owner-only mode `0600`. Pre-`0.6.x` state from
 `blink-auth/auth-state.json` is migrated automatically. Do not copy either file
 into the repository or expose its contents in logs or support requests.
+
+Use **Excluded Networks** in the plugin settings to select systems this instance
+should not expose. Save and restart the Blink child bridge. Clearing a selection
+restores that network on discovery. Missing/offline devices are not removed merely
+because they are absent from one response. Network names are exact matches; IDs
+remain stable if a network is renamed.
+
+The old per-device `enableMotion` configuration control had no runtime effect and
+has been removed from settings. Use each device's HomeKit Motion switch for cloud
+motion control; per-device `motionTimeout` remains supported.
+
+Stored JSON is validated before use; supported OAuth profiles are `android` and
+`ios`. A stored token is not proof that Blink still accepts it: **Test Connection**
+performs that check. Temporary refresh outages retain the current token and advise
+retrying; a confirmed rejected refresh grant requires sign-in again.
+
+Credential writes use a short cross-process lock and compare the saved session
+before replacing it. Logout also updates `.blink-auth.json.generation.json`, so
+an older child bridge cannot recreate cleared credentials or overwrite a new
+account. Restart the child bridge after changing accounts. Requests already sent
+and established streams can finish; logout does not revoke tokens at Blink.
+
+New authenticated sign-in can replace damaged JSON after preserving its exact
+contents in an owner-only `.invalid-<id>.json` backup (encoded as a JSON string).
+Treat those backups as credentials. If a crash leaves `.blink-auth.json.lock`
+behind, storage fails closed after five seconds. Stop the child bridge and the
+custom-UI process, confirm neither is running, remove only that empty lock
+directory, then restart. Do not remove the generation file during routine reset.
 
 For compatibility with older installations, the runtime still accepts a
 paired `username` and `password` in manually edited configuration and can use

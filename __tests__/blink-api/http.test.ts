@@ -40,6 +40,69 @@ describe('BlinkHttp', () => {
     jest.restoreAllMocks();
   });
 
+  it.each([false, true])('keeps transport and response parsing errors safe with debug=%s', async (debugAuth) => {
+    const messages: unknown[][] = [];
+    const record = (...args: unknown[]): void => { messages.push(args); };
+    const http = new BlinkHttp(mockAuth(), { ...mockConfig, debugAuth,
+      logger: { debug: record, info: record, warn: record, error: record } });
+    const secret = 'secret123';
+    for (const failure of ['network', 'json']) {
+      if (failure === 'network') {
+        (fetch as jest.Mock).mockRejectedValueOnce(new Error(secret, { cause: { token: secret } }));
+      } else {
+        (fetch as jest.Mock).mockResolvedValueOnce(new globalThis.Response(`${secret} invalid json`));
+      }
+      let caught: unknown;
+      try { await http.get('v1/example'); } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(BlinkHttpError);
+      expect((caught as BlinkHttpError).toLogString()).toContain(`Failure: ${failure === 'network' ? 'network' : 'response'}`);
+      expect(String(caught)).not.toContain(secret);
+      expect(JSON.stringify(caught)).not.toContain(secret);
+    }
+    expect(JSON.stringify(messages)).not.toContain(secret);
+    expect((fetch as jest.Mock).mock.calls[0][1].signal).toBeInstanceOf(globalThis.AbortSignal);
+  });
+
+  it('redacts stream capability URLs embedded in otherwise ordinary response fields', async () => {
+    const messages: unknown[][] = [];
+    const record = (...args: unknown[]): void => { messages.push(args); };
+    const http = new BlinkHttp(mockAuth(), { ...mockConfig, debugAuth: true,
+      logger: { debug: record, info: record, warn: record, error: record } });
+    (fetch as jest.Mock).mockResolvedValueOnce(response(200, {
+      server: 'immis://stream.example/session/path-secret?client_id=client-secret',
+      thumbnail: 'https://rest-prod.immedia-semi.com/media/thumbnail-path-secret',
+      liveview_token: 'liveview-value-secret',
+      liveview_url: 'https://stream.example/https-capability-secret',
+      nested: ['rtsps://user:password-secret@private-host-secret/path-secret?token=token-secret'],
+      details: "{'password': 'quoted password-secret with spaces', 'safe': 'visible'}",
+      message: 'See https://user:password-secret@example.com/help?access_token=token-secret#fragment-secret',
+    }));
+    await http.get('v1/liveview');
+    const output = JSON.stringify(messages);
+    for (const secret of ['path-secret', 'client-secret', 'password-secret', 'token-secret', 'fragment-secret', 'thumbnail-path-secret', 'liveview-value-secret', 'https-capability-secret', 'private-host-secret']) {
+      expect(output).not.toContain(secret);
+    }
+    expect(output).toContain('visible');
+  });
+
+  it('releases retry and ignored error responses without reporting expected 404s', async () => {
+    const error = jest.fn();
+    const http = new BlinkHttp(mockAuth(), { ...mockConfig,
+      logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error } });
+    const rejectedBody = { cancel: jest.fn().mockResolvedValue(undefined) };
+    const missingBody = { cancel: jest.fn().mockResolvedValue(undefined) };
+    (fetch as jest.Mock)
+      .mockResolvedValueOnce({ ...response(401), body: rejectedBody })
+      .mockResolvedValueOnce({ ...response(404), body: missingBody });
+    await expect(http.post('commands/1/done', undefined, [404])).rejects.toMatchObject({ status: 404 });
+    expect(rejectedBody.cancel).toHaveBeenCalledTimes(1);
+    expect(missingBody.cancel).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+    (fetch as jest.Mock).mockResolvedValueOnce(response(400));
+    await expect(http.post('commands/1/done', undefined, [404])).rejects.toMatchObject({ status: 400 });
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
   it('sends requests with required headers and base URL', async () => {
     const auth = mockAuth();
     const http = new BlinkHttp(auth, mockConfig);
@@ -49,6 +112,7 @@ describe('BlinkHttp', () => {
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, options] = (fetch as jest.Mock).mock.calls[0];
+    expect(options.redirect).toBe('error');
     expect(url).toBe('https://rest-prod.immedia-semi.com/api/v1/example');
     const headers = options.headers as Record<string, string>;
     expect(headers['APP-BUILD']).toBe('ANDROID_29715642');

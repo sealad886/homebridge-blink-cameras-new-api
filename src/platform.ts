@@ -36,7 +36,6 @@ const MIN_MOTION_TIMEOUT = 5;
 
 interface DeviceSettings {
   motionTimeout?: number;
-  enableMotion?: boolean;
 }
 
 interface DeviceNameOverride {
@@ -47,7 +46,6 @@ interface DeviceNameOverride {
 interface DeviceSettingOverride {
   deviceIdentifier: string;
   motionTimeout?: number;
-  enableMotion?: boolean;
 }
 
 interface BlinkPlatformConfig extends PlatformConfig {
@@ -66,6 +64,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   motionTimeout?: number;
   enableMotionPolling?: boolean;
   excludeDevices?: string[];
+  excludedNetworks?: string[];
   /** @deprecated Use deviceNameOverrides instead */
   deviceNames?: Record<string, string>;
   /** @deprecated Use deviceSettingOverrides instead */
@@ -343,11 +342,54 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
   }
 
+  private isNetworkExcluded(network: { id: number; name: string }): boolean {
+    return (this.config.excludedNetworks ?? []).some(entry => entry === String(network.id) || entry === network.name);
+  }
+
   private registerDevices(homescreen: BlinkHomescreen): void {
     let excludedCount = 0;
+    const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number }>([
+      ...homescreen.networks.map(device => [this.api.hap.uuid.generate(`blink-network-${device.id}`), device] as const),
+      ...homescreen.cameras.map(device => [this.api.hap.uuid.generate(`blink-camera-${device.id}`), device] as const),
+      ...homescreen.doorbells.map(device => [this.api.hap.uuid.generate(`blink-doorbell-${device.id}`), device] as const),
+      ...homescreen.owls.map(device => [this.api.hap.uuid.generate(`blink-owl-${device.id}`), device] as const),
+    ]);
+    const excludedNetworkIds = new Set(homescreen.networks
+      .filter(network => this.isNetworkExcluded(network))
+      .map(network => network.id));
+    for (const accessory of this.accessories) {
+      const device = currentDevices.get(accessory.UUID) ?? accessory.context.device;
+      if (device && accessory.UUID === this.api.hap.uuid.generate(`blink-network-${device.id}`)
+        && this.isNetworkExcluded(device)) excludedNetworkIds.add(device.id);
+    }
+    const excluded = (device: { id: number; name: string; serial?: string; network_id?: number }) =>
+      this.isDeviceExcluded(device) || (device.network_id !== undefined && (
+        excludedNetworkIds.has(device.network_id) || (this.config.excludedNetworks ?? []).includes(String(device.network_id))
+      ));
+
+    // Only explicit exclusions remove cached accessories. A temporarily absent
+    // device must retain its HomeKit identity and automations.
+    const removed = this.accessories.filter(accessory => {
+      const device = currentDevices.get(accessory.UUID) ?? accessory.context.device;
+      if (!device) return false;
+      return excluded(device) || (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${device.id}`)
+        && this.isNetworkExcluded(device));
+    });
+    if (removed.length) {
+      this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, removed);
+      for (const accessory of removed) {
+        this.accessories.splice(this.accessories.indexOf(accessory), 1);
+        const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
+        if (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${id}`)) this.networkAccessories.delete(id);
+        if (accessory.UUID === this.api.hap.uuid.generate(`blink-camera-${id}`)) this.cameraAccessories.delete(id);
+        if (accessory.UUID === this.api.hap.uuid.generate(`blink-doorbell-${id}`)) this.doorbellAccessories.delete(id);
+        if (accessory.UUID === this.api.hap.uuid.generate(`blink-owl-${id}`)) this.owlAccessories.delete(id);
+      }
+      this.log.info(`Removed ${removed.length} explicitly excluded accessories.`);
+    }
 
     for (const network of homescreen.networks) {
-      if (!this.isDeviceExcluded(network)) {
+      if (!this.isDeviceExcluded(network) && !excludedNetworkIds.has(network.id)) {
         this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
       } else {
         excludedCount++;
@@ -355,7 +397,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
 
     for (const camera of homescreen.cameras) {
-      if (!this.isDeviceExcluded(camera)) {
+      if (!excluded(camera)) {
         this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
       } else {
         excludedCount++;
@@ -363,7 +405,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
 
     for (const doorbell of homescreen.doorbells) {
-      if (!this.isDeviceExcluded(doorbell)) {
+      if (!excluded(doorbell)) {
         this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
       } else {
         excludedCount++;
@@ -371,7 +413,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
 
     for (const owl of homescreen.owls) {
-      if (!this.isDeviceExcluded(owl)) {
+      if (!excluded(owl)) {
         this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
       } else {
         excludedCount++;

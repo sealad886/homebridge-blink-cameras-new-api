@@ -5,12 +5,15 @@ import * as path from 'node:path';
 import {
   BlinkHostedReauthenticationRequiredError,
   BlinkHostedTokenExchangeError,
+  BlinkTokenRefreshError,
   type BlinkHostedOAuthSupportCode,
 } from '../blink-api/auth';
 import {
   BlinkApi,
   BlinkRestVerificationRequiredError,
 } from '../blink-api/client';
+import { AuthStateChangedError } from '../blink-api/auth-storage';
+import { invalidateAuthStorageGeneration, legacyAuthStorageAllowed, withAuthStorageLock } from '../blink-api/auth-storage-lock';
 import {
   readOwnerOnlyJsonFile,
   removeOwnerOnlyFile,
@@ -173,6 +176,10 @@ const durableSessionIdentity = (state: BlinkAuthState): string => {
     .digest('hex');
 };
 
+// Serialize every UI operation that can persist or remove authentication for a
+// storage root. Separate UI service instances must share the same logout barrier.
+const authOperationsByRoot = new Map<string, Promise<void>>();
+
 export class HostedAuthService {
   private readonly apiFactory: (config: BlinkConfig) => BlinkApi;
   private api: BlinkApi | null = null;
@@ -184,6 +191,10 @@ export class HostedAuthService {
   }
 
   async start(payload: HostedAuthStartRequest): Promise<BlinkHostedOAuthStart> {
+    return this.enqueueAuthOperation(() => this.startUnlocked(payload));
+  }
+
+  private async startUnlocked(payload: HostedAuthStartRequest): Promise<BlinkHostedOAuthStart> {
     const request = this.requirePayload(payload, ['deviceId']);
     const hardwareId = normalizeHardwareId(request.deviceId, true);
     const api = this.apiFactory(this.buildConfig(hardwareId, 'prod', 'android'));
@@ -208,6 +219,10 @@ export class HostedAuthService {
   }
 
   async complete(payload: HostedAuthCompleteRequest): Promise<AuthStatus> {
+    return this.enqueueAuthOperation(() => this.completeUnlocked(payload));
+  }
+
+  private async completeUnlocked(payload: HostedAuthCompleteRequest): Promise<AuthStatus> {
     const request = this.requirePayload(payload, ['flowId', 'callbackUrl']);
     if (
       typeof request.flowId !== 'string'
@@ -250,6 +265,10 @@ export class HostedAuthService {
   }
 
   async status(): Promise<AuthStatus> {
+    return this.enqueueAuthOperation(() => this.statusUnlocked());
+  }
+
+  private async statusUnlocked(): Promise<AuthStatus> {
     const loaded = await this.loadPersistedAuthState();
     this.reconcileRetainedSession(loaded.state);
     if (!loaded.state) {
@@ -263,6 +282,7 @@ export class HostedAuthService {
     if (!loaded.requiresRefresh) {
       return {
         authenticated: true,
+        verified: false,
         ...metadata,
         message: 'Blink tokens are stored.',
       };
@@ -298,6 +318,10 @@ export class HostedAuthService {
       if (error instanceof BlinkHostedReauthenticationRequiredError) {
         return { authenticated: false, message: REAUTHENTICATION_MESSAGE };
       }
+      if (error instanceof AuthStateChangedError) {
+        this.invalidateRetainedSession();
+        return { authenticated: false, message: this.connectionFailureMessage(error) };
+      }
       this.options.logger.warn('[Hosted Auth] Stored authentication refresh failed.');
       try {
         const recovered = await this.loadPersistedAuthState();
@@ -318,12 +342,16 @@ export class HostedAuthService {
       }
       return {
         authenticated: false,
-        message: 'Stored Blink authentication could not be refreshed. Sign in securely with Blink again.',
+        message: this.connectionFailureMessage(error),
       };
     }
   }
 
   async verify(payload: VerifyRequest): Promise<AuthStatus> {
+    return this.enqueueAuthOperation(() => this.verifyUnlocked(payload));
+  }
+
+  private async verifyUnlocked(payload: VerifyRequest): Promise<AuthStatus> {
     const request = this.requirePayload(payload, ['code', 'type', 'trustDevice']);
     if (
       typeof request.code !== 'string'
@@ -383,6 +411,10 @@ export class HostedAuthService {
   }
 
   async testConnection(payload: { deviceId?: string }): Promise<{ success: boolean; message: string }> {
+    return this.enqueueAuthOperation(() => this.testConnectionUnlocked(payload));
+  }
+
+  private async testConnectionUnlocked(payload: { deviceId?: string }): Promise<{ success: boolean; message: string }> {
     const request = this.requirePayload(payload, ['deviceId']);
     if (request.deviceId !== undefined) {
       normalizeHardwareId(request.deviceId, false);
@@ -401,42 +433,95 @@ export class HostedAuthService {
         success: true,
         message: 'Connected to Blink using stored tokens.',
       };
-    } catch {
+    } catch (error) {
       this.options.logger.warn('[Hosted Auth] Stored token connection test failed.');
       return {
         success: false,
-        message: 'Stored Blink tokens could not connect. Sign in securely with Blink again.',
+        message: this.connectionFailureMessage(error),
       };
     }
   }
 
+  async getNetworks(): Promise<Array<{ id: string; name: string }>> {
+    return this.enqueueAuthOperation(async () => {
+      try {
+        const context = await this.getPersistedApiContext();
+        await context.api.login();
+        const homescreen = await context.api.getHomescreen();
+        const persisted = await this.loadPersistedAuthState();
+        if (!persisted.state) {
+          this.invalidateRetainedSession();
+          throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
+        }
+        this.bindApiToState(context.api, persisted.state);
+        return homescreen.networks.map(network => ({ id: String(network.id), name: network.name }));
+      } catch (error) {
+        this.options.logger.warn('[Hosted Auth] Network discovery failed.');
+        throw new HostedAuthServiceError(this.connectionFailureMessage(error), 'authentication', 400);
+      }
+    });
+  }
+
+  private connectionFailureMessage(error: unknown): string {
+    if (error instanceof BlinkHostedReauthenticationRequiredError) return REAUTHENTICATION_MESSAGE;
+    if (error instanceof BlinkTokenRefreshError) {
+      return new BlinkTokenRefreshError(error.category).message;
+    }
+    if (error instanceof AuthStateChangedError) return new AuthStateChangedError().message;
+    return 'Blink connection could not be verified. Check the connection and try again.';
+  }
+
   async clear(): Promise<void> {
+    return this.enqueueAuthOperation(() => this.clearUnlocked());
+  }
+
+  private async clearUnlocked(): Promise<void> {
     try {
       await this.api?.cancelHostedLogin();
     } catch {
       this.options.logger.warn('[Hosted Auth] Pending sign-in cancellation failed; clearing files directly.');
     }
-    const [currentResult, legacyResult, pendingResult] = await Promise.allSettled([
-      removeOwnerOnlyFile(this.authStoragePath),
-      removeOwnerOnlyFile(this.legacyAuthStoragePath),
-      removeOwnerOnlyFile(this.pendingStoragePath),
-    ]);
-    this.invalidateRetainedSession();
-    if (
-      currentResult.status === 'rejected'
-      || legacyResult.status === 'rejected'
-      || pendingResult.status === 'rejected'
-    ) {
+    try {
+      await withAuthStorageLock(this.authStoragePath, async () => {
+        await invalidateAuthStorageGeneration(this.authStoragePath);
+        const results = await Promise.allSettled([
+          removeOwnerOnlyFile(this.authStoragePath),
+          removeOwnerOnlyFile(this.legacyAuthStoragePath),
+          removeOwnerOnlyFile(this.pendingStoragePath),
+        ]);
+        if (results.some(result => result.status === 'rejected')) {
+          throw new HostedAuthServiceError(CLEAR_FAILED_MESSAGE, 'storage', 500);
+        }
+      });
+    } catch {
       this.options.logger.warn('[Hosted Auth] Authentication file cleanup failed.');
       throw new HostedAuthServiceError(CLEAR_FAILED_MESSAGE, 'storage', 500);
+    } finally {
+      this.invalidateRetainedSession();
     }
   }
 
+  private enqueueAuthOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const key = path.resolve(this.options.storageRoot);
+    const previous = authOperationsByRoot.get(key) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const settled = result.then(() => undefined, () => undefined);
+    authOperationsByRoot.set(key, settled);
+    void settled.then(() => {
+      if (authOperationsByRoot.get(key) === settled) {
+        authOperationsByRoot.delete(key);
+      }
+    });
+    return result;
+  }
+
   private loadPersistedAuthState(): Promise<PersistedAuthStateLoadResult> {
-    return loadPersistedAuthStateFromFiles(
-      [this.authStoragePath, this.legacyAuthStoragePath],
+    return withAuthStorageLock(this.authStoragePath, async () => loadPersistedAuthStateFromFiles(
+      await legacyAuthStorageAllowed(this.authStoragePath)
+        ? [this.authStoragePath, this.legacyAuthStoragePath]
+        : [this.authStoragePath],
       message => this.options.logger.debug(message),
-    );
+    ));
   }
 
   private bindApiToState(api: BlinkApi, state: BlinkAuthState): void {

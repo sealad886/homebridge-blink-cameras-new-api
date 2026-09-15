@@ -9,6 +9,9 @@ import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { BlinkApi } from '../src/blink-api';
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
+import { AuthStateChangedError } from '../src/blink-api/auth-storage';
+import { BlinkTokenRefreshError } from '../src/blink-api/auth';
+import { BlinkHttpError } from '../src/blink-api/http';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 
@@ -46,6 +49,172 @@ type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
 };
 
 describe('Accessory handlers', () => {
+  it.each([
+    new BlinkTokenRefreshError('temporary'),
+    new BlinkTokenRefreshError('storage'),
+    new BlinkHttpError('Unauthorized', 401, '', 'https://rest-prod.immedia-semi.com/', 'POST'),
+    new Error('Unrelated failure containing 409'),
+  ])('stops thumbnail download when refresh fails with %s', async (error) => {
+    const headers = jest.fn();
+    const source = new BlinkCameraSource({
+      requestCameraThumbnail: jest.fn().mockRejectedValue(error), getAuthHeaders: headers,
+    } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+    () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
+    const callback = jest.fn();
+    await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+    expect(callback).toHaveBeenCalledWith(error);
+    expect(headers).not.toHaveBeenCalled();
+  });
+
+  it('downloads the existing thumbnail only for a typed busy response', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([7]).buffer });
+    try {
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail: jest.fn().mockRejectedValue(new BlinkHttpError('Busy', 409, '',
+          'https://rest-prod.immedia-semi.com/', 'POST')),
+        getAuthHeaders: jest.fn().mockReturnValue({}),
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
+      const callback = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+      expect(callback).toHaveBeenCalledWith(undefined, Buffer.from([7]));
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each(['snapshot', 'manual refresh'])('rejects a late %s image after an offline update and recovers', async (operation) => {
+    let available = true;
+    let goOfflineDuringDownload = true;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockImplementation(async () => ({
+      ok: true,
+      arrayBuffer: async () => {
+        if (goOfflineDuringDownload) {
+          available = false;
+        }
+        return new Uint8Array([1, 2, 3]).buffer;
+      },
+    })) as unknown as typeof fetch;
+    const source = new BlinkCameraSource({
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10 }),
+      pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+      getAuthHeaders: jest.fn().mockReturnValue({}),
+    } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+    () => 'https://rest-e006.immedia-semi.com/thumbnail.jpg', () => available, jest.fn(),
+    { persistSnapshotCache: true });
+    try {
+      if (operation === 'snapshot') {
+        const callback = jest.fn();
+        await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, callback);
+        expect(callback).toHaveBeenCalledWith(expect.any(Error));
+      } else {
+        await expect(source.refreshSnapshotCache()).rejects.toThrow('unavailable');
+      }
+      available = true;
+      goOfflineDuringDownload = false;
+      const recovered = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, recovered);
+      expect(recovered).toHaveBeenCalledWith(undefined, Buffer.from([1, 2, 3]));
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([undefined, '', 'online', 'done', 'new-provider-status'])('does not infer offline from status %s and recovers after offline', (status) => {
+    const { hap, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: true, status: 'offline' };
+    const handler = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    handler.updateState({ ...device, status });
+    expect(accessory.getService(hap.Service.MotionSensor)
+      ?.getCharacteristic(hap.Characteristic.StatusActive).value).toBe(true);
+  });
+
+  it('does not fetch a thumbnail with retained credentials after logout', async () => {
+    const headers = jest.fn();
+    const source = new BlinkCameraSource({
+      requestCameraThumbnail: jest.fn().mockRejectedValue(new AuthStateChangedError()),
+      getAuthHeaders: headers,
+    } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+    () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
+    const callback = jest.fn();
+    await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+    expect(callback).toHaveBeenCalledWith(expect.any(AuthStateChangedError));
+    expect(headers).not.toHaveBeenCalled();
+  });
+  it.each([
+    'https://attacker.example/thumbnail.jpg',
+    '//attacker.example/thumbnail.jpg',
+    'http://rest-prod.immedia-semi.com/thumbnail.jpg',
+    'https://user:password@rest-prod.immedia-semi.com/thumbnail.jpg',
+    'https://rest-prod.immedia-semi.com:8443/thumbnail.jpg',
+    'https://rest-prod.immedia-semi.com.attacker.example/thumbnail.jpg',
+  ])('rejects an untrusted thumbnail destination before attaching credentials: %s', async (url) => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn();
+    globalThis.fetch = fetchMock;
+    try {
+      const headers = jest.fn().mockReturnValue({ Authorization: 'Bearer secret' });
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail: jest.fn().mockResolvedValue(undefined),
+        getSharedRestRootUrl: () => 'https://rest-prod.immedia-semi.com/',
+        getAuthHeaders: headers,
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => url, () => true, jest.fn());
+      const callback = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+      expect(callback).toHaveBeenCalledWith(expect.any(Error));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(headers).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('downloads relative REST thumbnails with redirects disabled and bounded safe failures', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn().mockRejectedValue(new Error('token=secret123'));
+    globalThis.fetch = fetchMock;
+    try {
+      const errorLog = jest.fn();
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail: jest.fn().mockResolvedValue(undefined),
+        getSharedRestRootUrl: () => 'https://rest-prde.immedia-semi.com/',
+        getAuthHeaders: () => ({ Authorization: 'Bearer secret123' }),
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => '/media/thumbnail.jpg', () => true, jest.fn(), {}, errorLog);
+      const callback = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+      expect(fetchMock).toHaveBeenCalledWith('https://rest-prde.immedia-semi.com/media/thumbnail.jpg',
+        expect.objectContaining({ redirect: 'error', signal: expect.any(globalThis.AbortSignal) }));
+      expect(String(callback.mock.calls[0][0])).not.toContain('secret123');
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain('secret123');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reports snapshot failures outside debug logs while leaving routine traces in debug', async () => {
+    const trace = jest.fn();
+    const error = jest.fn();
+    const source = new BlinkCameraSource(
+      { requestCameraThumbnail: jest.fn().mockResolvedValue(undefined) } as unknown as BlinkApi,
+      createHap() as unknown as HAP, 1, 2, 'camera', 'serial', () => undefined,
+      () => true, trace, { ffmpegDebug: false }, error,
+    );
+    const callback = jest.fn();
+    await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
+    expect(callback).toHaveBeenCalledWith(expect.any(Error));
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('No thumbnail URL available'));
+    expect(trace).toHaveBeenCalledWith(expect.stringContaining('Snapshot requested'));
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('Snapshot requested'));
+  });
+
   const buildPlatform = (streamingConfigOverrides: Partial<ReturnType<typeof resolveStreamingConfig>> = {}) => {
     const hap = createHap();
     const log = createLogger();
@@ -990,7 +1159,7 @@ describe('Accessory handlers', () => {
       2,
       'camera',
       'TEST_SERIAL',
-      () => 'https://example.com/thumbnail.jpg',
+      () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg',
       () => false,
       logFn,
       { enabled: false },
@@ -1026,7 +1195,7 @@ describe('Accessory handlers', () => {
       2,
       'camera',
       'TEST_SERIAL',
-      () => 'https://example.com/thumbnail.jpg',
+      () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg',
       () => true,
       logFn,
       { enabled: false, snapshotCacheTTL: 1, persistSnapshotCache: true },
@@ -1100,7 +1269,7 @@ describe('Accessory handlers', () => {
         2,
         'camera',
         'TEST_SERIAL',
-        () => 'https://example.com/thumbnail.jpg',
+        () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg',
         () => true,
         logFn,
         { enabled: false, persistSnapshotCache: true },

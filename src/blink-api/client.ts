@@ -785,10 +785,12 @@ export class BlinkApi {
     try {
       return await this.sharedRootHttp.post<BlinkCommandStatus>(
         `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`,
+        undefined,
+        [404],
       );
     } catch (error) {
       // The command may have already ended - this is normal when stream closes
-      if (error instanceof Error && error.message.includes('404')) {
+      if (error instanceof BlinkHttpError && error.status === 404) {
         return null;
       }
       throw error;
@@ -808,11 +810,13 @@ export class BlinkApi {
     try {
       return await this.sharedRootHttp.post<BlinkCommandStatus>(
         `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
+        undefined,
+        [404],
       );
     } catch (error) {
       // The /done endpoint was deprecated by Blink and now returns 404
       // Silently ignore this error as the endpoint is no longer functional
-      if (error instanceof Error && error.message.includes('404')) {
+      if (error instanceof BlinkHttpError && error.status === 404) {
         return null;
       }
       throw error;

@@ -14,7 +14,7 @@
 
 **Decision owner:** Repository owner
 
-**Beads issue:** `homebridge-blinkcameras-2yh`
+**Historical tracker reference:** `homebridge-blinkcameras-2yh` (retired; current tracking uses GitHub issues)
 
 ## Summary
 

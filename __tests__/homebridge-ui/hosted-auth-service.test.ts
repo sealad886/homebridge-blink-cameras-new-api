@@ -6,7 +6,10 @@ import {
 import {
   BlinkHostedReauthenticationRequiredError,
   BlinkHostedTokenExchangeError,
+  BlinkTokenRefreshError,
 } from '../../src/blink-api/auth';
+import { AuthStateChangedError, FileAuthStorage } from '../../src/blink-api/auth-storage';
+import * as secureFiles from '../../src/blink-api/secure-json-file';
 import * as authState from '../../src/homebridge-ui/auth-state';
 import {
   BlinkApi,
@@ -471,6 +474,7 @@ describe('HostedAuthService', () => {
 
     expect(status).toEqual({
       authenticated: true,
+      verified: false,
       email: 'persisted@example.com',
       accountId: 123,
       tier: 'prde',
@@ -502,6 +506,7 @@ describe('HostedAuthService', () => {
 
     await expect(service.status()).resolves.toEqual({
       authenticated: true,
+      verified: false,
       email: 'replacement@example.com',
       accountId: 999,
       tier: 'e001',
@@ -642,6 +647,19 @@ describe('HostedAuthService', () => {
       expect(containsSecret(verified, secret)).toBe(false);
       expect(entries.join('\n')).not.toContain(secret);
     }
+  });
+
+  it('lists only safe network identifiers through persisted authentication', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const api = createApiDouble();
+    api.getHomescreen.mockResolvedValue({ networks: [{ id: 1, name: 'Home', token: 'secret' }, { id: 2, name: 'Away' }] });
+    const { logger, entries } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+    await expect(service.getNetworks()).resolves.toEqual([{ id: '1', name: 'Home' }, { id: '2', name: 'Away' }]);
+    expect(api.login).toHaveBeenCalledTimes(1);
+    api.getHomescreen.mockRejectedValue(new Error('secret-provider-detail'));
+    await expect(service.getNetworks()).rejects.not.toThrow('secret-provider-detail');
+    expect(entries.join(' ')).not.toContain('secret-provider-detail');
   });
 
   it('reconstructs from replacement durable state before testing the connection', async () => {
@@ -807,7 +825,6 @@ describe('HostedAuthService', () => {
 
   it.each([
     ['profile-less legacy', null, 'ios'],
-    ['resolver-compatible Amazon', 'amazon', 'amazon'],
   ] as const)('restores the %s OAuth profile for token refresh', async (
     _label,
     oauthClientId,
@@ -827,6 +844,39 @@ describe('HostedAuthService', () => {
     expect(apiFactory).toHaveBeenCalledWith(expect.objectContaining({
       oauthClientId: expectedClientId,
     }));
+  });
+
+  it('rejects an unsupported stored Amazon OAuth profile without network access', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState({
+      oauthClientId: 'amazon',
+      tokenExpiry: '2026-07-15T00:00:00.000Z',
+    }));
+    const { logger } = createLogger();
+    const apiFactory = jest.fn((_config: BlinkConfig) => asBlinkApi(createApiDouble()));
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory });
+
+    await expect(service.status()).resolves.toMatchObject({ authenticated: false });
+    expect(apiFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new BlinkTokenRefreshError('temporary'), /temporarily unavailable.*try again/i],
+    [new BlinkTokenRefreshError('response'), /invalid response.*try again/i],
+    [new BlinkTokenRefreshError('storage'), /storage.*try again/i],
+    [new AuthStateChangedError(), /restart.*child bridge/i],
+    [new BlinkHostedReauthenticationRequiredError(), /sign in securely/i],
+  ])('preserves recovery advice for %s in expired status and connection tests', async (error, advice) => {
+    await writeOwnerOnlyState(authStoragePath, persistedState({ tokenExpiry: '2000-01-01T00:00:00.000Z' }));
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.login.mockRejectedValue(error);
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+
+    await expect(service.status()).resolves.toMatchObject({ authenticated: false, message: expect.stringMatching(advice) });
+    await expect(service.testConnection({})).resolves.toMatchObject({ success: false, message: expect.stringMatching(advice) });
+    if (!(error instanceof BlinkHostedReauthenticationRequiredError)) {
+      expect((await service.status()).message).not.toMatch(/sign in.*again/i);
+    }
   });
 
   it('returns the fixed signed-out instruction when hosted refresh requires reauthentication', async () => {
@@ -911,7 +961,7 @@ describe('HostedAuthService', () => {
 
     expect(status).toEqual({
       authenticated: false,
-      message: 'Stored Blink authentication could not be refreshed. Sign in securely with Blink again.',
+      message: 'Blink connection could not be verified. Check the connection and try again.',
     });
     expect(containsSecret(status, secret)).toBe(false);
     expect(entries.join('\n')).not.toContain(secret);
@@ -973,7 +1023,7 @@ describe('HostedAuthService', () => {
     try {
       await expect(service.status()).resolves.toEqual({
         authenticated: false,
-        message: 'Stored Blink authentication could not be refreshed. Sign in securely with Blink again.',
+        message: 'Blink connection could not be verified. Check the connection and try again.',
       });
       expect(entries.join('\n')).not.toContain(secret);
     } finally {
@@ -1256,10 +1306,99 @@ describe('HostedAuthService', () => {
     const result = await service.testConnection({});
     expect(result).toEqual({
       success: false,
-      message: 'Stored Blink tokens could not connect. Sign in securely with Blink again.',
+      message: 'Blink connection could not be verified. Check the connection and try again.',
     });
     expect(containsSecret(result, secret)).toBe(false);
     expect(entries.join('\n')).not.toContain(secret);
+  });
+
+  it.each([
+    ['completion', false],
+    ['completion', true],
+    ['status refresh', false],
+    ['status refresh', true],
+    ['verification', false],
+    ['verification', true],
+    ['connection test', false],
+    ['connection test', true],
+    ['network discovery', false],
+    ['network discovery', true],
+  ] as const)('logout waits for pending %s persistence (separate service: %s)', async (
+    operation,
+    separateService,
+  ) => {
+    const { logger } = createLogger();
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<void>((resolve) => { releasePersistence = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const persistAfterGate = async (): Promise<void> => {
+      markStarted();
+      await persistenceGate;
+      await writeOwnerOnlyState(authStoragePath, persistedState());
+    };
+    const api = createApiDouble(undefined, operation === 'completion' ? persistAfterGate : undefined);
+    if (operation !== 'completion') {
+      await writeOwnerOnlyState(authStoragePath, persistedState({
+        tokenExpiry: operation === 'status refresh' ? '2000-01-01T00:00:00.000Z' : undefined,
+      }));
+      api.login.mockImplementation(persistAfterGate);
+    }
+    const apiFactory = (): BlinkApi => asBlinkApi(api);
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory });
+    if (operation === 'completion') await service.start({});
+    const pending = operation === 'completion'
+      ? service.complete({ flowId: 'opaque-flow-id', callbackUrl: 'https://applinks.blink.com/signin/callback?code=test&state=test' })
+      : operation === 'status refresh'
+        ? service.status()
+        : operation === 'verification'
+          ? service.verify({ code: '123456', type: 'client' })
+          : operation === 'network discovery' ? service.getNetworks() : service.testConnection({});
+    await started;
+    // Equivalent paths share the barrier across service instances.
+    const logoutService = separateService
+      ? new HostedAuthService({ storageRoot: path.join(storageRoot, '.'), logger, apiFactory })
+      : service;
+    let logoutFinished = false;
+    const logout = logoutService.clear().then(() => { logoutFinished = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(logoutFinished).toBe(false);
+    releasePersistence();
+    await Promise.all([pending, logout]);
+    await expect(fs.access(authStoragePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(service.status()).resolves.toMatchObject({ authenticated: false });
+  });
+
+  it('keeps UI and runtime logged out when primary cleanup succeeds but legacy cleanup fails', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    await writeOwnerOnlyState(legacyAuthStoragePath, persistedState());
+    const { logger } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(createApiDouble()) });
+    const realRemove = secureFiles.removeOwnerOnlyFile;
+    const remove = jest.spyOn(secureFiles, 'removeOwnerOnlyFile').mockImplementation(async target => {
+      if (target === legacyAuthStoragePath) throw new Error('legacy cleanup failed');
+      await realRemove(target);
+    });
+    try {
+      await expect(service.clear()).rejects.toThrow('could not be fully cleared');
+      const next = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(createApiDouble()) });
+      await expect(next.status()).resolves.toMatchObject({ authenticated: false });
+      await expect(new FileAuthStorage(authStoragePath, legacyAuthStoragePath).load()).resolves.toBeNull();
+    } finally {
+      remove.mockRestore();
+    }
+  });
+
+  it('continues queued authentication operations after an earlier operation fails', async () => {
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.beginHostedLogin.mockRejectedValue(new Error('synthetic failure'));
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+    const start = service.start({});
+    const logout = service.clear();
+    await expect(start).rejects.toBeInstanceOf(HostedAuthServiceError);
+    await expect(logout).resolves.toBeUndefined();
+    await expect(service.status()).resolves.toMatchObject({ authenticated: false });
   });
 
   it('clears current, legacy, and pending owner-only files without a silent file loop', async () => {
@@ -1318,6 +1457,18 @@ describe('BlinkUiServer hosted authentication routes', () => {
     await fs.rm(serverStorageRoot, { recursive: true, force: true });
   });
 
+  it('writes redacted warnings and errors to process logs without enabling debug output', () => {
+    const warn = jest.spyOn(globalThis.console, 'warn').mockImplementation(() => undefined);
+    const error = jest.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    const server = new BlinkUiServer();
+    server.pushLog('warn', 'Refresh failed access_token=secret123');
+    server.pushLog('error', 'Storage failed password=secret456');
+    server.pushLog('debug', 'Routine trace');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify([warn.mock.calls, error.mock.calls, mockUiEvents])).not.toMatch(/secret123|secret456/);
+  });
+
   it('registers exactly the hosted and token-only route set without /login', () => {
     new BlinkUiServer();
 
@@ -1330,6 +1481,7 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/lock',
       '/unlock',
       '/test-connection',
+      '/getNetworks',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });

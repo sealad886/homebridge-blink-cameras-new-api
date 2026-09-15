@@ -129,12 +129,28 @@ describe('homebridge UI persisted auth state loading', () => {
     const result = await loadPersistedAuthStateFromFiles([primaryPath], logDebug, now);
 
     expect(result.state).toBeNull();
-    expect(result.message).toContain('invalid expiry');
+    expect(result.message).toContain('invalid authentication data');
     expect(JSON.stringify(result)).not.toContain(invalidExpirySentinel);
     expect(result.message).not.toContain(tmpDir);
     expect(logDebug).toHaveBeenCalledWith(expect.stringContaining('.blink-auth.json'));
     expect(logDebug.mock.calls.flat().join('\n')).not.toContain(invalidExpirySentinel);
     expect(logDebug.mock.calls.flat().join('\n')).not.toContain(tmpDir);
+  });
+
+  it.each([
+    'invalid JSON',
+    JSON.stringify({ accessToken: 123 }),
+    JSON.stringify({ ...state, refreshToken: 123 }),
+    JSON.stringify({ ...state, tokenExpiry: '2000-01-01T00:00:00.000Z', refreshToken: undefined }),
+  ])('does not select legacy credentials when primary is present but unusable: %#', async primary => {
+    await fs.writeFile(primaryPath, primary, { mode: 0o600 });
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, JSON.stringify({ ...state, accessToken: 'other-account-token' }), { mode: 0o600 });
+    const result = await loadPersistedAuthStateFromFiles([primaryPath, legacyPath], logDebug, now);
+    expect(result.state).toBeNull();
+    expect(result.message).toContain('ignored');
+    expect(JSON.stringify(result)).not.toContain('other-account-token');
+    expect(await fs.readFile(primaryPath, 'utf8')).toBe(primary);
   });
 
   it('reports rejected auth state security errors instead of falling through silently', async () => {
