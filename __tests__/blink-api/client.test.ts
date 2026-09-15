@@ -995,7 +995,7 @@ describe('BlinkApi', () => {
         ok: true,
         status: 302,
         statusText: 'Found',
-        headers: headers({ location: 'callback?code=replacement-code' }),
+        headers: headers({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=replacement-code' }),
       })
       .mockResolvedValueOnce({
         ok: true,

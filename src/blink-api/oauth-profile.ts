@@ -30,6 +30,9 @@ export type BlinkOAuthProfile =
 export function resolveOAuthProfile(
   clientId?: BlinkOAuthClientId | null,
 ): BlinkOAuthProfile {
+  if (clientId != null && clientId !== 'android' && clientId !== 'ios') {
+    throw new Error('Unsupported Blink OAuth client profile. Sign in securely with Blink again.');
+  }
   return clientId === 'android'
     ? HOSTED_ANDROID_OAUTH_PROFILE
     : LEGACY_IOS_OAUTH_PROFILE;

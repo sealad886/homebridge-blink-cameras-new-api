@@ -106,6 +106,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       () => this.isDeviceAvailable(),
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,
+      (msg) => this.platform.log.error(`[${device.name}] ${msg}`),
     );
 
     this.cameraController = new this.platform.api.hap.CameraController(

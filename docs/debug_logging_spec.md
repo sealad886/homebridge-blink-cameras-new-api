@@ -12,14 +12,15 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 
 - **info**: High-level lifecycle events (login success, token refresh success, request start/end when `debugAuth` is enabled).
 - **warn**: Non-fatal but actionable events (configuration warnings, degraded retries).
-- **error**: Auth or HTTP failures (always log rich error details via `toLogString`).
+- **error**: Unexpected HTTP failures and camera/stream failures. HTTP diagnostics
+  retain method, redacted URL, numeric status, and a bounded failure category.
 - **debug**: Device-level events (motion detection toggles, accessory state changes) and FFmpeg debug output when enabled.
 
 ## HTTP Diagnostics (debugAuth only)
 
 - Log method + URL for each request with a per-request correlation ID.
 - Log request headers with redaction applied.
-- Log request body (JSON) only when debug is enabled.
+- Format and log request bodies only when debug is enabled.
 - Log response status + elapsed time (include correlation ID).
 - Log response body only in debug mode and truncate to a safe length (current behavior uses 500 chars).
 
@@ -27,7 +28,14 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 
 - Log OAuth grant type, URL, and redacted identifiers.
 - Log token expiry timing and refresh attempts.
-- On failure, emit `BlinkAuthenticationError.toLogString()` details (status, error code, server message, update/2FA hints).
+- On failure, emit bounded status, allowlisted error category, and update/2FA
+  hints. Raw server messages and response bodies are not error diagnostics.
+- Refresh transport/429/5xx failures are temporary; malformed responses and
+  persistence failures have distinct safe categories. Only a rejected refresh
+  grant or missing refresh credential requires hosted sign-in again.
+- OAuth and REST requests have a 30-second request deadline. Token POSTs and
+  REST requests reject redirects; legacy OAuth navigation handles redirects
+  explicitly. Discarded REST and refresh-retry bodies are canceled.
 
 ## Redaction Rules (Required)
 
@@ -41,6 +49,8 @@ Always fully redact sensitive values in logs:
 - `device_identifier`
 - `2fa-code`
 - username, email, and phone identifiers
+- liveview tokens, server URLs, thumbnail URLs, and embedded IMMIS/RTSP capability
+  paths and query parameters
 
 Use the literal `<redacted>` marker. Stable identity values must not be partially
 masked because even a prefix/suffix can correlate a Homebridge client or user
@@ -55,12 +65,22 @@ across diagnostic bundles.
   update/2FA guidance. They discard untrusted headers and response bodies.
 - Do not log raw tokens, credentials, verification values, or stable identity
   fields in error contexts.
+- Network and body-decoding errors discard native error messages and causes,
+  which may contain response snippets or request values.
+- Command-update and command-completion 404s are expected and do not emit error
+  banners. Other failures remain visible.
+- Hosted UI warnings/errors go to both the UI event stream and process console.
 
 ## Streaming Diagnostics
 
 - `ffmpegDebug` should toggle FFmpeg loglevel (`debug` vs `info`).
 - Streaming logs must not include raw stream tokens, liveview URLs, SRTP keys, or device serials unless redacted.
 - Debug stream recordings must avoid raw camera serials in filenames and use owner-only file permissions.
+- Camera and proxy failures use Homebridge's error level even when debug is off.
+  Routine traces and FFmpeg stderr remain debug output.
+- Authenticated thumbnails are restricted to HTTPS regional Blink REST hosts,
+  without userinfo or nonstandard ports; redirects are rejected. Their transport
+  and body failures use safe messages.
 
 ## EventStream Diagnostics (If Implemented)
 

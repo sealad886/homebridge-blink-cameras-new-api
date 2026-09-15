@@ -11,8 +11,7 @@ import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
 import { randomUUID } from 'node:crypto';
-import { URL } from 'node:url';
-import { isSensitiveDiagnosticKey } from './redaction';
+import { isSensitiveDiagnosticKey, redactDiagnosticText as redactText, redactDiagnosticUrl as redactUrlForLogging } from './redaction';
 
 /**
  * Standard headers for all Blink API requests
@@ -23,21 +22,6 @@ import { isSensitiveDiagnosticKey } from './redaction';
  */
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function redactUrlForLogging(value: string): string {
-  try {
-    const url = new URL(value);
-    for (const key of [...new Set(url.searchParams.keys())]) {
-      if (isSensitiveDiagnosticKey(key)
-          || /^(?:error|error_description|id_token|state|token)$/i.test(key)) {
-        url.searchParams.set(key, '<redacted>');
-      }
-    }
-    return url.toString();
-  } catch {
-    return '<redacted-url>';
-  }
-}
 
 /**
  * Redact authorization headers for logging
@@ -52,23 +36,6 @@ function redactHeaders(headers: Record<string, string>): Record<string, string> 
     }
   }
   return result;
-}
-
-function redactText(value: string): string {
-  return value
-    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1<redacted>')
-    .replace(
-      /("?)([A-Za-z][A-Za-z0-9_-]*)\1(\s*[=:]\s*)("[^"]*"|[^\s,;}&]+)/g,
-      (match, quote: string, key: string, separator: string, rawValue: string) => {
-        if (!isSensitiveDiagnosticKey(key)) {
-          return match;
-        }
-        const redactedValue = rawValue.startsWith('"')
-          ? '"<redacted>"'
-          : '<redacted>';
-        return `${quote}${key}${quote}${separator}${redactedValue}`;
-      },
-    );
 }
 
 function redactBody(body: unknown): unknown {
@@ -111,6 +78,7 @@ export class BlinkHttpError extends Error {
     public readonly method: string,
     _responseBody?: string,
     responseHeaders?: Record<string, string>,
+    public readonly failure: 'http' | 'network' | 'response' = 'http',
   ) {
     const untrustedFragments = [
       statusText,
@@ -134,6 +102,7 @@ export class BlinkHttpError extends Error {
       `${'─'.repeat(60)}`,
       `${this.method} ${this.url}`,
       `Status: ${this.status}`,
+      `Failure: ${this.failure}`,
     ];
 
     lines.push(`${'─'.repeat(60)}\n`);
@@ -158,7 +127,7 @@ export class BlinkHttp {
 
   setBaseUrl(baseUrl: string): void {
     this.baseUrl = baseUrl;
-    this.logDebug(`Updated base URL to ${baseUrl}`);
+    this.logDebug(`Updated base URL to ${redactUrlForLogging(baseUrl)}`);
   }
 
   /**
@@ -174,8 +143,8 @@ export class BlinkHttp {
     return this.request<T>('GET', path);
   }
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
+  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = []): Promise<T> {
+    return this.request<T>('POST', path, body, 0, true, expectedErrorStatuses);
   }
 
   async delete<T>(path: string): Promise<T> {
@@ -200,6 +169,7 @@ export class BlinkHttp {
     body?: unknown,
     attempt = 0,
     runPreflight = true,
+    expectedErrorStatuses: readonly number[] = [],
   ): Promise<T> {
     if (runPreflight) {
       await this.auth.ensureValidToken();
@@ -217,22 +187,32 @@ export class BlinkHttp {
       ...this.auth.getAuthHeaders(),
     };
 
-    if (attempt === 0) {
+    if (this.debug && attempt === 0) {
       this.logDebug(`[${requestId}] ${method} ${safeUrl}`);
       this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
       if (body) {
         this.logDebug(`[${requestId}] Request body:`, JSON.stringify(redactBody(body), null, 2));
       }
-    } else {
+    } else if (this.debug) {
       this.logDebug(`[${requestId}] ${method} ${safeUrl} (retry attempt ${attempt})`);
     }
 
     const startTime = Date.now();
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let response: Awaited<ReturnType<typeof fetch>>;
+    try {
+      response = await fetch(url, {
+        method,
+        redirect: 'error',
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: globalThis.AbortSignal.timeout(30_000),
+      });
+    } catch {
+      const error = new BlinkHttpError('Blink API network request failed or timed out.', 0, '', safeUrl, method,
+        undefined, undefined, 'network');
+      this.log.error(error.toLogString());
+      throw error;
+    }
     const elapsed = Date.now() - startTime;
 
     this.logDebug(`[${requestId}] Response status: ${response.status} (${elapsed}ms)`);
@@ -240,24 +220,27 @@ export class BlinkHttp {
     // Token expired or session invalid - refresh once and retry
     if ((response.status === 401 || response.status === 403) && attempt < 1) {
       this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
+      await response.body?.cancel().catch(() => undefined);
       await this.auth.refreshTokens();
-      return this.request<T>(method, path, body, attempt + 1, false);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses);
     }
 
     // Rate limited - exponential backoff
     if (response.status === 429 && attempt < 3) {
       const delay = 1000 * Math.pow(2, attempt);
       this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
+      await response.body?.cancel().catch(() => undefined);
       await sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1, false);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses);
     }
 
     // Server error - linear backoff
     if (response.status >= 500 && attempt < 2) {
       const delay = 500 * (attempt + 1);
       this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
+      await response.body?.cancel().catch(() => undefined);
       await sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1, false);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses);
     }
 
     if (!response.ok) {
@@ -269,12 +252,22 @@ export class BlinkHttp {
         method,
       );
 
-      // Always log HTTP errors
-      this.log.error(error.toLogString());
+      await response.body?.cancel().catch(() => undefined);
+      if (!expectedErrorStatuses.includes(response.status)) {
+        this.log.error(error.toLogString());
+      }
       throw error;
     }
 
-    const responseData = (await response.json()) as T;
+    let responseData: T;
+    try {
+      responseData = (await response.json()) as T;
+    } catch {
+      const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,
+        undefined, undefined, 'response');
+      this.log.error(error.toLogString());
+      throw error;
+    }
 
     if (this.debug) {
       // Only log response body in debug mode (can be verbose)

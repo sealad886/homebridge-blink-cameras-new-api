@@ -163,6 +163,24 @@ atomically replaced with owner-only mode `0600`. Pre-`0.6.x` state from
 `blink-auth/auth-state.json` is migrated automatically. Do not copy either file
 into the repository or expose its contents in logs or support requests.
 
+Stored JSON is validated before use; supported OAuth profiles are `android` and
+`ios`. A stored token is not proof that Blink still accepts it: **Test Connection**
+performs that check. Temporary refresh outages retain the current token and advise
+retrying; a confirmed rejected refresh grant requires sign-in again.
+
+Credential writes use a short cross-process lock and compare the saved session
+before replacing it. Logout also updates `.blink-auth.json.generation.json`, so
+an older child bridge cannot recreate cleared credentials or overwrite a new
+account. Restart the child bridge after changing accounts. Requests already sent
+and established streams can finish; logout does not revoke tokens at Blink.
+
+New authenticated sign-in can replace damaged JSON after preserving its exact
+contents in an owner-only `.invalid-<id>.json` backup (encoded as a JSON string).
+Treat those backups as credentials. If a crash leaves `.blink-auth.json.lock`
+behind, storage fails closed after five seconds. Stop the child bridge and the
+custom-UI process, confirm neither is running, remove only that empty lock
+directory, then restart. Do not remove the generation file during routine reset.
+
 For compatibility with older installations, the runtime still accepts a
 paired `username` and `password` in manually edited configuration and can use
 them for the legacy iOS-profile sign-in path when compatible token state is
