@@ -1,63 +1,81 @@
 # Release Guide
 
-This document describes how to prepare and publish a new npm release for this plugin.
+All packages are built from reviewed GitHub source and published by
+`.github/workflows/publish.yml`. Installations, including prereleases and rollback,
+use exact versions from `https://registry.npmjs.org`; do not copy builds or install
+Git URLs or local tarballs on Homebridge.
 
-In this repository, the canonical publish path is a version bump pushed to `main`. GitHub Actions in `.github/workflows/publish.yml` then decides whether a remote npm publish is needed, selects the correct dist-tag, and performs the publish from CI.
+## Prepare a version
 
-## Prerequisites
+Use a minor bump for new compatible capabilities, a patch for compatible fixes.
+The supported progression is `X.Y.Z-alpha.0`, `X.Y.Z-beta.0`, `X.Y.Z-rc.0`, then
+`X.Y.Z`. Increment the prerelease number after changes within a stage. Freeze the
+version target before alpha. Never reuse a published version for different code.
 
-- Node.js 20, 22, or 24 LTS and npm installed
-- GitHub access to push the release commit to `main`
-- Repository publish credentials configured for GitHub Actions (`NPM_TOKEN` today, or trusted publishing if the workflow is updated)
-- Clean working tree with all changes committed
+Update `CHANGELOG.md` with a `## [VERSION] - YYYY-MM-DD` section describing user
+behavior, security fixes, upgrade notes, and known limitations. Keep package.json
+and package-lock.json versions identical. Commit version changes using Conventional
+Commits; the publishing workflow creates the Git tag at the validated source SHA.
+This intentionally avoids a local npm-version tag pointing to a pre-merge SHA.
 
-## Versioning
+Use `npm version VERSION --no-git-tag-version`, inspect and commit the changes,
+then merge the reviewed PR to main. Resolve current-head reviews and CI before
+merging. Do not include unrelated editor files, credentials, or build artifacts.
 
-Use this order for a release candidate commit:
+## Gates and publication
 
-1. Update `CHANGELOG.md` and any other release notes.
-2. Commit those release-note changes so the working tree is clean.
-3. Run local validation with `npm run release`.
-4. Use npm to bump the version and create a git tag:
+Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
+build, and package contents. Use a dedicated clean clone when the working checkout
+contains unrelated user files; never stash or delete those files to satisfy it.
 
-```bash
-npm version <patch|minor|major>
-```
+Publication requires an explicit dispatch on main with the exact version input.
+An ordinary source push does not publish. The workflow validates the requested
+version against the manifest and runs clean-install, lint, tests, build, and
+package loadability checks on Node.js 20, 22, and 24 before publication.
 
-For prereleases, use the appropriate npm prerelease command such as `npm version preminor --preid=alpha` or `npm version prerelease --preid=beta`.
+The CI workflow alone uses the repository's npm credential. It validates registry
+responses, serializes releases, publishes the tested package, and records source
+SHA and registry integrity. Existing versions must match their original source;
+a failed post-publish release-record step can be retried at that same revision.
+Do not repair a partial release by publishing locally or overwriting a Git tag.
 
-## Preflight (no publish)
+Prereleases use `alpha`, `beta`, or `rc`; stable uses `latest`. Verify exact registry
+version, integrity, source identity, GitHub release, and dist-tags before installing.
+A prerelease must leave the previous stable `latest` unchanged.
 
-Run the release script without publishing to validate lint, tests, build, and package contents:
+## Homebridge upgrade and acceptance
 
-```bash
-npm run release
-```
+Before alpha, make an owner-only backup of config, auth state, and accessory
+persistence on the Homebridge host. Verify the backup without printing credentials.
+Record installed package versions and child-bridge identity. Preserve any other
+installed Blink plugin until ownership is understood.
 
-This is a local validation step only. It does not publish.
+Install the exact registry version using Homebridge package management
+(`hb-service add @sealad886/homebridge-blink-cameras-new-api@VERSION`). Prefer a
+Blink child-bridge restart through Homebridge UI; record any full-service restart.
+Verify the running package version, authentication, discovery, and accessory set.
 
-The release helper no longer supports a local publish mode. Any previous `npm run release -- --yes` workflow has been removed.
+Alpha requires snapshots, bounded live streams, normal/debug log inspection, and
+repeated child-bridge restarts. Beta additionally requires private hosted sign-in,
+logout/relogin, offline/recovery acceptance, at least 24 hours and one natural
+refresh. RC requires a feature freeze, current automated/review gates, physical
+critical paths, at least 48 hours and two natural refreshes. A runtime fix restarts
+the RC observation window. Keep corruption and hostile-token tests isolated.
 
-## Publish
+Stable must match the accepted RC runtime source except version and release notes.
+Publish and install it through the same CI/registry route. Repeat smoke acceptance
+and observe at least 24 hours including one natural refresh before completion.
+Record evidence and timestamps in Beads, with links to PRs, CI, and releases.
 
-After validation and version bumping, make sure the version bump commit is on `main` and then push the release commit and tag:
+## Rollback and cleanup
 
-```bash
-git push origin main --follow-tags
-```
+Stop promotion for lost authentication, leaked credentials, recurring refresh
+failure, missing accessories, or material streaming regression. Reinstall the last
+known-good exact registry version. Preserve rotated credentials: an older backup
+may hold an invalid refresh token. Restore data only when its validity is established.
+Do not uninstall the plugin or clear Homebridge persistence as routine rollback.
 
-If you versioned on a release branch, merge or cherry-pick that commit onto `main` before pushing.
-
-That push triggers `.github/workflows/publish.yml`, which:
-
-- compares `package.json` against the currently published npm version
-- skips publication if the version is already on npm
-- detects `alpha`, `beta`, and `rc` prerelease identifiers and publishes with the matching npm dist-tag
-- runs `npm run build` and `npm test` before publishing when a publish is required
-- creates a GitHub Release with generated release notes for the published version
-
-## After Publishing
-
-- Confirm the GitHub Actions publish workflow succeeded
-- Verify the new version and dist-tags appear on the npm registry
-- Check Homebridge loads the new version as expected
+After stable acceptance, use the CI cleanup workflow to remove obsolete prerelease
+dist-tags. Published versions remain available for reproducibility and rollback;
+routine cleanup must never call npm unpublish. Keep unresolved issue links open and
+separate code completion from deployed acceptance.
