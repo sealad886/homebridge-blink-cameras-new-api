@@ -25,6 +25,8 @@ type MutableBlinkApi = {
   getHomescreen: BlinkApi['getHomescreen'];
   armNetwork: BlinkApi['armNetwork'];
   disarmNetwork: BlinkApi['disarmNetwork'];
+  enableCameraMotion: BlinkApi['enableCameraMotion'];
+  disableCameraMotion: BlinkApi['disableCameraMotion'];
   pollCommand: BlinkApi['pollCommand'];
   auth: {
     login: jest.Mock;
@@ -1081,6 +1083,60 @@ describe('BlinkApi', () => {
     expect(auth.ensureValidToken).toHaveBeenCalled();
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/arm');
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/disarm');
+  });
+
+  it('serializes motion commands across cameras and recovers after a conflict', async () => {
+    const { api, http } = createApi();
+    const callTimes: number[] = [];
+    let releaseFirst!: () => void;
+    const firstRequest = new Promise<void>(resolve => { releaseFirst = resolve; });
+    http.post
+      .mockImplementationOnce(() => { callTimes.push(Date.now()); return firstRequest; })
+      .mockImplementation(() => { callTimes.push(Date.now()); return Promise.resolve(); });
+
+    const first = api.enableCameraMotion(5, 1);
+    const second = api.enableCameraMotion(5, 2);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(http.post).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(http.post.mock.calls.map(([path]) => path)).toEqual([
+      'accounts/10/networks/5/cameras/1/enable',
+      'accounts/10/networks/5/cameras/2/enable',
+    ]);
+    expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(300);
+  });
+
+  it('retries a camera motion conflict before resolving the HomeKit command', async () => {
+    const { api, http } = createApi();
+    http.post
+      .mockRejectedValueOnce(new BlinkHttpError('Conflict', 409, 'Conflict', 'https://example.com', 'POST'))
+      .mockResolvedValue(undefined);
+
+    await expect(api.enableCameraMotion(5, 1)).resolves.toBeUndefined();
+    expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry non-conflict errors and continues queued motion commands', async () => {
+    const { api, http } = createApi();
+    const failure = new BlinkHttpError('Forbidden', 403, 'Forbidden', 'https://example.com', 'POST');
+    http.post.mockRejectedValueOnce(failure).mockResolvedValue(undefined);
+
+    const first = api.disableCameraMotion(5, 1);
+    const second = api.disableCameraMotion(5, 2);
+    await expect(first).rejects.toBe(failure);
+    await expect(second).resolves.toBeUndefined();
+    expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops retrying motion conflicts after the bounded attempts', async () => {
+    const { api, http } = createApi();
+    const conflict = new BlinkHttpError('Conflict', 409, 'Conflict', 'https://example.com', 'POST');
+    http.post.mockRejectedValue(conflict);
+
+    await expect(api.enableCameraMotion(5, 1)).rejects.toBe(conflict);
+    expect(http.post).toHaveBeenCalledTimes(3);
   });
 
   it('polls command status until completion', async () => {

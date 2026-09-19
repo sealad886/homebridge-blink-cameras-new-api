@@ -47,6 +47,8 @@ export class BlinkRestVerificationRequiredError extends Error {
 }
 
 export class BlinkApi {
+  private motionCommandTail: Promise<void> = Promise.resolve();
+  private hasSentMotionCommand = false;
   private readonly auth: BlinkAuth;
   private readonly http: BlinkHttp;
   private readonly sharedHttp: BlinkHttp;
@@ -69,6 +71,32 @@ export class BlinkApi {
     if (this.debug) {
       this.log.info(`[Client Debug] ${message}`);
     }
+  }
+
+  /** Blink rejects bursts of per-device motion changes with HTTP 409. */
+  private queueMotionCommand(send: () => Promise<unknown>): Promise<void> {
+    const command = this.motionCommandTail.then(async () => {
+      if (this.hasSentMotionCommand) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      this.hasSentMotionCommand = true;
+
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await send();
+          return;
+        } catch (error) {
+          if (!(error instanceof BlinkHttpError) || error.status !== 409 || attempt >= 2) {
+            throw error;
+          }
+          const delay = 500 * (attempt + 1);
+          this.log.warn(`[Motion] Blink reported a state conflict; retrying in ${delay}ms (${attempt + 1}/2).`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    });
+    this.motionCommandTail = command.then(() => undefined, () => undefined);
+    return command;
   }
 
   getSharedRestRootUrl(): string {
@@ -538,8 +566,10 @@ export class BlinkApi {
    * Note: No version prefix - uses root URL (without /api/)
    */
   async enableCameraMotion(networkId: number, cameraId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
+    return this.queueMotionCommand(async () => {
+      const accountId = await this.ensureAccountId();
+      await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
+    });
   }
 
   /**
@@ -549,8 +579,10 @@ export class BlinkApi {
    * Note: No version prefix - uses root URL (without /api/)
    */
   async disableCameraMotion(networkId: number, cameraId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
+    return this.queueMotionCommand(async () => {
+      const accountId = await this.ensureAccountId();
+      await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
+    });
   }
 
   /**
@@ -559,8 +591,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
   async enableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
+    return this.queueMotionCommand(async () => {
+      const accountId = await this.ensureAccountId();
+      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
+    });
   }
 
   /**
@@ -569,8 +603,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
   async disableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
+    return this.queueMotionCommand(async () => {
+      const accountId = await this.ensureAccountId();
+      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
+    });
   }
 
   /**
@@ -579,8 +615,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
   async enableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
+    return this.queueMotionCommand(async () => {
+      const accountId = await this.ensureAccountId();
+      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
+    });
   }
 
   /**
@@ -589,8 +627,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
   async disableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    const accountId = await this.ensureAccountId();
-    await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
+    return this.queueMotionCommand(async () => {
+      const accountId = await this.ensureAccountId();
+      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
+    });
   }
 
   /**
