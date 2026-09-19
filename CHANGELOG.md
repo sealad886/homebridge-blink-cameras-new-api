@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-alpha.1] - 2026-09-19
+
+### Fixed
+
+- Serialize per-device motion commands across cameras, doorbells, and Mini
+  cameras, with a short pause between commands. Retry Blink HTTP 409 state
+  conflicts up to twice before reporting a failure to HomeKit.
+
+### Known limitations
+
+- The command spacing and retry behavior have passed local tests. Live Blink
+  and HomeKit acceptance remains necessary to confirm that simultaneous arm
+  automations no longer produce HTTP 409 responses.
+
 ## [0.10.0-alpha.0] - 2026-09-15
 
 ### Added
