@@ -280,9 +280,8 @@ export class HostedAuthService {
 
     const metadata = safeMetadata(loaded.state);
     if (!loaded.requiresRefresh) {
-      return {
+      return this.lastStatus ? { ...this.lastStatus } : {
         authenticated: true,
-        verified: false,
         ...metadata,
         message: 'Blink tokens are stored.',
       };
@@ -419,8 +418,10 @@ export class HostedAuthService {
     if (request.deviceId !== undefined) {
       normalizeHardwareId(request.deviceId, false);
     }
+    let checkedSessionIdentity: string | null = null;
     try {
       const context = await this.getPersistedApiContext(request.deviceId);
+      checkedSessionIdentity = this.apiSessionIdentity;
       await context.api.login();
       await context.api.getHomescreen();
       const persisted = await this.loadPersistedAuthState();
@@ -429,12 +430,32 @@ export class HostedAuthService {
         throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
       }
       this.bindApiToState(context.api, persisted.state);
+      this.lastStatus = {
+        authenticated: true,
+        verified: true,
+        ...safeMetadata(persisted.state),
+        message: 'Connected to Blink using stored tokens.',
+      };
       return {
         success: true,
         message: 'Connected to Blink using stored tokens.',
       };
     } catch (error) {
       this.options.logger.warn('[Hosted Auth] Stored token connection test failed.');
+      const persisted = await this.loadPersistedAuthState().catch(() => null);
+      this.reconcileRetainedSession(persisted?.state ?? null);
+      if (persisted?.state && checkedSessionIdentity === durableSessionIdentity(persisted.state)) {
+        this.lastStatus = error instanceof BlinkRestVerificationRequiredError
+          ? this.mapVerificationRequirement(error.type, persisted.state)
+          : error instanceof BlinkHostedReauthenticationRequiredError
+            ? { authenticated: false, message: REAUTHENTICATION_MESSAGE }
+          : {
+            authenticated: true,
+            verified: false,
+            ...safeMetadata(persisted.state),
+            message: this.connectionFailureMessage(error),
+          };
+      }
       return {
         success: false,
         message: this.connectionFailureMessage(error),
@@ -525,6 +546,9 @@ export class HostedAuthService {
   }
 
   private bindApiToState(api: BlinkApi, state: BlinkAuthState): void {
+    if (this.apiSessionIdentity !== durableSessionIdentity(state)) {
+      this.lastStatus = null;
+    }
     this.api = api;
     this.apiSessionIdentity = durableSessionIdentity(state);
   }

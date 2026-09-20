@@ -291,11 +291,11 @@ describe('schema auth UI regression', () => {
     const saveConfig = sectionBetween(
       html,
       'async function saveTokenOnlyConfig(data) {',
-      'async function handleAuthResponse(data) {',
+      'async function handleAuthResponse(data,',
     );
     const authResponse = sectionBetween(
       html,
-      'async function handleAuthResponse(data) {',
+      'async function handleAuthResponse(data,',
       'async function refreshAuthStatus() {',
     );
 
@@ -310,7 +310,7 @@ describe('schema auth UI regression', () => {
     expect(saveConfig.indexOf('await homebridge.savePluginConfig()')).toBeGreaterThan(
       saveConfig.indexOf('await homebridge.updatePluginConfig(pluginConfig)'),
     );
-    expect(authResponse.indexOf('await saveTokenOnlyConfig(data)')).toBeLessThan(
+    expect(authResponse.indexOf('if (persistConfig) await saveTokenOnlyConfig(data)')).toBeLessThan(
       authResponse.indexOf("showStep('success')"),
     );
     expect(authResponse).toContain('if (data.verified === false)');
