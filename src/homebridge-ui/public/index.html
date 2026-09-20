@@ -988,7 +988,8 @@
       });
       if (!response?.success) {
         const status = await refreshAuthStatus();
-        if (status?.authenticated && !status.requiresClientVerification && !status.requiresAccountVerification) {
+        if (status?.authenticated && status.verified === false
+          && !status.requiresClientVerification && !status.requiresAccountVerification) {
           showStatusError('Stored Blink tokens could not connect. Try again or sign in securely if this persists.');
         }
         return;
