@@ -1380,6 +1380,33 @@ describe('HostedAuthService', () => {
     expect(api.getHomescreen).toHaveBeenCalledTimes(1);
   });
 
+  it('does not verify credentials replaced during the homescreen check', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.getHomescreen.mockImplementation(async () => {
+      await writeOwnerOnlyState(authStoragePath, persistedState({
+        accessToken: 'replacementAccessSentinel_2Mw8',
+        refreshToken: 'replacementRefreshSentinel_5Hp4',
+        email: 'replacement@example.com',
+      }));
+      return { account: { account_id: 123 }, networks: [], cameras: [] };
+    });
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    await expect(service.testConnection({})).resolves.toMatchObject({ success: false });
+    const status = await service.status();
+    expect(status).toMatchObject({
+      authenticated: true,
+      email: 'replacement@example.com',
+    });
+    expect(status.verified).toBeUndefined();
+  });
+
   it.each([
     ['completion', false],
     ['completion', true],

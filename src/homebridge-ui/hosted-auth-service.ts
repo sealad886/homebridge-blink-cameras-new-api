@@ -436,6 +436,10 @@ export class HostedAuthService {
         this.invalidateRetainedSession();
         throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
       }
+      if (checkedSessionIdentity !== durableSessionIdentity(persisted.state)) {
+        this.reconcileRetainedSession(persisted.state);
+        throw new AuthStateChangedError();
+      }
       this.bindApiToState(context.api, persisted.state);
       this.lastStatus = {
         authenticated: true,
