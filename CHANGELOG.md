@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-alpha.2] - 2026-09-20
+
+### Fixed
+
+- Show stored Blink sign-in as unchecked when opening Plugin Config, without
+  an inaccurate verification warning or a redundant Homebridge config save.
+- Retain the outcome of Test Connection for the current stored session and
+  distinguish failed connection checks from Blink client/account verification
+  requests. Clear the displayed outcome when stored credentials change.
+
+### Known limitations
+
+- The Plugin Config connection result describes the most recent UI check, not
+  continuous child-bridge or accessory health. Live Pi panel acceptance remains
+  necessary after installation.
+
 ## [0.10.0-alpha.1] - 2026-09-19
 
 ### Fixed
