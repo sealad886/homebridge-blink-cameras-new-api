@@ -18,8 +18,10 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 - **Doorbell** service for ring notifications
 - **Switch** for enabling/disabling motion detection per device
 
-API behavior is based on reverse-engineered endpoints from Blink Android 57.1
-(`versionCode` 29715642). Blink can change these private interfaces without notice.
+The current static API catalog is recovered from Blink Android 59.2
+(`versionCode` 29823413), with Android 57.1 retained as the comparison and
+bounded live-evidence baseline. See `docs/api-contract/README.md`. Blink can
+change these private interfaces without notice.
 
 ## Two-Way Talk Status
 
@@ -391,7 +393,11 @@ node --version
 
 ## API Documentation
 
-This plugin's API implementation is based on reverse engineering the official Blink Home Monitor Android app, with URL routing revalidated against Android app v57.1 (`versionCode` 29715642). Key technical details:
+This plugin's API implementation is based on reverse engineering the official
+Blink Home Monitor Android app. The current static catalog is Android 59.2
+(`versionCode` 29823413); URL-routing live evidence from Android 57.1
+(`versionCode` 29715642) remains the bounded runtime baseline. Key technical
+details:
 
 ### Authentication
 

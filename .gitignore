@@ -69,6 +69,8 @@ homebridge-ui/server.js.map
 !/scripts/release.mjs
 !/scripts/preuninstall.js
 !/scripts/deploy-to-pi.sh
+!/scripts/blink-api-contract/
+!/scripts/blink-api-contract/**
 # IDE and tracking files
 .copilot-tracking/
 *.txt

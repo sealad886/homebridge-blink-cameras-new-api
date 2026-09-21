@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/api-contract/schema.json",
+  "title": "Blink Android static API contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "artifact",
+    "baseline",
+    "servicePolicies",
+    "endpoints",
+    "models",
+    "firstPartyCandidates",
+    "thirdPartyExclusions",
+    "unresolved",
+    "diagnostics",
+    "protocolIndicators",
+    "completeness"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "baseline": {
+      "type": ["object", "null"],
+      "required": ["versionName", "versionCode", "baseSha256"],
+      "properties": {
+        "versionName": { "type": "string" },
+        "versionCode": { "type": "integer" },
+        "baseSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "servicePolicies": { "type": "object" },
+    "endpoints": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/endpoint" }
+    },
+    "models": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/model" }
+    },
+    "firstPartyCandidates": { "type": "array", "items": { "type": "object" } },
+    "thirdPartyExclusions": { "type": "array", "items": { "type": "object" } },
+    "unresolved": { "type": "array", "items": { "type": "object" } },
+    "diagnostics": { "type": "object" },
+    "protocolIndicators": { "type": "object" },
+    "completeness": {
+      "type": "object",
+      "required": [
+        "apkSplitsExpected",
+        "apkSplitsObserved",
+        "dexFilesExpected",
+        "dexFilesObserved",
+        "activeNormalizedContracts",
+        "unclassifiedFirstPartyCandidates"
+      ],
+      "properties": {
+        "apkSplitsExpected": { "type": "integer", "minimum": 1 },
+        "apkSplitsObserved": { "type": "integer", "minimum": 0 },
+        "dexFilesExpected": { "type": "integer", "minimum": 1 },
+        "dexFilesObserved": { "type": "integer", "minimum": 0 },
+        "javaRetrofitBindings": { "type": "integer", "minimum": 0 },
+        "smaliRetrofitBindings": { "type": "integer", "minimum": 0 },
+        "activeNormalizedContracts": { "type": "integer", "minimum": 0 },
+        "removedContracts": { "type": "integer", "minimum": 0 },
+        "modelsRecovered": { "type": "integer", "minimum": 0 },
+        "unresolvedCandidates": { "type": "integer", "minimum": 0 },
+        "unclassifiedFirstPartyCandidates": { "const": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apkSha256", "split", "dex", "source", "line", "symbol", "method"],
+      "properties": {
+        "apkSha256": { "$ref": "#/$defs/sha256" },
+        "split": { "type": "string" },
+        "dex": { "type": "string" },
+        "source": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "symbol": { "type": "string" },
+        "method": { "enum": ["jadx", "apktool-smali", "resource", "native-strings"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["packageName", "versionName", "versionCode", "splits", "baseSha256", "dexFiles", "evidenceMode", "tools", "commandOutcomes"],
+      "properties": {
+        "packageName": { "const": "com.immediasemi.android.blink" },
+        "versionName": { "type": "string" },
+        "versionCode": { "type": "integer" },
+        "acquiredAt": { "type": ["string", "null"] },
+        "evidenceMode": { "const": "static-only" },
+        "baseSha256": { "$ref": "#/$defs/sha256" },
+        "splits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["file", "sha256", "size"],
+            "properties": {
+              "file": { "type": "string" },
+              "sha256": { "$ref": "#/$defs/sha256" },
+              "size": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "dexFiles": { "type": "array", "items": { "type": "string" } },
+        "tools": { "type": "array", "items": { "type": "object" } },
+        "commandOutcomes": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "required": [
+        "id", "method", "path", "normalizedIdentity", "serviceFamily",
+        "baseHostTemplate", "urlConstruction", "authentication", "headers",
+        "parameters", "requestModelRefs", "responseModelRefs", "bindings",
+        "evidence", "confidence", "lifecycle", "security"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^ep-[a-f0-9]+$" },
+        "method": { "enum": ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"] },
+        "path": { "type": "string" },
+        "normalizedIdentity": { "type": "string" },
+        "serviceFamily": { "type": "string" },
+        "baseHostTemplate": { "type": "string" },
+        "urlConstruction": { "type": "string" },
+        "authentication": { "type": "object" },
+        "headers": { "type": "array", "items": { "type": "object" } },
+        "parameters": { "type": "array", "items": { "type": "object" } },
+        "requestModelRefs": { "type": "array", "items": { "type": "string" } },
+        "responseModelRefs": { "type": "array", "items": { "type": "string" } },
+        "successResponses": { "type": "array", "items": { "type": "string" } },
+        "errorMappings": { "type": "array", "items": { "type": "object" } },
+        "polling": { "type": ["object", "null"] },
+        "feature": { "type": "string" },
+        "callSites": { "type": "array", "items": { "type": "string" } },
+        "deviceFamilies": { "type": "array", "items": { "type": "string" } },
+        "transportBackend": { "type": "string" },
+        "bindings": { "type": "array", "items": { "type": "object" } },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+        "confidence": { "enum": ["direct", "corroborated", "inferred", "unresolved"] },
+        "lifecycle": { "enum": ["added", "changed", "unchanged", "removed"] },
+        "security": { "type": "object" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["id", "name", "qualifiedName", "kind", "fields", "enumValues", "evidence", "confidence"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "qualifiedName": { "type": "string" },
+        "kind": { "enum": ["object", "enum"] },
+        "fields": { "type": "array", "items": { "type": "object" } },
+        "enumValues": { "type": "array", "items": { "type": "string" } },
+        "polymorphism": { "type": ["object", "null"] },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+        "confidence": { "enum": ["direct", "corroborated", "inferred", "unresolved"] }
+      }
+    }
+  }
+}

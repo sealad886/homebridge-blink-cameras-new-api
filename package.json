@@ -70,6 +70,7 @@
         "@types/node": "^25.0.9",
         "@typescript-eslint/eslint-plugin": "^8.53.1",
         "@typescript-eslint/parser": "^8.53.1",
+        "ajv": "^8.20.0",
         "eslint": "^9.39.2",
         "homebridge": "^1.11.1",
         "jest": "^30.2.0",
@@ -81,6 +82,9 @@
         "jest-util": "*"
     },
     "scripts": {
+        "blink-api:decompile": "node scripts/blink-api-contract/index.cjs decompile --apk-dir logs/blink-apk/59.2-29823413/apks --output-dir logs/blink-apk/59.2-29823413/decompiled",
+        "blink-api:generate": "node scripts/blink-api-contract/index.cjs generate --apk-dir logs/blink-apk/59.2-29823413/apks --decompiled-dir logs/blink-apk/59.2-29823413/decompiled --baseline-apk-dir logs/blink-apk/57.1-29715642/apks --baseline-decompiled-dir logs/blink-apk/57.1-29715642/decompiled --output docs/api-contract/blink-59.2-29823413.json --markdown docs/api-contract/blink-59.2-29823413.md --acquired-at 2026-09-21T05:58:52Z",
+        "blink-api:validate": "node scripts/blink-api-contract/index.cjs validate --input docs/api-contract/blink-59.2-29823413.json --schema docs/api-contract/schema.json",
         "preuninstall": "node scripts/preuninstall.js",
         "build": "tsc && npm run copy-ui-assets",
         "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
