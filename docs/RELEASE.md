@@ -16,18 +16,32 @@ npm settings, add a GitHub Actions trusted publisher with these exact values:
 | Organization or user | `sealad886` |
 | Repository | `homebridge-blink-cameras-new-api` |
 | Workflow filename | `publish.yml` |
-| Environment | Leave empty; this workflow declares no environment |
+| Environment | `npm-release` |
 | Allowed action | Direct `npm publish` |
 
-Alternatively, use an authenticated npm CLI **11.15.0 or newer**, with package
-write access and account 2FA enabled:
+For an existing publisher without an environment, configure the
+`npm-release` restriction in npm's package Settings > Trusted publishing
+before merging this workflow change. If npm requires replacing the existing
+connection, retain or restore the current publish path until the new connection
+is saved. If a second publisher is added instead, remove the environment-less
+publisher after the first environment-bound publication succeeds. The npm
+website supports multiple publishers; the current `npm trust github` CLI may
+reject adding a second relationship while one exists.
+
+For a first publisher, an authenticated npm CLI **11.15.0 or newer** with
+package write access and account 2FA can also configure it:
 
 ```sh
 npm trust github @sealad886/homebridge-blink-cameras-new-api \
   --file publish.yml \
   --repo sealad886/homebridge-blink-cameras-new-api \
+  --environment npm-release \
   --allow-publish
 ```
+
+The `npm-release` GitHub environment allows deployments from `main` only.
+The trusted publisher's environment must match it exactly. Configure the npm
+publisher before merging a workflow change that names a new environment.
 
 The publish job runs on a GitHub-hosted runner with Node 24, requires npm
 **11.5.1 or newer**, and grants `id-token: write`. Release jobs and their test gates
@@ -71,8 +85,11 @@ package loadability checks on Node.js 20, 22, and 24 before publication.
 gh workflow run publish.yml --ref main -f version=VERSION
 ```
 
-The CI workflow obtains a short-lived publishing credential through OIDC. It
-validates registry responses, serializes releases, publishes the tested package,
+The release gates run before a read-only job installs dependencies, builds,
+verifies, and uploads the package. A separate `npm-release` job downloads the
+artifact, checks its integrity, source SHA, package name, and requested version,
+then obtains a short-lived publishing credential through OIDC. It
+validates registry responses, serializes releases, publishes the verified package,
 and records source SHA and registry integrity. Existing versions must match their original source;
 a failed post-publish release-record step can be retried at that same revision.
 After npm accepts an upload, registry processing can delay exact-version and dist-tag
