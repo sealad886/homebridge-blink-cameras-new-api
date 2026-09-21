@@ -19,8 +19,8 @@ describe('Blink APK API contract extraction', () => {
       fakeHash,
     );
 
-    expect(endpoints).toHaveLength(4);
-    expect(endpoints.annotationCandidates).toBe(4);
+    expect(endpoints).toHaveLength(6);
+    expect(endpoints.annotationCandidates).toBe(6);
     expect(endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -41,6 +41,10 @@ describe('Blink APK API contract extraction', () => {
           method: 'DELETE',
           path: 'v1/accounts/{account}/history',
         }),
+        expect.objectContaining({
+          method: 'GET', path: '@Url',
+          responseModelRefs: ['com.immediasemi.blink.test.FixtureResponse'],
+        }),
       ]),
     );
     expect(endpoints.every((endpoint: { evidence: Array<{ dex: string }> }) =>
@@ -60,6 +64,8 @@ describe('Blink APK API contract extraction', () => {
         expect.objectContaining({ method: 'DELETE', path: 'v1/accounts/{account}/history' }),
       ]),
     );
+    expect(endpoints.filter((endpoint: { method: string; path: string }) =>
+      endpoint.method === 'GET' && endpoint.path === '@Url')).toHaveLength(2);
   });
 
   it('deduplicates Java and smali bindings but retains independent evidence', () => {
@@ -167,6 +173,26 @@ describe('Blink APK API contract extraction', () => {
 
     expect(errors.join('\n')).toMatch(/activeNormalizedContracts does not reconcile/);
     expect(errors.join('\n')).toMatch(/unclassifiedFirstPartyCandidates does not reconcile/);
+  });
+
+  it('marks an endpoint changed when a referenced wire model changes', () => {
+    const endpoint = {
+      id: 'ep-a', method: 'POST', path: 'v1/test',
+      normalizedIdentity: 'POST|rest|v1/test|FixtureBody', serviceFamily: 'rest',
+      parameters: [], requestModelRefs: ['test.FixtureBody'], responseModelRefs: [],
+      authentication: {}, lifecycle: 'unchanged',
+    };
+    const model = (type: string) => ({
+      name: 'FixtureBody', qualifiedName: 'test.FixtureBody', kind: 'object',
+      fields: [{ serializedName: 'value', qualifiedType: type, nullable: false, default: null }],
+      enumValues: [], polymorphism: null,
+    });
+    const current = { endpoints: [{ ...endpoint }], models: [model('String')] };
+    const baseline = { endpoints: [{ ...endpoint }], models: [model('long')] };
+
+    extractor.applyLifecycle(current, baseline);
+
+    expect(current.endpoints[0].lifecycle).toBe('changed');
   });
 
   it('parses only explicit decompiler diagnostics and canonicalizes URL hosts', () => {

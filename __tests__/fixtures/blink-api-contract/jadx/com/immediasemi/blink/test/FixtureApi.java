@@ -14,4 +14,10 @@ public interface FixtureApi {
 
     @HTTP(hasBody = false, method = "DELETE", path = "v1/accounts/{account}/history")
     Object clearHistory(@Path("account") long account, Continuation<? super Unit> continuation);
+
+    @GET
+    Object download(@Url String url, Continuation<? super FixtureResponse> continuation);
+
+    @POST
+    Object upload(@Url String url, @Body FixtureBody body, Continuation<? super FixtureResponse> continuation);
 }

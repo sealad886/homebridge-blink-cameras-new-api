@@ -10,6 +10,15 @@
     .end annotation
 .end method
 
+.method public abstract fetchSecond(Ljava/lang/String;)Ljava/lang/Object;
+    .param p1
+        .annotation runtime Lretrofit2/http/Url;
+        .end annotation
+    .end param
+    .annotation runtime Lretrofit2/http/GET;
+    .end annotation
+.end method
+
 .method public abstract clearHistory()Ljava/lang/Object;
     .annotation runtime Lretrofit2/http/HTTP;
         hasBody = false

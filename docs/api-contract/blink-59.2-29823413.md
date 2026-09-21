@@ -23,7 +23,7 @@ Static evidence describes client declarations and bounded construction evidence.
 | local-device | `http://172.16.97.199/` | 7 | local-none |
 | oauth | `https://api.{env}oauth.blink.com/` | 2 | none |
 | public-rest | `https://rest-{tier}.immedia-semi.com/api/` | 10 | none |
-| rest | `https://rest-{tier}.immedia-semi.com/api/` | 147 | bearer, unresolved |
+| rest | `https://rest-{tier}.immedia-semi.com/api/` | 159 | bearer |
 | shared-rest | `https://rest-{shared_tier}.immedia-semi.com/api/` | 141 | bearer |
 
 Default headers: `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone`. URL rewriting tokens: `{tier}`, `{shared_tier}`, `{env}`, `{injected_account_id}`, `{injected_client_id}`.
@@ -48,7 +48,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | GET | `device_info/v4/devices` | Rdis | bearer | — | com.immediasemi.blink.common.device.rdis.RdisDevicesResponse | changed | direct | `com/immediasemi/blink/common/device/rdis/RdisApi.java:20` |
 | GET | `device_info/v4/devices/{deviceId}` | Rdis | bearer | — | com.immediasemi.blink.common.device.rdis.RdisDeviceSettingsResponse | added | direct | `com/immediasemi/blink/common/device/rdis/RdisApi.java:17` |
 | POST | `device_info/v4/devices/operations` | Rdis | bearer | com.immediasemi.blink.common.device.rdis.RdisOperationsBody | com.immediasemi.blink.common.device.rdis.RdisOperationsResponse | changed | direct | `com/immediasemi/blink/common/device/rdis/RdisApi.java:23` |
-| PUT | `duos/v1/devices/{deviceId}/update` | DeviceUpdateOrchestrationService | bearer | com.immediasemi.blink.common.device.duos.DeviceEntityUpdateRequest | Unit | unchanged | direct | `com/immediasemi/blink/common/device/duos/DeviceUpdateOrchestrationServiceApi.java:16` |
+| PUT | `duos/v1/devices/{deviceId}/update` | DeviceUpdateOrchestrationService | bearer | com.immediasemi.blink.common.device.duos.DeviceEntityUpdateRequest | Unit | changed | direct | `com/immediasemi/blink/common/device/duos/DeviceUpdateOrchestrationServiceApi.java:16` |
 | PUT | `duos/v1/devices/{deviceId}/update` | DeviceUpdateOrchestrationService | bearer | com.immediasemi.blink.common.device.duos.DeviceMotionSettingsUpdateRequest | Unit | added | direct | `com/immediasemi/blink/common/device/duos/DeviceUpdateOrchestrationServiceApi.java:22` |
 | PUT | `duos/v1/devices/{deviceId}/update` | DeviceUpdateOrchestrationService | bearer | com.immediasemi.blink.common.device.duos.DevicePrivacySettingsUpdateRequest | Unit | added | direct | `com/immediasemi/blink/common/device/duos/DeviceUpdateOrchestrationServiceApi.java:25` |
 | PUT | `duos/v1/devices/update` | DeviceUpdateOrchestrationService | bearer | com.immediasemi.blink.common.device.duos.DeviceBulkUpdateRequest | com.immediasemi.blink.common.device.duos.DeviceBulkUpdateResponse | unchanged | direct | `com/immediasemi/blink/common/device/duos/DeviceUpdateOrchestrationServiceApi.java:19` |
@@ -94,21 +94,33 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v4/users/password_change` | PasswordReset | none | com.immediasemi.blink.account.password.ResetPasswordPostBody | Unit | unchanged | direct | `com/immediasemi/blink/account/password/PasswordResetApi.java:18` |
 | POST | `v4/users/password_change/pin/generate` | PasswordReset | none | com.immediasemi.blink.common.account.verification.GeneratePinPostBody | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/account/password/PasswordResetApi.java:21` |
 | POST | `v4/users/password_change/pin/verify` | PasswordReset | none | com.immediasemi.blink.common.account.verification.VerifyPinPostBody | com.immediasemi.blink.common.account.verification.VerifyPinResponse | unchanged | direct | `com/immediasemi/blink/account/password/PasswordResetApi.java:24` |
-| POST | `v7/users/register` | Auth | none | com.immediasemi.blink.common.account.auth.RegisterBody | com.immediasemi.blink.common.account.auth.AuthenticationResponse | unchanged | direct | `com/immediasemi/blink/common/account/auth/AuthApi.java:13` |
+| POST | `v7/users/register` | Auth | none | com.immediasemi.blink.common.account.auth.RegisterBody | com.immediasemi.blink.common.account.auth.AuthenticationResponse | changed | direct | `com/immediasemi/blink/common/account/auth/AuthApi.java:13` |
 
 ### rest
 
 | Method | Path | Feature | Auth | Request | Response | State | Confidence | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| GET | `@Url` | Blueprint | unresolved | — | — | unchanged | corroborated | `smali_classes2/com/ring/reapp/blueprint/api/BlueprintApi.smali:53` |
-| POST | `@Url` | Blueprint | unresolved | — | — | unchanged | corroborated | `smali_classes2/com/ring/reapp/blueprint/api/BlueprintApi.smali:79` |
+| GET | `@Url` | FaceImageDownload | bearer | — | ResponseBody | unchanged | direct | `com/immediasemi/blink/settings/knownfaces/image/FaceImageDownloadApi.java:15` |
+| GET | `@Url` | PreSignedVideo | bearer | — | ResponseBody | added | direct | `com/immediasemi/blink/video/PreSignedVideoApi.java:17` |
+| GET | `@Url` | Video | bearer | — | ResponseBody | unchanged | direct | `com/immediasemi/blink/video/VideoApi.java:14` |
+| GET | `@Url` | Firmware | bearer | — | com.ring.blueprints.setup.core.data.ApiAccessPoints | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:19` |
+| GET | `@Url` | Firmware | bearer | — | ResponseBody | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:22` |
+| GET | `@Url` | Firmware | bearer | — | ResponseBody | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:25` |
+| GET | `@Url` | Firmware | bearer | — | com.ring.blueprints.setup.core.data.ApiNetwork | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:28` |
+| GET | `@Url` | Blueprint | bearer | — | com.ring.reapp.blueprint.model.BlueprintResponse | changed | direct | `com/ring/reapp/blueprint/api/BlueprintApi.java:17` |
+| POST | `@Url` | Firmware | bearer | com.ring.blueprints.setup.core.data.DeviceLocale | ResponseBody | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:31` |
+| POST | `@Url` | Firmware | bearer | RequestBody | ResponseBody | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:34` |
+| POST | `@Url` | Firmware | bearer | RequestBody | ResponseBody | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:37` |
+| POST | `@Url` | Firmware | bearer | com.ring.blueprints.setup.core.data.ApiNetwork | String | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:40` |
+| POST | `@Url` | Firmware | bearer | com.ring.blueprints.setup.core.data.ApiNetwork | ResponseBody | unchanged | direct | `com/ring/blueprints/setup/core/data/FirmwareApi.java:43` |
+| POST | `@Url` | Blueprint | bearer | kotlinx.serialization.json.JsonObject | com.ring.reapp.blueprint.model.BlueprintResponse | changed | direct | `com/ring/reapp/blueprint/api/BlueprintApi.java:20` |
 | POST | `app/logs/upload` | Log | bearer | com.immediasemi.blink.api.retrofit.LogsBody | Unit | unchanged | direct | `com/immediasemi/blink/common/log/LogApi.java:16` |
 | GET | `blink/clients_api/links/v1/locations/{locationId}/devices/{deviceId}/links?ignore_rbac=true&include_deactivated=false` | LinkDevice | bearer | — | com.immediasemi.blink.device.setting.linkdevice.data.model.DeviceLinksResponse | unchanged | direct | `com/immediasemi/blink/device/setting/linkdevice/data/LinkDeviceApi.java:29` |
 | DELETE | `blink/clients_api/links/v1/locations/{locationId}/devices/{deviceId}/links/{linkId}?ignore_rbac=true&include_deactivated=false` | LinkDevice | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/setting/linkdevice/data/LinkDeviceApi.java:26` |
 | POST | `blink/clients_api/links/v1/locations/{locationId}/events/{event}/receivers?ignore_rbac=true&include_deactivated=false` | LinkDevice | bearer | com.immediasemi.blink.device.setting.linkdevice.data.model.CreateLinkRequest | com.immediasemi.blink.device.setting.linkdevice.data.model.CreateLinkResponse | unchanged | direct | `com/immediasemi/blink/device/setting/linkdevice/data/LinkDeviceApi.java:23` |
 | POST | `clients_api/setups` | SetupOrchestrationService | bearer | com.immediasemi.blink.common.device.ringsos.SosSetupPostBody | com.immediasemi.blink.common.device.ringsos.SosSetupResponse | unchanged | direct | `com/immediasemi/blink/common/device/ringsos/SetupOrchestrationServiceApi.java:44` |
 | GET | `clients_api/setups/{setupId}` | SetupOrchestrationService | bearer | — | com.immediasemi.blink.common.device.ringsos.SosDeviceSetupStatusResponse | unchanged | direct | `com/immediasemi/blink/common/device/ringsos/SetupOrchestrationServiceApi.java:38` |
-| POST | `clients/{injected_client_id}/update` | Client | bearer | com.immediasemi.blink.common.account.client.ClientUpdatePostBody | Unit | unchanged | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:26` |
+| POST | `clients/{injected_client_id}/update` | Client | bearer | com.immediasemi.blink.common.account.client.ClientUpdatePostBody | Unit | changed | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:26` |
 | GET | `device_info/v4/devices/{deviceId}` | SetupOrchestrationService | bearer | — | com.immediasemi.blink.common.device.ringsos.ChimeAccessoryConfigInfoResponse | unchanged | direct | `com/immediasemi/blink/common/device/ringsos/SetupOrchestrationServiceApi.java:26` |
 | GET | `device_info/v4/devices/{deviceId}/configurations` | SetupOrchestrationService | bearer | — | com.immediasemi.blink.common.device.ringsos.DeviceConfigurationsResponse | changed | direct | `com/immediasemi/blink/common/device/ringsos/SetupOrchestrationServiceApi.java:29` |
 | GET | `device_info/v4/devices/{deviceId}/status` | SetupOrchestrationService | bearer | — | com.immediasemi.blink.common.device.ringsos.SosDeviceOtaStatusResponse | unchanged | direct | `com/immediasemi/blink/common/device/ringsos/SetupOrchestrationServiceApi.java:32` |
@@ -122,7 +134,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | PUT | `dings/{dingId}/favorite` | Clients | bearer | — | Unit | unchanged | direct | `com/ringapp/orchestratorapi/data/ClientsApi.java:19` |
 | POST | `duos/v1/locations` | LocationsCore | bearer | com.amazon.rbks.mobile.locations.network.entities.PutLocationRequest | com.amazon.rbks.mobile.locations.network.entities.LocationBody | unchanged | direct | `com/immediasemi/blink/location/api/LocationsCoreApi.java:46` |
 | DELETE | `duos/v1/locations/{locationId}` | LocationsCore | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/location/api/LocationsCoreApi.java:27` |
-| PATCH | `duos/v1/locations/{locationId}` | LocationsCore | bearer | com.amazon.rbks.mobile.locations.network.entities.UpdateLocationRequest | com.amazon.rbks.mobile.locations.network.entities.LocationBody | unchanged | direct | `com/immediasemi/blink/location/api/LocationsCoreApi.java:39` |
+| PATCH | `duos/v1/locations/{locationId}` | LocationsCore | bearer | com.amazon.rbks.mobile.locations.network.entities.UpdateLocationRequest | com.amazon.rbks.mobile.locations.network.entities.LocationBody | changed | direct | `com/immediasemi/blink/location/api/LocationsCoreApi.java:39` |
 | GET | `ees/v2/history/extendedsearchmetadata` | TimelineOrchestrator | bearer | — | com.ringapp.orchestratorapi.data.OrchestratorSearchMetadataResponse | unchanged | direct | `com/ringapp/orchestratorapi/data/TimelineOrchestratorApi.java:130` |
 | DELETE | `evm/v2/dings` | TimelineOrchestrator | bearer | — | Unit | unchanged | direct | `com/ringapp/orchestratorapi/data/TimelineOrchestratorApi.java:121` |
 | POST | `evm/v2/events` | TimelineOrchestrator | bearer | com.ringapp.orchestratorapi.data.DeleteMultipleEventsRequest | Unit | added | direct | `com/ringapp/orchestratorapi/data/TimelineOrchestratorApi.java:90` |
@@ -139,8 +151,8 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | GET | `evm/v2/timeline/events/eventito/{source_id}` | TimelineOrchestrator | bearer | — | com.ringapp.orchestratorapi.data.OrchestratorEventResponse | changed | direct | `com/ringapp/orchestratorapi/data/TimelineOrchestratorApi.java:137` |
 | GET | `evm/v3/history/devices` | TimelineOrchestrator | bearer | — | com.ringapp.orchestratorapi.data.OrchestratorFeedResponse | changed | direct | `com/ringapp/orchestratorapi/data/TimelineOrchestratorApi.java:112` |
 | POST | `evm/v3/history/events` | TimelineOrchestrator | bearer | com.ringapp.orchestratorapi.data.OrchestratorBatchRequestBody | com.ringapp.orchestratorapi.data.OrchestratorEventResponse | changed | direct | `com/ringapp/orchestratorapi/data/TimelineOrchestratorApi.java:108` |
-| GET | `factory_profile` | SetupClients | bearer | — | com.ring.blueprints.setup.core.data.backend.ApiFactoryDeviceProfile | unchanged | direct | `com/ring/blueprints/setup/core/data/backend/SetupClientsApi.java:15` |
-| GET | `fms/device-firmware` | DeviceFirmware | bearer | — | com.ring.blueprints.setup.core.data.entity.DeviceFirmwareResponse | unchanged | direct | `com/ring/blueprints/setup/core/data/backend/DeviceFirmwareApi.java:14` |
+| GET | `factory_profile` | SetupClients | bearer | — | com.ring.blueprints.setup.core.data.backend.ApiFactoryDeviceProfile | changed | direct | `com/ring/blueprints/setup/core/data/backend/SetupClientsApi.java:15` |
+| GET | `fms/device-firmware` | DeviceFirmware | bearer | — | com.ring.blueprints.setup.core.data.entity.DeviceFirmwareResponse | changed | direct | `com/ring/blueprints/setup/core/data/backend/DeviceFirmwareApi.java:14` |
 | GET | `geocoding/v1/auto-complete` | Geocoding | bearer | — | com.amazon.rbks.mobile.locations.network.entities.AutoCompleteResponse | unchanged | direct | `com/immediasemi/blink/location/api/GeocodingApi.java:30` |
 | GET | `geocoding/v1/auto-complete/details` | Geocoding | bearer | — | com.amazon.rbks.mobile.locations.network.entities.LocationDetailsResponse | unchanged | direct | `com/immediasemi/blink/location/api/GeocodingApi.java:34` |
 | POST | `geocoding/v1/geocode` | Geocoding | bearer | com.amazon.rbks.mobile.locations.network.entities.GeoCodingRequest | com.amazon.rbks.mobile.locations.network.entities.LocationDetailsResponse | unchanged | direct | `com/immediasemi/blink/location/api/GeocodingApi.java:38` |
@@ -167,8 +179,8 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | DELETE | `v1/alexa/link` | AlexaLinking | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/settings/account/alexa/AlexaLinkingApi.java:16` |
 | POST | `v1/alexa/link` | AlexaLinking | bearer | com.immediasemi.blink.settings.account.alexa.AlexaLinkingLinkPostBody | Unit | unchanged | direct | `com/immediasemi/blink/settings/account/alexa/AlexaLinkingApi.java:25` |
 | GET | `v1/alexa/link_status` | AlexaLinking | bearer | — | com.immediasemi.blink.settings.account.alexa.AlexaLinkStatus | unchanged | direct | `com/immediasemi/blink/settings/account/alexa/AlexaLinkingApi.java:19` |
-| GET | `v1/clients/{injected_client_id}/control_panel/clients` | ClientDeviceManagement | bearer | — | com.immediasemi.blink.api.retrofit.GetClientsResponse | unchanged | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:23` |
-| POST | `v1/clients/{injected_client_id}/control_panel/delete` | ClientDeviceManagement | bearer | com.immediasemi.blink.api.retrofit.DeleteClientBody | Unit | unchanged | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:20` |
+| GET | `v1/clients/{injected_client_id}/control_panel/clients` | ClientDeviceManagement | bearer | — | com.immediasemi.blink.api.retrofit.GetClientsResponse | changed | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:23` |
+| POST | `v1/clients/{injected_client_id}/control_panel/delete` | ClientDeviceManagement | bearer | com.immediasemi.blink.api.retrofit.DeleteClientBody | Unit | changed | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:20` |
 | POST | `v1/clients/{injected_client_id}/control_panel/pin/resend` | ClientDeviceManagement | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:29` |
 | POST | `v1/clients/{injected_client_id}/control_panel/pin/verify` | ClientDeviceManagement | bearer | com.immediasemi.blink.common.account.verification.VerifyPinPostBody | com.immediasemi.blink.common.account.verification.VerifyPinResponse | unchanged | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:32` |
 | POST | `v1/clients/{injected_client_id}/control_panel/request_pin` | ClientDeviceManagement | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/settings/client/ClientDeviceManagementApi.java:26` |
@@ -182,7 +194,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v1/data_request/euda/create` | ManageData | bearer | — | com.immediasemi.blink.settings.account.managedata.SubmitDataRequestResponse | unchanged | direct | `com/immediasemi/blink/settings/account/managedata/ManageDataApi.java:21` |
 | GET | `v1/data_request/list` | ManageData | bearer | — | com.immediasemi.blink.settings.account.managedata.DataRequests | unchanged | direct | `com/immediasemi/blink/settings/account/managedata/ManageDataApi.java:15` |
 | POST | `v1/data_request/third_party/{thirdPartyId}/revoke` | ManageData | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/settings/account/managedata/ManageDataApi.java:24` |
-| POST | `v1/events/app` | Event | bearer | com.immediasemi.blink.api.retrofit.TrackingEvents | Unit | unchanged | direct | `com/immediasemi/blink/common/track/event/EventApi.java:15` |
+| POST | `v1/events/app` | Event | bearer | com.immediasemi.blink.api.retrofit.TrackingEvents | Unit | changed | direct | `com/immediasemi/blink/common/track/event/EventApi.java:15` |
 | DELETE | `v1/history/events/associations/{profile_id}` | EventAssociations | bearer | — | Unit | added | direct | `com/immediasemi/blink/settings/knownfaces/identities/EventAssociationsApi.java:16` |
 | GET | `v1/identities` | Identities | bearer | — | com.immediasemi.blink.settings.knownfaces.identities.IdentitiesResponse | unchanged | direct | `com/immediasemi/blink/settings/knownfaces/identities/IdentitiesApi.java:28` |
 | DELETE | `v1/identities/{id}` | Identities | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/settings/knownfaces/identities/IdentitiesApi.java:25` |
@@ -212,26 +224,26 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | PATCH | `v1/shared/popovers/{popoverId}/read` | Access | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/account/AccessApi.java:45` |
 | GET | `v1/shared/summary` | Access | bearer | — | com.immediasemi.blink.settings.access.AccessSummary | unchanged | direct | `com/immediasemi/blink/common/account/AccessApi.java:39` |
 | POST | `v1/subscriptions/clear_popup/{type}` | WriteSubscription | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:42` |
-| POST | `v1/subscriptions/link/link_account` | WriteSubscription | bearer | com.immediasemi.blink.utils.MapLinkBody | com.immediasemi.blink.utils.DspSubscriptionResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:39` |
-| POST | `v1/subscriptions/link/unlink_account` | WriteSubscription | bearer | com.immediasemi.blink.utils.VerifyLinkAccountBody | com.immediasemi.blink.utils.DspSubscriptionResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:51` |
-| POST | `v1/subscriptions/plans/{subscriptionId}/attach` | WriteSubscription | bearer | com.immediasemi.blink.common.subscription.basic.AttachPlanBody | com.immediasemi.blink.utils.DspSubscriptionResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:27` |
+| POST | `v1/subscriptions/link/link_account` | WriteSubscription | bearer | com.immediasemi.blink.utils.MapLinkBody | com.immediasemi.blink.utils.DspSubscriptionResponse | changed | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:39` |
+| POST | `v1/subscriptions/link/unlink_account` | WriteSubscription | bearer | com.immediasemi.blink.utils.VerifyLinkAccountBody | com.immediasemi.blink.utils.DspSubscriptionResponse | changed | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:51` |
+| POST | `v1/subscriptions/plans/{subscriptionId}/attach` | WriteSubscription | bearer | com.immediasemi.blink.common.subscription.basic.AttachPlanBody | com.immediasemi.blink.utils.DspSubscriptionResponse | changed | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:27` |
 | DELETE | `v1/subscriptions/plans/cancel_trial` | WriteSubscription | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:30` |
-| GET | `v1/subscriptions/plans/get_device_attach_eligibility` | WriteSubscription | bearer | — | com.immediasemi.blink.common.subscription.basic.DeviceEligibilityResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:36` |
+| GET | `v1/subscriptions/plans/get_device_attach_eligibility` | WriteSubscription | bearer | — | com.immediasemi.blink.common.subscription.basic.DeviceEligibilityResponse | changed | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:36` |
 | POST | `v1/subscriptions/plans/renew_trial` | WriteSubscription | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:45` |
-| POST | `v1/subscriptions/request/status/{uuid}` | WriteSubscription | bearer | com.immediasemi.blink.utils.SubscriptionRequestStatusBody | com.immediasemi.blink.utils.SubscriptionRequestStatusResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:48` |
+| POST | `v1/subscriptions/request/status/{uuid}` | WriteSubscription | bearer | com.immediasemi.blink.utils.SubscriptionRequestStatusBody | com.immediasemi.blink.utils.SubscriptionRequestStatusResponse | changed | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:48` |
 | POST | `v1/users/authenticate_password` | Account | bearer | com.immediasemi.blink.account.auth.AuthenticatePasswordBody | com.immediasemi.blink.account.auth.AuthenticatePasswordResponse | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:28` |
 | POST | `v1/users/countries/update` | Account | bearer | com.immediasemi.blink.api.retrofit.CountryBody | com.immediasemi.blink.api.retrofit.CountryResponse | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:70` |
-| GET | `v1/users/options` | Account | bearer | — | com.immediasemi.blink.common.account.option.AccountOptionsResponse | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:37` |
-| GET | `v1/users/preferences` | Account | bearer | — | com.immediasemi.blink.common.account.preference.AccountPreferencesBody | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:40` |
-| POST | `v1/users/preferences` | Account | bearer | com.immediasemi.blink.common.account.preference.AccountPreferencesBody | com.immediasemi.blink.common.account.preference.AccountPreferencesBody | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:52` |
+| GET | `v1/users/options` | Account | bearer | — | com.immediasemi.blink.common.account.option.AccountOptionsResponse | changed | direct | `com/immediasemi/blink/common/account/AccountApi.java:37` |
+| GET | `v1/users/preferences` | Account | bearer | — | com.immediasemi.blink.common.account.preference.AccountPreferencesBody | changed | direct | `com/immediasemi/blink/common/account/AccountApi.java:40` |
+| POST | `v1/users/preferences` | Account | bearer | com.immediasemi.blink.common.account.preference.AccountPreferencesBody | com.immediasemi.blink.common.account.preference.AccountPreferencesBody | changed | direct | `com/immediasemi/blink/common/account/AccountApi.java:52` |
 | GET | `v1/users/tier_info` | Account | bearer | — | com.immediasemi.blink.common.account.TierInfo | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:46` |
-| POST | `v2/clients/{injected_client_id}/tiv` | CustomerSupportAccess | bearer | com.immediasemi.blink.settings.privacy.TivLockBody | com.immediasemi.blink.settings.privacy.SetTivLockResponse | unchanged | direct | `com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java:16` |
+| POST | `v2/clients/{injected_client_id}/tiv` | CustomerSupportAccess | bearer | com.immediasemi.blink.settings.privacy.TivLockBody | com.immediasemi.blink.settings.privacy.SetTivLockResponse | changed | direct | `com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java:16` |
 | POST | `v2/clients/{injected_client_id}/tiv_unlock/pin/resend` | CustomerSupportAccess | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java:22` |
 | POST | `v2/clients/{injected_client_id}/tiv_unlock/pin/verify` | CustomerSupportAccess | bearer | com.immediasemi.blink.common.account.verification.VerifyPinPostBody | com.immediasemi.blink.common.account.verification.VerifyPinResponse | unchanged | direct | `com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java:25` |
 | POST | `v2/clients/{injected_client_id}/tiv_unlock/request_pin` | CustomerSupportAccess | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/settings/privacy/CustomerSupportAccessApi.java:19` |
 | POST | `v2/notification` | Notification | bearer | com.immediasemi.blink.api.retrofit.AcknowledgeNotificationBody | Object | unchanged | direct | `com/immediasemi/blink/notification/NotificationApi.java:14` |
-| POST | `v2/subscriptions/plans/create_trial` | WriteSubscription | bearer | com.immediasemi.blink.home.additionaltrial.AdditionalTrialBody | Unit | unchanged | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:33` |
-| GET | `v2/users/info` | Account | bearer | — | com.immediasemi.blink.common.account.Account | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:34` |
+| POST | `v2/subscriptions/plans/create_trial` | WriteSubscription | bearer | com.immediasemi.blink.home.additionaltrial.AdditionalTrialBody | Unit | changed | direct | `com/immediasemi/blink/common/subscription/WriteSubscriptionApi.java:33` |
+| GET | `v2/users/info` | Account | bearer | — | com.immediasemi.blink.common.account.Account | changed | direct | `com/immediasemi/blink/common/account/AccountApi.java:34` |
 | POST | `v4/clients/{injected_client_id}/email_change` | EmailChange | bearer | com.immediasemi.blink.settings.email.ChangeEmailPostBody | com.immediasemi.blink.common.account.verification.GeneratePinResponse | changed | direct | `com/immediasemi/blink/settings/email/EmailChangeApi.java:16` |
 | POST | `v4/clients/{injected_client_id}/email_change/pin/resend` | EmailChange | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/settings/email/EmailChangeApi.java:19` |
 | POST | `v4/clients/{injected_client_id}/email_change/pin/verify` | EmailChange | bearer | com.immediasemi.blink.common.account.verification.VerifyPinPostBody | com.immediasemi.blink.common.account.verification.VerifyPinResponse | unchanged | direct | `com/immediasemi/blink/settings/email/EmailChangeApi.java:22` |
@@ -239,14 +251,14 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v4/clients/{injected_client_id}/password_change` | PasswordChange | bearer | com.immediasemi.blink.account.password.ResetPasswordPostBody | Unit | unchanged | direct | `com/immediasemi/blink/settings/password/PasswordChangeApi.java:18` |
 | POST | `v4/clients/{injected_client_id}/password_change/pin/generate` | PasswordChange | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/settings/password/PasswordChangeApi.java:24` |
 | POST | `v4/clients/{injected_client_id}/password_change/pin/verify` | PasswordChange | bearer | com.immediasemi.blink.common.account.verification.VerifyPinPostBody | com.immediasemi.blink.common.account.verification.VerifyPinResponse | unchanged | direct | `com/immediasemi/blink/settings/password/PasswordChangeApi.java:27` |
-| POST | `v4/clients/{injected_client_id}/pin/verify` | Client | bearer | com.immediasemi.blink.api.retrofit.VerifyPinBody | com.immediasemi.blink.api.retrofit.PinVerificationResponse | unchanged | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:35` |
+| POST | `v4/clients/{injected_client_id}/pin/verify` | Client | bearer | com.immediasemi.blink.api.retrofit.VerifyPinBody | com.immediasemi.blink.api.retrofit.PinVerificationResponse | changed | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:35` |
 | POST | `v4/users/pin/resend` | Account | bearer | — | com.immediasemi.blink.common.account.verification.GeneratePinResponse | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:58` |
 | POST | `v4/users/pin/verify` | Account | bearer | com.immediasemi.blink.common.account.verification.VerifyPinPostBody | com.immediasemi.blink.common.account.verification.VerifyPinResponse | unchanged | direct | `com/immediasemi/blink/common/account/AccountApi.java:61` |
-| POST | `v5/clients/{injected_client_id}/client_verification/pin/resend` | Client | bearer | — | com.immediasemi.blink.api.retrofit.ResendClientVerificationCodeResponse | unchanged | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:29` |
-| POST | `v5/clients/{injected_client_id}/client_verification/pin/verify` | Client | bearer | com.immediasemi.blink.api.retrofit.SubmitVerificationRequest | com.immediasemi.blink.api.retrofit.PinVerificationResponse | unchanged | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:32` |
-| POST | `v5/clients/{injected_client_id}/phone_number_change` | PhoneNumberChange | bearer | com.immediasemi.blink.api.retrofit.ChangePhoneNumberBody | com.immediasemi.blink.api.retrofit.ChangePhoneNumberResponse | unchanged | direct | `com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java:18` |
-| POST | `v5/clients/{injected_client_id}/phone_number_change` | PhoneNumberChange | bearer | com.immediasemi.blink.account.phone.AddPhoneNumberPostBody | com.immediasemi.blink.api.retrofit.ChangePhoneNumberResponse | unchanged | direct | `com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java:21` |
-| POST | `v5/clients/{injected_client_id}/phone_number_change/pin/verify` | PhoneNumberChange | bearer | com.immediasemi.blink.api.retrofit.SubmitVerificationRequest | com.immediasemi.blink.api.retrofit.PinVerificationResponse | unchanged | direct | `com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java:24` |
+| POST | `v5/clients/{injected_client_id}/client_verification/pin/resend` | Client | bearer | — | com.immediasemi.blink.api.retrofit.ResendClientVerificationCodeResponse | changed | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:29` |
+| POST | `v5/clients/{injected_client_id}/client_verification/pin/verify` | Client | bearer | com.immediasemi.blink.api.retrofit.SubmitVerificationRequest | com.immediasemi.blink.api.retrofit.PinVerificationResponse | changed | direct | `com/immediasemi/blink/common/account/client/ClientApi.java:32` |
+| POST | `v5/clients/{injected_client_id}/phone_number_change` | PhoneNumberChange | bearer | com.immediasemi.blink.api.retrofit.ChangePhoneNumberBody | com.immediasemi.blink.api.retrofit.ChangePhoneNumberResponse | changed | direct | `com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java:18` |
+| POST | `v5/clients/{injected_client_id}/phone_number_change` | PhoneNumberChange | bearer | com.immediasemi.blink.account.phone.AddPhoneNumberPostBody | com.immediasemi.blink.api.retrofit.ChangePhoneNumberResponse | changed | direct | `com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java:21` |
+| POST | `v5/clients/{injected_client_id}/phone_number_change/pin/verify` | PhoneNumberChange | bearer | com.immediasemi.blink.api.retrofit.SubmitVerificationRequest | com.immediasemi.blink.api.retrofit.PinVerificationResponse | changed | direct | `com/immediasemi/blink/common/account/phone/PhoneNumberChangeApi.java:24` |
 
 ### shared-rest
 
@@ -257,39 +269,39 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `accounts/{injected_account_id}/networks/{network}/cameras/add` | Camera | bearer | com.immediasemi.blink.device.onboard.camera.AddCameraBody | com.immediasemi.blink.models.AddCameraResponseBody | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:36` |
 | GET | `accounts/{injected_account_id}/networks/{network}/commands/{command}` | Command | bearer | — | com.immediasemi.blink.device.network.command.SupervisorKommand | unchanged | direct | `com/immediasemi/blink/common/device/network/command/CommandApi.java:25` |
 | POST | `accounts/{injected_account_id}/networks/{network}/commands/{command}/done` | Command | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/network/command/CommandApi.java:40` |
-| POST | `accounts/{injected_account_id}/networks/{network}/commands/{command}/update` | Command | bearer | com.immediasemi.blink.api.requests.onboarding.OnboardingCommandUpdate.UpdateCommandRequest | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/network/command/CommandApi.java:37` |
+| POST | `accounts/{injected_account_id}/networks/{network}/commands/{command}/update` | Command | bearer | com.immediasemi.blink.api.requests.onboarding.OnboardingCommandUpdate.UpdateCommandRequest | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/network/command/CommandApi.java:37` |
 | POST | `accounts/{injected_account_id}/networks/{network}/commands/{command}/update` | Command | bearer | com.immediasemi.blink.api.retrofit.TerminateOnboardingBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/network/command/CommandApi.java:43` |
 | POST | `accounts/{injected_account_id}/networks/{network}/delete` | Network | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:34` |
 | POST | `accounts/{injected_account_id}/networks/{network}/update` | Network | bearer | com.immediasemi.blink.api.retrofit.UpdateNetworkSaveAllLiveViews | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:52` |
 | POST | `accounts/{injected_account_id}/networks/{network}/update` | Network | bearer | com.immediasemi.blink.api.retrofit.UpdateSystemNameBody | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:55` |
 | POST | `accounts/{injected_account_id}/networks/{network}/update` | Network | bearer | com.immediasemi.blink.api.retrofit.UpdateTimezoneBody | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:58` |
 | POST | `accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/delete` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:45` |
-| POST | `accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/status` | Camera | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:84` |
+| POST | `accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/status` | Camera | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:84` |
 | POST | `accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/delete` | SyncModule | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:22` |
-| POST | `accounts/{injected_account_id}/networks/add` | Network | bearer | com.immediasemi.blink.common.system.AddNetworkBody | com.immediasemi.blink.models.ANetwork | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:31` |
+| POST | `accounts/{injected_account_id}/networks/add` | Network | bearer | com.immediasemi.blink.common.system.AddNetworkBody | com.immediasemi.blink.models.ANetwork | changed | direct | `com/immediasemi/blink/device/network/NetworkApi.java:31` |
 | POST | `accounts/{injected_account_id}/system_offline/{network}` | Network | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:43` |
 | GET | `v1/accounts/{injected_account_id}/access` | ReadSubscription | bearer | — | com.immediasemi.blink.common.subscription.AccessResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java:13` |
 | GET | `v1/accounts/{injected_account_id}/doorbells/{serial}/fw_update` | Doorbell | bearer | — | ResponseBody | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:49` |
 | GET | `v1/accounts/{injected_account_id}/doorbells/{serial}/token` | Doorbell | bearer | — | com.immediasemi.blink.common.device.camera.wired.DeviceAuthTokenResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:55` |
-| GET | `v1/accounts/{injected_account_id}/feature_flags/enabled` | FeatureFlag | bearer | — | com.immediasemi.blink.common.flag.FeatureFlagsResponse | unchanged | direct | `com/immediasemi/blink/common/flag/FeatureFlagApi.java:12` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/accessories/delete` | Accessory | bearer | com.immediasemi.blink.device.accessory.DeleteAccessoryBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/accessory/AccessoryApi.java:20` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/accessories/rosie/owl/{owl_id}/calibrate` | Owl | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:32` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/cameras/{camera_id}/snooze` | Camera | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:111` |
+| GET | `v1/accounts/{injected_account_id}/feature_flags/enabled` | FeatureFlag | bearer | — | com.immediasemi.blink.common.flag.FeatureFlagsResponse | changed | direct | `com/immediasemi/blink/common/flag/FeatureFlagApi.java:12` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/accessories/delete` | Accessory | bearer | com.immediasemi.blink.device.accessory.DeleteAccessoryBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/accessory/AccessoryApi.java:20` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/accessories/rosie/owl/{owl_id}/calibrate` | Owl | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:32` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/cameras/{camera_id}/snooze` | Camera | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:111` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network_id}/cameras/{camera_id}/unsnooze` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:120` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/change_mode` | Doorbell | bearer | — | com.immediasemi.blink.api.retrofit.AddLotusResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:73` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/change_wifi` | Doorbell | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.api.retrofit.AddLotusResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:43` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/clear_creds` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:76` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/stay_awake` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:70` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{lotus_id}/snooze` | Doorbell | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:130` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/change_mode` | Doorbell | bearer | — | com.immediasemi.blink.api.retrofit.AddLotusResponse | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:73` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/change_wifi` | Doorbell | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.api.retrofit.AddLotusResponse | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:43` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/clear_creds` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:76` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/stay_awake` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:70` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{lotus_id}/snooze` | Doorbell | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:130` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{lotus_id}/unsnooze` | Doorbell | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:136` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/accessories/rosie/{rosie_id}/delete` | Owl | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:50` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/snooze` | Owl | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:101` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/snooze` | Owl | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:101` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/unsnooze` | Owl | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:107` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/snooze` | Network | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:46` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/state/disarm` | Network | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:37` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/snooze` | Network | bearer | com.immediasemi.blink.api.retrofit.SnoozeBody | Unit | changed | direct | `com/immediasemi/blink/device/network/NetworkApi.java:46` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network_id}/state/disarm` | Network | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/network/NetworkApi.java:37` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network_id}/unsnooze` | Network | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:49` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/accessories/add` | Accessory | bearer | com.immediasemi.blink.device.accessory.AddAccessoryBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/accessory/AccessoryApi.java:17` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/calibrate` | Camera | bearer | com.immediasemi.blink.api.retrofit.TemperatureCalibrationPostBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:102` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/accessories/add` | Accessory | bearer | com.immediasemi.blink.device.accessory.AddAccessoryBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/accessory/AccessoryApi.java:17` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/calibrate` | Camera | bearer | com.immediasemi.blink.api.retrofit.TemperatureCalibrationPostBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:102` |
 | GET | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs` | Camera | bearer | — | com.immediasemi.blink.models.FloodlightProgramConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:63` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/delete` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:51` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/disable` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:54` |
@@ -298,23 +310,23 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/create` | Camera | bearer | com.immediasemi.blink.models.CreateProgramBody | com.immediasemi.blink.models.FloodlightProgramConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:39` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/temp_alert_disable` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:114` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/temp_alert_enable` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:117` |
-| GET | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | — | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:69` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:105` |
-| GET | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` | Doorbell | bearer | — | com.immediasemi.blink.models.LotusChimeConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:61` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` | Doorbell | bearer | com.immediasemi.blink.models.UpdateLotusChimeConfig | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:121` |
-| GET | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/config` | Doorbell | bearer | — | com.immediasemi.blink.models.LotusConfigInfo | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:58` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/power_test` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:79` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/trigger_chime` | Doorbell | bearer | com.immediasemi.blink.models.TestLotusDingConfig | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:133` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/calibrate` | Doorbell | bearer | com.immediasemi.blink.api.retrofit.TemperatureCalibrationPostBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:109` |
+| GET | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | — | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:69` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:105` |
+| GET | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` | Doorbell | bearer | — | com.immediasemi.blink.models.LotusChimeConfig | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:61` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` | Doorbell | bearer | com.immediasemi.blink.models.UpdateLotusChimeConfig | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:121` |
+| GET | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/config` | Doorbell | bearer | — | com.immediasemi.blink.models.LotusConfigInfo | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:58` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/power_test` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:79` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/trigger_chime` | Doorbell | bearer | com.immediasemi.blink.models.TestLotusDingConfig | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:133` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/calibrate` | Doorbell | bearer | com.immediasemi.blink.api.retrofit.TemperatureCalibrationPostBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:109` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/temp_alert_disable` | Doorbell | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:103` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/temp_alert_enable` | Doorbell | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:106` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/disable` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.CameraActionKommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:85` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/enable` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.CameraActionKommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:97` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/status` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:115` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/status` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:115` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/thumbnail` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.CameraActionKommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:112` |
-| GET | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | — | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:64` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:124` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/add` | Doorbell | bearer | com.immediasemi.blink.device.onboard.doorbell.add.AddLotusBody | com.immediasemi.blink.api.retrofit.AddLotusResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:40` |
+| GET | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | — | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:64` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | com.immediasemi.blink.device.camera.zone.api.AdvancedCameraZones | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:124` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/doorbells/add` | Doorbell | bearer | com.immediasemi.blink.device.onboard.doorbell.add.AddLotusBody | com.immediasemi.blink.api.retrofit.AddLotusResponse | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:40` |
 | GET | `v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs` | Owl | bearer | — | com.immediasemi.blink.models.FloodlightProgramConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:65` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/delete` | Owl | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:47` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/disable` | Owl | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:53` |
@@ -322,7 +334,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/update` | Owl | bearer | com.immediasemi.blink.models.CreateProgramBody | com.immediasemi.blink.models.FloodlightProgramConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:110` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/create` | Owl | bearer | com.immediasemi.blink.models.CreateProgramBody | com.immediasemi.blink.models.FloodlightProgramConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:38` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/add` | Owl | bearer | com.immediasemi.blink.common.device.camera.wired.AddOwlPostBody | com.immediasemi.blink.common.device.camera.wired.AddOwlResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:71` |
-| POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/add` | Owl | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.api.retrofit.OwlAddBody | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:104` |
+| POST | `v1/accounts/{injected_account_id}/networks/{network}/owls/add` | Owl | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.api.retrofit.OwlAddBody | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:104` |
 | GET | `v1/accounts/{injected_account_id}/networks/{network}/programs` | Program | bearer | — | com.immediasemi.blink.scheduling.Program | unchanged | direct | `com/immediasemi/blink/device/network/program/ProgramApi.java:32` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/programs/{program}/delete` | Program | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/network/program/ProgramApi.java:23` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/programs/{program}/disable` | Program | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/device/network/program/ProgramApi.java:26` |
@@ -330,37 +342,37 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/programs/{program}/update` | Program | bearer | com.immediasemi.blink.scheduling.UpdateProgramRequest | Unit | unchanged | direct | `com/immediasemi/blink/device/network/program/ProgramApi.java:35` |
 | POST | `v1/accounts/{injected_account_id}/networks/{network}/programs/create` | Program | bearer | com.immediasemi.blink.scheduling.Program | Unit | unchanged | direct | `com/immediasemi/blink/device/network/program/ProgramApi.java:20` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{camera}/accessories/{accessoryType}/{accessoryId}/delete` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:42` |
-| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/network_type` | Camera | bearer | — | com.immediasemi.blink.models.VideoNetworksConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:66` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/network_type` | Camera | bearer | com.immediasemi.blink.common.device.camera.video.VideoNetworkTypeBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:99` |
-| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/list` | Doorbell | bearer | — | com.immediasemi.blink.common.device.camera.wired.ChimeCamerasResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:52` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/update` | Doorbell | bearer | com.immediasemi.blink.common.device.camera.wired.ChimeCamerasPostBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:82` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/config` | Doorbell | bearer | com.immediasemi.blink.models.UpdateLotusBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:88` |
+| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/network_type` | Camera | bearer | — | com.immediasemi.blink.models.VideoNetworksConfig | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:66` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/network_type` | Camera | bearer | com.immediasemi.blink.common.device.camera.video.VideoNetworkTypeBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:99` |
+| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/list` | Doorbell | bearer | — | com.immediasemi.blink.common.device.camera.wired.ChimeCamerasResponse | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:52` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/update` | Doorbell | bearer | com.immediasemi.blink.common.device.camera.wired.ChimeCamerasPostBody | Unit | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:82` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/config` | Doorbell | bearer | com.immediasemi.blink.models.UpdateLotusBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:88` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/delete` | Doorbell | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:46` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/status` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:94` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/status` | Doorbell | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:94` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/ob_cancel` | Doorbell | bearer | com.immediasemi.blink.common.device.camera.doorbell.CancelOnboardingPostBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:91` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{camera}/accessories/{accessoryType}/{accessoryId}/delete` | Owl | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:41` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{camera}/lights/{lightControl}` | Owl | bearer | — | com.immediasemi.blink.device.network.command.CameraActionKommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:77` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/change_wifi` | Owl | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.api.retrofit.OwlAddBody | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:35` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/change_wifi` | Owl | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.api.retrofit.OwlAddBody | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:35` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/change_wifi` | Owl | bearer | com.immediasemi.blink.common.device.camera.wired.AddOwlPostBody | com.immediasemi.blink.common.device.camera.wired.AddOwlResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:74` |
-| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` | Owl | bearer | — | com.immediasemi.blink.models.OwlConfigInfo | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:62` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` | Owl | bearer | com.immediasemi.blink.models.UpdateOwlBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:86` |
+| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` | Owl | bearer | — | com.immediasemi.blink.models.OwlConfigInfo | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:62` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` | Owl | bearer | com.immediasemi.blink.models.UpdateOwlBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:86` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/delete` | Owl | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:44` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/status` | Owl | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:92` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/status` | Owl | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:92` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/thumbnail` | Owl | bearer | — | com.immediasemi.blink.device.network.command.CameraActionKommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:95` |
 | DELETE | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{primary_id}/pair` | Camera | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:48` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{primary_id}/pair` | Camera | bearer | com.immediasemi.blink.common.device.camera.PairCameraBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:90` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{primary_id}/pair` | Camera | bearer | com.immediasemi.blink.common.device.camera.PairCameraBody | Unit | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:90` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/owls/{primary_id}/swap_pair` | Camera | bearer | com.immediasemi.blink.common.device.camera.SwapCameraBody | Unit | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:93` |
 | POST | `v1/accounts/{injected_account_id}/networks/{networkId}/state/{type}` | Network | bearer | — | com.immediasemi.blink.models.Command | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:25` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/state/arm` | Network | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:40` |
-| DELETE | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:27` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/eject` | SyncModule | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:28` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/format` | SyncModule | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:31` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/delete/{clipId}` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:30` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/request/{clipId}` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:24` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/request` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:33` |
-| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/media/{commandId}` | Media | bearer | — | com.immediasemi.blink.video.clip.media.MediaResponse | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:36` |
-| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/mount` | SyncModule | bearer | — | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:37` |
-| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/status` | SyncModule | bearer | — | com.immediasemi.blink.api.retrofit.LocalStorageStatusResponse | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:34` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/state/arm` | Network | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/network/NetworkApi.java:40` |
+| DELETE | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:27` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/eject` | SyncModule | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:28` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/format` | SyncModule | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:31` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/delete/{clipId}` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:30` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/request/{clipId}` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:24` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/request` | Media | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:33` |
+| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/media/{commandId}` | Media | bearer | — | com.immediasemi.blink.video.clip.media.MediaResponse | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:36` |
+| POST | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/mount` | SyncModule | bearer | — | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:37` |
+| GET | `v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/status` | SyncModule | bearer | — | com.immediasemi.blink.api.retrofit.LocalStorageStatusResponse | changed | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:34` |
 | POST | `v1/accounts/{injected_account_id}/networks/bulk_location_assignment` | Network | bearer | com.immediasemi.blink.device.network.BulkLocationAssignmentRequest | com.immediasemi.blink.device.network.BulkLocationAssignmentResponse | unchanged | direct | `com/immediasemi/blink/device/network/NetworkApi.java:28` |
 | GET | `v1/accounts/{injected_account_id}/owls/{serial}/fw_update` | Owl | bearer | — | ResponseBody | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:56` |
 | GET | `v1/accounts/{injected_account_id}/smart_video_descriptions` | SmartVideoDescriptions | bearer | — | com.immediasemi.blink.settings.SmartVideoDescriptionsResponse | unchanged | direct | `com/immediasemi/blink/settings/SmartVideoDescriptionsApi.java:18` |
@@ -368,32 +380,32 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | POST | `v1/accounts/{injected_account_id}/smart_video_descriptions/summarize` | SmartVideoDescriptions | bearer | com.immediasemi.blink.video.clip.moment.SummarizeClipsRequest | com.immediasemi.blink.video.clip.moment.SummarizeClipsResponse | unchanged | direct | `com/immediasemi/blink/settings/SmartVideoDescriptionsApi.java:21` |
 | GET | `v1/accounts/{injected_account_id}/sync_modules/{serial}/fw_update` | SyncModule | bearer | — | ResponseBody | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:25` |
 | GET | `v2/accounts/{injected_account_id}/devices/identify/{serialNumber}` | Device | bearer | — | com.immediasemi.blink.common.device.IdentifyDeviceResponseApiModel | unchanged | direct | `com/immediasemi/blink/common/device/DeviceApi.java:13` |
-| GET | `v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/config` | Camera | bearer | — | com.immediasemi.blink.models.CameraConfig | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:60` |
-| GET | `v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | — | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:72` |
-| POST | `v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:108` |
-| GET | `v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | — | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:67` |
-| POST | `v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:127` |
+| GET | `v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/config` | Camera | bearer | — | com.immediasemi.blink.models.CameraConfig | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:60` |
+| GET | `v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | — | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:72` |
+| POST | `v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` | Camera | bearer | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:108` |
+| GET | `v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | — | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:67` |
+| POST | `v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` | Doorbell | bearer | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:127` |
 | POST | `v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{camera}/light_accessories/{accessoryId}/lights/{lightControl}` | Camera | bearer | — | com.immediasemi.blink.device.network.command.CameraActionKommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:75` |
-| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/config` | Camera | bearer | com.immediasemi.blink.api.retrofit.UpdateCameraBody | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:78` |
-| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/liveview` | Doorbell | bearer | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandPostBody | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:100` |
-| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/liveview` | Owl | bearer | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandPostBody | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:83` |
-| GET | `v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` | Owl | bearer | — | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:68` |
-| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` | Owl | bearer | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | com.immediasemi.blink.device.network.command.Kommand | unchanged | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:98` |
+| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/config` | Camera | bearer | com.immediasemi.blink.api.retrofit.UpdateCameraBody | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:78` |
+| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/liveview` | Doorbell | bearer | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandPostBody | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandResponse | changed | direct | `com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.java:100` |
+| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/liveview` | Owl | bearer | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandPostBody | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandResponse | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:83` |
+| GET | `v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` | Owl | bearer | — | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:68` |
+| POST | `v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` | Owl | bearer | com.immediasemi.blink.device.camera.zone.api.ZoneV2Response | com.immediasemi.blink.device.network.command.Kommand | changed | direct | `com/immediasemi/blink/common/device/camera/wired/OwlApi.java:98` |
 | POST | `v2/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{type}` | SyncModule | bearer | com.immediasemi.blink.device.onboard.OnboardingBody | com.immediasemi.blink.models.Command | unchanged | direct | `com/immediasemi/blink/device/sync/SyncModuleApi.java:40` |
-| GET | `v2/accounts/{injected_account_id}/subscriptions/entitlements` | ReadSubscription | bearer | — | com.immediasemi.blink.api.retrofit.EntitlementResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java:16` |
+| GET | `v2/accounts/{injected_account_id}/subscriptions/entitlements` | ReadSubscription | bearer | — | com.immediasemi.blink.api.retrofit.EntitlementResponse | changed | direct | `com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java:16` |
 | GET | `v3/accounts/{injected_account_id}/subscriptions/plans` | ReadSubscription | bearer | — | com.immediasemi.blink.common.subscription.SubscriptionPlansResponse | removed | direct | `com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java:19` |
-| GET | `v4/accounts/{injected_account_id}/homescreen` | HomeScreen | bearer | — | com.immediasemi.blink.utils.sync.HomeScreen | unchanged | direct | `com/immediasemi/blink/utils/sync/HomeScreenApi.java:12` |
-| POST | `v4/accounts/{injected_account_id}/media` | Media | bearer | com.immediasemi.blink.video.clip.media.MediaPostBody | com.immediasemi.blink.video.clip.media.MediaResponse | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:57` |
-| GET | `v4/accounts/{injected_account_id}/media_settings` | Media | bearer | — | com.immediasemi.blink.video.clip.media.MediaSettingsResponse | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:39` |
-| PATCH | `v4/accounts/{injected_account_id}/media_settings` | Media | bearer | com.immediasemi.blink.video.clip.media.MediaSettingsPatch | Unit | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:45` |
+| GET | `v4/accounts/{injected_account_id}/homescreen` | HomeScreen | bearer | — | com.immediasemi.blink.utils.sync.HomeScreen | changed | direct | `com/immediasemi/blink/utils/sync/HomeScreenApi.java:12` |
+| POST | `v4/accounts/{injected_account_id}/media` | Media | bearer | com.immediasemi.blink.video.clip.media.MediaPostBody | com.immediasemi.blink.video.clip.media.MediaResponse | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:57` |
+| GET | `v4/accounts/{injected_account_id}/media_settings` | Media | bearer | — | com.immediasemi.blink.video.clip.media.MediaSettingsResponse | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:39` |
+| PATCH | `v4/accounts/{injected_account_id}/media_settings` | Media | bearer | com.immediasemi.blink.video.clip.media.MediaSettingsPatch | Unit | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:45` |
 | DELETE | `v4/accounts/{injected_account_id}/media/{mediaId}/delete` | Media | bearer | — | Unit | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:21` |
-| POST | `v4/accounts/{injected_account_id}/media/delete` | Media | bearer | com.immediasemi.blink.api.retrofit.MediaListBody | Unit | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:48` |
+| POST | `v4/accounts/{injected_account_id}/media/delete` | Media | bearer | com.immediasemi.blink.api.retrofit.MediaListBody | Unit | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:48` |
 | POST | `v4/accounts/{injected_account_id}/media/favorite` | Media | bearer | com.immediasemi.blink.video.clip.media.FavoriteEventIdsBody | Unit | added | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:51` |
-| POST | `v4/accounts/{injected_account_id}/media/mark_as_viewed` | Media | bearer | com.immediasemi.blink.api.retrofit.MediaListBody | Unit | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:54` |
+| POST | `v4/accounts/{injected_account_id}/media/mark_as_viewed` | Media | bearer | com.immediasemi.blink.api.retrofit.MediaListBody | Unit | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:54` |
 | POST | `v4/accounts/{injected_account_id}/media/unfavorite` | Media | bearer | com.immediasemi.blink.video.clip.media.FavoriteEventIdsBody | Unit | added | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:60` |
 | GET | `v4/accounts/{injected_account_id}/subscriptions/plans` | ReadSubscription | bearer | — | com.immediasemi.blink.common.subscription.SubscriptionPlansResponse | unchanged | direct | `com/immediasemi/blink/common/subscription/ReadSubscriptionApi.java:19` |
-| GET | `v4/accounts/{injected_account_id}/unwatched_media` | Media | bearer | — | com.immediasemi.blink.video.clip.media.UnwatchedMediaResponse | unchanged | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:42` |
-| POST | `v6/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/liveview` | Camera | bearer | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandPostBody | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandResponse | unchanged | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:87` |
+| GET | `v4/accounts/{injected_account_id}/unwatched_media` | Media | bearer | — | com.immediasemi.blink.video.clip.media.UnwatchedMediaResponse | changed | direct | `com/immediasemi/blink/video/clip/media/MediaApi.java:42` |
+| POST | `v6/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/liveview` | Camera | bearer | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandPostBody | com.immediasemi.blink.common.device.camera.video.live.LiveViewCommandResponse | changed | direct | `com/immediasemi/blink/common/device/camera/CameraApi.java:87` |
 
 ## Request and response schema index
 
@@ -821,11 +833,187 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | `UnwatchedMediaResponse` | object | 1 | direct | `com/immediasemi/blink/video/clip/media/UnwatchedMediaResponse.java` |
 | `SummarizeClipsRequest` | object | 1 | direct | `com/immediasemi/blink/video/clip/moment/SummarizeClipsRequest.java` |
 | `SummarizeClipsResponse` | object | 1 | direct | `com/immediasemi/blink/video/clip/moment/SummarizeClipsResponse.java` |
+| `ApiAccessPoint` | object | 5 | direct | `com/ring/blueprints/setup/core/data/ApiAccessPoint.java` |
+| `ApiAccessPoints` | object | 1 | direct | `com/ring/blueprints/setup/core/data/ApiAccessPoints.java` |
+| `ApiNetwork` | object | 43 | direct | `com/ring/blueprints/setup/core/data/ApiNetwork.java` |
 | `ApiFactoryDeviceProfile` | object | 7 | direct | `com/ring/blueprints/setup/core/data/backend/ApiFactoryDeviceProfile.java` |
 | `ApiSetup` | object | 6 | direct | `com/ring/blueprints/setup/core/data/backend/ApiSetup.java` |
 | `ApiSetupStatus` | object | 12 | direct | `com/ring/blueprints/setup/core/data/backend/ApiSetupStatus.java` |
 | `CompleteSetupBody` | object | 5 | direct | `com/ring/blueprints/setup/core/data/backend/CompleteSetupBody.java` |
+| `DeviceLocale` | object | 1 | direct | `com/ring/blueprints/setup/core/data/DeviceLocale.java` |
 | `DeviceFirmwareResponse` | object | 4 | direct | `com/ring/blueprints/setup/core/data/entity/DeviceFirmwareResponse.java` |
+| `BlueprintContext` | object | 2 | direct | `com/ring/reapp/blueprint/model/BlueprintContext.java` |
+| `BlueprintResponse` | object | 2 | direct | `com/ring/reapp/blueprint/model/BlueprintResponse.java` |
+| `Action` | object | 19 | direct | `com/ring/reapp/models/Action.java` |
+| `AdvancedNetworkOptionsScreen` | object | 9 | direct | `com/ring/reapp/models/AdvancedNetworkOptionsScreen.java` |
+| `AttributedString` | object | 2 | direct | `com/ring/reapp/models/AttributedString.java` |
+| `AutoProvisioningLocalisedResources` | object | 3 | direct | `com/ring/reapp/models/AutoProvisioningLocalisedResources.java` |
+| `AutoSetupProvisioning` | object | 2 | direct | `com/ring/reapp/models/AutoSetupProvisioning.java` |
+| `Badge` | object | 5 | direct | `com/ring/reapp/models/Badge.java` |
+| `BadgeStyle` | enum | 1 | direct | `com/ring/reapp/models/BadgeStyle.java` |
+| `BannerImageConfig` | object | 3 | direct | `com/ring/reapp/models/BannerImageConfig.java` |
+| `BLEConnectionFailedScreen` | object | 5 | direct | `com/ring/reapp/models/BLEConnectionFailedScreen.java` |
+| `BLEConnectionLostScreen` | object | 4 | direct | `com/ring/reapp/models/BLEConnectionLostScreen.java` |
+| `BLEConnectionScreen` | object | 3 | direct | `com/ring/reapp/models/BLEConnectionScreen.java` |
+| `BLEFetchWifiNetworksScreen` | object | 3 | direct | `com/ring/reapp/models/BLEFetchWifiNetworksScreen.java` |
+| `BLENonOwnerScreen` | object | 4 | direct | `com/ring/reapp/models/BLENonOwnerScreen.java` |
+| `BLESetupCompletingScreen` | object | 3 | direct | `com/ring/reapp/models/BLESetupCompletingScreen.java` |
+| `BLESetupEnterWifiPasswordScreen` | object | 6 | direct | `com/ring/reapp/models/BLESetupEnterWifiPasswordScreen.java` |
+| `BLESetupGenericErrorScreen` | object | 4 | direct | `com/ring/reapp/models/BLESetupGenericErrorScreen.java` |
+| `BLESetupModeCheckForSetupModeScreen` | object | 5 | direct | `com/ring/reapp/models/BLESetupModeCheckForSetupModeScreen.java` |
+| `BLESetupModeEducationScreen` | object | 5 | direct | `com/ring/reapp/models/BLESetupModeEducationScreen.java` |
+| `BLESetupModeEnterSetupModeScreen` | object | 6 | direct | `com/ring/reapp/models/BLESetupModeEnterSetupModeScreen.java` |
+| `BLESetupModeInfoScreen` | object | 5 | direct | `com/ring/reapp/models/BLESetupModeInfoScreen.java` |
+| `BLESetupModeInstructions` | object | 6 | direct | `com/ring/reapp/models/BLESetupModeInstructions.java` |
+| `BLESetupModeProgressScreen` | object | 3 | direct | `com/ring/reapp/models/BLESetupModeProgressScreen.java` |
+| `BLESetupModeWaitForSetupModeScreen` | object | 6 | direct | `com/ring/reapp/models/BLESetupModeWaitForSetupModeScreen.java` |
+| `BLESetupProvisioning` | object | 3 | direct | `com/ring/reapp/models/BLESetupProvisioning.java` |
+| `BLESetupWeakSignalScreen` | object | 6 | direct | `com/ring/reapp/models/BLESetupWeakSignalScreen.java` |
+| `BLESetupWifiSelectionListScreen` | object | 10 | direct | `com/ring/reapp/models/BLESetupWifiSelectionListScreen.java` |
+| `BLESetupWrongWifiPasswordScreen` | object | 5 | direct | `com/ring/reapp/models/BLESetupWrongWifiPasswordScreen.java` |
+| `ButterBarAction` | object | 3 | direct | `com/ring/reapp/models/ButterBarAction.java` |
+| `ButterBarButtonSize` | enum | 1 | direct | `com/ring/reapp/models/ButterBarButtonSize.java` |
+| `ButterBarTemplate` | object | 5 | direct | `com/ring/reapp/models/ButterBarTemplate.java` |
+| `ButtonModuleModel` | object | 3 | direct | `com/ring/reapp/models/ButtonModuleModel.java` |
+| `CalloutCard` | object | 6 | direct | `com/ring/reapp/models/CalloutCard.java` |
+| `CancelDialogResources` | object | 5 | direct | `com/ring/reapp/models/CancelDialogResources.java` |
+| `CantFindNetworkButterbar` | object | 3 | direct | `com/ring/reapp/models/CantFindNetworkButterbar.java` |
+| `CellCheckableConfig` | object | 2 | direct | `com/ring/reapp/models/CellCheckableConfig.java` |
+| `CellIcon` | object | 2 | direct | `com/ring/reapp/models/CellIcon.java` |
+| `CellInfoButton` | object | 2 | direct | `com/ring/reapp/models/CellInfoButton.java` |
+| `CellList` | object | 2 | direct | `com/ring/reapp/models/CellList.java` |
+| `ChangeWifiIdentification` | object | 4 | direct | `com/ring/reapp/models/ChangeWifiIdentification.java` |
+| `ChangeWifiIdentificationWithPin` | object | 4 | direct | `com/ring/reapp/models/ChangeWifiIdentificationWithPin.java` |
+| `CheckableIcon` | object | 2 | direct | `com/ring/reapp/models/CheckableIcon.java` |
+| `CheckableStyle` | enum | 1 | direct | `com/ring/reapp/models/CheckableStyle.java` |
+| `CloseAction` | object | 1 | direct | `com/ring/reapp/models/CloseAction.java` |
+| `CodeKeyboardType` | enum | 1 | direct | `com/ring/reapp/models/CodeKeyboardType.java` |
+| `CodeTextEntryConfig` | object | 9 | direct | `com/ring/reapp/models/CodeTextEntryConfig.java` |
+| `CodeTextEntryTemplate` | object | 5 | direct | `com/ring/reapp/models/CodeTextEntryTemplate.java` |
+| `ColorToken` | enum | 1 | direct | `com/ring/reapp/models/ColorToken.java` |
+| `ConfirmationButtonModule` | object | 5 | direct | `com/ring/reapp/models/ConfirmationButtonModule.java` |
+| `ConnectionRestorationManualScreen` | object | 5 | direct | `com/ring/reapp/models/ConnectionRestorationManualScreen.java` |
+| `ConnectionRestorationOfflineAlert` | object | 4 | direct | `com/ring/reapp/models/ConnectionRestorationOfflineAlert.java` |
+| `ConnectionType` | enum | 1 | direct | `com/ring/reapp/models/ConnectionType.java` |
+| `ContentMode` | enum | 1 | direct | `com/ring/reapp/models/ContentMode.java` |
+| `CustomCheckIcon` | object | 2 | direct | `com/ring/reapp/models/CustomCheckIcon.java` |
+| `DescriptionArea` | object | 6 | direct | `com/ring/reapp/models/DescriptionArea.java` |
+| `DescriptionAreaActionButton` | object | 4 | direct | `com/ring/reapp/models/DescriptionAreaActionButton.java` |
+| `DescriptionAreaMainIcon` | object | 2 | direct | `com/ring/reapp/models/DescriptionAreaMainIcon.java` |
+| `DescriptionAreaMainIconSize` | enum | 1 | direct | `com/ring/reapp/models/DescriptionAreaMainIconSize.java` |
+| `DescriptionAreaTemplate` | object | 8 | direct | `com/ring/reapp/models/DescriptionAreaTemplate.java` |
+| `DeviceIdentification` | object | 4 | direct | `com/ring/reapp/models/DeviceIdentification.java` |
+| `DeviceProvisioningLocalisedResources` | object | 29 | direct | `com/ring/reapp/models/DeviceProvisioningLocalisedResources.java` |
+| `DialogTemplate` | object | 6 | direct | `com/ring/reapp/models/DialogTemplate.java` |
+| `EnterPinCodeScreen` | object | 8 | direct | `com/ring/reapp/models/EnterPinCodeScreen.java` |
+| `EventPropertyValue` | object | 4 | direct | `com/ring/reapp/models/EventPropertyValue.java` |
+| `EventTrackingAction` | object | 8 | direct | `com/ring/reapp/models/EventTrackingAction.java` |
+| `FindMyCodeScreen` | object | 6 | direct | `com/ring/reapp/models/FindMyCodeScreen.java` |
+| `FontIcon` | object | 2 | direct | `com/ring/reapp/models/FontIcon.java` |
+| `HiddenNetworkEntryScreen` | object | 15 | direct | `com/ring/reapp/models/HiddenNetworkEntryScreen.java` |
+| `HttpMethod` | enum | 1 | direct | `com/ring/reapp/models/HttpMethod.java` |
+| `HttpRequestAction` | object | 5 | direct | `com/ring/reapp/models/HttpRequestAction.java` |
+| `HttpRequestUpdateAction` | object | 2 | direct | `com/ring/reapp/models/HttpRequestUpdateAction.java` |
+| `Icon` | object | 3 | direct | `com/ring/reapp/models/Icon.java` |
+| `IconBackground` | object | 2 | direct | `com/ring/reapp/models/IconBackground.java` |
+| `IconGlyph` | enum | 1 | direct | `com/ring/reapp/models/IconGlyph.java` |
+| `IconShape` | enum | 1 | direct | `com/ring/reapp/models/IconShape.java` |
+| `IconSource` | object | 2 | direct | `com/ring/reapp/models/IconSource.java` |
+| `IconValueCell` | object | 13 | direct | `com/ring/reapp/models/IconValueCell.java` |
+| `IconValueCellMainIcon` | object | 2 | direct | `com/ring/reapp/models/IconValueCellMainIcon.java` |
+| `IconValueCellMainIconSize` | enum | 1 | direct | `com/ring/reapp/models/IconValueCellMainIconSize.java` |
+| `ImageActionCell` | object | 8 | direct | `com/ring/reapp/models/ImageActionCell.java` |
+| `ImageCard` | object | 13 | direct | `com/ring/reapp/models/ImageCard.java` |
+| `ImageCellConfig` | object | 2 | direct | `com/ring/reapp/models/ImageCellConfig.java` |
+| `ImageContentMode` | enum | 1 | direct | `com/ring/reapp/models/ImageContentMode.java` |
+| `ImageIconCell` | object | 12 | direct | `com/ring/reapp/models/ImageIconCell.java` |
+| `ImageIconCellMainIconSize` | enum | 1 | direct | `com/ring/reapp/models/ImageIconCellMainIconSize.java` |
+| `ImageUrl` | object | 2 | direct | `com/ring/reapp/models/ImageUrl.java` |
+| `ListSection` | object | 3 | direct | `com/ring/reapp/models/ListSection.java` |
+| `LoopedVideoModel` | object | 5 | direct | `com/ring/reapp/models/LoopedVideoModel.java` |
+| `MagicConnectionScreen` | object | 7 | direct | `com/ring/reapp/models/MagicConnectionScreen.java` |
+| `MainButton` | object | 5 | direct | `com/ring/reapp/models/MainButton.java` |
+| `MainButtonStyle` | enum | 1 | direct | `com/ring/reapp/models/MainButtonStyle.java` |
+| `ManualConnectionScreen` | object | 4 | direct | `com/ring/reapp/models/ManualConnectionScreen.java` |
+| `MediaContent` | object | 3 | direct | `com/ring/reapp/models/MediaContent.java` |
+| `NavBar` | object | 4 | direct | `com/ring/reapp/models/NavBar.java` |
+| `NavigateScreenJsonAction` | object | 3 | direct | `com/ring/reapp/models/NavigateScreenJsonAction.java` |
+| `NavigateUrlAction` | object | 3 | direct | `com/ring/reapp/models/NavigateUrlAction.java` |
+| `PatternValidationRule` | object | 2 | direct | `com/ring/reapp/models/PatternValidationRule.java` |
+| `PermissionsCheckLocalisedResources` | object | 9 | direct | `com/ring/reapp/models/PermissionsCheckLocalisedResources.java` |
+| `PinCodeIdentification` | object | 1 | direct | `com/ring/reapp/models/PinCodeIdentification.java` |
+| `Platform` | enum | 1 | direct | `com/ring/reapp/models/Platform.java` |
+| `PopAction` | object | 2 | direct | `com/ring/reapp/models/PopAction.java` |
+| `PopToScreenIdAction` | object | 2 | direct | `com/ring/reapp/models/PopToScreenIdAction.java` |
+| `PostSetupAction` | object | 6 | direct | `com/ring/reapp/models/PostSetupAction.java` |
+| `PostSetupAlexaSkillAction` | object | 3 | direct | `com/ring/reapp/models/PostSetupAlexaSkillAction.java` |
+| `PostSetupChimeConnectionAction` | object | 3 | direct | `com/ring/reapp/models/PostSetupChimeConnectionAction.java` |
+| `PostSetupMotionFlowType` | enum | 1 | direct | `com/ring/reapp/models/PostSetupMotionFlowType.java` |
+| `PostSetupMotionSettingsAction` | object | 4 | direct | `com/ring/reapp/models/PostSetupMotionSettingsAction.java` |
+| `PostSetupPrivacyFeaturesAction` | object | 3 | direct | `com/ring/reapp/models/PostSetupPrivacyFeaturesAction.java` |
+| `PostSetupRingAIFeaturesAction` | object | 4 | direct | `com/ring/reapp/models/PostSetupRingAIFeaturesAction.java` |
+| `PostSetupSearchPartyAction` | object | 3 | direct | `com/ring/reapp/models/PostSetupSearchPartyAction.java` |
+| `PromoCardModel` | object | 5 | direct | `com/ring/reapp/models/PromoCardModel.java` |
+| `QRCodeIdentification` | object | 2 | direct | `com/ring/reapp/models/QRCodeIdentification.java` |
+| `RebootRequiredScreen` | object | 6 | direct | `com/ring/reapp/models/RebootRequiredScreen.java` |
+| `RegionProvisioning` | object | 3 | direct | `com/ring/reapp/models/RegionProvisioning.java` |
+| `RequiredValidationRule` | object | 1 | direct | `com/ring/reapp/models/RequiredValidationRule.java` |
+| `RichErrorButtonModel` | object | 3 | direct | `com/ring/reapp/models/RichErrorButtonModel.java` |
+| `RichErrorCodeModel` | object | 2 | direct | `com/ring/reapp/models/RichErrorCodeModel.java` |
+| `RichErrorDeviceItemModel` | object | 4 | direct | `com/ring/reapp/models/RichErrorDeviceItemModel.java` |
+| `RichErrorDeviceListModel` | object | 2 | direct | `com/ring/reapp/models/RichErrorDeviceListModel.java` |
+| `RichErrorTemplate` | object | 15 | direct | `com/ring/reapp/models/RichErrorTemplate.java` |
+| `RichErrorTryItemModel` | object | 6 | direct | `com/ring/reapp/models/RichErrorTryItemModel.java` |
+| `RichErrorTryListModel` | object | 3 | direct | `com/ring/reapp/models/RichErrorTryListModel.java` |
+| `RightImageFlatCell` | object | 8 | direct | `com/ring/reapp/models/RightImageFlatCell.java` |
+| `SafeCellComponent` | object | 5 | direct | `com/ring/reapp/models/SafeCellComponent.java` |
+| `SafeComponent` | object | 19 | direct | `com/ring/reapp/models/SafeComponent.java` |
+| `SafeString` | object | 2 | direct | `com/ring/reapp/models/SafeString.java` |
+| `Screen` | object | 8 | direct | `com/ring/reapp/models/Screen.java` |
+| `ScreenAnalyticsContext` | object | 2 | direct | `com/ring/reapp/models/ScreenAnalyticsContext.java` |
+| `ScreenContext` | object | 1 | direct | `com/ring/reapp/models/ScreenContext.java` |
+| `ScreenNavigationType` | enum | 1 | direct | `com/ring/reapp/models/ScreenNavigationType.java` |
+| `SectionedList` | object | 2 | direct | `com/ring/reapp/models/SectionedList.java` |
+| `SectionHeader` | object | 3 | direct | `com/ring/reapp/models/SectionHeader.java` |
+| `SetScreenJsonAction` | object | 1 | direct | `com/ring/reapp/models/SetScreenJsonAction.java` |
+| `SetupCreateLocationAction` | object | 4 | direct | `com/ring/reapp/models/SetupCreateLocationAction.java` |
+| `SetupDeviceProvisioningAction` | object | 24 | direct | `com/ring/reapp/models/SetupDeviceProvisioningAction.java` |
+| `SetupDeviceQRCodeScanAction` | object | 2 | direct | `com/ring/reapp/models/SetupDeviceQRCodeScanAction.java` |
+| `SetupDeviceType` | enum | 1 | direct | `com/ring/reapp/models/SetupDeviceType.java` |
+| `SetupFlowCancelledAction` | object | 1 | direct | `com/ring/reapp/models/SetupFlowCancelledAction.java` |
+| `SetupFlowFallbackAction` | object | 1 | direct | `com/ring/reapp/models/SetupFlowFallbackAction.java` |
+| `SetupFlowStartPostSetupAction` | object | 1 | direct | `com/ring/reapp/models/SetupFlowStartPostSetupAction.java` |
+| `SetupPropertyKey` | enum | 1 | direct | `com/ring/reapp/models/SetupPropertyKey.java` |
+| `ShowButterBarAction` | object | 1 | direct | `com/ring/reapp/models/ShowButterBarAction.java` |
+| `ShowDeviceOTAUpdateAction` | object | 4 | direct | `com/ring/reapp/models/ShowDeviceOTAUpdateAction.java` |
+| `ShowDialogAction` | object | 2 | direct | `com/ring/reapp/models/ShowDialogAction.java` |
+| `SimpleCheckableIcon` | object | 1 | direct | `com/ring/reapp/models/SimpleCheckableIcon.java` |
+| `SoftAPSetupProvisioning` | object | 4 | direct | `com/ring/reapp/models/SoftAPSetupProvisioning.java` |
+| `SpinnerIcon` | object | 1 | direct | `com/ring/reapp/models/SpinnerIcon.java` |
+| `StickyButtonModule` | object | 5 | direct | `com/ring/reapp/models/StickyButtonModule.java` |
+| `StrikethroughStyle` | enum | 1 | direct | `com/ring/reapp/models/StrikethroughStyle.java` |
+| `StyledIcon` | object | 5 | direct | `com/ring/reapp/models/StyledIcon.java` |
+| `TextAttribute` | object | 7 | direct | `com/ring/reapp/models/TextAttribute.java` |
+| `TextButton` | object | 4 | direct | `com/ring/reapp/models/TextButton.java` |
+| `TextInputModel` | object | 10 | direct | `com/ring/reapp/models/TextInputModel.java` |
+| `TextInputTemplate` | object | 7 | direct | `com/ring/reapp/models/TextInputTemplate.java` |
+| `TextInputType` | enum | 1 | direct | `com/ring/reapp/models/TextInputType.java` |
+| `TextInputValidationRule` | object | 2 | direct | `com/ring/reapp/models/TextInputValidationRule.java` |
+| `TextRange` | object | 2 | direct | `com/ring/reapp/models/TextRange.java` |
+| `ThumbnailVideoModel` | object | 7 | direct | `com/ring/reapp/models/ThumbnailVideoModel.java` |
+| `ToggleRoundButton` | object | 6 | direct | `com/ring/reapp/models/ToggleRoundButton.java` |
+| `ToggleRoundButtonStyle` | enum | 1 | direct | `com/ring/reapp/models/ToggleRoundButtonStyle.java` |
+| `ToolbarItem` | object | 5 | direct | `com/ring/reapp/models/ToolbarItem.java` |
+| `TutorialImage` | object | 5 | direct | `com/ring/reapp/models/TutorialImage.java` |
+| `TutorialProgressModel` | object | 5 | direct | `com/ring/reapp/models/TutorialProgressModel.java` |
+| `TutorialTemplate` | object | 11 | direct | `com/ring/reapp/models/TutorialTemplate.java` |
+| `TypographyToken` | enum | 1 | direct | `com/ring/reapp/models/TypographyToken.java` |
+| `UnderlineStyle` | enum | 1 | direct | `com/ring/reapp/models/UnderlineStyle.java` |
+| `VerticalButtonModule` | object | 5 | direct | `com/ring/reapp/models/VerticalButtonModule.java` |
+| `VPNDisableScreen` | object | 5 | direct | `com/ring/reapp/models/VPNDisableScreen.java` |
+| `WepSecurityWarningScreen` | object | 7 | direct | `com/ring/reapp/models/WepSecurityWarningScreen.java` |
+| `WifiUnableToConnectScreen` | object | 5 | direct | `com/ring/reapp/models/WifiUnableToConnectScreen.java` |
+| `WrongPinErrorScreen` | object | 3 | direct | `com/ring/reapp/models/WrongPinErrorScreen.java` |
 | `DetectionType` | enum | 1 | direct | `com/ringapp/library/video/event/model/DetectionType.java` |
 | `Identity` | object | 4 | direct | `com/ringapp/library/video/event/model/Identity.java` |
 | `ProfileResolutionStatus` | enum | 4 | direct | `com/ringapp/library/video/event/model/ProfileResolutionStatus.java` |
@@ -874,6 +1062,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | `WatchEventsRequest` | object | 1 | direct | `com/ringapp/orchestratorapi/data/WatchEventsRequest.java` |
 | `FeedElementType` | enum | 2 | direct | `com/ringapp/playback/historyevent/FeedElementType.java` |
 | `JsonElement` | object | 0 | inferred | `kotlinx/serialization/json/JsonElement.java` |
+| `JsonObject` | object | 1 | direct | `kotlinx/serialization/json/JsonObject.java` |
 
 ## Command, polling, retry, and error semantics
 
@@ -889,9 +1078,9 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 
 ## 57.1 → 59.2 change report
 
-- Added: 19
-- Changed: 13
-- Unchanged: 288
+- Added: 20
+- Changed: 111
+- Unchanged: 201
 - Removed: 1
 
 ### Added
@@ -902,6 +1091,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - `PUT duos/v1/devices/{deviceId}/update` (device-orchestration)
 - `PUT duos/v1/devices/{deviceId}/update` (device-orchestration)
 - `POST oauth/v2/verify_otp` (oauth)
+- `GET @Url` (rest)
 - `PATCH devices/{deviceId}` (rest)
 - `PATCH devices/v1/devices/{deviceId}` (rest)
 - `POST evm/v2/events` (rest)
@@ -920,7 +1110,13 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 
 - `GET device_info/v4/devices` (device-orchestration)
 - `POST device_info/v4/devices/operations` (device-orchestration)
+- `PUT duos/v1/devices/{deviceId}/update` (device-orchestration)
+- `POST v7/users/register` (public-rest)
+- `GET @Url` (rest)
+- `POST @Url` (rest)
+- `POST clients/{injected_client_id}/update` (rest)
 - `GET device_info/v4/devices/{deviceId}/configurations` (rest)
+- `PATCH duos/v1/locations/{locationId}` (rest)
 - `GET evm/v2/history/devices` (rest)
 - `GET evm/v2/history/events/{eventId}` (rest)
 - `POST evm/v2/history/extendedsearch` (rest)
@@ -930,7 +1126,99 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - `GET evm/v2/timeline/events/eventito/{source_id}` (rest)
 - `GET evm/v3/history/devices` (rest)
 - `POST evm/v3/history/events` (rest)
+- `GET factory_profile` (rest)
+- `GET fms/device-firmware` (rest)
+- `GET v1/clients/{injected_client_id}/control_panel/clients` (rest)
+- `POST v1/clients/{injected_client_id}/control_panel/delete` (rest)
+- `POST v1/events/app` (rest)
+- `POST v1/subscriptions/link/link_account` (rest)
+- `POST v1/subscriptions/link/unlink_account` (rest)
+- `POST v1/subscriptions/plans/{subscriptionId}/attach` (rest)
+- `GET v1/subscriptions/plans/get_device_attach_eligibility` (rest)
+- `POST v1/subscriptions/request/status/{uuid}` (rest)
+- `GET v1/users/options` (rest)
+- `GET v1/users/preferences` (rest)
+- `POST v1/users/preferences` (rest)
+- `POST v2/clients/{injected_client_id}/tiv` (rest)
+- `POST v2/subscriptions/plans/create_trial` (rest)
+- `GET v2/users/info` (rest)
 - `POST v4/clients/{injected_client_id}/email_change` (rest)
+- `POST v4/clients/{injected_client_id}/pin/verify` (rest)
+- `POST v5/clients/{injected_client_id}/client_verification/pin/resend` (rest)
+- `POST v5/clients/{injected_client_id}/client_verification/pin/verify` (rest)
+- `POST v5/clients/{injected_client_id}/phone_number_change` (rest)
+- `POST v5/clients/{injected_client_id}/phone_number_change` (rest)
+- `POST v5/clients/{injected_client_id}/phone_number_change/pin/verify` (rest)
+- `POST accounts/{injected_account_id}/networks/{network}/commands/{command}/update` (shared-rest)
+- `POST accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/status` (shared-rest)
+- `POST accounts/{injected_account_id}/networks/add` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/feature_flags/enabled` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/accessories/delete` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/accessories/rosie/owl/{owl_id}/calibrate` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/cameras/{camera_id}/snooze` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/change_mode` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/change_wifi` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/clear_creds` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{doorbell_id}/stay_awake` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/doorbells/{lotus_id}/snooze` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/snooze` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/snooze` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network_id}/state/disarm` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/accessories/add` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/calibrate` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/config` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/power_test` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/trigger_chime` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/calibrate` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/status` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/add` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{network}/owls/add` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/network_type` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/network_type` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/list` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/update` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/config` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{lotusId}/status` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/change_wifi` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/status` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{primary_id}/pair` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/state/arm` (shared-rest)
+- `DELETE v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/eject` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/format` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/delete/{clipId}` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/request/{clipId}` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/request` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/media/{commandId}` (shared-rest)
+- `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/mount` (shared-rest)
+- `GET v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/status` (shared-rest)
+- `GET v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/config` (shared-rest)
+- `GET v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` (shared-rest)
+- `POST v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` (shared-rest)
+- `GET v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` (shared-rest)
+- `POST v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` (shared-rest)
+- `POST v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/config` (shared-rest)
+- `POST v2/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/liveview` (shared-rest)
+- `POST v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/liveview` (shared-rest)
+- `GET v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` (shared-rest)
+- `POST v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` (shared-rest)
+- `GET v2/accounts/{injected_account_id}/subscriptions/entitlements` (shared-rest)
+- `GET v4/accounts/{injected_account_id}/homescreen` (shared-rest)
+- `POST v4/accounts/{injected_account_id}/media` (shared-rest)
+- `GET v4/accounts/{injected_account_id}/media_settings` (shared-rest)
+- `PATCH v4/accounts/{injected_account_id}/media_settings` (shared-rest)
+- `POST v4/accounts/{injected_account_id}/media/delete` (shared-rest)
+- `POST v4/accounts/{injected_account_id}/media/mark_as_viewed` (shared-rest)
+- `GET v4/accounts/{injected_account_id}/unwatched_media` (shared-rest)
+- `POST v6/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/liveview` (shared-rest)
 
 ### Removed
 
@@ -940,7 +1228,6 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 
 | Host | Owner | Reason |
 |---|---|---|
-| 172.16.97.199 | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | 192.168.240.1 | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | accounts.google.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | aomedia.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
@@ -1064,10 +1351,10 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 
 ## Unresolved evidence and completeness
 
-- Active normalized contracts: 320
-- Models recovered: 475
-- Unresolved candidates: 349
-- Smali-only contracts: 2
+- Active normalized contracts: 332
+- Models recovered: 652
+- Unresolved candidates: 371
+- Smali-only contracts: 0
 - Active contracts without smali evidence: 0
 - Unresolved models: 0
 - Unclassified first-party candidates: 0
@@ -1078,6 +1365,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST setups/{setupId}/complete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET evm/v2/timeline/24/devices/{source_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **model-field-reference:** `com.immediasemi.blink.models.LastConnect` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/state/arm` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1088,6 +1376,8 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST app/logs/upload` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST api/set/ssid` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST geocoding/v1/geocode` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Transformer` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Setup` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1100,6 +1390,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `GET device_info/v4/devices/{deviceId}/status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network_id}/snooze` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Capabilities` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET devices/v2/locations` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/identities` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **model-field-reference:** `com.immediasemi.blink.models.STAGE_TYPE` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
@@ -1155,6 +1446,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/media/{commandId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network_id}/accessories/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/enable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE duos/v1/locations/{locationId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{camera}/light_accessories/{accessoryId}/lights/{lightControl}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1165,6 +1457,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/subscriptions/plans/renew_trial` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST evm/v3/history/events` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/shared/authorizations/{authorizationId}/remove` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH duos/v1/locations/{locationId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/enable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/clients/{injected_client_id}/password_change/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1177,9 +1470,9 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/shared/invitations/send` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/change_wifi` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST users/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
-- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{camera}/lights/{lightControl}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PUT duos/v1/devices/{deviceId}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Properties` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/alexa/authorization` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/history/events/associations/{profile_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET location-subtypes` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1194,6 +1487,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST blink/clients_api/links/v1/locations/{locationId}/events/{event}/receivers?ignore_rbac=true&include_deactivated=false` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{type}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH v1/identities/{id}/actions/merge-identities` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET device_info/v4/devices/{deviceId}/configurations` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/feature_flags/enabled` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/shared/invitations/{invitationId}/revoke` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1223,6 +1517,8 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/request/{clipId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **model-field-reference:** `com.immediasemi.blink.models.SEQUENTIAL_ALERTS_STATUS` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v1/users/options` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Cellular` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Cellular` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v4/accounts/{injected_account_id}/subscriptions/plans` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH v4/accounts/{injected_account_id}/media_settings` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/commands/{command}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1266,10 +1562,14 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v7/users/register` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/version` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/chime/{chimeType}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Client` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v4/users/password_change/pin/generate` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH v1/devices/{id}/configurations` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST 1.0.0/batch/client.device/{appSubGroup}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/data_request/euda/create` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1290,6 +1590,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/events/app` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/alexa/link` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1308,6 +1609,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/accessories/add` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/state/{type}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH devices/v1/devices/{deviceId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/eject` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/enable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/users/authenticate_password` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1343,7 +1645,6 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/shared_login` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **model-field-reference:** `com.immediasemi.blink.video.clip.media.Filters` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `PUT dings/{dingId}/favorite` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
-- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/alexa/link_status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/cameras/{camera}/accessories/{accessoryType}/{accessoryId}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1356,6 +1657,9 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `GET api/ssids` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v3/users/validate_email` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/subscriptions/link/unlink_account` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Wireless` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Ip` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.Ip` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET clients_api/setups/{setupId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET apphelp.immedia-semi.com/link-manifest.json` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/identities/{id}/enrollment-images` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1372,6 +1676,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Setup` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/shared_login/request_pin` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/shared_login/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/programs/{program}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/control_panel/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{networkId}/doorbells/{doorbellId}/owl_as_chime/list` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1391,13 +1696,16 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/owls/{serial}/fw_update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `POST @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST evm/v2/events/watch` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/clients/{injected_client_id}/tiv_unlock/request_pin` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/control_panel/request_pin` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v2/accounts/{injected_account_id}/subscriptions/entitlements` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/clients/{injected_client_id}/options` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST evm/v2/events` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST oauth/token` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/thumbnail` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{primary_id}/swap_pair` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE evm/v2/events/time-based-deletion/{source_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1407,6 +1715,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v5/clients/{injected_client_id}/phone_number_change` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/cameras/{camera}/thumbnail` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.EnterSetupProvisioning` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/control_panel/pin/resend` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/accounts/{injected_account_id}/media/favorite` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST clients/{injected_client_id}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.

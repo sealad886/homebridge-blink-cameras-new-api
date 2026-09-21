@@ -203,36 +203,45 @@ function securityFlags(method, endpointPath) {
 function parseJavaEndpoints(sourcesRoot, apkHash) {
   const endpoints = [];
   let annotationCandidates = 0;
+  const failures = [];
   for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
     const text = fs.readFileSync(file, 'utf8');
     if (!/@(?:DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP)\b/.test(text)) continue;
     const pkg = sourcePackage(text);
+    if (pkg === 'retrofit2' || pkg.startsWith('retrofit2.')) continue;
     const className = sourceClass(text, file);
     const rel = relative(sourcesRoot, file);
-    const annotationPattern = /@(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP)\s*\(([^)]*)\)([\s\S]*?;)/g;
+    const annotationPattern = /@(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP)(?:\s*\(([^)]*)\))?([\s\S]*?;)/g;
     for (const match of text.matchAll(annotationPattern)) {
       annotationCandidates += 1;
       const annotation = match[1];
-      const annotationArguments = match[2];
+      const annotationArguments = match[2] || '';
       const method = annotation === 'HTTP'
         ? annotationArguments.match(/\bmethod\s*=\s*"([A-Z]+)"/)?.[1]
         : annotation;
       const rawPath = annotation === 'HTTP'
         ? annotationArguments.match(/\bpath\s*=\s*"([^"]*)"/)?.[1]
         : annotationArguments.match(/"([^"]*)"/)?.[1];
-      if (!HTTP_METHODS.includes(method)) continue;
+      if (!HTTP_METHODS.includes(method)) {
+        failures.push({ source: rel, line: lineNumber(text, match.index), annotation, reason: 'Unsupported or missing HTTP method' });
+        continue;
+      }
       const endpointPath = normalizePath(rawPath || '@Url');
       const signatureChunk = match[3].replace(/\/\*[\s\S]*?\*\//g, ' ').trim();
       const signatureLine = signatureChunk.split('\n').filter(line => !line.trim().startsWith('@')).join(' ').trim();
       const methodMatch = signatureLine.match(/(?:public\s+)?(?:abstract\s+)?(.+?)\s+([\w$]+)\s*\((.*)\)\s*;/);
-      if (!methodMatch) continue;
+      if (!methodMatch) {
+        failures.push({ source: rel, line: lineNumber(text, match.index), annotation, reason: 'Could not parse annotated Java method signature' });
+        continue;
+      }
       const [, returnType, methodName, rawParameters] = methodMatch;
       const parameters = splitParameters(rawParameters)
         .map(parseParameter)
         .filter(Boolean);
       const service = resolveService(className, rel, endpointPath);
       const bodyTypes = parameters.filter(item => item.location === 'body').map(item => item.type).sort();
-      const identity = `${method}|${service.family}|${endpointPath}|${bodyTypes.join(',')}`;
+      const bindingIdentity = `${pkg}.${className}.${methodName}`;
+      const identity = `${method}|${service.family}|${endpointPath}|${bodyTypes.join(',')}${endpointPath === '@Url' ? `|${bindingIdentity}` : ''}`;
       endpoints.push({
         id: `ep-${stableHash(identity)}`,
         method,
@@ -280,6 +289,7 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
     }
   }
   endpoints.annotationCandidates = annotationCandidates;
+  endpoints.failures = failures;
   return endpoints;
 }
 
@@ -302,7 +312,8 @@ function parseSmaliEndpoints(apktoolRoot, apkHash) {
       const pathValue = normalizePath(verbMatch[2].match(/(?:value|path)\s*=\s*"([^"]*)"/)?.[1] || '@Url');
       const className = classDescriptor.split('/').at(-1);
       const service = resolveService(className, classDescriptor, pathValue);
-      const identity = `${method}|${service.family}|${pathValue}|`;
+      const bindingIdentity = `${classDescriptor.replaceAll('/', '.')}.${methodMatch[1]}`;
+      const identity = `${method}|${service.family}|${pathValue}||${bindingIdentity}`;
       endpoints.push({
         id: `ep-${stableHash(identity)}`,
         method,
@@ -345,10 +356,9 @@ function mergeEndpoints(javaEndpoints, smaliEndpoints) {
   for (const endpoint of smaliEndpoints) {
     const exact = byKey.get(endpoint.normalizedIdentity);
     const compatible = exact ? [exact] : [...byKey.values()].filter(item =>
-      item.method === endpoint.method && item.path === endpoint.path);
-    if (compatible.length) {
-      for (const contract of compatible) contract.evidence.push(...endpoint.evidence);
-    }
+      item.method === endpoint.method && item.path === endpoint.path
+      && item.bindings.some(binding => `${binding.package ? `${binding.package}.` : ''}${binding.className}.${binding.methodName}` === endpoint.binding));
+    if (compatible.length === 1) compatible[0].evidence.push(...endpoint.evidence);
     else smaliOnly.push(endpoint);
   }
   for (const endpoint of smaliOnly) {
@@ -543,6 +553,14 @@ function canonicalUrl(value) {
   }
 }
 
+function urlOrigin(value) {
+  try {
+    return new URL(value.replace(/\{[^}]+}/g, 'token')).origin;
+  } catch {
+    return null;
+  }
+}
+
 function extractProtocolIndicators(roots) {
   const patterns = {
     graphql: /\bgraphql\b/i,
@@ -573,8 +591,9 @@ function classifyUrls(urls, endpoints) {
   const exclusions = [];
   const unresolved = [];
   const knownBases = new Set(endpoints.map(item => canonicalUrl(item.baseHostTemplate)));
+  const knownOrigins = new Set(endpoints.map(item => urlOrigin(item.baseHostTemplate)).filter(Boolean));
   for (const item of urls) {
-    if (knownBases.has(canonicalUrl(item.url))) {
+    if (knownBases.has(canonicalUrl(item.url)) || knownOrigins.has(urlOrigin(item.url))) {
       firstPartyCandidates.push({ ...item, classification: 'service-base' });
       continue;
     }
@@ -582,7 +601,7 @@ function classifyUrls(urls, endpoints) {
     if (owner) {
       exclusions.push({ hostname: item.host, owner: owner[1], evidence: [item.evidence], reason: 'Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog.' });
     } else if (FIRST_PARTY_HOSTS.some(pattern => pattern.test(item.host))) {
-      const classified = knownBases.has(canonicalUrl(item.url))
+      const classified = knownBases.has(canonicalUrl(item.url)) || knownOrigins.has(urlOrigin(item.url))
         || /(^|\.)eventstream\.immedia-semi\.com$/i.test(item.host);
       const nonApi = /(^|\.)(app-content|support)\.ring\.com$/i.test(item.host)
         || /(^|\.)(beta|gamma)\.site\.blink\.com$/i.test(item.host)
@@ -686,7 +705,35 @@ function extractSnapshot({ apkDir, decompiledDir }) {
   const urls = [...extractUrls(scanRoots), ...extractNativeUrls([decompiledDir])];
   const classifications = classifyUrls(urls, endpoints);
   const protocolIndicators = extractProtocolIndicators(scanRoots);
-  return { metadata, decompilationReport, endpoints, models, urls, classifications, protocolIndicators, counts: { javaBindings: javaEndpoints.length, javaAnnotationCandidates: javaEndpoints.annotationCandidates, smaliBindings: smaliEndpoints.length } };
+  return { metadata, decompilationReport, endpoints, models, urls, classifications, protocolIndicators, javaAnnotationFailures: javaEndpoints.failures, counts: { javaBindings: javaEndpoints.length, javaAnnotationCandidates: javaEndpoints.annotationCandidates, smaliBindings: smaliEndpoints.length } };
+}
+
+function endpointModelShape(endpoint, snapshot) {
+  const byName = new Map(snapshot.models.flatMap(model => [[model.name, model], [model.qualifiedName, model]]));
+  const visited = new Set();
+  const visit = name => {
+    if (!name || visited.has(name)) return null;
+    const model = byName.get(name);
+    if (!model) return null;
+    visited.add(name);
+    return {
+      qualifiedName: model.qualifiedName,
+      kind: model.kind,
+      fields: model.fields.map(field => ({
+        serializedName: field.serializedName,
+        type: field.qualifiedType || field.type,
+        nullable: field.nullable,
+        default: field.default,
+        nested: visit(field.qualifiedType),
+      })),
+      enumValues: model.enumValues,
+      polymorphism: model.polymorphism,
+    };
+  };
+  return [...endpoint.requestModelRefs, ...endpoint.responseModelRefs]
+    .map(visit)
+    .filter(Boolean)
+    .sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName));
 }
 
 function applyLifecycle(current, baseline) {
@@ -696,8 +743,8 @@ function applyLifecycle(current, baseline) {
     const old = oldByWire.get(endpoint.normalizedIdentity);
     if (!old) endpoint.lifecycle = 'added';
     else {
-      const oldShape = JSON.stringify({ parameters: old.parameters, requestModelRefs: old.requestModelRefs, responseModelRefs: old.responseModelRefs, authentication: old.authentication });
-      const newShape = JSON.stringify({ parameters: endpoint.parameters, requestModelRefs: endpoint.requestModelRefs, responseModelRefs: endpoint.responseModelRefs, authentication: endpoint.authentication });
+      const oldShape = JSON.stringify({ parameters: old.parameters, requestModelRefs: old.requestModelRefs, responseModelRefs: old.responseModelRefs, authentication: old.authentication, models: endpointModelShape(old, baseline) });
+      const newShape = JSON.stringify({ parameters: endpoint.parameters, requestModelRefs: endpoint.requestModelRefs, responseModelRefs: endpoint.responseModelRefs, authentication: endpoint.authentication, models: endpointModelShape(endpoint, current) });
       endpoint.lifecycle = oldShape === newShape ? 'unchanged' : 'changed';
     }
   }
@@ -1060,6 +1107,7 @@ if (require.main === module) {
 module.exports = {
   buildContract,
   canonicalUrl,
+  applyLifecycle,
   extractProtocolIndicators,
   extractModels,
   mergeEndpoints,
