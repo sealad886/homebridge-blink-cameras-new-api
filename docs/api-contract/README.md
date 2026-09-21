@@ -22,7 +22,7 @@ const target = contract.endpoints.find(endpoint => endpoint.id === 'EP_ID');
 console.log(target.baseHostTemplate, target.authentication, target.parameters);
 
 // Follow request and response model references.
-const models = new Map(contract.models.map(model => [model.name, model]));
+const models = new Map(contract.models.map(model => [model.qualifiedName, model]));
 console.log(target.requestModelRefs.map(name => models.get(name)));
 
 // Exclude destructive operations.
@@ -34,9 +34,12 @@ const delta = contract.endpoints.filter(endpoint =>
   endpoint.lifecycle !== 'unchanged');
 ```
 
-Always inspect `confidence`, `evidence`, `lifecycle`, and `unresolved` before
-using a record. Treat `inferred` and `unresolved` as leads, not confirmed wire
-behavior. Never use this catalog as authorization to call destructive,
+Always inspect `confidence`, `recovery`, `evidence`, `lifecycle`, and
+`unresolved` before using a record. The catalog explicitly records unresolved
+call-site, response/error/polling, and device-family attribution per endpoint;
+empty arrays are not evidence that those behaviors do not exist. Treat
+`inferred` and `unresolved` as leads, not confirmed wire behavior. Never use
+this catalog as authorization to call destructive,
 privacy-sensitive, account-management, or media-bearing endpoints.
 
 ## Regeneration

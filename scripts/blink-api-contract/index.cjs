@@ -143,6 +143,18 @@ function sourceClass(text, file) {
   return text.match(/\b(?:class|interface|enum)\s+([\w$]+)/)?.[1] || path.basename(file, '.java');
 }
 
+function sourceImports(text) {
+  return new Map([...text.matchAll(/^import\s+([\w.$]+);/gm)]
+    .map(match => [match[1].split('.').at(-1), match[1]]));
+}
+
+function qualifyType(type, sourceText) {
+  const name = extractTypeName(type);
+  if (!name || /^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(name)) return name;
+  if (name.includes('.')) return name;
+  return sourceImports(sourceText).get(name) || `${sourcePackage(sourceText)}.${name}`;
+}
+
 function dexName(text) {
   return text.match(/loaded from:\s*(classes\d*\.dex)/)?.[1] || 'unknown';
 }
@@ -195,10 +207,18 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
     const pkg = sourcePackage(text);
     const className = sourceClass(text, file);
     const rel = relative(sourcesRoot, file);
-    const annotationPattern = /@(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT)\s*\(\s*"([^"]*)"\s*\)([\s\S]*?;)/g;
+    const annotationPattern = /@(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP)\s*\(([^)]*)\)([\s\S]*?;)/g;
     for (const match of text.matchAll(annotationPattern)) {
-      const method = match[1];
-      const endpointPath = normalizePath(match[2] || '@Url');
+      const annotation = match[1];
+      const annotationArguments = match[2];
+      const method = annotation === 'HTTP'
+        ? annotationArguments.match(/\bmethod\s*=\s*"([A-Z]+)"/)?.[1]
+        : annotation;
+      const rawPath = annotation === 'HTTP'
+        ? annotationArguments.match(/\bpath\s*=\s*"([^"]*)"/)?.[1]
+        : annotationArguments.match(/"([^"]*)"/)?.[1];
+      if (!HTTP_METHODS.includes(method)) continue;
+      const endpointPath = normalizePath(rawPath || '@Url');
       const signatureChunk = match[3].replace(/\/\*[\s\S]*?\*\//g, ' ').trim();
       const signatureLine = signatureChunk.split('\n').filter(line => !line.trim().startsWith('@')).join(' ').trim();
       const methodMatch = signatureLine.match(/(?:public\s+)?(?:abstract\s+)?(.+?)\s+([\w$]+)\s*\((.*)\)\s*;/);
@@ -222,12 +242,13 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
           mode: service.auth,
           tokenSource: service.auth === 'bearer' ? 'persisted OAuth access token' : null,
           refreshBehavior: service.auth === 'bearer' ? 'Blink authenticator may refresh after an authenticated-host HTTP 401.' : null,
+          confidence: 'inferred',
         },
         headers: parameters.filter(item => item.location === 'header' || item.location === 'headermap'),
         parameters,
-        requestModelRefs: bodyTypes.map(extractTypeName).filter(Boolean),
-        responseModelRefs: [extractTypeName(responseType(returnType, signatureLine))].filter(Boolean),
-        successResponses: ['Declared Retrofit return type; concrete HTTP status set is not statically enumerated.'],
+        requestModelRefs: bodyTypes.map(type => qualifyType(type, text)).filter(Boolean),
+        responseModelRefs: [qualifyType(responseType(returnType, signatureLine), text)].filter(Boolean),
+        successResponses: [],
         errorMappings: [],
         polling: null,
         feature: className.replace(/Api$/, ''),
@@ -245,6 +266,11 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
           method: 'jadx',
         }],
         confidence: 'direct',
+        recovery: {
+          declaration: 'resolved', models: 'resolved', serviceBinding: 'inferred',
+          authentication: 'inferred', callSites: 'unresolved',
+          responseSemantics: 'unresolved', deviceFamilies: 'unresolved',
+        },
         lifecycle: 'unchanged',
         security: securityFlags(method, endpointPath),
       });
@@ -257,21 +283,25 @@ function parseSmaliEndpoints(apktoolRoot, apkHash) {
   const endpoints = [];
   for (const file of walk(apktoolRoot, item => item.endsWith('.smali'))) {
     const text = fs.readFileSync(file, 'utf8');
-    if (!/Lretrofit2\/http\/(?:DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT);/.test(text)) continue;
+    if (!/Lretrofit2\/http\/(?:DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP);/.test(text)) continue;
     const classDescriptor = text.match(/^\.class[^\n]*\sL([^;]+);/m)?.[1];
     if (!classDescriptor || classDescriptor.startsWith('retrofit2/')) continue;
     const blocks = text.split(/(?=^\.method\s)/m);
     for (const block of blocks) {
       const methodMatch = block.match(/^\.method[^\n]*\s([\w$<>]+)\(([^)]*)\)([^\s]+)/m);
-      const verbMatch = block.match(/\.annotation runtime Lretrofit2\/http\/(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT);([\s\S]*?)\.end annotation/);
+      const verbMatch = block.match(/\.annotation runtime Lretrofit2\/http\/(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP);([\s\S]*?)\.end annotation/);
       if (!methodMatch || !verbMatch) continue;
-      const pathValue = normalizePath(verbMatch[2].match(/value\s*=\s*"([^"]*)"/)?.[1] || '@Url');
+      const method = verbMatch[1] === 'HTTP'
+        ? verbMatch[2].match(/method\s*=\s*"([A-Z]+)"/)?.[1]
+        : verbMatch[1];
+      if (!HTTP_METHODS.includes(method)) continue;
+      const pathValue = normalizePath(verbMatch[2].match(/(?:value|path)\s*=\s*"([^"]*)"/)?.[1] || '@Url');
       const className = classDescriptor.split('/').at(-1);
       const service = resolveService(className, classDescriptor, pathValue);
-      const identity = `${verbMatch[1]}|${service.family}|${pathValue}|`;
+      const identity = `${method}|${service.family}|${pathValue}|`;
       endpoints.push({
         id: `ep-${stableHash(identity)}`,
-        method: verbMatch[1],
+        method,
         path: pathValue,
         normalizedIdentity: identity,
         serviceFamily: service.family,
@@ -319,13 +349,18 @@ function mergeEndpoints(javaEndpoints, smaliEndpoints) {
     byKey.set(endpoint.normalizedIdentity, {
       ...endpoint,
       urlConstruction: endpoint.path === '@Url' ? 'Runtime-provided absolute URL' : 'Recovered from Retrofit annotation in smali.',
-      authentication: { mode: 'unresolved', tokenSource: null, refreshBehavior: null },
+      authentication: { mode: 'unresolved', tokenSource: null, refreshBehavior: null, confidence: 'unresolved' },
       headers: [], parameters: [], requestModelRefs: [], responseModelRefs: [],
       successResponses: [], errorMappings: [], polling: null,
       feature: endpoint.binding.split('.').at(-2)?.replace(/Api$/, '') || 'Unknown',
       callSites: [], deviceFamilies: [], transportBackend: endpoint.serviceFamily,
       bindings: [{ className: endpoint.binding.split('.').at(-2), methodName: endpoint.binding.split('.').at(-1), signature: null }],
       confidence: 'corroborated', lifecycle: 'unchanged',
+      recovery: {
+        declaration: 'resolved', models: 'unresolved', serviceBinding: 'unresolved',
+        authentication: 'unresolved', callSites: 'unresolved',
+        responseSemantics: 'unresolved', deviceFamilies: 'unresolved',
+      },
       security: securityFlags(endpoint.method, endpoint.path),
     });
   }
@@ -347,8 +382,11 @@ function buildClassIndex(sourcesRoot) {
   for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
     const text = fs.readFileSync(file, 'utf8');
     const name = sourceClass(text, file);
-    if (!index.has(name)) index.set(name, []);
-    index.get(name).push({ file, text });
+    const candidate = { file, text, name, qualifiedName: `${sourcePackage(text)}.${name}` };
+    for (const key of [name, candidate.qualifiedName]) {
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(candidate);
+    }
   }
   return index;
 }
@@ -356,18 +394,25 @@ function buildClassIndex(sourcesRoot) {
 function parseModel(name, classIndex, sourcesRoot, apkHash) {
   const candidates = classIndex.get(name) || [];
   if (!candidates.length) return null;
+  const exact = candidates.filter(candidate => candidate.qualifiedName === name);
   const preferred = candidates.filter(candidate =>
     /\/com\/immediasemi\/blink\//.test(candidate.file));
-  const { file, text } = (preferred.length === 1 ? preferred : candidates)[0];
+  const resolved = exact.length === 1 ? exact[0] : preferred.length === 1 ? preferred[0] : candidates.length === 1 ? candidates[0] : null;
+  if (!resolved) return null;
+  const { file, text } = resolved;
   const fields = [];
-  const fieldPattern = /(?:@SerializedName\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\)\s*)?(?:private|public|protected)\s+(?:final\s+)?([\w.<>?, \[\]]+)\s+([\w$]+)\s*(?:=[^;]*)?;/g;
+  const fieldPattern = /(?:@SerializedName\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\)\s*)?(?:private|public|protected)\s+((?:(?:static|final|transient|volatile)\s+)*)([\w.<>?, \[\]]+)\s+([\w$]+)\s*(?:=[^;]*)?;/g;
   for (const match of text.matchAll(fieldPattern)) {
-    if (/^(CREATOR|Companion|INSTANCE|\$stable|serialVersionUID)$/.test(match[3])) continue;
+    const modifiers = match[2];
+    const type = match[3].trim();
+    const fieldName = match[4];
+    if (/\bstatic\b/.test(modifiers) || fieldName.includes('$') || /^(CREATOR|Companion|INSTANCE|serialVersionUID)$/.test(fieldName)) continue;
     fields.push({
-      serializedName: match[1] || match[3],
-      sourceName: match[3],
-      type: match[2].trim(),
-      nullable: !/\b(?:boolean|byte|char|double|float|int|long|short)\b/.test(match[2]),
+      serializedName: match[1] || fieldName,
+      sourceName: fieldName,
+      type,
+      qualifiedType: qualifyType(type, text),
+      nullable: !/\b(?:boolean|byte|char|double|float|int|long|short)\b/.test(type),
       default: null,
     });
   }
@@ -375,9 +420,9 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
     ? [...text.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*(?:\([^;]*\))?[,;]/gm)].map(match => match[1])
     : [];
   return {
-    id: `model-${stableHash(`${sourcePackage(text)}.${name}`)}`,
-    name,
-    qualifiedName: `${sourcePackage(text)}.${name}`,
+    id: `model-${stableHash(resolved.qualifiedName)}`,
+    name: resolved.name,
+    qualifiedName: resolved.qualifiedName,
     kind: enumValues.length ? 'enum' : 'object',
     fields,
     enumValues,
@@ -388,7 +433,7 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
       dex: dexName(text),
       source: relative(sourcesRoot, file),
       line: 1,
-      symbol: `${sourcePackage(text)}.${name}`,
+      symbol: resolved.qualifiedName,
       method: 'jadx',
     }],
     confidence: fields.length || enumValues.length ? 'direct' : 'inferred',
@@ -408,11 +453,11 @@ function extractModels(endpoints, sourcesRoot, apkHash) {
     if (!model) continue;
     models.push(model);
     for (const field of model.fields) {
-      const nested = extractTypeName(field.type);
+      const nested = field.qualifiedType || extractTypeName(field.type);
       if (nested && classIndex.has(nested) && !visited.has(nested)) pending.push(nested);
     }
   }
-  const recovered = new Set(models.map(model => model.name));
+  const recovered = new Set(models.flatMap(model => [model.name, model.qualifiedName]));
   for (const endpoint of endpoints) {
     for (const name of [...endpoint.requestModelRefs, ...endpoint.responseModelRefs]) {
       if (!name || recovered.has(name) || /^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(name)) continue;
@@ -506,6 +551,10 @@ function classifyUrls(urls, endpoints) {
   const unresolved = [];
   const knownBases = new Set(endpoints.map(item => item.baseHostTemplate));
   for (const item of urls) {
+    if (knownBases.has(item.url)) {
+      firstPartyCandidates.push({ ...item, classification: 'service-base' });
+      continue;
+    }
     const owner = THIRD_PARTY_OWNERS.find(([pattern]) => pattern.test(item.host));
     if (owner) {
       exclusions.push({ hostname: item.host, owner: owner[1], evidence: [item.evidence], reason: 'Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog.' });
@@ -517,16 +566,19 @@ function classifyUrls(urls, endpoints) {
         || /(^|\.)crashtracking\.prod\.ring\.com$/i.test(item.host)
         || /^(?:www\.)?blink\.com$/i.test(item.host)
         || /^(?:download\.)?ring\.com$/i.test(item.host);
-      firstPartyCandidates.push({ ...item, classification: classified ? 'service-base' : 'first-party-candidate' });
       if (nonApi) {
+        firstPartyCandidates.push({ ...item, classification: 'excluded-non-api' });
         exclusions.push({ hostname: item.host, owner: 'Blink/Ring static content or observability', evidence: [item.evidence], reason: 'First-party host, but not an application API contract.' });
-      } else if (!classified) unresolved.push({
+      } else if (!classified) {
+        firstPartyCandidates.push({ ...item, classification: 'first-party-candidate' });
+        unresolved.push({
         id: `unresolved-${stableHash(item.url)}`,
         category: 'url-candidate',
         value: item.url,
         reason: 'First-party URL literal is not a canonical Retrofit base and requires call-site interpretation.',
         evidence: [item.evidence],
       });
+      } else firstPartyCandidates.push({ ...item, classification: 'service-base' });
     } else {
       exclusions.push({ hostname: item.host, owner: 'Other bundled dependency', evidence: [item.evidence], reason: 'Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations.' });
     }
@@ -561,8 +613,35 @@ function toolVersion(command, args) {
   return { command: [command, ...args].join(' '), exitCode: result.status, version: `${result.stdout || result.stderr}`.trim().split('\n')[0] || 'unknown' };
 }
 
+function reportedErrorCount(output) {
+  const text = `${output.stdoutTail || ''}\n${output.stderrTail || ''}`;
+  const reported = text.match(/(?:with errors,\s*count:\s*|with\s+|,\s*)(\d+)\s*(?:errors?)?/i)?.[1];
+  return reported ? Number(reported) : output.errorCount;
+}
+
+function readDecompilationReport(decompiledDir, metadata) {
+  const reportFile = path.join(decompiledDir, 'decompilation-report.json');
+  if (!fs.existsSync(reportFile)) throw new Error(`Missing decompilation report: ${reportFile}; run the decompile command first`);
+  const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  if (report.schemaVersion !== 1 || !Array.isArray(report.outcomes) || !report.apkSet) {
+    throw new Error(`Unsupported decompilation report format: ${reportFile}`);
+  }
+  const expectedSplits = new Map(report.apkSet.splits.map(item => [item.file, item.sha256]));
+  const actualSplits = new Map(metadata.splits.map(item => [item.file, item.sha256]));
+  if (expectedSplits.size !== actualSplits.size || [...expectedSplits].some(([file, hash]) => actualSplits.get(file) !== hash)) {
+    throw new Error(`Decompilation report APK hashes do not match ${reportFile}`);
+  }
+  if (JSON.stringify(report.apkSet.dexFiles) !== JSON.stringify(metadata.dexFiles)) {
+    throw new Error(`Decompilation report DEX inventory does not match ${reportFile}`);
+  }
+  report.outcomes = report.outcomes.map(outcome => ({ ...outcome, errorCount: reportedErrorCount(outcome) }));
+  report.jadxReportedErrors = report.outcomes.find(outcome => outcome.tool === 'jadx')?.errorCount || 0;
+  return report;
+}
+
 function extractSnapshot({ apkDir, decompiledDir }) {
   const metadata = apkMetadata(apkDir);
+  const decompilationReport = readDecompilationReport(decompiledDir, metadata);
   const sourcesRoot = path.join(decompiledDir, 'jadx', 'sources');
   const apktoolRoot = path.join(decompiledDir, 'apktool-base');
   if (!fs.existsSync(sourcesRoot)) throw new Error(`Missing JADX sources: ${sourcesRoot}`);
@@ -575,14 +654,14 @@ function extractSnapshot({ apkDir, decompiledDir }) {
   const urls = [...extractUrls(scanRoots), ...extractNativeUrls([decompiledDir])];
   const classifications = classifyUrls(urls, endpoints);
   const protocolIndicators = extractProtocolIndicators(scanRoots);
-  return { metadata, endpoints, models, urls, classifications, protocolIndicators, counts: { javaBindings: javaEndpoints.length, smaliBindings: smaliEndpoints.length } };
+  return { metadata, decompilationReport, endpoints, models, urls, classifications, protocolIndicators, counts: { javaBindings: javaEndpoints.length, smaliBindings: smaliEndpoints.length } };
 }
 
 function applyLifecycle(current, baseline) {
-  const oldByWire = new Map(baseline.endpoints.map(item => [`${item.method}|${item.path}|${item.serviceFamily}`, item]));
-  const currentByWire = new Map(current.endpoints.map(item => [`${item.method}|${item.path}|${item.serviceFamily}`, item]));
+  const oldByWire = new Map(baseline.endpoints.map(item => [item.normalizedIdentity, item]));
+  const currentByWire = new Map(current.endpoints.map(item => [item.normalizedIdentity, item]));
   for (const endpoint of current.endpoints) {
-    const old = oldByWire.get(`${endpoint.method}|${endpoint.path}|${endpoint.serviceFamily}`);
+    const old = oldByWire.get(endpoint.normalizedIdentity);
     if (!old) endpoint.lifecycle = 'added';
     else {
       const oldShape = JSON.stringify({ parameters: old.parameters, requestModelRefs: old.requestModelRefs, responseModelRefs: old.responseModelRefs, authentication: old.authentication });
@@ -591,7 +670,7 @@ function applyLifecycle(current, baseline) {
     }
   }
   const removed = baseline.endpoints
-    .filter(item => !currentByWire.has(`${item.method}|${item.path}|${item.serviceFamily}`))
+    .filter(item => !currentByWire.has(item.normalizedIdentity))
     .map(item => ({ ...item, lifecycle: 'removed' }));
   current.endpoints.push(...removed);
   current.endpoints.sort((a, b) => a.serviceFamily.localeCompare(b.serviceFamily) || a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
@@ -607,8 +686,10 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
   const endpointEvidenceSources = new Set(activeEndpoints.flatMap(item => item.evidence.map(evidence => evidence.source)));
   const firstPartySmaliFiles = walk(path.join(decompiledDir, 'apktool-base'), item => item.endsWith('.smali') && /com\/(?:immediasemi|ring)\//.test(item));
   const diagnostics = {
-    jadxReportedErrors: 606,
-    apktoolResourceWarnings: 'Present; decoded smali remains available.',
+    jadxReportedErrors: current.decompilationReport.jadxReportedErrors,
+    apktoolResourceWarnings: current.decompilationReport.outcomes
+      .filter(outcome => outcome.tool === 'apktool')
+      .reduce((count, outcome) => count + outcome.warningCount, 0),
     unmatchedJavaRetrofitAnnotations: Math.max(0, current.counts.javaBindings - activeEndpoints.length),
     smaliOnlyContracts: activeEndpoints.filter(item => item.evidence.every(evidence => evidence.method === 'apktool-smali')).length,
     activeContractsWithoutSmaliEvidence: activeEndpoints.filter(item =>
@@ -616,19 +697,32 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     unresolvedModels: current.models.filter(model => model.confidence === 'unresolved').length,
     firstPartySmaliFilesInspected: firstPartySmaliFiles.length,
     firstPartyEvidenceFiles: endpointEvidenceSources.size,
-    unclassifiedFirstPartyCandidates: 0,
+    unclassifiedFirstPartyCandidates: current.classifications.firstPartyCandidates
+      .filter(item => item.classification === 'first-party-candidate').length,
   };
+  const behavioralUnresolved = activeEndpoints.map(endpoint => ({
+    id: `unresolved-${stableHash(`${endpoint.id}|behavior`)}`,
+    category: 'endpoint-behavior',
+    endpointId: endpoint.id,
+    value: `${endpoint.method} ${endpoint.path}`,
+    unresolvedFields: Object.entries(endpoint.recovery)
+      .filter(([, state]) => state === 'unresolved')
+      .map(([field]) => field),
+    reason: 'The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.',
+    evidence: endpoint.evidence.map(item => `${item.source}:${item.line}`),
+  })).filter(item => item.unresolvedFields.length);
   const contract = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '1.1.0',
     artifact: {
       ...current.metadata,
       acquiredAt: acquiredAt || null,
       evidenceMode: 'static-only',
-      tools: [toolVersion('jadx', ['--version']), toolVersion('apktool', ['--version'])],
-      commandOutcomes: [
-        { command: 'jadx APK set', status: 'completed-with-errors', detail: 'Sources recovered; JADX reported 606 errors. Smali is the fallback authority.' },
-        { command: 'apktool decode APK set', status: 'completed', detail: 'All four splits decoded; resource-reference warnings recorded.' },
-      ],
+      tools: current.decompilationReport.tools,
+      commandOutcomes: current.decompilationReport.outcomes.map(outcome => ({
+        command: outcome.command,
+        status: outcome.exitCode === 0 ? 'completed' : outcome.tool === 'jadx' ? 'completed-with-errors' : 'failed',
+        detail: `${outcome.errorCount} errors; ${outcome.warningCount} warnings`,
+      })),
     },
     baseline: baseline ? {
       versionName: baseline.metadata.versionName,
@@ -644,20 +738,21 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     models: current.models,
     firstPartyCandidates: current.classifications.firstPartyCandidates,
     thirdPartyExclusions: current.classifications.exclusions,
-    unresolved: current.classifications.unresolved,
+    unresolved: [...current.classifications.unresolved, ...behavioralUnresolved]
+      .sort((a, b) => a.id.localeCompare(b.id)),
     diagnostics,
     protocolIndicators: current.protocolIndicators,
     completeness: {
-      apkSplitsExpected: 4,
+      apkSplitsExpected: current.decompilationReport.apkSet.splits.length,
       apkSplitsObserved: current.metadata.splits.length,
-      dexFilesExpected: 12,
+      dexFilesExpected: current.decompilationReport.apkSet.dexFiles.length,
       dexFilesObserved: current.metadata.dexFiles.length,
       javaRetrofitBindings: current.counts.javaBindings,
       smaliRetrofitBindings: current.counts.smaliBindings,
       activeNormalizedContracts: activeEndpoints.length,
       removedContracts: current.endpoints.length - activeEndpoints.length,
       modelsRecovered: current.models.length,
-      unresolvedCandidates: current.classifications.unresolved.length,
+      unresolvedCandidates: current.classifications.unresolved.length + behavioralUnresolved.length,
       unclassifiedFirstPartyCandidates: diagnostics.unclassifiedFirstPartyCandidates,
     },
   };
@@ -668,13 +763,13 @@ function validateContract(contract) {
   const errors = [];
   const allowedConfidence = new Set(['direct', 'corroborated', 'inferred', 'unresolved']);
   const allowedLifecycle = new Set(['added', 'changed', 'unchanged', 'removed']);
-  if (contract.schemaVersion !== '1.0.0') errors.push('schemaVersion must be 1.0.0');
+  if (contract.schemaVersion !== '1.1.0') errors.push('schemaVersion must be 1.1.0');
   for (const key of ['artifact', 'endpoints', 'models', 'thirdPartyExclusions', 'unresolved', 'diagnostics', 'completeness']) {
     if (contract[key] == null) errors.push(`missing top-level property: ${key}`);
   }
   const ids = new Set();
   const identities = new Set();
-  const modelNames = new Set((contract.models || []).map(model => model.name));
+  const modelNames = new Set((contract.models || []).flatMap(model => [model.name, model.qualifiedName]));
   for (const endpoint of contract.endpoints || []) {
     for (const key of ['id', 'method', 'path', 'normalizedIdentity', 'serviceFamily', 'baseHostTemplate', 'authentication', 'evidence', 'confidence', 'lifecycle', 'security']) {
       if (endpoint[key] == null) errors.push(`${endpoint.id || 'endpoint'} missing ${key}`);
@@ -686,6 +781,9 @@ function validateContract(contract) {
     identities.add(identityKey);
     if (!allowedConfidence.has(endpoint.confidence)) errors.push(`${endpoint.id} invalid confidence: ${endpoint.confidence}`);
     if (!allowedLifecycle.has(endpoint.lifecycle)) errors.push(`${endpoint.id} invalid lifecycle: ${endpoint.lifecycle}`);
+    for (const field of ['declaration', 'models', 'serviceBinding', 'authentication', 'callSites', 'responseSemantics', 'deviceFamilies']) {
+      if (!['resolved', 'inferred', 'unresolved'].includes(endpoint.recovery?.[field])) errors.push(`${endpoint.id} invalid recovery state for ${field}`);
+    }
     for (const evidence of endpoint.evidence || []) {
       if (!/^[a-f0-9]{64}$/.test(evidence.apkSha256 || '')) errors.push(`${endpoint.id} evidence missing APK SHA-256`);
     }
@@ -697,6 +795,21 @@ function validateContract(contract) {
   }
   if (contract.completeness?.apkSplitsObserved !== contract.completeness?.apkSplitsExpected) errors.push('APK split coverage mismatch');
   if (contract.completeness?.dexFilesObserved !== contract.completeness?.dexFilesExpected) errors.push('DEX coverage mismatch');
+  const activeEndpoints = (contract.endpoints || []).filter(endpoint => endpoint.lifecycle !== 'removed');
+  const unclassified = (contract.firstPartyCandidates || []).filter(item => item.classification === 'first-party-candidate').length;
+  const recomputed = {
+    apkSplitsObserved: contract.artifact?.splits?.length || 0,
+    dexFilesObserved: contract.artifact?.dexFiles?.length || 0,
+    activeNormalizedContracts: activeEndpoints.length,
+    removedContracts: (contract.endpoints || []).length - activeEndpoints.length,
+    modelsRecovered: (contract.models || []).length,
+    unresolvedCandidates: (contract.unresolved || []).length,
+    unclassifiedFirstPartyCandidates: unclassified,
+  };
+  for (const [key, value] of Object.entries(recomputed)) {
+    if (contract.completeness?.[key] !== value) errors.push(`${key} does not reconcile: expected ${value}, found ${contract.completeness?.[key]}`);
+  }
+  if (contract.diagnostics?.unclassifiedFirstPartyCandidates !== unclassified) errors.push('diagnostic unclassified first-party count does not reconcile');
   if (contract.completeness?.unclassifiedFirstPartyCandidates !== 0) errors.push('unclassified first-party candidates remain');
   return errors;
 }
@@ -713,19 +826,42 @@ function decompileApkSet(apkDir, outputDir) {
   const apks = walk(apkDir, item => item.endsWith('.apk'));
   if (!apks.some(file => path.basename(file) === 'base.apk')) throw new Error(`No base.apk found under ${apkDir}`);
   fs.mkdirSync(outputDir, { recursive: true });
+  const metadata = apkMetadata(apkDir);
   const outcomes = [];
   const jadxOutput = path.join(outputDir, 'jadx');
   const jadx = spawnSync('jadx', ['-d', jadxOutput, ...apks], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  outcomes.push({ command: `jadx -d ${jadxOutput} <APK set>`, exitCode: jadx.status, stderr: `${jadx.stderr || ''}`.slice(-20000) });
+  const makeOutcome = (tool, command, result) => {
+    const stderr = `${result.stderr || ''}`;
+    const stdout = `${result.stdout || ''}`;
+    const diagnosticOutput = `${stdout}\n${stderr}`;
+    const reported = diagnosticOutput.match(/(?:with errors,\s*count:\s*|with\s+|,\s*)(\d+)\s*(?:errors?)?/i)?.[1];
+    return {
+      tool,
+      command,
+      exitCode: result.status,
+      errorCount: reported ? Number(reported) : (result.status === 0 ? 0 : (diagnosticOutput.match(/\bERROR\b/g) || []).length),
+      warningCount: (diagnosticOutput.match(/\bWARN(?:ING)?\b/gi) || []).length,
+      stdoutTail: stdout.slice(-20000),
+      stderrTail: stderr.slice(-20000),
+    };
+  };
+  outcomes.push(makeOutcome('jadx', `jadx -d ${jadxOutput} <APK set>`, jadx));
   for (const apk of apks) {
     const name = path.basename(apk, '.apk');
     const target = path.join(outputDir, `apktool-${name}`);
     const result = spawnSync('apktool', ['d', '-f', apk, '-o', target], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    outcomes.push({ command: `apktool d -f ${path.basename(apk)} -o ${target}`, exitCode: result.status, stderr: `${result.stderr || ''}`.slice(-20000) });
+    outcomes.push(makeOutcome('apktool', `apktool d -f ${path.basename(apk)} -o ${target}`, result));
   }
-  fs.writeFileSync(path.join(outputDir, 'decompilation-report.json'), `${JSON.stringify(outcomes, null, 2)}\n`);
+  const report = {
+    schemaVersion: 1,
+    apkSet: { splits: metadata.splits, dexFiles: metadata.dexFiles },
+    tools: [toolVersion('jadx', ['--version']), toolVersion('apktool', ['--version'])],
+    jadxReportedErrors: outcomes.find(outcome => outcome.tool === 'jadx')?.errorCount || 0,
+    outcomes,
+  };
+  fs.writeFileSync(path.join(outputDir, 'decompilation-report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (outcomes.some(outcome => outcome.command.startsWith('apktool') && outcome.exitCode !== 0)) throw new Error('One or more apktool decodes failed; inspect decompilation-report.json');
-  return outcomes;
+  return report;
 }
 
 function markdownEscape(value) {
@@ -750,7 +886,7 @@ function renderMarkdown(contract) {
     `- Evidence mode: \`${contract.artifact.evidenceMode}\``,
     `- APK splits: ${contract.artifact.splits.length}; DEX files: ${contract.artifact.dexFiles.length}`,
     `- JADX result: ${contract.artifact.commandOutcomes[0].status}; apktool result: ${contract.artifact.commandOutcomes[1].status}`, '',
-    'Static evidence describes client construction and declarations. It does not prove current server behavior or authorize live calls.', '',
+    'Static evidence describes client declarations and bounded construction evidence. It does not prove current server behavior or authorize live calls. Per-endpoint `recovery` state in the canonical JSON distinguishes resolved declarations from inferred service/authentication mapping and unresolved runtime behavior.', '',
     '## Service, host, and interceptor map', '',
     '| Service | Base host template | Active contracts | Authentication |',
     '|---|---|---:|---|',
@@ -758,11 +894,12 @@ function renderMarkdown(contract) {
   for (const [service, endpoints] of [...byService.entries()].sort()) {
     const current = endpoints.filter(item => item.lifecycle !== 'removed');
     if (!current.length) continue;
-    lines.push(`| ${service} | \`${markdownEscape(current[0].baseHostTemplate)}\` | ${current.length} | ${markdownEscape(current[0].authentication.mode)} |`);
+    const authenticationModes = [...new Set(current.map(item => item.authentication.mode))].sort().join(', ');
+    lines.push(`| ${service} | \`${markdownEscape(current[0].baseHostTemplate)}\` | ${current.length} | ${markdownEscape(authenticationModes)} |`);
   }
   lines.push('', 'Default headers: `APP-BUILD`, `User-Agent`, `LOCALE`, `X-Blink-Time-Zone`. URL rewriting tokens: `{tier}`, `{shared_tier}`, `{env}`, `{injected_account_id}`, `{injected_client_id}`.', '');
   lines.push('## Authentication cascade', '',
-    'Normal hosted authorization and `oauth/token` exchange remain the primary sign-in path. Authenticated REST clients attach the persisted bearer token and may conditionally attach `TOKEN-AUTH` when registration-token state exists. On authenticated-host HTTP 401, the Blink authenticator can refresh and rebuild the request. Blink 59.2 adds OTP verification and WebAuthn registration as an optional post-login passkey enrollment path; it does not replace the established token exchange or refresh contracts.', '');
+    'Corroborated service-level static evidence retains hosted authorization, `oauth/token` exchange, persisted bearer-token attachment, conditional `TOKEN-AUTH`, and authenticated-host HTTP 401 refresh behavior. Blink 59.2 adds OTP verification and WebAuthn registration declarations. Endpoint-level authentication assignment is marked `inferred` unless the declaration itself supplies explicit authorization evidence; none of this proves current server behavior.', '');
   lines.push('## Endpoint catalog', '');
   for (const [service, endpoints] of [...byService.entries()].sort()) {
     lines.push(`### ${service}`, '', '| Method | Path | Feature | Auth | Request | Response | State | Confidence | Evidence |', '|---|---|---|---|---|---|---|---|---|');
@@ -782,10 +919,9 @@ function renderMarkdown(contract) {
     '- Static polling/retry semantics are retained as service-level evidence; they must not be treated as proof of current server timing.',
     '- No new 59.2 Retrofit declaration establishes a general HTTP 409 serialization or retry contract.', '');
   lines.push('## Dynamic transports', '',
-    '- RDIS/DUOS: Blink 59.2 contains a unified device-settings transport that can route newer device families through device orchestration rather than traditional camera configuration calls.',
-    '- Event stream: client event submission uses the production event-stream service and optional explicit authorization.',
-    '- Live view and streaming: command negotiation remains REST-backed; returned runtime hosts/tokens drive subsequent streaming.',
-    '- Local device: Sync Module onboarding and Wi-Fi routes use the local device base and are distinct from cloud bearer authentication.', '');
+    '- RDIS/DUOS, event-stream, WebSocket, RTSP, and local-device indicators are indexed under `protocolIndicators`.',
+    '- The declaration catalog separates known service families, but it does not claim complete call-site, signaling, retry, device-family, or runtime-host reconstruction.',
+    '- Consult each endpoint recovery state and its unresolved record before treating transport attribution as established.', '');
   lines.push('## 57.1 → 59.2 change report', '', `- Added: ${lifecycle.added}`, `- Changed: ${lifecycle.changed}`, `- Unchanged: ${lifecycle.unchanged}`, `- Removed: ${lifecycle.removed}`, '');
   for (const state of ['added', 'changed', 'removed']) {
     const items = contract.endpoints.filter(item => item.lifecycle === state);
@@ -827,8 +963,8 @@ function main() {
     return;
   }
   if (args.command === 'decompile') {
-    const outcomes = decompileApkSet(args['apk-dir'], args['output-dir']);
-    process.stdout.write(`${JSON.stringify(outcomes.map(item => ({ command: item.command, exitCode: item.exitCode })), null, 2)}\n`);
+    const report = decompileApkSet(args['apk-dir'], args['output-dir']);
+    process.stdout.write(`${JSON.stringify(report.outcomes.map(item => ({ command: item.command, exitCode: item.exitCode })), null, 2)}\n`);
     return;
   }
   if (args.command === 'render') {

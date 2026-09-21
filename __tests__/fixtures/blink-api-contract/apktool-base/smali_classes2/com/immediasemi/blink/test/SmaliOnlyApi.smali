@@ -10,6 +10,14 @@
     .end annotation
 .end method
 
+.method public abstract clearHistory()Ljava/lang/Object;
+    .annotation runtime Lretrofit2/http/HTTP;
+        hasBody = false
+        method = "DELETE"
+        path = "v1/accounts/{account}/history"
+    .end annotation
+.end method
+
 .method public abstract remove()Ljava/lang/Object;
     .annotation runtime Lretrofit2/http/DELETE;
         value = "v1/device/remove"

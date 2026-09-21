@@ -19,7 +19,7 @@
     "completeness"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "1.1.0" },
     "artifact": { "$ref": "#/$defs/artifact" },
     "baseline": {
       "type": ["object", "null"],
@@ -118,7 +118,7 @@
         "id", "method", "path", "normalizedIdentity", "serviceFamily",
         "baseHostTemplate", "urlConstruction", "authentication", "headers",
         "parameters", "requestModelRefs", "responseModelRefs", "bindings",
-        "evidence", "confidence", "lifecycle", "security"
+        "evidence", "confidence", "lifecycle", "security", "recovery"
       ],
       "properties": {
         "id": { "type": "string", "pattern": "^ep-[a-f0-9]+$" },
@@ -144,7 +144,21 @@
         "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
         "confidence": { "enum": ["direct", "corroborated", "inferred", "unresolved"] },
         "lifecycle": { "enum": ["added", "changed", "unchanged", "removed"] },
-        "security": { "type": "object" }
+        "security": { "type": "object" },
+        "recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["declaration", "models", "serviceBinding", "authentication", "callSites", "responseSemantics", "deviceFamilies"],
+          "properties": {
+            "declaration": { "enum": ["resolved", "inferred", "unresolved"] },
+            "models": { "enum": ["resolved", "inferred", "unresolved"] },
+            "serviceBinding": { "enum": ["resolved", "inferred", "unresolved"] },
+            "authentication": { "enum": ["resolved", "inferred", "unresolved"] },
+            "callSites": { "enum": ["resolved", "inferred", "unresolved"] },
+            "responseSemantics": { "enum": ["resolved", "inferred", "unresolved"] },
+            "deviceFamilies": { "enum": ["resolved", "inferred", "unresolved"] }
+          }
+        }
       }
     },
     "model": {

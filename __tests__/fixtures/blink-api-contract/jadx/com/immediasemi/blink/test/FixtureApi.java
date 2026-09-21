@@ -11,4 +11,7 @@ public interface FixtureApi {
 
     @POST("v1/accounts/{account}/devices")
     Object updateDevice(@Body FixtureBody body, @Path("account") long account, Continuation<? super FixtureResponse> continuation);
+
+    @HTTP(hasBody = false, method = "DELETE", path = "v1/accounts/{account}/history")
+    Object clearHistory(@Path("account") long account, Continuation<? super Unit> continuation);
 }

@@ -19,13 +19,13 @@ describe('Blink APK API contract extraction', () => {
       fakeHash,
     );
 
-    expect(endpoints).toHaveLength(3);
+    expect(endpoints).toHaveLength(4);
     expect(endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           method: 'GET',
           path: 'v1/accounts/{account}/devices',
-          responseModelRefs: ['FixtureResponse'],
+          responseModelRefs: ['com.immediasemi.blink.test.FixtureResponse'],
           parameters: expect.arrayContaining([
             expect.objectContaining({ location: 'path', wireName: 'account' }),
             expect.objectContaining({ location: 'query', wireName: 'page' }),
@@ -34,7 +34,11 @@ describe('Blink APK API contract extraction', () => {
         expect.objectContaining({
           method: 'POST',
           path: 'v1/accounts/{account}/devices',
-          requestModelRefs: ['FixtureBody'],
+          requestModelRefs: ['com.immediasemi.blink.test.FixtureBody'],
+        }),
+        expect.objectContaining({
+          method: 'DELETE',
+          path: 'v1/accounts/{account}/history',
         }),
       ]),
     );
@@ -50,6 +54,7 @@ describe('Blink APK API contract extraction', () => {
       expect.arrayContaining([
         expect.objectContaining({ method: 'GET', path: '@Url' }),
         expect.objectContaining({ method: 'DELETE', path: 'v1/device/remove' }),
+        expect.objectContaining({ method: 'DELETE', path: 'v1/accounts/{account}/history' }),
       ]),
     );
   });
@@ -111,9 +116,14 @@ describe('Blink APK API contract extraction', () => {
       security: {},
       requestModelRefs: ['MissingModel'],
       responseModelRefs: [],
+      recovery: {
+        declaration: 'resolved', models: 'resolved', serviceBinding: 'inferred',
+        authentication: 'inferred', callSites: 'unresolved',
+        responseSemantics: 'unresolved', deviceFamilies: 'unresolved',
+      },
     };
     const errors = extractor.validateContract({
-      schemaVersion: '1.0.0',
+      schemaVersion: '1.1.0',
       artifact: {},
       endpoints: [endpoint, endpoint],
       models: [],
@@ -132,6 +142,25 @@ describe('Blink APK API contract extraction', () => {
     expect(errors.join('\n')).toMatch(/duplicate endpoint id/);
     expect(errors.join('\n')).toMatch(/evidence missing APK SHA-256/);
     expect(errors.join('\n')).toMatch(/unresolved model reference/);
+  });
+
+  it('recomputes completeness instead of trusting declared summary counts', () => {
+    const errors = extractor.validateContract({
+      schemaVersion: '1.1.0', artifact: { splits: [], dexFiles: [] },
+      endpoints: [], models: [], firstPartyCandidates: [{ classification: 'first-party-candidate' }],
+      thirdPartyExclusions: [], unresolved: [],
+      diagnostics: { unclassifiedFirstPartyCandidates: 0 },
+      completeness: {
+        apkSplitsExpected: 4, apkSplitsObserved: 4,
+        dexFilesExpected: 12, dexFilesObserved: 12,
+        activeNormalizedContracts: 1, removedContracts: 1,
+        modelsRecovered: 1, unresolvedCandidates: 1,
+        unclassifiedFirstPartyCandidates: 0,
+      },
+    });
+
+    expect(errors.join('\n')).toMatch(/activeNormalizedContracts does not reconcile/);
+    expect(errors.join('\n')).toMatch(/unclassifiedFirstPartyCandidates does not reconcile/);
   });
 
   it('renders deterministically for the same canonical contract', () => {
