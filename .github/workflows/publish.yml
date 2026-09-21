@@ -20,21 +20,18 @@ jobs:
     uses: ./.github/workflows/test.yml
     with:
       release: true
-  publish:
+  package:
     if: github.ref == 'refs/heads/main'
     needs: gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
-      # registry-url would create token-auth config and a NODE_AUTH_TOKEN placeholder.
-      # npm publish selects the public registry explicitly and authenticates with OIDC.
-      - uses: actions/setup-node@v6
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           package-manager-cache: false
@@ -42,21 +39,54 @@ jobs:
       - run: npm run build
       - name: Build and verify the immutable npm artifact
         env:
-          PACKAGE_OUTPUT: ${{ runner.temp }}/release.tgz
-          PACKAGE_RECEIPT: ${{ runner.temp }}/package-receipt.json
-        run: node .github/scripts/verify-package.mjs
+          PACKAGE_OUTPUT: ${{ runner.temp }}/release-artifact/release.tgz
+          PACKAGE_RECEIPT: ${{ runner.temp }}/release-artifact/package-receipt.json
+        run: |
+          mkdir -p "${{ runner.temp }}/release-artifact"
+          node .github/scripts/verify-package.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-package-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-artifact/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-24.04
+    environment: npm-release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # registry-url would create token-auth config and a NODE_AUTH_TOKEN placeholder.
+      # npm publish selects the public registry explicitly and authenticates with OIDC.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-package-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-artifact
       - name: Publish and reconcile release records
         env:
           GH_TOKEN: ${{ github.token }}
-          PACKAGE_RECEIPT: ${{ runner.temp }}/package-receipt.json
+          PACKAGE_RECEIPT: ${{ runner.temp }}/release-artifact/package-receipt.json
+          PACKAGE_ARTIFACT_DIR: ${{ runner.temp }}/release-artifact
           RELEASE_VERSION: ${{ inputs.version }}
         run: node .github/scripts/publish.mjs
       - name: Preserve release receipt
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-receipt-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             release-receipt.json
-            ${{ runner.temp }}/package-receipt.json
+            ${{ runner.temp }}/release-artifact/package-receipt.json
           if-no-files-found: warn
