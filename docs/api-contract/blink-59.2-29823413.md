@@ -634,6 +634,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | `AccessName` | enum | 1 | direct | `com/immediasemi/blink/db/enums/AccessName.java` |
 | `AccessReason` | enum | 1 | direct | `com/immediasemi/blink/db/enums/AccessReason.java` |
 | `AccessStatus` | enum | 1 | direct | `com/immediasemi/blink/db/enums/AccessStatus.java` |
+| `AccessTarget` | enum | 1 | direct | `com/immediasemi/blink/db/enums/AccessTarget.java` |
 | `EntitlementReason` | enum | 1 | direct | `com/immediasemi/blink/db/enums/EntitlementReason.java` |
 | `EntitlementStatus` | enum | 1 | direct | `com/immediasemi/blink/db/enums/EntitlementStatus.java` |
 | `EventDataKey` | enum | 1 | direct | `com/immediasemi/blink/db/EventDataKey.java` |
@@ -944,7 +945,6 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | accounts.google.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | aomedia.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | apache.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| api | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | api-events-config-staging.tilestream.net | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | api-events-staging.tilestream.net | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | api.mapbox.com | Mapbox | Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog. |
@@ -959,13 +959,11 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | blink.helpjuice.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | blinkforhome.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | bugsnag.com | Bugsnag | Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog. |
-| c | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | clientsapigw.us-east-1.beta.v2.gws.ring.amazon.dev | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | cloud.google.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | cloudfront-staging.tilestream.net | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | code.amazon.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | config.mapbox.com | Mapbox | Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog. |
-| d | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | dashif.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | default.url | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | developer.android.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
@@ -977,11 +975,9 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | docs.python.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | download.ring.com | Blink/Ring static content or observability | First-party host, but not an application API contract. |
 | dummy.retrofitapibuilder.url | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| e | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | events.mapbox.com | Mapbox | Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog. |
 | events.mobile.crashtracking.prod.ring.com | Blink/Ring static content or observability | First-party host, but not an application API contract. |
 | example.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| f | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | fastly.picsum.photos | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | fcmregistrations.googleapis.com | Google | Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog. |
 | firebase-settings.crashlytics.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
@@ -1031,8 +1027,6 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | token.token.prod.service.minerva.devices.a2z.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | w.amazon.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | wiki.labcollab.net | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| wrapperns | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.amazon-customtabtest.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.amazon.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.amazonforum.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
@@ -1047,14 +1041,12 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | www.slf4j.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.smpte-ra.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.w3.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| x | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | xml.apache.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | xml.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | xmlpull.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | youtrack.jetbrains.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | android.googlesource.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.tensorflow.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| http | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | crashpad.chromium.org | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | crbug.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | webrtc.googlesource.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
@@ -1062,56 +1054,19 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 | aomediacodec.github.io | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | crl.comodoca.com | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | crl.comodo.net | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| descriptionrelatively | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| applicationslink | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| navigation | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| px | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.world | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.years | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| interested | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| familiar | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| was | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| ain | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| whether | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| interpreted | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| addeventlistenerresponsible | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| according | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.interpretation | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| html4 | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| style= | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| staticsuggested | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www.a | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| an | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.recent | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| in | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www. | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| cript | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www.wencodeuricomponent( | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| encoding= | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.icon | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| imenglish | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| i | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| site_name | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.hortcut | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| iparticipation | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| xt | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| link | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| option | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| w | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| .css | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www.style= | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 | www.css | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| ator | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www.language= | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www- | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| ua-compatible | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
-| www.c | Other bundled dependency | Host is not owned by Blink, Immedia, Ring, or Amazon Vision Operations. |
 
 ## Unresolved evidence and completeness
 
 - Active normalized contracts: 320
-- Models recovered: 474
-- Unresolved candidates: 320
+- Models recovered: 475
+- Unresolved candidates: 349
 - Smali-only contracts: 2
 - Active contracts without smali evidence: 0
 - Unresolved models: 0
@@ -1123,6 +1078,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST setups/{setupId}/complete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET evm/v2/timeline/24/devices/{source_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.LastConnect` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/state/arm` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v5/clients/{injected_client_id}/client_verification/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1133,6 +1089,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST api/set/ssid` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST geocoding/v1/geocode` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Setup` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET ees/v2/history/extendedsearchmetadata` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1145,10 +1102,12 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network_id}/snooze` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET devices/v2/locations` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/identities` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.STAGE_TYPE` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET regions` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/users/pin/resend` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbell}/power_test` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PUT duos/v1/devices/{deviceId}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.MAX_RECORDING_RESOLUTION` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `PATCH v1/identities/{id}/enrollment-images/actions/move-enrollment-images` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/temp_alert_disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1188,6 +1147,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `DELETE evm/v2/events/associations/{profile_Id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET geocoding/v1/ip/info/my` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/liveview` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.ring.blueprints.setup.core.data.backend.MetaData` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST device_info/v4/devices/operations` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network_id}/state/disarm` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/request` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1208,6 +1168,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `PATCH duos/v1/locations/{locationId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/programs/{program}/enable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/clients/{injected_client_id}/password_change/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.api.retrofit.SSId` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v4/users/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET accounts/{injected_account_id}/networks/{network}/commands/{command}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET evm/v2/timeline/events/eventito/{source_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1222,8 +1183,10 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/alexa/authorization` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/history/events/associations/{profile_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET location-subtypes` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.NETWORK_ORIGIN` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `PATCH devices/v1/devices/{deviceId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST setups` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.api.retrofit.Status` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE blink/clients_api/links/v1/locations/{locationId}/devices/{deviceId}/links/{linkId}?ignore_rbac=true&include_deactivated=false` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/accounts/{injected_account_id}/media/unfavorite` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1241,6 +1204,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v4/clients/{injected_client_id}/logout` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/snooze` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/subscriptions/plans/create_trial` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.LIVEVIEW_STATE` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{camera}/accessories/{accessoryType}/{accessoryId}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/identities/{id}/actions/split-identity` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET location_info/v3/locations` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1250,12 +1214,14 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `GET v2/users/info` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/programs/{program}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/add` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Setup` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v2/notification` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/accounts/{injected_account_id}/media/mark_as_viewed` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/users/preferences` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/request/{clipId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.SEQUENTIAL_ALERTS_STATUS` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v1/users/options` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v4/accounts/{injected_account_id}/subscriptions/plans` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH v4/accounts/{injected_account_id}/media_settings` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1275,12 +1241,16 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/commands/{command}/done` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/notifications/preferences` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/clients/{injected_client_id}/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.accessory.chime.Health` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
+- **model-field-reference:** `com.immediasemi.blink.common.device.duos.DeviceBulkUpdateError` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/commands/{command}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH devices/{deviceId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.RegionClient` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
+- **model-field-reference:** `com.immediasemi.blink.scheduling.ProgramStatusCallback` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET evm/v2/history/devices` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET blink/clients_api/links/v1/locations/{locationId}/devices/{deviceId}/links?ignore_rbac=true&include_deactivated=false` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST oauth/v2/verify_otp` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1308,6 +1278,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/cameras/{camera}/temp_alert_disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/clients/{injected_client_id}/tiv` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/mount` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Meta` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/add` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PUT duos/v1/devices/{deviceId}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1326,7 +1297,9 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v4/accounts/{injected_account_id}/media/{mediaId}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET system/config/network` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Data` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST sos/v1/setups` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Included` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/bulk_location_assignment` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/shared/summary` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET evm/v2/history/events/{eventId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1347,6 +1320,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v4/users/password_change/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/shared/authorizations/{authorizationId}/revoke` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST evm/v2/history/extendedsearch` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.VIDEO_DESTINATION` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `DELETE v1/identities/{id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/identities/{id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET factory_profile` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1362,10 +1336,12 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `DELETE v1/shared/invitations/{invitationId}/decline` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE evm/v2/dings` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/smart_video_descriptions` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Attributes` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/sync_modules/{serial}/fw_update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network_id}/owls/{owl_id}/accessories/rosie/{rosie_id}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/shared_login` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.video.clip.media.Filters` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `PUT dings/{dingId}/favorite` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET @Url` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v2/accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/config` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1376,12 +1352,15 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/manifest/{manifestId}/clip/delete/{clipId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/clients/{injected_client_id}/email_change` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/doorbells/{serial}/fw_update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.CONDITION_TYPE` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET api/ssids` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v3/users/validate_email` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/subscriptions/link/unlink_account` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET clients_api/setups/{setupId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET apphelp.immedia-semi.com/link-manifest.json` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/identities/{id}/enrollment-images` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Data` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.RegionWireless` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/system_offline/{network}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE v1/alexa/link` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `PATCH v1/identities/{id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1390,6 +1369,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `GET v1/shared_login` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `DELETE recordings/public/footages/{deviceId}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v4/users/password_change` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.common.device.ringsos.Setup` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/shared_login/request_pin` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/clients/{injected_client_id}/shared_login/pin/verify` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/programs/{program}/disable` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1407,6 +1387,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `POST v1/notifications/preferences` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{networkId}/owls/{owlId}/change_wifi` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET api/get_fw_version` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.LED_ILLUMINATOR_STATE` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{lotus}/zones` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{networkId}/sync_modules/{syncModuleId}/local_storage/status` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/owls/{serial}/fw_update` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1422,6 +1403,7 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `DELETE evm/v2/events/time-based-deletion/{source_id}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET geocoding/v1/reverse-geocode` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{networkId}/cameras/{cameraId}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.CAMERA_STATUS` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs/{program}/delete` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v5/clients/{injected_client_id}/phone_number_change` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST accounts/{injected_account_id}/networks/{network}/cameras/{camera}/thumbnail` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
@@ -1433,8 +1415,10 @@ Corroborated service-level static evidence retains hosted authorization, `oauth/
 - **endpoint-behavior:** `GET sos/v1/factory_profile` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/clients/{injected_client_id}/control_panel/clients` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/data_request/list` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.COMMAND_TYPE` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/networks/{network}/owls/{owl}/programs` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/access` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
+- **model-field-reference:** `com.immediasemi.blink.models.Duration` — The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.
 - **endpoint-behavior:** `POST v1/subscriptions/request/status/{uuid}` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `GET v1/accounts/{injected_account_id}/smart_video_descriptions` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.
 - **endpoint-behavior:** `POST v1/accounts/{injected_account_id}/networks/{network}/doorbells/{doorbellId}/calibrate` — The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.

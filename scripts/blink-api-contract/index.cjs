@@ -149,8 +149,9 @@ function sourceImports(text) {
 }
 
 function qualifyType(type, sourceText) {
-  const name = extractTypeName(type);
-  if (!name || /^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(name)) return name;
+  const candidates = `${type || ''}`.match(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g) || [];
+  const name = candidates.at(-1);
+  if (!name || /^(?:boolean|byte|char|double|float|int|long|short|void|Unit|Object|String|Long|Integer|Boolean|Byte|Character|Double|Float|Short|Void|ResponseBody|RequestBody|unknown)$/.test(name)) return name;
   if (name.includes('.')) return name;
   return sourceImports(sourceText).get(name) || `${sourcePackage(sourceText)}.${name}`;
 }
@@ -201,6 +202,7 @@ function securityFlags(method, endpointPath) {
 
 function parseJavaEndpoints(sourcesRoot, apkHash) {
   const endpoints = [];
+  let annotationCandidates = 0;
   for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
     const text = fs.readFileSync(file, 'utf8');
     if (!/@(?:DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP)\b/.test(text)) continue;
@@ -209,6 +211,7 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
     const rel = relative(sourcesRoot, file);
     const annotationPattern = /@(DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|HTTP)\s*\(([^)]*)\)([\s\S]*?;)/g;
     for (const match of text.matchAll(annotationPattern)) {
+      annotationCandidates += 1;
       const annotation = match[1];
       const annotationArguments = match[2];
       const method = annotation === 'HTTP'
@@ -276,6 +279,7 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
       });
     }
   }
+  endpoints.annotationCandidates = annotationCandidates;
   return endpoints;
 }
 
@@ -310,7 +314,9 @@ function parseSmaliEndpoints(apktoolRoot, apkHash) {
         evidence: [{
           apkSha256: apkHash,
           split: 'base.apk',
-          dex: relative(apktoolRoot, file).split('/')[0].replace('smali_', '').replace('smali', 'classes.dex'),
+          dex: relative(apktoolRoot, file).split('/')[0] === 'smali'
+            ? 'classes.dex'
+            : `${relative(apktoolRoot, file).split('/')[0].replace('smali_classes', 'classes')}.dex`,
           source: relative(apktoolRoot, file),
           line: lineNumber(text, text.indexOf(verbMatch[0])),
           symbol: `${classDescriptor.replaceAll('/', '.')}.${methodMatch[1]}`,
@@ -490,6 +496,7 @@ function extractUrls(roots) {
         const value = match[0].replaceAll('\\/', '/').replace(/[),.;]+$/, '');
         let host;
         try { host = new URL(value.replace(/\{[^}]+}/g, 'token')).hostname; } catch { continue; }
+        if (!isValidUrlHost(host)) continue;
         const key = `${host}|${value}`;
         if (!candidates.has(key)) candidates.set(key, {
           url: value,
@@ -513,11 +520,27 @@ function extractNativeUrls(roots) {
         const value = match[0].replace(/[),.;]+$/, '');
         let host;
         try { host = new URL(value.replace(/\{[^}]+}/g, 'token')).hostname; } catch { continue; }
+        if (!isValidUrlHost(host)) continue;
         urls.push({ url: value, host, evidence: `${path.basename(root)}/${relative(root, file)}:native-strings` });
       }
     }
   }
   return urls;
+}
+
+function isValidUrlHost(host) {
+  if (/^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\])$/i.test(host)) return true;
+  return /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(host);
+}
+
+function canonicalUrl(value) {
+  try {
+    const parsed = new URL(value.replace(/\{[^}]+}/g, 'token'));
+    parsed.pathname = parsed.pathname === '/' ? '/' : parsed.pathname.replace(/\/+$/, '');
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
 }
 
 function extractProtocolIndicators(roots) {
@@ -549,9 +572,9 @@ function classifyUrls(urls, endpoints) {
   const firstPartyCandidates = [];
   const exclusions = [];
   const unresolved = [];
-  const knownBases = new Set(endpoints.map(item => item.baseHostTemplate));
+  const knownBases = new Set(endpoints.map(item => canonicalUrl(item.baseHostTemplate)));
   for (const item of urls) {
-    if (knownBases.has(item.url)) {
+    if (knownBases.has(canonicalUrl(item.url))) {
       firstPartyCandidates.push({ ...item, classification: 'service-base' });
       continue;
     }
@@ -559,7 +582,7 @@ function classifyUrls(urls, endpoints) {
     if (owner) {
       exclusions.push({ hostname: item.host, owner: owner[1], evidence: [item.evidence], reason: 'Bundled third-party SDK or service traffic; outside the Blink first-party contract catalog.' });
     } else if (FIRST_PARTY_HOSTS.some(pattern => pattern.test(item.host))) {
-      const classified = knownBases.has(item.url)
+      const classified = knownBases.has(canonicalUrl(item.url))
         || /(^|\.)eventstream\.immedia-semi\.com$/i.test(item.host);
       const nonApi = /(^|\.)(app-content|support)\.ring\.com$/i.test(item.host)
         || /(^|\.)(beta|gamma)\.site\.blink\.com$/i.test(item.host)
@@ -615,8 +638,13 @@ function toolVersion(command, args) {
 
 function reportedErrorCount(output) {
   const text = `${output.stdoutTail || ''}\n${output.stderrTail || ''}`;
-  const reported = text.match(/(?:with errors,\s*count:\s*|with\s+|,\s*)(\d+)\s*(?:errors?)?/i)?.[1];
+  const reported = text.match(/finished with errors,\s*count:\s*(\d+)/i)?.[1];
   return reported ? Number(reported) : output.errorCount;
+}
+
+function reportedWarningCount(output) {
+  const text = `${output.stdoutTail || ''}\n${output.stderrTail || ''}`;
+  return (text.match(/(?:\bWARN(?:ING)?\b|^W:)/gim) || []).length;
 }
 
 function readDecompilationReport(decompiledDir, metadata) {
@@ -634,7 +662,11 @@ function readDecompilationReport(decompiledDir, metadata) {
   if (JSON.stringify(report.apkSet.dexFiles) !== JSON.stringify(metadata.dexFiles)) {
     throw new Error(`Decompilation report DEX inventory does not match ${reportFile}`);
   }
-  report.outcomes = report.outcomes.map(outcome => ({ ...outcome, errorCount: reportedErrorCount(outcome) }));
+  report.outcomes = report.outcomes.map(outcome => ({
+    ...outcome,
+    errorCount: reportedErrorCount(outcome),
+    warningCount: reportedWarningCount(outcome),
+  }));
   report.jadxReportedErrors = report.outcomes.find(outcome => outcome.tool === 'jadx')?.errorCount || 0;
   return report;
 }
@@ -654,7 +686,7 @@ function extractSnapshot({ apkDir, decompiledDir }) {
   const urls = [...extractUrls(scanRoots), ...extractNativeUrls([decompiledDir])];
   const classifications = classifyUrls(urls, endpoints);
   const protocolIndicators = extractProtocolIndicators(scanRoots);
-  return { metadata, decompilationReport, endpoints, models, urls, classifications, protocolIndicators, counts: { javaBindings: javaEndpoints.length, smaliBindings: smaliEndpoints.length } };
+  return { metadata, decompilationReport, endpoints, models, urls, classifications, protocolIndicators, counts: { javaBindings: javaEndpoints.length, javaAnnotationCandidates: javaEndpoints.annotationCandidates, smaliBindings: smaliEndpoints.length } };
 }
 
 function applyLifecycle(current, baseline) {
@@ -683,6 +715,26 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     : null;
   if (baseline) applyLifecycle(current, baseline);
   const activeEndpoints = current.endpoints.filter(item => item.lifecycle !== 'removed');
+  const recoveredModelNames = new Set(current.models.flatMap(model => [model.name, model.qualifiedName]));
+  const modelReferenceUnresolved = [];
+  for (const model of current.models) {
+    for (const field of model.fields) {
+      const qualifiedType = field.qualifiedType;
+      const applicationType = /^(?:com\.(?:immediasemi|ring)|com\.amazon)\./.test(qualifiedType || '');
+      field.referenceState = !qualifiedType || /^(?:boolean|byte|char|double|float|int|long|short|void|Unit|Object|String|Long|Integer|Boolean|Byte|Character|Double|Float|Short|Void|unknown)$/.test(qualifiedType)
+        ? 'builtin'
+        : recoveredModelNames.has(qualifiedType) ? 'resolved' : applicationType ? 'unresolved' : 'external';
+      if (field.referenceState === 'unresolved') modelReferenceUnresolved.push({
+        id: `unresolved-${stableHash(`${model.id}|${field.sourceName}|${qualifiedType}`)}`,
+        category: 'model-field-reference',
+        modelId: model.id,
+        field: field.sourceName,
+        value: qualifiedType,
+        reason: 'The decompiled field type names an application class that was not uniquely recoverable as a top-level model declaration.',
+        evidence: model.evidence.map(item => `${item.source}:${item.line}`),
+      });
+    }
+  }
   const endpointEvidenceSources = new Set(activeEndpoints.flatMap(item => item.evidence.map(evidence => evidence.source)));
   const firstPartySmaliFiles = walk(path.join(decompiledDir, 'apktool-base'), item => item.endsWith('.smali') && /com\/(?:immediasemi|ring)\//.test(item));
   const diagnostics = {
@@ -690,7 +742,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     apktoolResourceWarnings: current.decompilationReport.outcomes
       .filter(outcome => outcome.tool === 'apktool')
       .reduce((count, outcome) => count + outcome.warningCount, 0),
-    unmatchedJavaRetrofitAnnotations: Math.max(0, current.counts.javaBindings - activeEndpoints.length),
+    unmatchedJavaRetrofitAnnotations: Math.max(0, current.counts.javaAnnotationCandidates - current.counts.javaBindings),
     smaliOnlyContracts: activeEndpoints.filter(item => item.evidence.every(evidence => evidence.method === 'apktool-smali')).length,
     activeContractsWithoutSmaliEvidence: activeEndpoints.filter(item =>
       !item.evidence.some(evidence => evidence.method === 'apktool-smali')).length,
@@ -738,7 +790,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     models: current.models,
     firstPartyCandidates: current.classifications.firstPartyCandidates,
     thirdPartyExclusions: current.classifications.exclusions,
-    unresolved: [...current.classifications.unresolved, ...behavioralUnresolved]
+    unresolved: [...current.classifications.unresolved, ...behavioralUnresolved, ...modelReferenceUnresolved]
       .sort((a, b) => a.id.localeCompare(b.id)),
     diagnostics,
     protocolIndicators: current.protocolIndicators,
@@ -752,7 +804,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
       activeNormalizedContracts: activeEndpoints.length,
       removedContracts: current.endpoints.length - activeEndpoints.length,
       modelsRecovered: current.models.length,
-      unresolvedCandidates: current.classifications.unresolved.length + behavioralUnresolved.length,
+      unresolvedCandidates: current.classifications.unresolved.length + behavioralUnresolved.length + modelReferenceUnresolved.length,
       unclassifiedFirstPartyCandidates: diagnostics.unclassifiedFirstPartyCandidates,
     },
   };
@@ -790,6 +842,20 @@ function validateContract(contract) {
     for (const ref of [...(endpoint.requestModelRefs || []), ...(endpoint.responseModelRefs || [])]) {
       if (!modelNames.has(ref) && !/^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(ref)) {
         errors.push(`${endpoint.id} unresolved model reference: ${ref}`);
+      }
+    }
+  }
+  const unresolvedModelFields = new Set((contract.unresolved || [])
+    .filter(item => item.category === 'model-field-reference')
+    .map(item => `${item.modelId}|${item.field}|${item.value}`));
+  for (const model of contract.models || []) {
+    for (const field of model.fields || []) {
+      if (!['builtin', 'resolved', 'external', 'unresolved'].includes(field.referenceState)) {
+        errors.push(`${model.id}.${field.sourceName} invalid model reference state`);
+      }
+      if (field.referenceState === 'unresolved'
+        && !unresolvedModelFields.has(`${model.id}|${field.sourceName}|${field.qualifiedType}`)) {
+        errors.push(`${model.id}.${field.sourceName} missing unresolved model-field record`);
       }
     }
   }
@@ -834,13 +900,13 @@ function decompileApkSet(apkDir, outputDir) {
     const stderr = `${result.stderr || ''}`;
     const stdout = `${result.stdout || ''}`;
     const diagnosticOutput = `${stdout}\n${stderr}`;
-    const reported = diagnosticOutput.match(/(?:with errors,\s*count:\s*|with\s+|,\s*)(\d+)\s*(?:errors?)?/i)?.[1];
+    const reported = diagnosticOutput.match(/finished with errors,\s*count:\s*(\d+)/i)?.[1];
     return {
       tool,
       command,
       exitCode: result.status,
       errorCount: reported ? Number(reported) : (result.status === 0 ? 0 : (diagnosticOutput.match(/\bERROR\b/g) || []).length),
-      warningCount: (diagnosticOutput.match(/\bWARN(?:ING)?\b/gi) || []).length,
+      warningCount: (diagnosticOutput.match(/(?:\bWARN(?:ING)?\b|^W:)/gim) || []).length,
       stdoutTail: stdout.slice(-20000),
       stderrTail: stderr.slice(-20000),
     };
@@ -993,12 +1059,16 @@ if (require.main === module) {
 
 module.exports = {
   buildContract,
+  canonicalUrl,
   extractProtocolIndicators,
   extractModels,
   mergeEndpoints,
   normalizePath,
   parseJavaEndpoints,
   parseSmaliEndpoints,
+  isValidUrlHost,
+  reportedErrorCount,
+  reportedWarningCount,
   renderMarkdown,
   splitParameters,
   validateContract,

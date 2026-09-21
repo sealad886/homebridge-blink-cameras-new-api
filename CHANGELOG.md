@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
   59.2 APK set, with JADX and smali recovery, native/protocol scanning, strict
   JSON Schema validation, and deterministic generated documentation.
 - Publish an AI-readable declaration catalog covering 320 active normalized
-  API contracts and 474 request/response models, including lifecycle comparison
+  API contracts and 475 request/response models, including lifecycle comparison
   with the retained Android 57.1 evidence baseline.
 
 ### Changed

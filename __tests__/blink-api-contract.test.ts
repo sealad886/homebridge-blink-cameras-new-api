@@ -20,6 +20,7 @@ describe('Blink APK API contract extraction', () => {
     );
 
     expect(endpoints).toHaveLength(4);
+    expect(endpoints.annotationCandidates).toBe(4);
     expect(endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -42,6 +43,8 @@ describe('Blink APK API contract extraction', () => {
         }),
       ]),
     );
+    expect(endpoints.every((endpoint: { evidence: Array<{ dex: string }> }) =>
+      endpoint.evidence.every(evidence => evidence.dex === 'classes2.dex'))).toBe(true);
   });
 
   it('recovers dynamic and fixed Retrofit contracts from smali', () => {
@@ -91,7 +94,10 @@ describe('Blink APK API contract extraction', () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: 'FixtureBody',
-          fields: [expect.objectContaining({ serializedName: 'motion_enabled' })],
+          fields: [expect.objectContaining({
+            serializedName: 'motion_enabled',
+            qualifiedType: 'boolean',
+          })],
         }),
         expect.objectContaining({
           name: 'FixtureResponse',
@@ -161,6 +167,25 @@ describe('Blink APK API contract extraction', () => {
 
     expect(errors.join('\n')).toMatch(/activeNormalizedContracts does not reconcile/);
     expect(errors.join('\n')).toMatch(/unclassifiedFirstPartyCandidates does not reconcile/);
+  });
+
+  it('parses only explicit decompiler diagnostics and canonicalizes URL hosts', () => {
+    expect(extractor.reportedErrorCount({
+      stdoutTail: 'Using Apktool with 8 threads\nW: Unresolved resource reference',
+      stderrTail: '', errorCount: 0,
+    })).toBe(0);
+    expect(extractor.reportedErrorCount({
+      stdoutTail: 'ERROR - finished with errors, count: 605',
+      stderrTail: '', errorCount: 1,
+    })).toBe(605);
+    expect(extractor.reportedWarningCount({
+      stdoutTail: 'W: first\nWARNING second', stderrTail: '',
+    })).toBe(2);
+    expect(extractor.isValidUrlHost('api.blink.com')).toBe(true);
+    expect(extractor.isValidUrlHost('descriptionrelatively')).toBe(false);
+    expect(extractor.canonicalUrl('https://api.blink.com/v1/')).toBe(
+      extractor.canonicalUrl('https://api.blink.com/v1'),
+    );
   });
 
   it('renders deterministically for the same canonical contract', () => {
