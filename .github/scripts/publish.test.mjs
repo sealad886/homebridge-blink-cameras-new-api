@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 const entry = resolve('.github/scripts/publish.mjs');
-function fixture({ existing = false, existingImmutableRelease = false, failRelease = false, badSha = false, badTag = false, staleChannel = false, version = '0.10.0-alpha.0', latest = '0.9.1' } = {}) {
+function fixture({ existing = false, existingImmutableRelease = false, failRelease = false, badSha = false, badTag = false, annotatedTag = false, staleChannel = false, version = '0.10.0-alpha.0', latest = '0.9.1' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'blink-publish-test-'));
   const packageBytes = Buffer.from('verified release fixture');
   const receipt = { name: 'test-package', version, sha: 'a'.repeat(40), integrity: 'sha512-' + createHash('sha512').update(packageBytes).digest('base64'), filename: join(root, 'release.tgz') };
@@ -18,7 +18,7 @@ function fixture({ existing = false, existingImmutableRelease = false, failRelea
     prerelease: true,
     immutable: true,
   } : null;
-  const state = { receipt, metadata: { name: receipt.name, versions: existing ? { [receipt.version]: record } : {}, 'dist-tags': { latest, ...(existing && !staleChannel ? { alpha: receipt.version } : {}) } }, calls: [], tag: (badTag ? 'b'.repeat(40) : existingImmutableRelease ? receipt.sha : ''), releases: release ? [release] : [], failRelease };
+  const state = { receipt, metadata: { name: receipt.name, versions: existing ? { [receipt.version]: record } : {}, 'dist-tags': { latest, ...(existing && !staleChannel ? { alpha: receipt.version } : {}) } }, calls: [], tag: (badTag ? 'b'.repeat(40) : existingImmutableRelease ? receipt.sha : ''), annotatedTag, releases: release ? [release] : [], failRelease };
   const statePath = join(root, 'state.json');
   writeFileSync(statePath, JSON.stringify(state));
   writeFileSync(receipt.filename, packageBytes);
@@ -37,7 +37,9 @@ const args = process.argv.slice(2);
 state.calls.push([command, ...args]);
 let output = '', status = 0;
 if (command === 'git') {
-  if (args[0] === 'ls-remote') output = state.receipt.sha + '\\trefs/heads/main';
+  if (args[0] === 'ls-remote') output = args.some(arg => arg.endsWith('^{}'))
+    ? state.tag + '\\t' + args.at(-1)
+    : state.receipt.sha + '\\trefs/heads/main';
 } else if (command === 'npm') {
   if (args[0] === '--version') output = '11.5.1';
   else if (args[0] === 'publish') {
@@ -46,7 +48,7 @@ if (command === 'git') {
   } else if (args[0] === 'dist-tag') state.metadata['dist-tags'][args[3]] = state.receipt.version;
 } else if (command === 'gh') {
   if (args[0] === 'api' && args.some(arg => arg.includes('matching-refs/tags/'))) {
-    output = JSON.stringify([state.tag ? [{ ref: 'refs/tags/v' + state.receipt.version, object: { type: 'commit', sha: state.tag } }] : []]);
+    output = JSON.stringify([state.tag ? [{ ref: 'refs/tags/v' + state.receipt.version, object: { type: state.annotatedTag ? 'tag' : 'commit', sha: state.annotatedTag ? 'c'.repeat(40) : state.tag } }] : []]);
   } else if (args[0] === 'api' && args.includes('POST')) {
     state.tag = state.receipt.sha;
   } else if (args[0] === 'api') output = JSON.stringify([state.releases]);
@@ -148,6 +150,14 @@ test('recovery validates an immutable release and leaves it unchanged', () => {
     assert.match(readFileSync(join(resolve(state.receipt.filename, '..'), 'release-receipt.json'), 'utf8'), /test-package/);
   } finally { testCase.cleanup(); }
 });
+test('recovery accepts an annotated tag that resolves to the published commit', () => {
+  const testCase = fixture({ existing: true, existingImmutableRelease: true, annotatedTag: true });
+  try {
+    const result = testCase.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert(!testCase.state().calls.some(([command, action]) => command === 'npm' && action === 'publish'));
+  } finally { testCase.cleanup(); }
+});
 test('rerun recovers GitHub release after successful npm publication', () => {
   const testCase = fixture({ failRelease: true });
   try {
@@ -159,7 +169,7 @@ test('rerun recovers GitHub release after successful npm publication', () => {
     assert.equal(state.releases.length, 1);
   } finally { testCase.cleanup(); }
 });
-for (const options of [{ existing: true, badSha: true }, { badTag: true }, { existing: true, staleChannel: true }, { version: '0.9.0', latest: '0.9.1' }]) {
+for (const options of [{ existing: true, badSha: true }, { badTag: true }, { badTag: true, annotatedTag: true }, { existing: true, staleChannel: true }, { version: '0.9.0', latest: '0.9.1' }]) {
   test(`rejects conflicting immutable release identity ${JSON.stringify(options)}`, () => {
     const testCase = fixture(options);
     try {

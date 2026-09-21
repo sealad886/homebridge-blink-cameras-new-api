@@ -35,8 +35,11 @@ const tagMatches = JSON.parse(run('gh', ['api', '--paginate', '--slurp',
   `repos/${process.env.GITHUB_REPOSITORY}/git/matching-refs/tags/v${version}`])).flat();
 const existingTag = tagMatches.find((item) => item.ref === tagRef);
 if (existingTag) {
-  assert.equal(existingTag.object?.type, 'commit', 'Release tag is not a lightweight commit tag');
-  assert.equal(existingTag.object.sha, sha, 'Release tag points to another revision');
+  const tagSha = existingTag.object?.type === 'commit'
+    ? existingTag.object.sha
+    : run('git', ['ls-remote', 'origin', `${tagRef}^{}`]).split(/\s+/)[0];
+  assert.match(tagSha, /^[a-f0-9]{40}$/, 'Release tag must resolve to a commit');
+  assert.equal(tagSha, sha, 'Release tag points to another revision');
 }
 if (!existing) {
   assert.equal(run('git', ['ls-remote', 'origin', 'refs/heads/main']).split(/\s+/)[0], sha, 'Source is no longer the main branch head; re-run gates on current main');

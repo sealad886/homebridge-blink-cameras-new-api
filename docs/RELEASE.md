@@ -19,14 +19,11 @@ npm settings, add a GitHub Actions trusted publisher with these exact values:
 | Environment | `npm-release` |
 | Allowed action | Direct `npm publish` |
 
-For an existing publisher without an environment, configure the
-`npm-release` restriction in npm's package Settings > Trusted publishing
-before merging this workflow change. If npm requires replacing the existing
-connection, retain or restore the current publish path until the new connection
-is saved. If a second publisher is added instead, remove the environment-less
-publisher after the first environment-bound publication succeeds. The npm
-website supports multiple publishers; the current `npm trust github` CLI may
-reject adding a second relationship while one exists.
+For an existing publisher without an environment, edit its environment in npm's
+package Settings > Trusted publishing to `npm-release` before merging this
+workflow change. If the existing relationship cannot be edited, replace it with
+one using the values above before dispatching a release. Verify the saved
+relationship in npm's package settings.
 
 For a first publisher, an authenticated npm CLI **11.15.0 or newer** with
 package write access and account 2FA can also configure it:
