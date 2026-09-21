@@ -518,13 +518,15 @@
     statusError.classList.add('hidden');
   }
 
-  function showConnectionStatus(verified, data) {
+  function showConnectionStatus(state, data) {
+    const verified = state === 'verified';
+    const failed = state === 'failed';
     successEmail.textContent = data.email || 'Blink account';
     successTier.textContent = data.tier || pluginConfig[0]?.tier || '-';
     successStatusBadge.classList.toggle('success', verified);
-    successStatusBadge.classList.toggle('warning', !verified);
+    successStatusBadge.classList.toggle('warning', failed);
     authStatusBadge.classList.toggle('badge-success', verified);
-    authStatusBadge.classList.toggle('badge-warning', !verified);
+    authStatusBadge.classList.toggle('badge-warning', failed);
 
     if (verified) {
       successStatusLabel.textContent = 'Authentication Successful';
@@ -532,12 +534,18 @@
       successSummary.textContent = 'Blink tokens are stored and verified.';
       authStatusBadge.textContent = 'Authenticated';
       hideStatusError();
-    } else {
+    } else if (failed) {
       successStatusLabel.textContent = 'Connection Check Needed';
       successTitle.textContent = 'Blink sign-in completed';
       successSummary.textContent = 'Blink tokens are stored, but the connection could not yet be verified.';
-      authStatusBadge.textContent = 'Verification pending';
+      authStatusBadge.textContent = 'Connection check failed';
       showStatusError('Use Test Connection to retry the Blink connection check.');
+    } else {
+      successStatusLabel.textContent = 'Sign-in stored';
+      successTitle.textContent = 'Blink sign-in stored';
+      successSummary.textContent = 'Blink tokens are stored. Use Test Connection to check the connection.';
+      authStatusBadge.textContent = 'Connection not checked';
+      hideStatusError();
     }
   }
 
@@ -566,17 +574,17 @@
     updateLockUI(true);
   }
 
-  async function handleAuthResponse(data) {
+  async function handleAuthResponse(data, { persistConfig = true, notify = true } = {}) {
     if (!data || data.authenticated !== true) {
       showError('Blink sign-in was not completed. Start a fresh sign-in and try again.');
       return;
     }
 
     try {
-      await saveTokenOnlyConfig(data);
+      if (persistConfig) await saveTokenOnlyConfig(data);
     } catch {
       setAuthLockVisibility(true);
-      showConnectionStatus(false, data);
+      showConnectionStatus('failed', data);
       showStep('success');
       showStatusError('Blink tokens are stored, but the Homebridge configuration could not be saved. Try saving again.');
       return;
@@ -585,24 +593,24 @@
     setAuthLockVisibility(true);
     homebridge.showSchemaForm();
 
+    if (data.requiresClientVerification) {
+      handleVerificationRequired('client', data);
+      return;
+    }
+    if (data.requiresAccountVerification) {
+      handleVerificationRequired('account', data);
+      return;
+    }
     if (data.verified === false) {
-      if (data.requiresClientVerification) {
-        handleVerificationRequired('client', data);
-        return;
-      }
-      if (data.requiresAccountVerification) {
-        handleVerificationRequired('account', data);
-        return;
-      }
-      showConnectionStatus(false, data);
+      showConnectionStatus('failed', data);
       showStep('success');
-      homebridge.toast.warning('Blink tokens are stored, but the connection still needs verification.', 'Verification needed');
+      if (notify) homebridge.toast.warning('Blink tokens are stored, but the connection check failed.', 'Connection check failed');
       return;
     }
 
-    showConnectionStatus(true, data);
+    showConnectionStatus(data.verified === true ? 'verified' : 'unchecked', data);
     showStep('success');
-    homebridge.toast.success('Blink tokens are stored and verified.', 'Connected');
+    if (notify && data.verified === true) homebridge.toast.success('Blink tokens are stored and verified.', 'Connected');
   }
 
   async function refreshAuthStatus() {
@@ -610,7 +618,7 @@
     try {
       const data = await homebridge.request('/status');
       if (data?.authenticated === true) {
-        await handleAuthResponse(data);
+        await handleAuthResponse(data, { persistConfig: false, notify: false });
       } else {
         setAuthLockVisibility(false);
         homebridge.hideSchemaForm();
@@ -929,7 +937,7 @@
 
   function handleVerificationRequired(type, data) {
     if (type !== 'client' && type !== 'account') {
-      showConnectionStatus(false, data);
+      showConnectionStatus('failed', data);
       showStep('success');
       return;
     }
@@ -979,7 +987,11 @@
         deviceId: deviceIdValue || pluginConfig[0]?.deviceId || 'homebridge-blink'
       });
       if (!response?.success) {
-        showError('Stored Blink tokens could not connect. Sign in securely with Blink again if this persists.');
+        const status = await refreshAuthStatus();
+        if (status?.authenticated && status.verified === false
+          && !status.requiresClientVerification && !status.requiresAccountVerification) {
+          showStatusError('Stored Blink tokens could not connect. Try again or sign in securely if this persists.');
+        }
         return;
       }
       await refreshAuthStatus();

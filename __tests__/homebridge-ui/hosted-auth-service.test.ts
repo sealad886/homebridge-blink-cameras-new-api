@@ -474,7 +474,6 @@ describe('HostedAuthService', () => {
 
     expect(status).toEqual({
       authenticated: true,
-      verified: false,
       email: 'persisted@example.com',
       accountId: 123,
       tier: 'prde',
@@ -506,7 +505,6 @@ describe('HostedAuthService', () => {
 
     await expect(service.status()).resolves.toEqual({
       authenticated: true,
-      verified: false,
       email: 'replacement@example.com',
       accountId: 999,
       tier: 'e001',
@@ -1285,6 +1283,28 @@ describe('HostedAuthService', () => {
     }));
     expect(api.login).toHaveBeenCalledTimes(1);
     expect(api.getHomescreen).toHaveBeenCalledTimes(1);
+    await expect(service.status()).resolves.toMatchObject({
+      authenticated: true,
+      verified: true,
+    });
+
+    const reopened = new HostedAuthService({ storageRoot, logger, apiFactory });
+    const reopenedStatus = await reopened.status();
+    expect(reopenedStatus.authenticated).toBe(true);
+    expect(reopenedStatus.verified).toBeUndefined();
+    expect(api.login).toHaveBeenCalledTimes(1);
+
+    await writeOwnerOnlyState(authStoragePath, persistedState({
+      accessToken: 'replacementAccessSentinel_6Mn4',
+      refreshToken: 'replacementRefreshSentinel_8Pt3',
+      email: 'replacement@example.com',
+    }));
+    const replacementStatus = await service.status();
+    expect(replacementStatus).toMatchObject({
+      authenticated: true,
+      email: 'replacement@example.com',
+    });
+    expect(replacementStatus.verified).toBeUndefined();
   });
 
   it('rejects credential-bearing connection payloads and bounds connection failures', async () => {
@@ -1310,6 +1330,81 @@ describe('HostedAuthService', () => {
     });
     expect(containsSecret(result, secret)).toBe(false);
     expect(entries.join('\n')).not.toContain(secret);
+    await expect(service.status()).resolves.toMatchObject({
+      authenticated: true,
+      verified: false,
+    });
+  });
+
+  it('exposes an explicit Blink verification requirement after a connection test', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.login.mockRejectedValue(new BlinkRestVerificationRequiredError('client', 'secret upstream text'));
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    await expect(service.testConnection({})).resolves.toMatchObject({ success: false });
+    await expect(service.status()).resolves.toMatchObject({
+      authenticated: true,
+      verified: false,
+      requiresClientVerification: true,
+    });
+  });
+
+  it('retains a failed connection result after login rotates stored tokens', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.login.mockImplementation(async () => {
+      await writeOwnerOnlyState(authStoragePath, persistedState({
+        accessToken: 'rotatedAccessSentinel_6Tv2',
+        refreshToken: 'rotatedRefreshSentinel_4Fw9',
+      }));
+    });
+    api.getHomescreen.mockRejectedValue(new Error('homescreen unavailable'));
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    await expect(service.testConnection({})).resolves.toMatchObject({ success: false });
+    await expect(service.status()).resolves.toMatchObject({
+      authenticated: true,
+      verified: false,
+    });
+    expect(api.getHomescreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not verify credentials replaced during the homescreen check', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger();
+    const api = createApiDouble();
+    api.getHomescreen.mockImplementation(async () => {
+      await writeOwnerOnlyState(authStoragePath, persistedState({
+        accessToken: 'replacementAccessSentinel_2Mw8',
+        refreshToken: 'replacementRefreshSentinel_5Hp4',
+        email: 'replacement@example.com',
+      }));
+      return { account: { account_id: 123 }, networks: [], cameras: [] };
+    });
+    const service = new HostedAuthService({
+      storageRoot,
+      logger,
+      apiFactory: () => asBlinkApi(api),
+    });
+
+    await expect(service.testConnection({})).resolves.toMatchObject({ success: false });
+    const status = await service.status();
+    expect(status).toMatchObject({
+      authenticated: true,
+      email: 'replacement@example.com',
+    });
+    expect(status.verified).toBeUndefined();
   });
 
   it.each([
