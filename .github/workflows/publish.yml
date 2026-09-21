@@ -46,9 +46,10 @@ jobs:
           node .github/scripts/verify-package.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: npm-package-${{ github.sha }}-${{ github.run_attempt }}
+          name: npm-package-${{ github.run_id }}
           path: ${{ runner.temp }}/release-artifact/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
   publish:
     if: github.ref == 'refs/heads/main'
@@ -71,7 +72,7 @@ jobs:
           package-manager-cache: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: npm-package-${{ github.sha }}-${{ github.run_attempt }}
+          name: npm-package-${{ github.run_id }}
           path: ${{ runner.temp }}/release-artifact
       - name: Publish and reconcile release records
         env:
