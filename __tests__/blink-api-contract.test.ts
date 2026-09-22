@@ -19,8 +19,8 @@ describe('Blink APK API contract extraction', () => {
       fakeHash,
     );
 
-    expect(endpoints).toHaveLength(6);
-    expect(endpoints.annotationCandidates).toBe(6);
+    expect(endpoints).toHaveLength(7);
+    expect(endpoints.annotationCandidates).toBe(7);
     expect(endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -45,6 +45,7 @@ describe('Blink APK API contract extraction', () => {
           method: 'GET', path: '@Url',
           responseModelRefs: ['com.immediasemi.blink.test.FixtureResponse'],
         }),
+        expect.objectContaining({ method: 'HEAD', path: '' }),
       ]),
     );
     expect(endpoints.every((endpoint: { evidence: Array<{ dex: string }> }) =>
@@ -100,10 +101,11 @@ describe('Blink APK API contract extraction', () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: 'FixtureBody',
-          fields: [expect.objectContaining({
-            serializedName: 'motion_enabled',
-            qualifiedType: 'boolean',
-          })],
+          fields: expect.arrayContaining([
+            expect.objectContaining({ serializedName: 'motion_enabled', qualifiedType: 'boolean' }),
+            expect.objectContaining({ serializedName: 'account_id' }),
+            expect.objectContaining({ serializedName: 'require_trust_client_device' }),
+          ]),
         }),
         expect.objectContaining({
           name: 'FixtureResponse',
@@ -181,6 +183,7 @@ describe('Blink APK API contract extraction', () => {
       normalizedIdentity: 'POST|rest|v1/test|FixtureBody', serviceFamily: 'rest',
       parameters: [], requestModelRefs: ['test.FixtureBody'], responseModelRefs: [],
       authentication: {}, lifecycle: 'unchanged',
+      bindings: [{ package: 'test', className: 'FixtureApi', methodName: 'post' }],
     };
     const model = (type: string) => ({
       name: 'FixtureBody', qualifiedName: 'test.FixtureBody', kind: 'object',
@@ -192,6 +195,50 @@ describe('Blink APK API contract extraction', () => {
 
     extractor.applyLifecycle(current, baseline);
 
+    expect(current.endpoints[0].lifecycle).toBe('changed');
+  });
+
+  it('ignores source field ordering when comparing wire models', () => {
+    const endpoint = {
+      id: 'ep-a', method: 'POST', path: 'v1/test',
+      normalizedIdentity: 'POST|rest|v1/test|FixtureBody', serviceFamily: 'rest',
+      parameters: [], requestModelRefs: ['test.FixtureBody'], responseModelRefs: [],
+      authentication: {}, lifecycle: 'unchanged',
+      bindings: [{ package: 'test', className: 'FixtureApi', methodName: 'post' }],
+    };
+    const field = (serializedName: string) => ({
+      serializedName, qualifiedType: 'String', nullable: false, default: null,
+    });
+    const model = (fields: Array<ReturnType<typeof field>>) => ({
+      name: 'FixtureBody', qualifiedName: 'test.FixtureBody', kind: 'object',
+      fields, enumValues: [], polymorphism: null,
+    });
+    const current = { endpoints: [{ ...endpoint }], models: [model([field('second'), field('first')])] };
+    const baseline = { endpoints: [{ ...endpoint }], models: [model([field('first'), field('second')])] };
+
+    extractor.applyLifecycle(current, baseline);
+
+    expect(current.endpoints[0].lifecycle).toBe('unchanged');
+  });
+
+  it('matches lifecycle by stable binding when wire parameters change', () => {
+    const base = {
+      id: 'ep-old', method: 'GET', path: 'v1/test', serviceFamily: 'rest',
+      requestModelRefs: [], responseModelRefs: [], authentication: {}, models: [],
+      bindings: [{ package: 'test', className: 'FixtureApi', methodName: 'get' }],
+    };
+    const baseline = { models: [], endpoints: [{
+      ...base, normalizedIdentity: 'GET|rest|v1/test|query:page:int',
+      parameters: [{ location: 'query', wireName: 'page', type: 'int' }],
+    }] };
+    const current: { models: unknown[]; endpoints: Array<Record<string, unknown>> } = { models: [], endpoints: [{
+      ...base, id: 'ep-new', normalizedIdentity: 'GET|rest|v1/test|query:cursor:String',
+      parameters: [{ location: 'query', wireName: 'cursor', type: 'String' }],
+    }] };
+
+    extractor.applyLifecycle(current, baseline);
+
+    expect(current.endpoints).toHaveLength(1);
     expect(current.endpoints[0].lifecycle).toBe('changed');
   });
 
@@ -242,6 +289,7 @@ describe('Blink APK API contract extraction', () => {
 
     expect(indicators.counts.websocket).toBeGreaterThan(0);
     expect(indicators.counts.streaming).toBeGreaterThan(0);
+    expect(indicators.counts.urlRewrite).toBeGreaterThan(0);
     const fixture = readFileSync(
       join(
         fixtureRoot,

@@ -124,7 +124,7 @@ function parseParameter(raw, index) {
     name,
     wireName,
     type,
-    required: !/Nullable|\b(Long|Integer|Boolean|String)\b/.test(raw) || /@Body|@Path/.test(raw),
+    required: /@Path/.test(raw) || !/@(?:[\w.]*\.)?Nullable\b/.test(raw),
   };
 }
 
@@ -226,7 +226,6 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
         failures.push({ source: rel, line: lineNumber(text, match.index), annotation, reason: 'Unsupported or missing HTTP method' });
         continue;
       }
-      const endpointPath = normalizePath(rawPath || '@Url');
       const signatureChunk = match[3].replace(/\/\*[\s\S]*?\*\//g, ' ').trim();
       const signatureLine = signatureChunk.split('\n').filter(line => !line.trim().startsWith('@')).join(' ').trim();
       const methodMatch = signatureLine.match(/(?:public\s+)?(?:abstract\s+)?(.+?)\s+([\w$]+)\s*\((.*)\)\s*;/);
@@ -237,11 +236,16 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
       const [, returnType, methodName, rawParameters] = methodMatch;
       const parameters = splitParameters(rawParameters)
         .map(parseParameter)
-        .filter(Boolean);
+        .filter(item => item && item.location !== 'unknown');
+      const endpointPath = normalizePath(rawPath ?? (parameters.some(item => item.location === 'url') ? '@Url' : ''));
       const service = resolveService(className, rel, endpointPath);
       const bodyTypes = parameters.filter(item => item.location === 'body').map(item => item.type).sort();
+      const parameterIdentity = parameters
+        .map(item => `${item.location}:${item.wireName || item.name}:${item.type}`)
+        .sort()
+        .join(',');
       const bindingIdentity = `${pkg}.${className}.${methodName}`;
-      const identity = `${method}|${service.family}|${endpointPath}|${bodyTypes.join(',')}${endpointPath === '@Url' ? `|${bindingIdentity}` : ''}`;
+      const identity = `${method}|${service.family}|${endpointPath}|${parameterIdentity}${endpointPath === '@Url' ? `|${bindingIdentity}` : ''}`;
       endpoints.push({
         id: `ep-${stableHash(identity)}`,
         method,
@@ -293,7 +297,7 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
   return endpoints;
 }
 
-function parseSmaliEndpoints(apktoolRoot, apkHash) {
+function parseSmaliEndpoints(apktoolRoot, apkHash, split = 'base.apk') {
   const endpoints = [];
   for (const file of walk(apktoolRoot, item => item.endsWith('.smali'))) {
     const text = fs.readFileSync(file, 'utf8');
@@ -309,7 +313,8 @@ function parseSmaliEndpoints(apktoolRoot, apkHash) {
         ? verbMatch[2].match(/method\s*=\s*"([A-Z]+)"/)?.[1]
         : verbMatch[1];
       if (!HTTP_METHODS.includes(method)) continue;
-      const pathValue = normalizePath(verbMatch[2].match(/(?:value|path)\s*=\s*"([^"]*)"/)?.[1] || '@Url');
+      const annotatedPath = verbMatch[2].match(/(?:value|path)\s*=\s*"([^"]*)"/)?.[1];
+      const pathValue = normalizePath(annotatedPath ?? (/Lretrofit2\/http\/Url;/.test(block) ? '@Url' : ''));
       const className = classDescriptor.split('/').at(-1);
       const service = resolveService(className, classDescriptor, pathValue);
       const bindingIdentity = `${classDescriptor.replaceAll('/', '.')}.${methodMatch[1]}`;
@@ -324,7 +329,7 @@ function parseSmaliEndpoints(apktoolRoot, apkHash) {
         binding: `${classDescriptor.replaceAll('/', '.')}.${methodMatch[1]}`,
         evidence: [{
           apkSha256: apkHash,
-          split: 'base.apk',
+          split,
           dex: relative(apktoolRoot, file).split('/')[0] === 'smali'
             ? 'classes.dex'
             : `${relative(apktoolRoot, file).split('/')[0].replace('smali_classes', 'classes')}.dex`,
@@ -341,6 +346,7 @@ function parseSmaliEndpoints(apktoolRoot, apkHash) {
 
 function mergeEndpoints(javaEndpoints, smaliEndpoints) {
   const byKey = new Map();
+  const unresolvedEvidence = [];
   for (const endpoint of javaEndpoints) {
     const key = endpoint.normalizedIdentity;
     const existing = byKey.get(key);
@@ -359,6 +365,7 @@ function mergeEndpoints(javaEndpoints, smaliEndpoints) {
       item.method === endpoint.method && item.path === endpoint.path
       && item.bindings.some(binding => `${binding.package ? `${binding.package}.` : ''}${binding.className}.${binding.methodName}` === endpoint.binding));
     if (compatible.length === 1) compatible[0].evidence.push(...endpoint.evidence);
+    else if (compatible.length > 1) unresolvedEvidence.push({ endpoint, candidateIds: compatible.map(item => item.id) });
     else smaliOnly.push(endpoint);
   }
   for (const endpoint of smaliOnly) {
@@ -380,7 +387,7 @@ function mergeEndpoints(javaEndpoints, smaliEndpoints) {
       security: securityFlags(endpoint.method, endpoint.path),
     });
   }
-  return [...byKey.values()]
+  const merged = [...byKey.values()]
     .map(endpoint => ({
       ...endpoint,
       evidence: endpoint.evidence
@@ -391,6 +398,8 @@ function mergeEndpoints(javaEndpoints, smaliEndpoints) {
         .sort((a, b) => `${a.className}.${a.methodName}`.localeCompare(`${b.className}.${b.methodName}`)),
     }))
     .sort((a, b) => a.serviceFamily.localeCompare(b.serviceFamily) || a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+  merged.unresolvedEvidence = unresolvedEvidence;
+  return merged;
 }
 
 function buildClassIndex(sourcesRoot) {
@@ -407,6 +416,14 @@ function buildClassIndex(sourcesRoot) {
   return index;
 }
 
+function snakeCase(value) {
+  return value
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-\s]+/g, '_')
+    .toLowerCase();
+}
+
 function parseModel(name, classIndex, sourcesRoot, apkHash) {
   const candidates = classIndex.get(name) || [];
   if (!candidates.length) return null;
@@ -417,14 +434,18 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
   if (!resolved) return null;
   const { file, text } = resolved;
   const fields = [];
-  const fieldPattern = /(?:@SerializedName\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\)\s*)?(?:private|public|protected)\s+((?:(?:static|final|transient|volatile)\s+)*)([\w.<>?, \[\]]+)\s+([\w$]+)\s*(?:=[^;]*)?;/g;
+  const kotlinSerializable = /@Serializable\b/.test(text)
+    && sourceImports(text).get('Serializable') === 'kotlinx.serialization.Serializable';
+  const getterSerialNames = new Map([...text.matchAll(/@SerialName\(\s*"([^"]+)"\s*\)\s*(?:public\s+)?static[^\n]*\bget([A-Z][\w$]*)\$annotations\s*\(/g)]
+    .map(match => [`${match[2][0].toLowerCase()}${match[2].slice(1)}`, match[1]]));
+  const fieldPattern = /(?:@SerializedName\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\)\s*)?(?:@SerialName\(\s*"([^"]+)"\s*\)\s*)?(?:private|public|protected)\s+((?:(?:static|final|transient|volatile)\s+)*)([\w.<>?, \[\]]+)\s+([\w$]+)\s*(?:=[^;]*)?;/g;
   for (const match of text.matchAll(fieldPattern)) {
-    const modifiers = match[2];
-    const type = match[3].trim();
-    const fieldName = match[4];
+    const modifiers = match[3];
+    const type = match[4].trim();
+    const fieldName = match[5];
     if (/\bstatic\b/.test(modifiers) || fieldName.includes('$') || /^(CREATOR|Companion|INSTANCE|serialVersionUID)$/.test(fieldName)) continue;
     fields.push({
-      serializedName: match[1] || fieldName,
+      serializedName: match[1] || match[2] || getterSerialNames.get(fieldName) || (kotlinSerializable ? snakeCase(fieldName) : fieldName),
       sourceName: fieldName,
       type,
       qualifiedType: qualifyType(type, text),
@@ -433,7 +454,8 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
     });
   }
   const enumValues = /\benum\s+/.test(text)
-    ? [...text.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*(?:\([^;]*\))?[,;]/gm)].map(match => match[1])
+    ? [...text.matchAll(/(?:@SerialName\(\s*"([^"]+)"\s*\)\s*)?^\s*([A-Z][A-Z0-9_]*)\s*(?:\([^;]*\))?[,;]/gm)]
+      .map(match => match[1] || (kotlinSerializable ? snakeCase(match[2]) : match[2]))
     : [];
   return {
     id: `model-${stableHash(resolved.qualifiedName)}`,
@@ -443,6 +465,7 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
     fields,
     enumValues,
     polymorphism: null,
+    serialization: kotlinSerializable ? { library: 'kotlinx.serialization', namingStrategy: 'snake_case', confidence: 'corroborated' } : { library: 'declaration', namingStrategy: 'explicit-or-source', confidence: 'direct' },
     evidence: [{
       apkSha256: apkHash,
       split: 'base.apk',
@@ -569,6 +592,7 @@ function extractProtocolIndicators(roots) {
     streaming: /rtsps?:\/\//i,
     rdis: /\brdis\b/i,
     duos: /\bduos\b|device update orchestration/i,
+    urlRewrite: /\.replace\(\s*"\{(?:tier|shared_tier|env|injected_account_id|injected_client_id)\}"/i,
   };
   const counts = Object.fromEntries(Object.keys(patterns).map(key => [key, 0]));
   const evidence = Object.fromEntries(Object.keys(patterns).map(key => [key, []]));
@@ -630,11 +654,12 @@ function classifyUrls(urls, endpoints) {
 }
 
 function apkMetadata(apkDir) {
-  const apks = walk(apkDir, item => item.endsWith('.apk')).map(file => ({
-    file: path.basename(file),
-    sha256: sha256(file),
-    size: fs.statSync(file).size,
-  }));
+  const apks = walk(apkDir, item => item.endsWith('.apk')).map(file => {
+    const apkName = path.basename(file);
+    const dexFiles = spawnSync('unzip', ['-Z1', file], { encoding: 'utf8' }).stdout
+      .split('\n').filter(item => /^classes\d*\.dex$/.test(item)).sort();
+    return { file: apkName, sha256: sha256(file), size: fs.statSync(file).size, dexFiles };
+  });
   const base = apks.find(item => item.file === 'base.apk');
   if (!base) throw new Error(`No base.apk found under ${apkDir}`);
   const dirname = path.basename(path.dirname(apkDir));
@@ -645,8 +670,7 @@ function apkMetadata(apkDir) {
     versionCode: versionMatch ? Number(versionMatch[2]) : 0,
     splits: apks,
     baseSha256: base.sha256,
-    dexFiles: spawnSync('unzip', ['-Z1', path.join(apkDir, 'base.apk')], { encoding: 'utf8' }).stdout
-      .split('\n').filter(item => /^classes\d*\.dex$/.test(item)).sort(),
+    dexFiles: apks.flatMap(apk => apk.dexFiles.map(dex => apk.file === 'base.apk' ? dex : `${apk.file}:${dex}`)).sort(),
   };
 }
 
@@ -694,62 +718,87 @@ function extractSnapshot({ apkDir, decompiledDir }) {
   const metadata = apkMetadata(apkDir);
   const decompilationReport = readDecompilationReport(decompiledDir, metadata);
   const sourcesRoot = path.join(decompiledDir, 'jadx', 'sources');
-  const apktoolRoot = path.join(decompiledDir, 'apktool-base');
+  const apktoolRoots = metadata.splits.map(split => ({
+    root: path.join(decompiledDir, `apktool-${path.basename(split.file, '.apk')}`),
+    split,
+  }));
   if (!fs.existsSync(sourcesRoot)) throw new Error(`Missing JADX sources: ${sourcesRoot}`);
-  if (!fs.existsSync(apktoolRoot)) throw new Error(`Missing apktool output: ${apktoolRoot}`);
+  for (const item of apktoolRoots) if (!fs.existsSync(item.root)) throw new Error(`Missing apktool output: ${item.root}`);
   const javaEndpoints = parseJavaEndpoints(sourcesRoot, metadata.baseSha256);
-  const smaliEndpoints = parseSmaliEndpoints(apktoolRoot, metadata.baseSha256);
+  const smaliEndpoints = apktoolRoots.flatMap(item => parseSmaliEndpoints(item.root, item.split.sha256, item.split.file));
   const endpoints = mergeEndpoints(javaEndpoints, smaliEndpoints);
   const models = extractModels(endpoints, sourcesRoot, metadata.baseSha256);
-  const scanRoots = [path.join(decompiledDir, 'jadx'), apktoolRoot];
+  const scanRoots = [path.join(decompiledDir, 'jadx'), ...apktoolRoots.map(item => item.root)];
   const urls = [...extractUrls(scanRoots), ...extractNativeUrls([decompiledDir])];
   const classifications = classifyUrls(urls, endpoints);
   const protocolIndicators = extractProtocolIndicators(scanRoots);
-  return { metadata, decompilationReport, endpoints, models, urls, classifications, protocolIndicators, javaAnnotationFailures: javaEndpoints.failures, counts: { javaBindings: javaEndpoints.length, javaAnnotationCandidates: javaEndpoints.annotationCandidates, smaliBindings: smaliEndpoints.length } };
+  return { metadata, decompilationReport, apktoolRoots, endpoints, models, urls, classifications, protocolIndicators, javaAnnotationFailures: javaEndpoints.failures, unresolvedSmaliEvidence: endpoints.unresolvedEvidence, counts: { javaBindings: javaEndpoints.length, javaAnnotationCandidates: javaEndpoints.annotationCandidates, smaliBindings: smaliEndpoints.length } };
 }
 
 function endpointModelShape(endpoint, snapshot) {
   const byName = new Map(snapshot.models.flatMap(model => [[model.name, model], [model.qualifiedName, model]]));
-  const visited = new Set();
-  const visit = name => {
-    if (!name || visited.has(name)) return null;
+  const visit = (name, ancestors = new Set()) => {
+    if (!name) return null;
     const model = byName.get(name);
     if (!model) return null;
-    visited.add(name);
+    if (ancestors.has(model.qualifiedName)) return { qualifiedName: model.qualifiedName, cycle: true };
+    const nestedAncestors = new Set(ancestors).add(model.qualifiedName);
     return {
       qualifiedName: model.qualifiedName,
       kind: model.kind,
-      fields: model.fields.map(field => ({
+      fields: [...model.fields]
+        .sort((a, b) => a.serializedName.localeCompare(b.serializedName)
+          || String(a.qualifiedType || a.type).localeCompare(String(b.qualifiedType || b.type)))
+        .map(field => ({
         serializedName: field.serializedName,
         type: field.qualifiedType || field.type,
         nullable: field.nullable,
         default: field.default,
-        nested: visit(field.qualifiedType),
+        nested: visit(field.qualifiedType, nestedAncestors),
       })),
-      enumValues: model.enumValues,
+      enumValues: [...model.enumValues].sort(),
       polymorphism: model.polymorphism,
     };
   };
   return [...endpoint.requestModelRefs, ...endpoint.responseModelRefs]
-    .map(visit)
+    .map(name => visit(name))
     .filter(Boolean)
     .sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName));
 }
 
+function endpointBindingKeys(endpoint) {
+  return (endpoint.bindings || []).map(binding =>
+    `${endpoint.serviceFamily}|${binding.package ? `${binding.package}.` : ''}${binding.className}.${binding.methodName}`);
+}
+
 function applyLifecycle(current, baseline) {
   const oldByWire = new Map(baseline.endpoints.map(item => [item.normalizedIdentity, item]));
-  const currentByWire = new Map(current.endpoints.map(item => [item.normalizedIdentity, item]));
+  const oldByBinding = new Map();
+  for (const endpoint of baseline.endpoints) {
+    for (const key of endpointBindingKeys(endpoint)) {
+      if (!oldByBinding.has(key)) oldByBinding.set(key, []);
+      oldByBinding.get(key).push(endpoint);
+    }
+  }
+  const matchedBaseline = new Set();
   for (const endpoint of current.endpoints) {
-    const old = oldByWire.get(endpoint.normalizedIdentity);
+    let old = oldByWire.get(endpoint.normalizedIdentity);
+    if (!old) {
+      const candidates = [...new Set(endpointBindingKeys(endpoint)
+        .flatMap(key => oldByBinding.get(key) || []))]
+        .filter(candidate => !matchedBaseline.has(candidate.id));
+      if (candidates.length === 1) [old] = candidates;
+    }
     if (!old) endpoint.lifecycle = 'added';
     else {
-      const oldShape = JSON.stringify({ parameters: old.parameters, requestModelRefs: old.requestModelRefs, responseModelRefs: old.responseModelRefs, authentication: old.authentication, models: endpointModelShape(old, baseline) });
-      const newShape = JSON.stringify({ parameters: endpoint.parameters, requestModelRefs: endpoint.requestModelRefs, responseModelRefs: endpoint.responseModelRefs, authentication: endpoint.authentication, models: endpointModelShape(endpoint, current) });
+      matchedBaseline.add(old.id);
+      const oldShape = JSON.stringify({ parameters: old.parameters.filter(item => item.location !== 'unknown'), requestModelRefs: old.requestModelRefs, responseModelRefs: old.responseModelRefs, authentication: old.authentication, models: endpointModelShape(old, baseline) });
+      const newShape = JSON.stringify({ parameters: endpoint.parameters.filter(item => item.location !== 'unknown'), requestModelRefs: endpoint.requestModelRefs, responseModelRefs: endpoint.responseModelRefs, authentication: endpoint.authentication, models: endpointModelShape(endpoint, current) });
       endpoint.lifecycle = oldShape === newShape ? 'unchanged' : 'changed';
     }
   }
   const removed = baseline.endpoints
-    .filter(item => !currentByWire.has(item.normalizedIdentity))
+    .filter(item => !matchedBaseline.has(item.id))
     .map(item => ({ ...item, lifecycle: 'removed' }));
   current.endpoints.push(...removed);
   current.endpoints.sort((a, b) => a.serviceFamily.localeCompare(b.serviceFamily) || a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
@@ -783,7 +832,8 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     }
   }
   const endpointEvidenceSources = new Set(activeEndpoints.flatMap(item => item.evidence.map(evidence => evidence.source)));
-  const firstPartySmaliFiles = walk(path.join(decompiledDir, 'apktool-base'), item => item.endsWith('.smali') && /com\/(?:immediasemi|ring)\//.test(item));
+  const firstPartySmaliFiles = current.apktoolRoots.flatMap(item =>
+    walk(item.root, file => file.endsWith('.smali') && /com\/(?:immediasemi|ring)\//.test(file)));
   const diagnostics = {
     jadxReportedErrors: current.decompilationReport.jadxReportedErrors,
     apktoolResourceWarnings: current.decompilationReport.outcomes
@@ -810,6 +860,20 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     reason: 'The Retrofit declaration proves the wire binding, but the retained static evidence does not uniquely establish these runtime behaviors.',
     evidence: endpoint.evidence.map(item => `${item.source}:${item.line}`),
   })).filter(item => item.unresolvedFields.length);
+  const extractionUnresolved = [
+    ...current.javaAnnotationFailures.map(item => ({
+      id: `unresolved-${stableHash(`java|${item.source}|${item.line}`)}`,
+      category: 'java-retrofit-annotation', value: `${item.source}:${item.line}`,
+      reason: item.reason, evidence: [`${item.source}:${item.line}`],
+    })),
+    ...current.unresolvedSmaliEvidence.map(item => ({
+      id: `unresolved-${stableHash(`smali|${item.endpoint.binding}|${item.endpoint.path}`)}`,
+      category: 'smali-evidence-binding', value: item.endpoint.binding,
+      candidateEndpointIds: item.candidateIds,
+      reason: 'Smali evidence matched multiple normalized Java contracts and was not attached ambiguously.',
+      evidence: item.endpoint.evidence.map(evidence => `${evidence.source}:${evidence.line}`),
+    })),
+  ];
   const contract = {
     schemaVersion: '1.1.0',
     artifact: {
@@ -837,7 +901,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     models: current.models,
     firstPartyCandidates: current.classifications.firstPartyCandidates,
     thirdPartyExclusions: current.classifications.exclusions,
-    unresolved: [...current.classifications.unresolved, ...behavioralUnresolved, ...modelReferenceUnresolved]
+    unresolved: [...current.classifications.unresolved, ...behavioralUnresolved, ...modelReferenceUnresolved, ...extractionUnresolved]
       .sort((a, b) => a.id.localeCompare(b.id)),
     diagnostics,
     protocolIndicators: current.protocolIndicators,
@@ -851,7 +915,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
       activeNormalizedContracts: activeEndpoints.length,
       removedContracts: current.endpoints.length - activeEndpoints.length,
       modelsRecovered: current.models.length,
-      unresolvedCandidates: current.classifications.unresolved.length + behavioralUnresolved.length + modelReferenceUnresolved.length,
+      unresolvedCandidates: current.classifications.unresolved.length + behavioralUnresolved.length + modelReferenceUnresolved.length + extractionUnresolved.length,
       unclassifiedFirstPartyCandidates: diagnostics.unclassifiedFirstPartyCandidates,
     },
   };
@@ -869,6 +933,7 @@ function validateContract(contract) {
   const ids = new Set();
   const identities = new Set();
   const modelNames = new Set((contract.models || []).flatMap(model => [model.name, model.qualifiedName]));
+  const activeSplitHashes = new Map((contract.artifact?.splits || []).map(split => [split.file, split.sha256]));
   for (const endpoint of contract.endpoints || []) {
     for (const key of ['id', 'method', 'path', 'normalizedIdentity', 'serviceFamily', 'baseHostTemplate', 'authentication', 'evidence', 'confidence', 'lifecycle', 'security']) {
       if (endpoint[key] == null) errors.push(`${endpoint.id || 'endpoint'} missing ${key}`);
@@ -885,6 +950,9 @@ function validateContract(contract) {
     }
     for (const evidence of endpoint.evidence || []) {
       if (!/^[a-f0-9]{64}$/.test(evidence.apkSha256 || '')) errors.push(`${endpoint.id} evidence missing APK SHA-256`);
+      if (endpoint.lifecycle !== 'removed' && activeSplitHashes.get(evidence.split) !== evidence.apkSha256) {
+        errors.push(`${endpoint.id} evidence hash does not match split ${evidence.split}`);
+      }
     }
     for (const ref of [...(endpoint.requestModelRefs || []), ...(endpoint.responseModelRefs || [])]) {
       if (!modelNames.has(ref) && !/^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(ref)) {
@@ -1108,6 +1176,8 @@ module.exports = {
   buildContract,
   canonicalUrl,
   applyLifecycle,
+  endpointModelShape,
+  extractSnapshot,
   extractProtocolIndicators,
   extractModels,
   mergeEndpoints,

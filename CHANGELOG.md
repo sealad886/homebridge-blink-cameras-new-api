@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file.
 - Add a reproducible static-analysis pipeline for the official Blink Android
   59.2 APK set, with JADX and smali recovery, native/protocol scanning, strict
   JSON Schema validation, and deterministic generated documentation.
-- Publish an AI-readable declaration catalog covering 332 active normalized
+- Publish an AI-readable declaration catalog covering 334 active normalized
   API contracts and 652 request/response models, including recursive
   model-shape lifecycle comparison with the retained Android 57.1 evidence
   baseline.

@@ -20,4 +20,7 @@ public interface FixtureApi {
 
     @POST
     Object upload(@Url String url, @Body FixtureBody body, Continuation<? super FixtureResponse> continuation);
+
+    @HEAD
+    Object root();
 }
