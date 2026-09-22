@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-beta.0] - 2026-09-21
+
+### Added
+
+- Add a reproducible static-analysis pipeline for the official Blink Android
+  59.2 APK set, with JADX and smali recovery, native/protocol scanning, strict
+  JSON Schema validation, and deterministic generated documentation.
+- Publish an AI-readable declaration catalog covering 334 active normalized
+  API contracts and 652 request/response models, including recursive
+  model-shape lifecycle comparison with the retained Android 57.1 evidence
+  baseline.
+
+### Changed
+
+- Advance the `0.10.0` release line to beta for broader acceptance of network
+  exclusions, hosted-authentication state handling, and serialized motion
+  commands delivered during the alpha stage.
+- Treat first-party static content and observability hosts separately from API
+  contracts so unresolved and unclassified endpoint counts remain meaningful.
+
+### Known limitations
+
+- Blink's interfaces remain private and can change without notice. Static APK
+  declarations do not prove current server behavior or authorize destructive
+  API calls.
+- The catalog explicitly marks call sites, response/error/polling semantics,
+  and device-family attribution as unresolved where the retained static
+  evidence does not establish them uniquely; it is not a runtime behavior map.
+- Beta runtime acceptance still requires private hosted sign-in, logout and
+  relogin, offline recovery, at least 24 hours of observation, and one natural
+  token refresh after exact-version installation.
+
 ## [0.10.0-alpha.2] - 2026-09-20
 
 ### Fixed

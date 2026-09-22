@@ -1,5 +1,10 @@
 # Blink API Dossier (APK Evidence)
 
+> Historical 57.1 evidence and bounded live observations are preserved below
+> with their original E1–E95 identifiers. The canonical current static catalog
+> is `docs/api-contract/blink-59.2-29823413.json`; its generated human view is
+> `docs/api-contract/blink-59.2-29823413.md`.
+
 This dossier combines the earlier endpoint inventory with the locally retained,
 git-ignored Blink Android 57.1 (`versionCode` 29715642) JADX/apktool snapshot
 under `logs/blink-apk/57.1-29715642/decompiled/`. APK/decompilation artifacts
