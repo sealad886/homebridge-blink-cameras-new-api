@@ -108,7 +108,32 @@ function extractTypeName(type) {
   return identifiers?.at(-1) || null;
 }
 
-function parseParameter(raw, index) {
+function resolveStringConstant(expression, sourceText, constantIndex) {
+  const value = expression.trim();
+  if (/^"(?:[^"\\]|\\.)*"$/.test(value)) {
+    try { return JSON.parse(value); } catch { return null; }
+  }
+  if (!/^[\w$]+(?:\.[\w$]+)*$/.test(value)) return null;
+  const [owner, field] = value.includes('.') ? [value.slice(0, value.lastIndexOf('.')), value.slice(value.lastIndexOf('.') + 1)] : [null, value];
+  const candidates = [];
+  if (owner) {
+    const [first, ...rest] = owner.split('.');
+    const imported = sourceImports(sourceText).get(first);
+    if (imported) candidates.push(`${imported}${rest.length ? `.${rest.join('.')}` : ''}.${field}`);
+    else candidates.push(`${sourcePackage(sourceText)}.${owner}.${field}`, `${owner}.${field}`);
+  } else {
+    const local = `${sourcePackage(sourceText)}.${sourceClass(sourceText, '')}.${field}`;
+    if (constantIndex.has(local)) return constantIndex.get(local);
+    for (const match of sourceText.matchAll(/^import\s+static\s+([\w.$]+)(\.\*)?;/gm)) {
+      if (match[2]) candidates.push(`${match[1]}.${field}`);
+      else if (match[1].endsWith(`.${field}`)) candidates.push(match[1]);
+    }
+  }
+  const matches = [...new Set(candidates)].filter(key => constantIndex.has(key));
+  return matches.length === 1 ? constantIndex.get(matches[0]) : null;
+}
+
+function parseParameter(raw, index, sourceText = '', constantIndex = new Map()) {
   if (/Continuation\s*</.test(raw)) return null;
   const annotation = raw.match(/@(Path|Query|Field|Header|Body|Url|QueryMap|HeaderMap|Part|PartMap)(?:\(([^)]*)\))?/);
   const cleaned = raw.replace(/@[\w.]+(?:\([^)]*\))?\s*/g, '').trim();
@@ -116,23 +141,68 @@ function parseParameter(raw, index) {
   const name = tokens.pop() || `arg${index}`;
   const type = tokens.join(' ') || 'unknown';
   let wireName = null;
+  let wireNameExpression = null;
   if (annotation?.[2]) {
-    wireName = annotation[2].match(/"([^"]+)"/)?.[1] || annotation[2].trim();
+    const annotationValue = splitParameters(annotation[2])[0].replace(/^value\s*=\s*/, '').trim();
+    wireNameExpression = /^"[^"]*"$/.test(annotationValue) ? null : annotationValue;
+    wireName = resolveStringConstant(annotationValue, sourceText, constantIndex);
   }
   return {
     location: annotation ? annotation[1].toLowerCase() : 'unknown',
     name,
     wireName,
+    wireNameExpression,
+    wireNameResolution: wireName !== null || !wireNameExpression ? 'resolved' : 'unresolved',
     type,
     required: /@Path/.test(raw) || !/@(?:[\w.]*\.)?Nullable\b/.test(raw),
   };
 }
 
-function responseType(returnType, signature) {
-  const continuation = signature.match(/Continuation\s*<\s*\?\s*super\s+([^>]+)>/);
-  if (continuation) return continuation[1].trim();
-  const generic = returnType.match(/(?:Call|Result|Single|Observable|Response)\s*<\s*([^>]+)>/);
-  return (generic?.[1] || returnType || 'unknown').trim();
+function buildStringConstantIndex(sourcesRoot) {
+  const constants = new Map();
+  const declarations = [];
+  for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
+    const text = fs.readFileSync(file, 'utf8');
+    const owner = `${sourcePackage(text)}.${sourceClass(text, file)}`;
+    // A flattened decompiler file can contain nested owners. Until that scope
+    // is recovered, do not attribute its constants to the outer class.
+    if ([...text.matchAll(/\b(?:class|interface|enum)\s+[\w$]+\s*(?:[<{]|extends\b|implements\b)/g)].length > 1) continue;
+    for (const match of text.matchAll(/\b((?:(?:public|protected|private|static|final)\s+)*)String\s+([\w$]+)\s*=\s*([^;]+);/g)) {
+      if (!/\bfinal\b/.test(match[1]) && !/\binterface\s/.test(text)) continue;
+      declarations.push({ key: `${owner}.${match[2]}`, expression: match[3], text });
+    }
+  }
+  // Resolve aliases to a fixed point. Cycles and ambiguous owners stay unknown.
+  for (let pass = 0; pass <= declarations.length; pass += 1) {
+    let changed = false;
+    for (const declaration of declarations) {
+      if (constants.has(declaration.key)) continue;
+      const value = resolveStringConstant(declaration.expression, declaration.text, constants);
+      if (value !== null) { constants.set(declaration.key, value); changed = true; }
+    }
+    if (!changed) break;
+  }
+  return constants;
+}
+
+function wireResponseType(returnType, signature, sourceText) {
+  const continuation = splitParameters(signature.slice(signature.indexOf('(') + 1, signature.lastIndexOf(')')))
+    .find(parameter => /\bContinuation\s*</.test(parameter));
+  let type = continuation
+    ? continuation.slice(continuation.indexOf('<') + 1, continuation.lastIndexOf('>')).replace(/^\s*\?\s*super\s+/, '')
+    : returnType.trim();
+  while (/^(?:[\w$.]+\.)?(?:Call|Single|Observable|Maybe|Flowable|Response|Result)\s*</.test(type)) {
+    type = type.slice(type.indexOf('<') + 1, type.lastIndexOf('>')).trim();
+  }
+  return qualifyWireType(type, sourceText);
+}
+
+function qualifyWireType(type, sourceText) {
+  const imports = sourceImports(sourceText);
+  return type.replace(/\?\s+(?:extends|super)\s+/g, '').replace(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g, name => {
+    if (name.includes('.') || /^(?:boolean|byte|char|double|float|int|long|short|void|Unit|Object|String|Long|Integer|Boolean|Byte|Character|Double|Float|Short|Void|ResponseBody|RequestBody|List|Map|Set|Collection|unknown)$/.test(name)) return name;
+    return imports.get(name) || `${sourcePackage(sourceText)}.${name}`;
+  }).replace(/\s+/g, '');
 }
 
 function sourcePackage(text) {
@@ -202,6 +272,7 @@ function securityFlags(method, endpointPath) {
 
 function parseJavaEndpoints(sourcesRoot, apkHash) {
   const endpoints = [];
+  const constantIndex = buildStringConstantIndex(sourcesRoot);
   let annotationCandidates = 0;
   const failures = [];
   for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
@@ -235,17 +306,28 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
       }
       const [, returnType, methodName, rawParameters] = methodMatch;
       const parameters = splitParameters(rawParameters)
-        .map(parseParameter)
-        .filter(item => item && item.location !== 'unknown');
+        .map((parameter, index) => parseParameter(parameter, index, text, constantIndex))
+        .filter(item => item && item.location !== 'unknown')
+        .map(item => ({ ...item, qualifiedType: qualifyWireType(item.type, text) }));
       const endpointPath = normalizePath(rawPath ?? (parameters.some(item => item.location === 'url') ? '@Url' : ''));
+      const placeholders = [...endpointPath.matchAll(/\{([^}]+)\}/g)].map(item => item[1]);
+      const unresolvedPaths = parameters.filter(item => item.location === 'path' && item.wireName === null);
+      const remainingPlaceholders = [...new Set(placeholders)].filter(name => !parameters.some(item => item.location === 'path' && item.wireName === name));
+      if (unresolvedPaths.length === 1 && remainingPlaceholders.length === 1) {
+        unresolvedPaths[0].wireName = remainingPlaceholders[0];
+        unresolvedPaths[0].wireNameResolution = 'path-placeholder';
+      }
       const service = resolveService(className, rel, endpointPath);
       const bodyTypes = parameters.filter(item => item.location === 'body').map(item => item.type).sort();
+      const effectiveResponseType = wireResponseType(returnType, signatureLine, text);
+      const resolvedResponseType = qualifyType(effectiveResponseType, text);
       const parameterIdentity = parameters
-        .map(item => `${item.location}:${item.wireName || item.name}:${item.type}`)
+        .map(item => `${item.location}:${item.wireName ?? (item.wireNameExpression ? `unresolved(${pkg}.${className}:${item.wireNameExpression})` : '')}:${qualifyWireType(item.type, text)}:required=${item.required}`)
         .sort()
         .join(',');
       const bindingIdentity = `${pkg}.${className}.${methodName}`;
-      const identity = `${method}|${service.family}|${endpointPath}|${parameterIdentity}${endpointPath === '@Url' ? `|${bindingIdentity}` : ''}`;
+      const responseIdentity = effectiveResponseType || 'unknown';
+      const identity = `${method}|${service.family}|${endpointPath}|${parameterIdentity}|response:${responseIdentity}${endpointPath === '@Url' ? `|${bindingIdentity}` : ''}`;
       endpoints.push({
         id: `ep-${stableHash(identity)}`,
         method,
@@ -263,7 +345,8 @@ function parseJavaEndpoints(sourcesRoot, apkHash) {
         headers: parameters.filter(item => item.location === 'header' || item.location === 'headermap'),
         parameters,
         requestModelRefs: bodyTypes.map(type => qualifyType(type, text)).filter(Boolean),
-        responseModelRefs: [qualifyType(responseType(returnType, signatureLine), text)].filter(Boolean),
+        responseModelRefs: [resolvedResponseType].filter(Boolean),
+        effectiveResponseType,
         successResponses: [],
         errorMappings: [],
         polling: null,
@@ -424,7 +507,115 @@ function snakeCase(value) {
     .toLowerCase();
 }
 
-function parseModel(name, classIndex, sourcesRoot, apkHash) {
+function serializerFieldMetadata(resolved, sourcesRoot) {
+  const serializerFile = path.join(path.dirname(resolved.file), `${resolved.name}$$serializer.java`);
+  if (!fs.existsSync(serializerFile)) return new Map();
+  const text = fs.readFileSync(serializerFile, 'utf8');
+  const serializers = /childSerializers\(\)[\s\S]*?return new KSerializer\[\]\{([^;]+)\};/.exec(text)?.[1];
+  const children = serializers ? splitParameters(serializers) : [];
+  return new Map([...text.matchAll(/\.addElement\("([^"]+)",\s*(true|false)\)/g)]
+    .map((match, index) => [match[1], {
+      required: match[2] === 'false',
+      nullable: children[index] ? /getNullable\(/.test(children[index]) : null,
+      evidence: relative(sourcesRoot, serializerFile),
+    }]));
+}
+
+// Read method boundaries without treating braces inside Java strings as syntax.
+function modelSourceMethods(text) {
+  const methods = [];
+  const pattern = /(?:public|private|protected|static)\s+(?:(?:static|final|synchronized)\s+)*([\w.$<>]+)\s+([\w$]+)\s*\(([^{};]*)\)\s*\{/g;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index + match[0].length;
+    let depth = 1; let quote = null; let end = start;
+    for (; end < text.length && depth; end++) {
+      const char = text[end];
+      if (quote) { if (char === '\\') end++; else if (char === quote) quote = null; }
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === '{') depth++;
+      else if (char === '}') depth--;
+    }
+    methods.push({ type: match[1], name: match[2], parameters: match[3], body: text.slice(start, end - 1), offset: match.index });
+  }
+  return methods;
+}
+
+function recoverModelConverters(classIndex, sourcesRoot) {
+  const sources = [...new Map([...classIndex.values()].flat().map(source => [source.file, source])).values()];
+  const factoryDependencies = new Map();
+  for (const source of sources) {
+    for (const match of source.text.matchAll(/\b([\w]+Factory)\.create\(([^;\n]*)/g)) {
+      const factory = match[1].split('_').at(-1);
+      if (!factoryDependencies.has(factory)) factoryDependencies.set(factory, new Set());
+      for (const provider of match[2].matchAll(/\b(\w+Provider)\b/g)) factoryDependencies.get(factory).add(provider[1]);
+    }
+  }
+  const providers = [];
+  for (const source of sources) {
+    if (!/\bJson\b|Retrofit/.test(source.text)) continue;
+    const methods = modelSourceMethods(source.text);
+    for (const method of methods) {
+      if (method.type !== 'Json' || !/\b(?:JsonKt\.)?Json(?:\$default)?\(/.test(method.body)) continue;
+      const config = [method.body, ...methods.filter(item => item.name.startsWith(`${method.name}$lambda$`)).map(item => item.body)].join('\n');
+      const naming = /setNamingStrategy\([^;]*getSnakeCase\(/.test(config) ? 'snake_case'
+        : /setNamingStrategy\(/.test(config) ? 'unresolved' : 'camelCase';
+      providers.push({ name: method.name, naming, source, method });
+    }
+  }
+  const resolveJson = (argument, context, source) => {
+    const direct = /(?:\w+\.)?(provide\w+)\(/.exec(argument);
+    const name = direct?.[1] || `provide${argument[0]?.toUpperCase()}${argument.slice(1)}`;
+    const allMatches = providers.filter(provider => provider.name === name);
+    const localMatches = allMatches.filter(provider => provider.source.file === source.file);
+    const matches = localMatches.length ? localMatches : allMatches;
+    // Constructor/DI names alone are insufficient: require a generated factory
+    // binding connecting this converter's provider to the selected Json provider.
+    const factoryName = `${context.name[0]?.toUpperCase()}${context.name.slice(1)}Factory`;
+    const linked = direct || factoryDependencies.get(factoryName)?.has(`${name}Provider`);
+    return matches.length === 1 && linked ? matches[0] : null;
+  };
+  const builders = [];
+  const apiPolicies = new Map();
+  for (const source of sources) {
+    if (!/Retrofit/.test(source.text) || source.name.endsWith('Factory')) continue;
+    for (const method of modelSourceMethods(source.text)) {
+      const converter = /KotlinSerializationConverterFactory\.create\((\w+|(?:\w+\.)?provide\w+\(\))\s*,/.exec(method.body);
+      const provider = converter ? resolveJson(converter[1], method, source) : null;
+      if (/^Retrofit(?:[.$]Builder)?$/.test(method.type)
+        && (provider || /Retrofit(?:[.$]Builder)?\s+\w+/.test(method.parameters))) builders.push({ provider, source, method });
+      const api = /\.create\(([\w.]+)\.class\)/.exec(method.body)?.[1];
+      if (!api) continue;
+      const key = sourceImports(source.text).get(api) || `${sourcePackage(source.text)}.${api}`;
+      if (!apiPolicies.has(key)) apiPolicies.set(key, []);
+      apiPolicies.get(key).push({ source, method, provider, usesBuilder: /Retrofit(?:[.$]Builder)?\s+\w+/.test(method.parameters) && !/new Retrofit\.Builder\(/.test(method.body) });
+    }
+  }
+  const result = new Map();
+  const resolveBuilder = (binding, visited = new Set()) => {
+    if (binding.provider) return binding.provider;
+    if (visited.has(binding.method.name)) return null;
+    const next = new Set([...visited, binding.method.name]);
+    const factory = `${binding.method.name[0].toUpperCase()}${binding.method.name.slice(1)}Factory`;
+    const linked = builders.filter(item => item !== binding && factoryDependencies.get(factory)?.has(`${item.method.name}Provider`));
+    return linked.length === 1 ? resolveBuilder(linked[0], next) : null;
+  };
+  for (const [api, bindings] of apiPolicies) {
+    const policies = bindings.map(binding => {
+      const provider = binding.provider || (binding.usesBuilder ? resolveBuilder(binding) : null);
+      return { namingStrategy: provider?.naming || 'unresolved', evidence: [binding.source, provider?.source].filter(Boolean).map(source => relative(sourcesRoot, source.file)) };
+    });
+    const names = new Set(policies.map(policy => policy.namingStrategy));
+    result.set(api, { namingStrategy: names.size === 1 ? [...names][0] : 'unresolved', evidence: [...new Set(policies.flatMap(policy => policy.evidence))] });
+  }
+  return result;
+}
+
+function applyNamingStrategy(value, namingStrategy) {
+  if (namingStrategy === 'snake_case') return snakeCase(value);
+  return value;
+}
+
+function parseModel(name, classIndex, sourcesRoot, apkHash, namingStrategy = 'unresolved') {
   const candidates = classIndex.get(name) || [];
   if (!candidates.length) return null;
   const exact = candidates.filter(candidate => candidate.qualifiedName === name);
@@ -438,25 +629,54 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
     && sourceImports(text).get('Serializable') === 'kotlinx.serialization.Serializable';
   const getterSerialNames = new Map([...text.matchAll(/@SerialName\(\s*"([^"]+)"\s*\)\s*(?:public\s+)?static[^\n]*\bget([A-Z][\w$]*)\$annotations\s*\(/g)]
     .map(match => [`${match[2][0].toLowerCase()}${match[2].slice(1)}`, match[1]]));
+  const serializerFields = serializerFieldMetadata(resolved, sourcesRoot);
   const fieldPattern = /(?:@SerializedName\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\)\s*)?(?:@SerialName\(\s*"([^"]+)"\s*\)\s*)?(?:private|public|protected)\s+((?:(?:static|final|transient|volatile)\s+)*)([\w.<>?, \[\]]+)\s+([\w$]+)\s*(?:=[^;]*)?;/g;
   for (const match of text.matchAll(fieldPattern)) {
     const modifiers = match[3];
     const type = match[4].trim();
     const fieldName = match[5];
     if (/\bstatic\b/.test(modifiers) || fieldName.includes('$') || /^(CREATOR|Companion|INSTANCE|serialVersionUID)$/.test(fieldName)) continue;
+    const explicitSerializedName = match[1] || match[2] || getterSerialNames.get(fieldName);
+    const serializerField = serializerFields.get(explicitSerializedName || fieldName);
+    const primitive = /^(?:boolean|byte|char|double|float|int|long|short)$/.test(type);
+    const nonNullEvidence = primitive || new RegExp(`checkNotNullParameter\\(\\w+,\\s*"${fieldName}"\\)`).test(text);
+    const prefix = text.slice(Math.max(0, match.index - 250), match.index).split(/[;{}]/).at(-1);
+    const annotationNullability = /@(?:[\w.]+\.)?Nullable\b/.test(prefix) ? true : /@(?:[\w.]+\.)?(?:NotNull|NonNull)\b/.test(prefix) ? false : null;
+    const initializer = /=\s*(null|true|false|-?\d+(?:\.\d+)?|"(?:\\.|[^"\\])*")\s*;$/.exec(match[0])
+      || new RegExp(`if\\s*\\(\\(\\w+\\s*&\\s*\\d+\\)\\s*==\\s*0\\)\\s*\\{?\\s*this\\.${fieldName}\\s*=\\s*(null|true|false|-?\\d+(?:\\.\\d+)?|"(?:\\\\.|[^"\\\\])*")\\s*;`).exec(text);
+    const metadata = {
+      nullable: serializerField?.nullable ?? annotationNullability ?? (nonNullEvidence ? false : null),
+      required: serializerField?.required ?? null,
+      defaultState: initializer ? 'known' : serializerField ? (serializerField.required ? 'absent' : 'present-unresolved') : 'unresolved',
+    };
+    if (initializer) metadata.default = JSON.parse(initializer[1]);
     fields.push({
-      serializedName: match[1] || match[2] || getterSerialNames.get(fieldName) || (kotlinSerializable ? snakeCase(fieldName) : fieldName),
+      serializedName: kotlinSerializable ? applyNamingStrategy(explicitSerializedName || fieldName, namingStrategy) : explicitSerializedName || fieldName,
       sourceName: fieldName,
       type,
       qualifiedType: qualifyType(type, text),
-      nullable: !/\b(?:boolean|byte|char|double|float|int|long|short)\b/.test(type),
-      default: null,
+      ...metadata,
+      namingResolved: !kotlinSerializable || namingStrategy !== 'unresolved',
+      metadataEvidence: serializerField?.evidence || null,
     });
   }
   const enumValues = /\benum\s+/.test(text)
-    ? [...text.matchAll(/(?:@SerialName\(\s*"([^"]+)"\s*\)\s*)?^\s*([A-Z][A-Z0-9_]*)\s*(?:\([^;]*\))?[,;]/gm)]
-      .map(match => match[1] || (kotlinSerializable ? snakeCase(match[2]) : match[2]))
-    : [];
+    ? [...text.matchAll(/(?:@(?:SerialName|SerializedName)\(\s*"([^"]+)"\s*\)\s*)?^\s*([A-Z][A-Z0-9_]*)\s*(?:\([^;]*?\))?[,;]/gm)]
+      .map(match => match[1] || match[2]) : [];
+  if (/extends Enum</.test(text)) {
+    for (const match of text.matchAll(/public static final [\w.]+ ([A-Z][A-Z0-9_]*)\s*=/g)) enumValues.push(match[1]);
+    // Decompiled Kotlin enums preserve wire overrides in serializer name arrays.
+    const names = /create(?:Annotated)?EnumSerializer\([^;]*?new String\[\]\{([^}]+)\}/.exec(text)?.[1];
+    if (names) splitParameters(names).forEach((value, index) => {
+      if (/^"[^"\\]*"$/.test(value.trim()) && index < enumValues.length) enumValues[index] = JSON.parse(value.trim());
+    });
+  }
+  const unresolvedReasons = fields.flatMap(field => [
+    field.nullable === null ? `${field.sourceName}: nullability unresolved` : null,
+    field.required === null ? `${field.sourceName}: requiredness unresolved` : null,
+    /unresolved/.test(field.defaultState) ? `${field.sourceName}: default unresolved` : null,
+    !field.namingResolved ? `${field.sourceName}: converter naming unresolved` : null,
+  ].filter(Boolean));
   return {
     id: `model-${stableHash(resolved.qualifiedName)}`,
     name: resolved.name,
@@ -465,7 +685,7 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
     fields,
     enumValues,
     polymorphism: null,
-    serialization: kotlinSerializable ? { library: 'kotlinx.serialization', namingStrategy: 'snake_case', confidence: 'corroborated' } : { library: 'declaration', namingStrategy: 'explicit-or-source', confidence: 'direct' },
+    serialization: kotlinSerializable ? { library: 'kotlinx.serialization', namingStrategy, confidence: namingStrategy === 'unresolved' ? 'unresolved' : 'corroborated' } : { library: 'declaration', namingStrategy: 'explicit-or-source', confidence: 'direct' },
     evidence: [{
       apkSha256: apkHash,
       split: 'base.apk',
@@ -475,25 +695,74 @@ function parseModel(name, classIndex, sourcesRoot, apkHash) {
       symbol: resolved.qualifiedName,
       method: 'jadx',
     }],
-    confidence: fields.length || enumValues.length ? 'direct' : 'inferred',
+    unresolvedReasons,
+    confidence: unresolvedReasons.length ? 'unresolved' : fields.length || enumValues.length ? 'direct' : 'inferred',
   };
 }
 
 function extractModels(endpoints, sourcesRoot, apkHash) {
   const classIndex = buildClassIndex(sourcesRoot);
-  const pending = [...new Set(endpoints.flatMap(item => [...item.requestModelRefs, ...item.responseModelRefs]))];
+  const converters = recoverModelConverters(classIndex, sourcesRoot);
+  const rootStrategies = new Map();
+  for (const endpoint of endpoints) {
+    const policies = endpoint.bindings.map(binding => {
+      const exact = converters.get(`${binding.package}.${binding.className}`) || converters.get(binding.className);
+      const matches = [...converters].filter(([name]) => name.endsWith(`.${binding.className}`));
+      return exact || (matches.length === 1 ? matches[0][1] : null);
+    }).filter(Boolean);
+    const strategies = new Set(policies.map(policy => policy.namingStrategy));
+    endpoint.serializationNamingStrategy = policies.length === endpoint.bindings.length && strategies.size === 1 ? [...strategies][0] : 'unresolved';
+    endpoint.serializationEvidence = [...new Set(policies.flatMap(policy => policy.evidence))];
+    for (const ref of [...endpoint.requestModelRefs, ...endpoint.responseModelRefs]) {
+      if (!rootStrategies.has(ref)) rootStrategies.set(ref, new Set());
+      rootStrategies.get(ref).add(endpoint.serializationNamingStrategy || 'unresolved');
+    }
+  }
+  const propagation = [...rootStrategies].flatMap(([name, strategies]) => [...strategies].map(namingStrategy => ({ name, namingStrategy })));
+  const propagated = new Set();
+  while (propagation.length) {
+    const { name, namingStrategy } = propagation.shift();
+    const key = `${name}|${namingStrategy}`;
+    if (propagated.has(key)) continue;
+    propagated.add(key);
+    const model = parseModel(name, classIndex, sourcesRoot, apkHash, namingStrategy);
+    if (!model) continue;
+    for (const field of model.fields) {
+      const nested = field.qualifiedType || extractTypeName(field.type);
+      if (!classIndex.has(nested)) continue;
+      if (!rootStrategies.has(nested)) rootStrategies.set(nested, new Set());
+      rootStrategies.get(nested).add(namingStrategy);
+      propagation.push({ name: nested, namingStrategy });
+    }
+  }
+  const variantName = (name, namingStrategy) => rootStrategies.get(name)?.size > 1 ? `${name}@${namingStrategy}` : name;
+  const pending = [...rootStrategies].flatMap(([name, strategies]) => [...strategies].map(namingStrategy => ({ name, namingStrategy })));
   const visited = new Set();
   const models = [];
   while (pending.length) {
-    const name = pending.shift();
-    if (!name || visited.has(name) || /^(Unit|Object|String|Long|Integer|Boolean|ResponseBody|RequestBody|unknown)$/.test(name)) continue;
-    visited.add(name);
-    const model = parseModel(name, classIndex, sourcesRoot, apkHash);
+    const { name, namingStrategy } = pending.shift();
+    const variant = variantName(name, namingStrategy);
+    if (!name || visited.has(variant) || /^(Unit|Object|String|Long|Integer|Boolean|ResponseBody|RequestBody|unknown)$/.test(name)) continue;
+    visited.add(variant);
+    const model = parseModel(name, classIndex, sourcesRoot, apkHash, namingStrategy);
     if (!model) continue;
+    if (variant !== name) {
+      model.originalQualifiedName = model.qualifiedName;
+      model.qualifiedName = variant;
+      model.id = `model-${stableHash(variant)}`;
+    }
     models.push(model);
     for (const field of model.fields) {
       const nested = field.qualifiedType || extractTypeName(field.type);
-      if (nested && classIndex.has(nested) && !visited.has(nested)) pending.push(nested);
+      if (nested && classIndex.has(nested)) field.qualifiedType = variantName(nested, namingStrategy);
+    }
+  }
+  for (const endpoint of endpoints) {
+    endpoint.requestModelRefs = endpoint.requestModelRefs.map(name => variantName(name, endpoint.serializationNamingStrategy));
+    endpoint.responseModelRefs = endpoint.responseModelRefs.map(name => variantName(name, endpoint.serializationNamingStrategy));
+    if (endpoint.normalizedIdentity) {
+      endpoint.normalizedIdentity += `|converter=${endpoint.serializationNamingStrategy}`;
+      endpoint.id = `ep-${stableHash(endpoint.normalizedIdentity)}`;
     }
   }
   const recovered = new Set(models.flatMap(model => [model.name, model.qualifiedName]));
@@ -726,8 +995,8 @@ function extractSnapshot({ apkDir, decompiledDir }) {
   for (const item of apktoolRoots) if (!fs.existsSync(item.root)) throw new Error(`Missing apktool output: ${item.root}`);
   const javaEndpoints = parseJavaEndpoints(sourcesRoot, metadata.baseSha256);
   const smaliEndpoints = apktoolRoots.flatMap(item => parseSmaliEndpoints(item.root, item.split.sha256, item.split.file));
+  const models = extractModels(javaEndpoints, sourcesRoot, metadata.baseSha256);
   const endpoints = mergeEndpoints(javaEndpoints, smaliEndpoints);
-  const models = extractModels(endpoints, sourcesRoot, metadata.baseSha256);
   const scanRoots = [path.join(decompiledDir, 'jadx'), ...apktoolRoots.map(item => item.root)];
   const urls = [...extractUrls(scanRoots), ...extractNativeUrls([decompiledDir])];
   const classifications = classifyUrls(urls, endpoints);
@@ -753,7 +1022,10 @@ function endpointModelShape(endpoint, snapshot) {
         serializedName: field.serializedName,
         type: field.qualifiedType || field.type,
         nullable: field.nullable,
+        required: field.required,
         default: field.default,
+        defaultState: field.defaultState,
+        namingResolved: field.namingResolved,
         nested: visit(field.qualifiedType, nestedAncestors),
       })),
       enumValues: [...model.enumValues].sort(),
@@ -772,6 +1044,16 @@ function endpointBindingKeys(endpoint) {
 }
 
 function applyLifecycle(current, baseline) {
+  const wireShape = (endpoint, snapshot) => JSON.stringify({
+    method: endpoint.method, path: endpoint.path, host: endpoint.baseHostTemplate,
+    parameters: endpoint.parameters.filter(item => item.location !== 'unknown').map(item => ({
+      location: item.location, wireName: item.wireName, type: item.qualifiedType || item.type,
+      required: item.required, nullable: item.nullable, default: item.default,
+    })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    requestModelRefs: endpoint.requestModelRefs, responseModelRefs: endpoint.responseModelRefs,
+    effectiveResponseType: endpoint.effectiveResponseType,
+    authentication: endpoint.authentication, models: endpointModelShape(endpoint, snapshot),
+  });
   const oldByWire = new Map(baseline.endpoints.map(item => [item.normalizedIdentity, item]));
   const oldByBinding = new Map();
   for (const endpoint of baseline.endpoints) {
@@ -792,8 +1074,8 @@ function applyLifecycle(current, baseline) {
     if (!old) endpoint.lifecycle = 'added';
     else {
       matchedBaseline.add(old.id);
-      const oldShape = JSON.stringify({ parameters: old.parameters.filter(item => item.location !== 'unknown'), requestModelRefs: old.requestModelRefs, responseModelRefs: old.responseModelRefs, authentication: old.authentication, models: endpointModelShape(old, baseline) });
-      const newShape = JSON.stringify({ parameters: endpoint.parameters.filter(item => item.location !== 'unknown'), requestModelRefs: endpoint.requestModelRefs, responseModelRefs: endpoint.responseModelRefs, authentication: endpoint.authentication, models: endpointModelShape(endpoint, current) });
+      const oldShape = wireShape(old, baseline);
+      const newShape = wireShape(endpoint, current);
       endpoint.lifecycle = oldShape === newShape ? 'unchanged' : 'changed';
     }
   }
@@ -813,13 +1095,15 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
   const activeEndpoints = current.endpoints.filter(item => item.lifecycle !== 'removed');
   const recoveredModelNames = new Set(current.models.flatMap(model => [model.name, model.qualifiedName]));
   const modelReferenceUnresolved = [];
-  for (const model of current.models) {
+  for (const model of [...current.models, ...(baseline?.models || [])]) {
+    const referenceNames = current.models.includes(model) ? recoveredModelNames
+      : new Set(baseline.models.flatMap(item => [item.name, item.qualifiedName]));
     for (const field of model.fields) {
       const qualifiedType = field.qualifiedType;
       const applicationType = /^(?:com\.(?:immediasemi|ring)|com\.amazon)\./.test(qualifiedType || '');
       field.referenceState = !qualifiedType || /^(?:boolean|byte|char|double|float|int|long|short|void|Unit|Object|String|Long|Integer|Boolean|Byte|Character|Double|Float|Short|Void|unknown)$/.test(qualifiedType)
         ? 'builtin'
-        : recoveredModelNames.has(qualifiedType) ? 'resolved' : applicationType ? 'unresolved' : 'external';
+        : referenceNames.has(qualifiedType) ? 'resolved' : applicationType ? 'unresolved' : 'external';
       if (field.referenceState === 'unresolved') modelReferenceUnresolved.push({
         id: `unresolved-${stableHash(`${model.id}|${field.sourceName}|${qualifiedType}`)}`,
         category: 'model-field-reference',
@@ -861,6 +1145,36 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     evidence: endpoint.evidence.map(item => `${item.source}:${item.line}`),
   })).filter(item => item.unresolvedFields.length);
   const extractionUnresolved = [
+    ...[...current.models, ...(baseline?.models || [])].flatMap(model => {
+      const fields = model.fields.filter(field => field.namingResolved === false
+        || field.nullable === null || field.required === null
+        || ['unresolved', 'present-unresolved'].includes(field.defaultState));
+      return fields.length ? [{
+        id: `unresolved-${stableHash(`${model.id}|metadata|${model.evidence[0]?.apkSha256}`)}`,
+        category: 'model-field-metadata', modelId: model.id,
+        value: model.qualifiedName,
+        fields: fields.map(field => ({ name: field.sourceName,
+          unresolved: [field.namingResolved === false && 'serializedName', field.nullable === null && 'nullable',
+            field.required === null && 'required', ['unresolved', 'present-unresolved'].includes(field.defaultState) && 'default'].filter(Boolean) })),
+        reason: 'Static declarations and serializer evidence do not uniquely establish all field metadata; unknown values are not inferred from Java reference types.',
+        evidence: model.evidence.map(item => `${item.source}:${item.line}`),
+      }] : [];
+    }),
+    ...activeEndpoints.filter(endpoint => endpoint.serializationNamingStrategy === 'unresolved').map(endpoint => ({
+      id: `unresolved-${stableHash(`${endpoint.id}|converter`)}`,
+      category: 'serialization-converter', endpointId: endpoint.id, value: endpoint.path,
+      reason: 'No unique source-evidenced converter policy was recovered for this API binding.',
+      evidence: endpoint.evidence.map(item => `${item.source}:${item.line}`),
+    })),
+    ...activeEndpoints.flatMap(endpoint => endpoint.parameters
+      .filter(parameter => parameter.wireNameResolution === 'unresolved')
+      .map(parameter => ({
+        id: `unresolved-${stableHash(`${endpoint.id}|${parameter.location}|${parameter.wireNameExpression}`)}`,
+        category: 'parameter-wire-name', endpointId: endpoint.id,
+        value: parameter.wireNameExpression,
+        reason: 'Annotation constant could not be uniquely resolved from its qualified declaration or imports.',
+        evidence: endpoint.evidence.map(item => `${item.source}:${item.line}`),
+      }))),
     ...current.javaAnnotationFailures.map(item => ({
       id: `unresolved-${stableHash(`java|${item.source}|${item.line}`)}`,
       category: 'java-retrofit-annotation', value: `${item.source}:${item.line}`,
@@ -874,6 +1188,8 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
       evidence: item.endpoint.evidence.map(evidence => `${evidence.source}:${evidence.line}`),
     })),
   ];
+  const unresolved = [...new Map([...current.classifications.unresolved, ...behavioralUnresolved, ...modelReferenceUnresolved, ...extractionUnresolved].map(item => [item.id, item])).values()]
+    .sort((a, b) => a.id.localeCompare(b.id));
   const contract = {
     schemaVersion: '1.1.0',
     artifact: {
@@ -891,6 +1207,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
       versionName: baseline.metadata.versionName,
       versionCode: baseline.metadata.versionCode,
       baseSha256: baseline.metadata.baseSha256,
+      models: baseline.models,
     } : null,
     servicePolicies: {
       defaultHeaders: ['APP-BUILD', 'User-Agent', 'LOCALE', 'X-Blink-Time-Zone'],
@@ -901,8 +1218,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     models: current.models,
     firstPartyCandidates: current.classifications.firstPartyCandidates,
     thirdPartyExclusions: current.classifications.exclusions,
-    unresolved: [...current.classifications.unresolved, ...behavioralUnresolved, ...modelReferenceUnresolved, ...extractionUnresolved]
-      .sort((a, b) => a.id.localeCompare(b.id)),
+    unresolved,
     diagnostics,
     protocolIndicators: current.protocolIndicators,
     completeness: {
@@ -915,7 +1231,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
       activeNormalizedContracts: activeEndpoints.length,
       removedContracts: current.endpoints.length - activeEndpoints.length,
       modelsRecovered: current.models.length,
-      unresolvedCandidates: current.classifications.unresolved.length + behavioralUnresolved.length + modelReferenceUnresolved.length + extractionUnresolved.length,
+      unresolvedCandidates: unresolved.length,
       unclassifiedFirstPartyCandidates: diagnostics.unclassifiedFirstPartyCandidates,
     },
   };
@@ -933,6 +1249,7 @@ function validateContract(contract) {
   const ids = new Set();
   const identities = new Set();
   const modelNames = new Set((contract.models || []).flatMap(model => [model.name, model.qualifiedName]));
+  const baselineModelNames = new Set((contract.baseline?.models || []).flatMap(model => [model.name, model.qualifiedName]));
   const activeSplitHashes = new Map((contract.artifact?.splits || []).map(split => [split.file, split.sha256]));
   for (const endpoint of contract.endpoints || []) {
     for (const key of ['id', 'method', 'path', 'normalizedIdentity', 'serviceFamily', 'baseHostTemplate', 'authentication', 'evidence', 'confidence', 'lifecycle', 'security']) {
@@ -954,8 +1271,9 @@ function validateContract(contract) {
         errors.push(`${endpoint.id} evidence hash does not match split ${evidence.split}`);
       }
     }
+    const referenceNames = endpoint.lifecycle === 'removed' ? baselineModelNames : modelNames;
     for (const ref of [...(endpoint.requestModelRefs || []), ...(endpoint.responseModelRefs || [])]) {
-      if (!modelNames.has(ref) && !/^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(ref)) {
+      if (!referenceNames.has(ref) && !/^(Unit|Object|String|Long|Integer|Boolean|Void|ResponseBody|RequestBody|unknown)$/.test(ref)) {
         errors.push(`${endpoint.id} unresolved model reference: ${ref}`);
       }
     }
@@ -963,10 +1281,14 @@ function validateContract(contract) {
   const unresolvedModelFields = new Set((contract.unresolved || [])
     .filter(item => item.category === 'model-field-reference')
     .map(item => `${item.modelId}|${item.field}|${item.value}`));
-  for (const model of contract.models || []) {
+  for (const model of [...(contract.models || []), ...(contract.baseline?.models || [])]) {
+    const referenceNames = (contract.models || []).includes(model) ? modelNames : baselineModelNames;
     for (const field of model.fields || []) {
       if (!['builtin', 'resolved', 'external', 'unresolved'].includes(field.referenceState)) {
         errors.push(`${model.id}.${field.sourceName} invalid model reference state`);
+      }
+      if (field.referenceState === 'resolved' && !referenceNames.has(field.qualifiedType)) {
+        errors.push(`${model.id}.${field.sourceName} resolved model reference is missing`);
       }
       if (field.referenceState === 'unresolved'
         && !unresolvedModelFields.has(`${model.id}|${field.sourceName}|${field.qualifiedType}`)) {
@@ -1095,6 +1417,7 @@ function renderMarkdown(contract) {
     const evidence = model.evidence[0];
     lines.push(`| \`${model.name}\` | ${model.kind} | ${model.fields.length || model.enumValues.length} | ${model.confidence} | \`${markdownEscape(evidence.source)}\` |`);
   }
+  lines.push('', `Removed endpoint model references resolve against \`baseline.models\` (${contract.baseline?.models?.length || 0} retained baseline models), not the current schema index. Serialization policies and unresolved field metadata remain explicit in JSON.`);
   lines.push('', '## Command, polling, retry, and error semantics', '',
     '- Command-producing endpoints are identified by response model and feature, but server status codes not declared in the APK remain unknown.',
     '- Static polling/retry semantics are retained as service-level evidence; they must not be treated as proof of current server timing.',

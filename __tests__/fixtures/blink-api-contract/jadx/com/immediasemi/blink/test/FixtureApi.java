@@ -3,7 +3,10 @@ package com.immediasemi.blink.test;
 /* JADX INFO: loaded from: classes2.dex */
 public interface FixtureApi {
     @GET("v1/accounts/{account}/devices")
-    Object getDevices(@Path("account") long account, @Query("page") Long page, Continuation<? super FixtureResponse> continuation);
+    Object getDevices(@Path("account") long account, @Query(FixtureConstants.KEY_PAGE) Long page, Continuation<? super FixtureResponse> continuation);
+
+    @GET("v1/accounts/{account}/devices")
+    Object getDeviceSummary(@Path("account") long account, Continuation<? super AlternateFixtureResponse> continuation);
 
     @FormUrlEncoded
     @POST("oauth/token")

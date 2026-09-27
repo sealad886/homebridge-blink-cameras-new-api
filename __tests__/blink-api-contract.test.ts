@@ -19,8 +19,8 @@ describe('Blink APK API contract extraction', () => {
       fakeHash,
     );
 
-    expect(endpoints).toHaveLength(7);
-    expect(endpoints.annotationCandidates).toBe(7);
+    expect(endpoints).toHaveLength(9);
+    expect(endpoints.annotationCandidates).toBe(9);
     expect(endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -29,7 +29,10 @@ describe('Blink APK API contract extraction', () => {
           responseModelRefs: ['com.immediasemi.blink.test.FixtureResponse'],
           parameters: expect.arrayContaining([
             expect.objectContaining({ location: 'path', wireName: 'account' }),
-            expect.objectContaining({ location: 'query', wireName: 'page' }),
+            expect.objectContaining({
+              location: 'query', wireName: 'page',
+              wireNameExpression: 'FixtureConstants.KEY_PAGE',
+            }),
           ]),
         }),
         expect.objectContaining({
@@ -46,8 +49,15 @@ describe('Blink APK API contract extraction', () => {
           responseModelRefs: ['com.immediasemi.blink.test.FixtureResponse'],
         }),
         expect.objectContaining({ method: 'HEAD', path: '' }),
+        expect.objectContaining({
+          method: 'POST', path: 'v1/passkey/register',
+        }),
       ]),
     );
+    const deviceVariants = endpoints.filter((endpoint: { path: string }) =>
+      endpoint.path === 'v1/accounts/{account}/devices');
+    expect(new Set(deviceVariants.map((endpoint: { normalizedIdentity: string }) =>
+      endpoint.normalizedIdentity)).size).toBe(deviceVariants.length);
     expect(endpoints.every((endpoint: { evidence: Array<{ dex: string }> }) =>
       endpoint.evidence.every(evidence => evidence.dex === 'classes2.dex'))).toBe(true);
   });
@@ -103,13 +113,21 @@ describe('Blink APK API contract extraction', () => {
           name: 'FixtureBody',
           fields: expect.arrayContaining([
             expect.objectContaining({ serializedName: 'motion_enabled', qualifiedType: 'boolean' }),
-            expect.objectContaining({ serializedName: 'account_id' }),
+            expect.objectContaining({ serializedName: 'accountId', namingResolved: false }),
             expect.objectContaining({ serializedName: 'require_trust_client_device' }),
           ]),
         }),
         expect.objectContaining({
           name: 'FixtureResponse',
           fields: [expect.objectContaining({ serializedName: 'device_id' })],
+        }),
+        expect.objectContaining({
+          name: 'RegistrationRequest',
+          serialization: expect.objectContaining({ namingStrategy: 'unresolved' }),
+          fields: [expect.objectContaining({
+            serializedName: 'hardwareId', nullable: false, required: true,
+            defaultState: 'absent',
+          })],
         }),
       ]),
     );
@@ -177,6 +195,18 @@ describe('Blink APK API contract extraction', () => {
     expect(errors.join('\n')).toMatch(/unclassifiedFirstPartyCandidates does not reconcile/);
   });
 
+  it('resolves removed endpoint models only against the retained baseline', () => {
+    const contract = JSON.parse(readFileSync(join(process.cwd(),
+      'docs/api-contract/blink-59.2-29823413.json'), 'utf8'));
+    const removed = contract.endpoints.find((endpoint: { lifecycle: string }) => endpoint.lifecycle === 'removed');
+    removed.responseModelRefs = ['baseline.OnlyResponse'];
+    contract.baseline.models = [{ name: 'OnlyResponse', qualifiedName: 'baseline.OnlyResponse', fields: [] }];
+    expect(extractor.validateContract(contract).join('\n')).not.toContain('baseline.OnlyResponse');
+    contract.baseline.models = [];
+    contract.models.push({ name: 'OnlyResponse', qualifiedName: 'baseline.OnlyResponse', fields: [] });
+    expect(extractor.validateContract(contract).join('\n')).toContain('unresolved model reference: baseline.OnlyResponse');
+  });
+
   it('marks an endpoint changed when a referenced wire model changes', () => {
     const endpoint = {
       id: 'ep-a', method: 'POST', path: 'v1/test',
@@ -219,6 +249,36 @@ describe('Blink APK API contract extraction', () => {
     extractor.applyLifecycle(current, baseline);
 
     expect(current.endpoints[0].lifecycle).toBe('unchanged');
+  });
+
+  it('compares requiredness and defaults but ignores parameter source expressions', () => {
+    const endpoint = {
+      id: 'ep-metadata', method: 'POST', path: 'v1/test', normalizedIdentity: 'metadata',
+      serviceFamily: 'rest', authentication: {}, requestModelRefs: ['test.Body'], responseModelRefs: [],
+      parameters: [{ location: 'query', wireName: 'page', type: 'int', wireNameExpression: 'Old.PAGE' }],
+    };
+    const model = (required: boolean) => ({ name: 'Body', qualifiedName: 'test.Body', kind: 'object',
+      enumValues: [], fields: [{ serializedName: 'name', type: 'String', required, defaultState: 'absent' }] });
+    const baseline = { endpoints: [endpoint], models: [model(true)] };
+    const current = { endpoints: [{ ...endpoint, parameters: [{ ...endpoint.parameters[0], wireNameExpression: 'New.PAGE' }] }], models: [model(true)] };
+    extractor.applyLifecycle(current, baseline);
+    expect((current.endpoints[0] as typeof endpoint & { lifecycle: string }).lifecycle).toBe('unchanged');
+    current.models = [model(false)];
+    extractor.applyLifecycle(current, baseline);
+    expect((current.endpoints[0] as typeof endpoint & { lifecycle: string }).lifecycle).toBe('changed');
+  });
+
+  it('does not classify converter implementation metadata as a wire change', () => {
+    const endpoint = { id: 'ep-policy', normalizedIdentity: 'policy', method: 'POST', path: 'test',
+      parameters: [], requestModelRefs: ['test.Body'], responseModelRefs: [], authentication: {} };
+    const model = { name: 'Body', qualifiedName: 'test.Body', kind: 'object', enumValues: [],
+      fields: [{ serializedName: 'value', type: 'String', namingResolved: true }] };
+    const current = { endpoints: [{ ...endpoint }], models: [{ ...model,
+      serialization: { library: 'kotlinx.serialization', confidence: 'corroborated' } }] };
+    const baseline = { endpoints: [{ ...endpoint }], models: [{ ...model,
+      serialization: { library: 'declaration', confidence: 'direct' } }] };
+    extractor.applyLifecycle(current, baseline);
+    expect((current.endpoints[0] as typeof endpoint & { lifecycle: string }).lifecycle).toBe('unchanged');
   });
 
   it('matches lifecycle by stable binding when wire parameters change', () => {

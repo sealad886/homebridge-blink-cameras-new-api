@@ -23,11 +23,12 @@
     "artifact": { "$ref": "#/$defs/artifact" },
     "baseline": {
       "type": ["object", "null"],
-      "required": ["versionName", "versionCode", "baseSha256"],
+      "required": ["versionName", "versionCode", "baseSha256", "models"],
       "properties": {
         "versionName": { "type": "string" },
         "versionCode": { "type": "integer" },
-        "baseSha256": { "$ref": "#/$defs/sha256" }
+        "baseSha256": { "$ref": "#/$defs/sha256" },
+        "models": { "type": "array", "items": { "$ref": "#/$defs/model" } }
       }
     },
     "servicePolicies": { "type": "object" },
@@ -169,7 +170,23 @@
         "name": { "type": "string" },
         "qualifiedName": { "type": "string" },
         "kind": { "enum": ["object", "enum"] },
-        "fields": { "type": "array", "items": { "type": "object" } },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["sourceName", "serializedName", "type", "nullable", "required", "defaultState", "namingResolved", "referenceState"],
+            "properties": {
+              "sourceName": { "type": "string" },
+              "serializedName": { "type": "string" },
+              "type": { "type": "string" },
+              "nullable": { "type": ["boolean", "null"] },
+              "required": { "type": ["boolean", "null"] },
+              "defaultState": { "enum": ["known", "absent", "present-unresolved", "unresolved"] },
+              "namingResolved": { "type": "boolean" },
+              "referenceState": { "enum": ["builtin", "resolved", "external", "unresolved"] }
+            }
+          }
+        },
         "enumValues": { "type": "array", "items": { "type": "string" } },
         "polymorphism": { "type": ["object", "null"] },
         "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },

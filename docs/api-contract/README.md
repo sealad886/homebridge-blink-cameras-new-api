@@ -22,7 +22,9 @@ const target = contract.endpoints.find(endpoint => endpoint.id === 'EP_ID');
 console.log(target.baseHostTemplate, target.authentication, target.parameters);
 
 // Follow request and response model references.
-const models = new Map(contract.models.map(model => [model.qualifiedName, model]));
+const schemaModels = target.lifecycle === 'removed'
+  ? contract.baseline.models : contract.models;
+const models = new Map(schemaModels.map(model => [model.qualifiedName, model]));
 console.log(target.requestModelRefs.map(name => models.get(name)));
 
 // Exclude destructive operations.
@@ -41,6 +43,13 @@ empty arrays are not evidence that those behaviors do not exist. Treat
 `inferred` and `unresolved` as leads, not confirmed wire behavior. Never use
 this catalog as authorization to call destructive,
 privacy-sensitive, account-management, or media-bearing endpoints.
+
+Model references are version-scoped. Removed contracts use `baseline.models`;
+active contracts use `models`. Converter-specific variants can carry a policy
+suffix in `qualifiedName`; use the exact reference, not a simple class name.
+Unknown nullability and requiredness are `null`. An absent `default` value is
+not a JSON-null default: inspect `defaultState`. Unresolved naming policies
+must not be used to synthesize request field names.
 
 ## Regeneration
 
