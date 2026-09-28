@@ -128,7 +128,7 @@ operation and closes the fault only after handler updates finish.
 | WI-2 Centralize HAP-safe accessory and service names | Complete | `src/hap-name.ts`; name and cached-migration tests |
 | WI-3 Add stable status and retry accessories | Complete | `src/platform.ts`; platform recovery tests |
 | WI-4 Separate startup discovery from runtime recovery | Complete | Coalesced `recoverConnection`; success, failure, polling, and concurrency tests |
-| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/589 tests, 39 release tests, lint, build, and Graphify update passed |
+| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/590 tests, 39 release tests, lint, build, and Graphify update passed |
 | WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; `8540162` first review fix; later review fixes committed; `03e9bd0` message correction pending |
 | WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; rounds 1-3 below |
 | WI-8 Merge and task-scoped branch cleanup | Planned | Pending merge/cleanup receipts |
@@ -217,16 +217,36 @@ outcome, findings, pattern analysis, fixes, and verification here.
   `03e9bd0` because its body line exceeds 100 characters. Correcting that
   already-pushed commit requires explicit history-rewrite authorization.
 
+### Round 4
+
+- Base/head: `origin/main` / `7304f4f8c73261690e3de346d99e93f18db2db8a`.
+- Codex report: `/tmp/codex-pr41-r4.JpRdNT`, exit 0. One actionable P1:
+  the broad authentication regex classified temporary token-refresh failures
+  as user-action-required and therefore disabled automatic recovery forever.
+- Pattern analysis: Graphify and refreshed Codanna indexing traced
+  `BlinkTokenRefreshError` categories through token refresh, platform failure
+  classification, and polling. Repository-wide search found concrete auth
+  error types already used by hosted-auth UI handling. Temporary, response, and
+  storage refresh errors are retryable; interactive 2FA, hosted reauthentication,
+  verification, changed/invalid stored state, and terminal 400/401/403 auth
+  responses require user action. Classification: broken shared classifier.
+- Repair: replace message regex with concrete error/category checks. Preserve
+  automatic recovery for token-refresh and transient authentication failures;
+  suspend polling only for errors whose contract requires user intervention.
+- Verification after repair: 3 focused suites and 76 tests passed; the full 26
+  suites and 590 tests passed; lint, build, the 39 release-workflow tests, and
+  Graphify refresh passed. Round 5 remains pending.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
 `0.14.0`:
 
-- `npm test -- --runInBand`: 26 suites and 589 tests passed.
+- `npm test -- --runInBand`: 26 suites and 590 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed.
 - `node --test .github/scripts/*.test.mjs`: 39 tests passed.
-- `zsh -lic 'graphify update .'`: graph rebuilt with 2,034 nodes and 3,731
+- `zsh -lic 'graphify update .'`: graph rebuilt with 2,035 nodes and 3,745
   edges; generated graph files remain repository-ignored.
 - `node .github/scripts/verify-package.mjs`: not completed locally because npm
   `12.0.2` changed `npm pack --json` from an array to an object keyed by package

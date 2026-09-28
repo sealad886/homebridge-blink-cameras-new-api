@@ -5,6 +5,7 @@ import { createApi, createLogger } from './helpers/homebridge';
 import { BlinkHomescreen } from '../src/types';
 import { CameraAccessory, NetworkAccessory } from '../src/accessories';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
+import { Blink2FARequiredError, BlinkTokenRefreshError } from '../src/blink-api/auth';
 
 jest.mock('../src/blink-api');
 
@@ -211,9 +212,7 @@ describe('BlinkCamerasPlatform', () => {
   it('suspends automatic polling while authentication needs user action', async () => {
     hapApi = createApi() as unknown as MockAPI;
     const blinkApi = buildBlinkApi();
-    const authError = new Error('2FA verification required');
-    authError.name = 'Blink2FARequiredError';
-    blinkApi.login.mockRejectedValue(authError);
+    blinkApi.login.mockRejectedValue(new Blink2FARequiredError('2FA verification required'));
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       createLogger() as unknown as Logger,
@@ -230,6 +229,32 @@ describe('BlinkCamerasPlatform', () => {
     expect(blinkApi.login).toHaveBeenCalledTimes(1);
     expect(blinkApi.getHomescreen).not.toHaveBeenCalled();
     expect(platform.isOperational()).toBe(false);
+  });
+
+  it('keeps temporary token-refresh failures eligible for automatic recovery', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    blinkApi.login
+      .mockRejectedValueOnce(new BlinkTokenRefreshError('temporary'))
+      .mockResolvedValueOnce(undefined);
+    blinkApi.getHomescreen.mockResolvedValue({
+      account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+    });
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(
+      createLogger() as unknown as Logger,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      hapApi,
+    );
+    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
+    const poll = (platform as unknown as { pollDeviceStates: () => Promise<void> }).pollDeviceStates.bind(platform);
+
+    await expect(discover()).resolves.toBe(false);
+    await poll();
+
+    expect(blinkApi.login).toHaveBeenCalledTimes(2);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+    expect(platform.isOperational()).toBe(true);
   });
 
   it('instructs a child-bridge restart when stored authentication changes', async () => {

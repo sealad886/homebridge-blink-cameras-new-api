@@ -20,7 +20,15 @@ import {
   Service,
 } from 'homebridge';
 import { BlinkApi } from './blink-api';
+import {
+  Blink2FARequiredError,
+  BlinkAuthenticationError,
+  BlinkHostedReauthenticationRequiredError,
+  BlinkHostedTokenExchangeError,
+} from './blink-api/auth';
+import { InvalidAuthStateError } from './blink-api/auth-state';
 import { AuthStateChangedError } from './blink-api/auth-storage';
+import { BlinkRestVerificationRequiredError } from './blink-api/client';
 import {
   BlinkHomescreen,
   BlinkMediaClip,
@@ -510,7 +518,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private setConnectionFailure(error?: unknown): void {
     const shouldReportFailure = this.connectionState !== 'faulted' &&
       this.connectionState !== 'authentication-required';
-    this.connectionState = this.isAuthenticationFailure(error) ? 'authentication-required' : 'faulted';
+    this.connectionState = this.requiresAuthenticationAction(error) ? 'authentication-required' : 'faulted';
     this.operational = false;
     this.connectionFailureConfirmed = true;
     this.updateCachedAccessoryFaults(true);
@@ -549,11 +557,23 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private isAuthenticationFailure(error: unknown): boolean {
-    if (!(error instanceof Error)) {
-      return false;
+  private requiresAuthenticationAction(error: unknown): boolean {
+    if (
+      error instanceof AuthStateChangedError ||
+      error instanceof InvalidAuthStateError ||
+      error instanceof Blink2FARequiredError ||
+      error instanceof BlinkHostedReauthenticationRequiredError ||
+      error instanceof BlinkHostedTokenExchangeError ||
+      error instanceof BlinkRestVerificationRequiredError
+    ) {
+      return true;
     }
-    return /auth|sign.?in|token|verification|credential/i.test(`${error.name} ${error.message}`);
+    if (error instanceof BlinkAuthenticationError) {
+      return error.details.requires2FA ||
+        error.details.requiresUpdate ||
+        [400, 401, 403].includes(error.details.status);
+    }
+    return false;
   }
 
   private describeConnectionFailure(error: unknown): string {
