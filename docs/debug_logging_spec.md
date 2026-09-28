@@ -58,15 +58,21 @@ across diagnostic bundles.
 
 ## Error Logging Requirements
 
-- HTTP errors retain only method, URL, and numeric status. Untrusted status
-  text, response-header names/values, and response bodies are discarded rather
-  than copied into exception diagnostics.
+- HTTP errors retain method, redacted URL, numeric status, failure category,
+  and the bounded network metadata described below. Untrusted status text,
+  response-header names/values, and response bodies are discarded rather than
+  copied into exception diagnostics.
 - Auth errors retain numeric status, allowlisted error categories, and boolean
   update/2FA guidance. They discard untrusted headers and response bodies.
 - Do not log raw tokens, credentials, verification values, or stable identity
   fields in error contexts.
-- Network and body-decoding errors discard native error messages and causes,
-  which may contain response snippets or request values.
+- Network errors retain a bounded transport category, an allowlisted native
+  error code when recognized, elapsed milliseconds, and the destination hostname.
+  Classification inspects a bounded cause chain; raw native messages, causes,
+  addresses, and request values are never copied into diagnostics. Unknown
+  failures remain classified as network failures rather than guessed causes.
+- Body-decoding errors discard native error messages and causes, which may
+  contain response snippets or request values.
 - Command-update and command-completion 404s are expected and do not emit error
   banners. Other failures remain visible.
 - Hosted UI warnings/errors go to both the UI event stream and process console.

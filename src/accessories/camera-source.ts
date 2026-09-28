@@ -22,6 +22,11 @@ import {
 } from 'homebridge';
 import { BlinkApi } from '../blink-api/client';
 import { BlinkHttpError } from '../blink-api/http';
+import {
+  describeNetworkFailure,
+  formatNetworkFailureDiagnostic,
+  NetworkFailureDiagnostic,
+} from '../blink-api/network-diagnostics';
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { Buffer } from 'node:buffer';
@@ -286,12 +291,26 @@ const toSrtpParams = (srtp: Buffer): string => srtp.toString('base64');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// HomeKit may ask for the same camera snapshot several times within a few
+// seconds. Keep transport failures from turning that retry burst into an
+// equivalent burst of thumbnail commands.
+const SNAPSHOT_FAILURE_COOLDOWN_MS = 15_000;
+
+class SnapshotNetworkError extends Error {
+  constructor(readonly diagnostic: NetworkFailureDiagnostic) {
+    super('Blink thumbnail request failed or timed out.');
+  }
+}
+
 export class BlinkCameraSource implements CameraStreamingDelegate {
   private readonly streamingConfig: BlinkCameraStreamingConfig;
   private readonly pendingSessions = new Map<string, PendingStreamSession>();
   private readonly ongoingSessions = new Map<string, ActiveStreamSession>();
   private cachedSnapshot: Buffer | null = null;
   private cachedSnapshotTime = 0;
+  private freshSnapshotPromise: Promise<Buffer> | null = null;
+  private snapshotFailureCooldownUntil = 0;
+  private snapshotFailure: Error | null = null;
 
   constructor(
     private readonly api: BlinkApi,
@@ -352,13 +371,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     try {
-      const buffer = await this.fetchSnapshotBuffer();
-      this.cacheSnapshot(buffer);
+      const buffer = await this.fetchFreshSnapshot();
 
       this.log(`Snapshot returned (${buffer.length} bytes)`);
       callback(undefined, buffer);
     } catch (error) {
-      this.logError(`Snapshot error: ${error}`);
       callback(error as Error);
     }
   }
@@ -372,9 +389,49 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error('Camera is unavailable/offline');
     }
 
-    const buffer = await this.fetchSnapshotBuffer();
-    this.cacheSnapshot(buffer);
+    const buffer = await this.fetchFreshSnapshot();
     this.log(`Snapshot cache refreshed manually (${buffer.length} bytes)`);
+  }
+
+  private fetchFreshSnapshot(): Promise<Buffer> {
+    if (this.freshSnapshotPromise) return this.freshSnapshotPromise;
+
+    if (this.snapshotFailure && Date.now() < this.snapshotFailureCooldownUntil) {
+      return Promise.reject(this.snapshotFailure);
+    }
+
+    this.snapshotFailure = null;
+    this.snapshotFailureCooldownUntil = 0;
+
+    const request = (async () => {
+      try {
+        const buffer = await this.fetchSnapshotBuffer();
+        this.cacheSnapshot(buffer);
+        this.snapshotFailure = null;
+        this.snapshotFailureCooldownUntil = 0;
+        return buffer;
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (failure instanceof SnapshotNetworkError) {
+          // The formatter emits only fixed labels and allowlisted bounded values.
+          this.errorLog(`Snapshot network failure: ${formatNetworkFailureDiagnostic(failure.diagnostic)}`);
+        } else {
+          this.logError(`Snapshot error: ${failure}`);
+        }
+        // Availability already prevents outbound work. Let a camera that comes
+        // back online recover immediately instead of inheriting a network cooldown.
+        if (this.isDeviceAvailable()) {
+          this.snapshotFailure = failure;
+          this.snapshotFailureCooldownUntil = Date.now() + SNAPSHOT_FAILURE_COOLDOWN_MS;
+        }
+        throw failure;
+      } finally {
+        this.freshSnapshotPromise = null;
+      }
+    })();
+
+    this.freshSnapshotPromise = request;
+    return request;
   }
 
   private cacheSnapshot(buffer: Buffer): void {
@@ -418,14 +475,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     let response: Awaited<ReturnType<typeof fetch>>;
+    const startedAtMs = Date.now();
     try {
       response = await fetch(resourceUrl.toString(), {
         headers: this.api.getAuthHeaders(),
         redirect: 'error',
         signal: globalThis.AbortSignal.timeout(30_000),
       });
-    } catch {
-      throw new Error('Blink thumbnail request failed or timed out.');
+    } catch (error) {
+      throw new SnapshotNetworkError(describeNetworkFailure(error, resourceUrl, startedAtMs));
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);

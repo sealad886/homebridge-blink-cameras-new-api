@@ -204,6 +204,13 @@ Remove those fields after migrating to hosted sign-in.
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to force a new thumbnail capture.
 
+Concurrent fresh snapshot requests for the same camera share one capture and
+download, including requests from the manual refresh switch. For 15 seconds after
+a failed attempt, fresh requests return that failure without contacting Blink
+again. A later request can retry. Existing valid cached snapshots remain
+available while the camera is online. A cached image does not confirm current
+connectivity to Blink.
+
 ## Quick Start: Hosted Blink Sign-In
 
 1. Open this plugin's settings in the remote Homebridge UI and choose **Sign in

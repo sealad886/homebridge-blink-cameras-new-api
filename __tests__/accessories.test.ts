@@ -86,6 +86,102 @@ describe('Accessory handlers', () => {
     }
   });
 
+  it('coalesces concurrent HomeKit and manual snapshot refreshes', async () => {
+    let finishThumbnailRequest!: (value: { command_id: number }) => void;
+    const thumbnailRequest = new Promise<{ command_id: number }>((resolve) => {
+      finishThumbnailRequest = resolve;
+    });
+    const requestCameraThumbnail = jest.fn().mockReturnValue(thumbnailRequest);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([4, 5, 6]).buffer,
+    }) as unknown as typeof fetch;
+
+    try {
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail,
+        pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+        getAuthHeaders: jest.fn().mockReturnValue({}),
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn(),
+      { snapshotCacheTTL: 0 });
+      const firstCallback = jest.fn();
+      const secondCallback = jest.fn();
+
+      const first = source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, firstCallback);
+      const second = source.handleSnapshotRequest({ width: 320, height: 240 } as SnapshotRequest, secondCallback);
+      const manual = source.refreshSnapshotCache();
+
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
+      finishThumbnailRequest({ command_id: 10 });
+      await Promise.all([first, second, manual]);
+
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(firstCallback).toHaveBeenCalledWith(undefined, Buffer.from([4, 5, 6]));
+      expect(secondCallback).toHaveBeenCalledWith(undefined, Buffer.from([4, 5, 6]));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('shares snapshot failures, suppresses retry commands during cooldown, then recovers', async () => {
+    let now = 1_000;
+    const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const failure = new Error('temporary transport failure');
+    const requestCameraThumbnail = jest.fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue({ command_id: 11 });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([9]).buffer,
+    }) as unknown as typeof fetch;
+
+    try {
+      const errorLog = jest.fn();
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail,
+        pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+        getAuthHeaders: jest.fn().mockReturnValue({}),
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn(),
+      { snapshotCacheTTL: 0 }, errorLog);
+      const firstCallback = jest.fn();
+      const secondCallback = jest.fn();
+      const cooldownCallback = jest.fn();
+      const recoveredCallback = jest.fn();
+
+      await Promise.all([
+        source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, firstCallback),
+        source.handleSnapshotRequest({ width: 320, height: 240 } as SnapshotRequest, secondCallback),
+      ]);
+
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
+      expect(firstCallback).toHaveBeenCalledWith(failure);
+      expect(secondCallback).toHaveBeenCalledWith(failure);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+
+      now += 14_999;
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, cooldownCallback);
+      expect(cooldownCallback).toHaveBeenCalledWith(failure);
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      await expect(source.refreshSnapshotCache()).rejects.toBe(failure);
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+
+      now += 1;
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, recoveredCallback);
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(2);
+      expect(recoveredCallback).toHaveBeenCalledWith(undefined, Buffer.from([9]));
+    } finally {
+      nowSpy.mockRestore();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each(['snapshot', 'manual refresh'])('rejects a late %s image after an offline update and recovers', async (operation) => {
     let available = true;
     let goOfflineDuringDownload = true;
@@ -195,6 +291,41 @@ describe('Accessory handlers', () => {
         expect.objectContaining({ redirect: 'error', signal: expect.any(globalThis.AbortSignal) }));
       expect(String(callback.mock.calls[0][0])).not.toContain('secret123');
       expect(JSON.stringify(errorLog.mock.calls)).not.toContain('secret123');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reports bounded DNS diagnostics once when snapshot download retries are cooling down', async () => {
+    const originalFetch = globalThis.fetch;
+    const nativeFailure = Object.assign(new Error('getaddrinfo ENOTFOUND token=secret123'), {
+      code: 'ENOTFOUND',
+    });
+    globalThis.fetch = jest.fn().mockRejectedValue(new TypeError('fetch failed', { cause: nativeFailure }));
+
+    try {
+      const errorLog = jest.fn();
+      const source = new BlinkCameraSource({
+        requestCameraThumbnail: jest.fn().mockResolvedValue(undefined),
+        getAuthHeaders: jest.fn().mockReturnValue({}),
+      } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
+      () => 'https://rest-prde.immedia-semi.com/media/thumbnail.jpg?token=secret123',
+      () => true, jest.fn(), { snapshotCacheTTL: 0 }, errorLog);
+      const firstCallback = jest.fn();
+      const cooldownCallback = jest.fn();
+
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, firstCallback);
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, cooldownCallback);
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(firstCallback).toHaveBeenCalledWith(expect.any(Error));
+      expect(cooldownCallback).toHaveBeenCalledWith(firstCallback.mock.calls[0][0]);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(
+        'type=dns code=ENOTFOUND hostname=rest-prde.immedia-semi.com elapsedMs=',
+      ));
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain('secret123');
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain('/media/thumbnail.jpg');
     } finally {
       globalThis.fetch = originalFetch;
     }

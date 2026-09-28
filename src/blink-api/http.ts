@@ -12,6 +12,11 @@ import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
 import { randomUUID } from 'node:crypto';
 import { isSensitiveDiagnosticKey, redactDiagnosticText as redactText, redactDiagnosticUrl as redactUrlForLogging } from './redaction';
+import {
+  describeNetworkFailure,
+  formatNetworkFailureDiagnostic,
+  NetworkFailureDiagnostic,
+} from './network-diagnostics';
 
 /**
  * Standard headers for all Blink API requests
@@ -79,11 +84,13 @@ export class BlinkHttpError extends Error {
     _responseBody?: string,
     responseHeaders?: Record<string, string>,
     public readonly failure: 'http' | 'network' | 'response' = 'http',
+    public readonly networkDiagnostic?: NetworkFailureDiagnostic,
   ) {
     const untrustedFragments = [
       statusText,
       ...Object.entries(responseHeaders ?? {}).flatMap(([key, value]) => [key, value]),
     ];
+
     let safeMessage = message;
     for (const fragment of untrustedFragments) {
       if (fragment) {
@@ -104,6 +111,10 @@ export class BlinkHttpError extends Error {
       `Status: ${this.status}`,
       `Failure: ${this.failure}`,
     ];
+
+    if (this.networkDiagnostic) {
+      lines.push(`Network: ${formatNetworkFailureDiagnostic(this.networkDiagnostic)}`);
+    }
 
     lines.push(`${'─'.repeat(60)}\n`);
     return lines.join('\n');
@@ -207,9 +218,10 @@ export class BlinkHttp {
         body: body ? JSON.stringify(body) : undefined,
         signal: globalThis.AbortSignal.timeout(30_000),
       });
-    } catch {
+    } catch (cause) {
+      const diagnostic = describeNetworkFailure(cause, url, startTime);
       const error = new BlinkHttpError('Blink API network request failed or timed out.', 0, '', safeUrl, method,
-        undefined, undefined, 'network');
+        undefined, undefined, 'network', diagnostic);
       this.log.error(error.toLogString());
       throw error;
     }
