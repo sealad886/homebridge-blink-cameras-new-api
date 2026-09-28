@@ -10,9 +10,11 @@ below.
 ## Context
 
 Blink's current Android application uses a hosted OAuth 2.0 authorization-code
-flow with PKCE. Blink Android 57.1 (`versionCode` 29715642) is the protocol
-authority for this integration. Blink's OAuth and REST interfaces are private
-and undocumented, so they can change independently of this plugin.
+flow with PKCE. Blink Android 59.2 (`versionCode` 29823413) is the current
+static protocol catalog; Android 57.1 (`versionCode` 29715642) remains the
+comparison baseline and the authority for this integration's bounded live
+AppAuth proof. Blink's OAuth and REST interfaces are private and undocumented,
+so they can change independently of this plugin.
 
 The Homebridge instance is remote from the operator's browser. It must retain
 the PKCE verifier and expected state, while the browser handles Blink-hosted

@@ -53,7 +53,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   }
 
   private isMotionServiceActive(): boolean {
-    return this.device.enabled && this.isDeviceAvailable();
+    return this.platform.isOperational() && this.device.enabled && this.isDeviceAvailable();
   }
 
   constructor(
@@ -103,7 +103,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       cameraSourceType,
       device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
-      () => this.isDeviceAvailable(),
+      () => this.platform.isOperational() && this.isDeviceAvailable(),
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,
       (msg) => this.platform.log.error(`[${device.name}] ${msg}`),
@@ -193,6 +193,10 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       );
     }
 
+    this.updateAvailability();
+  }
+
+  public updateAvailability(): void {
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .updateValue(this.isMotionServiceActive());

@@ -1,11 +1,15 @@
 # Blink Hosted Authentication Integration Checklist
 
 Use this checklist to validate the `0.9.1` hosted-authentication release against
-the implementation, Blink Android 57.1 evidence, the native AppAuth harness,
+the implementation, its Blink Android 57.1 evidence, the native AppAuth harness,
 and the authorized EU/Ireland account. Native hosted-page launch and the
 deployed Android refresh/restart path are proven. Two fresh packaged exchanges
 returned `BHO-HTTP-INVALID-GRANT`, so only the fresh packaged code-exchange box
 remains open.
+
+For current static API discovery, use the validated Android 59.2 contract in
+`docs/api-contract/blink-59.2-29823413.json`. The 57.1 evidence in this release
+checklist remains the authority for the bounded live AppAuth proof it records.
 
 ## Automated release gates
 

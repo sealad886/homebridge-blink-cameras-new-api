@@ -47,8 +47,8 @@ export class BlinkRestVerificationRequiredError extends Error {
 }
 
 export class BlinkApi {
-  private motionCommandTail: Promise<void> = Promise.resolve();
-  private hasSentMotionCommand = false;
+  private stateCommandTail: Promise<void> = Promise.resolve();
+  private hasSentStateCommand = false;
   private readonly auth: BlinkAuth;
   private readonly http: BlinkHttp;
   private readonly sharedHttp: BlinkHttp;
@@ -73,30 +73,52 @@ export class BlinkApi {
     }
   }
 
-  /** Blink rejects bursts of per-device motion changes with HTTP 409. */
-  private queueMotionCommand(send: () => Promise<unknown>): Promise<void> {
-    const command = this.motionCommandTail.then(async () => {
-      if (this.hasSentMotionCommand) {
+  /** Blink rejects overlapping network and per-device state mutations with HTTP 409. */
+  private queueStateCommand<T>(
+    label: 'Motion' | 'Network',
+    send: () => Promise<T>,
+    retryDelays: number[],
+    conflictResolution?: () => Promise<T | undefined>,
+  ): Promise<T> {
+    const command = this.stateCommandTail.then(async () => {
+      if (this.hasSentStateCommand) {
         await new Promise(resolve => setTimeout(resolve, 300));
       }
-      this.hasSentMotionCommand = true;
+      this.hasSentStateCommand = true;
 
       for (let attempt = 0; ; attempt++) {
         try {
-          await send();
-          return;
+          return await send();
         } catch (error) {
-          if (!(error instanceof BlinkHttpError) || error.status !== 409 || attempt >= 2) {
+          if (!(error instanceof BlinkHttpError) || error.status !== 409) {
             throw error;
           }
-          const delay = 500 * (attempt + 1);
-          this.log.warn(`[Motion] Blink reported a state conflict; retrying in ${delay}ms (${attempt + 1}/2).`);
+          const reconciled = await conflictResolution?.();
+          if (reconciled !== undefined) {
+            this.log.info(`[${label}] Blink reached the requested state despite the conflict response.`);
+            return reconciled;
+          }
+          const delay = retryDelays[attempt];
+          if (delay === undefined) {
+            throw error;
+          }
+          this.log.warn(`[${label}] Blink reported a state conflict; retrying in ${delay}ms (${attempt + 1}/${retryDelays.length}).`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
       }
     });
-    this.motionCommandTail = command.then(() => undefined, () => undefined);
+    this.stateCommandTail = command.then(() => undefined, () => undefined);
     return command;
+  }
+
+  private async networkReachedState(networkId: number, armed: boolean): Promise<boolean> {
+    try {
+      const homescreen = await this.getHomescreen();
+      return homescreen.networks.some(network => network.id === networkId && network.armed === armed);
+    } catch (error) {
+      this.logDebug(`Network state reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
   }
 
   getSharedRestRootUrl(): string {
@@ -545,8 +567,16 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/NetworkApi.smali
    */
   async armNetwork(networkId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`);
+    return this.queueStateCommand('Network', async () => {
+      const accountId = await this.ensureAccountId();
+      const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`);
+      const commandId = response.id ?? response.command_id;
+      if (commandId) {
+        await this.pollCommand(networkId, commandId, 10, 1);
+      }
+      return response;
+    }, [1000, 2000, 4000], async () =>
+      await this.networkReachedState(networkId, true) ? {} : undefined);
   }
 
   /**
@@ -555,8 +585,16 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/NetworkApi.smali
    */
   async disarmNetwork(networkId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`);
+    return this.queueStateCommand('Network', async () => {
+      const accountId = await this.ensureAccountId();
+      const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`);
+      const commandId = response.id ?? response.command_id;
+      if (commandId) {
+        await this.pollCommand(networkId, commandId, 10, 1);
+      }
+      return response;
+    }, [1000, 2000, 4000], async () =>
+      await this.networkReachedState(networkId, false) ? {} : undefined);
   }
 
   /**
@@ -566,10 +604,10 @@ export class BlinkApi {
    * Note: No version prefix - uses root URL (without /api/)
    */
   async enableCameraMotion(networkId: number, cameraId: number): Promise<void> {
-    return this.queueMotionCommand(async () => {
+    return this.queueStateCommand('Motion', async () => {
       const accountId = await this.ensureAccountId();
       await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
-    });
+    }, [500, 1000]);
   }
 
   /**
@@ -579,10 +617,10 @@ export class BlinkApi {
    * Note: No version prefix - uses root URL (without /api/)
    */
   async disableCameraMotion(networkId: number, cameraId: number): Promise<void> {
-    return this.queueMotionCommand(async () => {
+    return this.queueStateCommand('Motion', async () => {
       const accountId = await this.ensureAccountId();
       await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
-    });
+    }, [500, 1000]);
   }
 
   /**
@@ -591,10 +629,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
   async enableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    return this.queueMotionCommand(async () => {
+    return this.queueStateCommand('Motion', async () => {
       const accountId = await this.ensureAccountId();
       await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
-    });
+    }, [500, 1000]);
   }
 
   /**
@@ -603,10 +641,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
   async disableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    return this.queueMotionCommand(async () => {
+    return this.queueStateCommand('Motion', async () => {
       const accountId = await this.ensureAccountId();
       await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
-    });
+    }, [500, 1000]);
   }
 
   /**
@@ -615,10 +653,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
   async enableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    return this.queueMotionCommand(async () => {
+    return this.queueStateCommand('Motion', async () => {
       const accountId = await this.ensureAccountId();
       await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
-    });
+    }, [500, 1000]);
   }
 
   /**
@@ -627,10 +665,10 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
   async disableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    return this.queueMotionCommand(async () => {
+    return this.queueStateCommand('Motion', async () => {
       const accountId = await this.ensureAccountId();
       await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
-    });
+    }, [500, 1000]);
   }
 
   /**
@@ -793,7 +831,12 @@ export class BlinkApi {
    * Source: API Dossier Section 3.10 - GET /accounts/{account_id}/networks/{network}/commands/{command}
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/command/CommandApi.smali
    */
-  async pollCommand(networkId: number, commandId: number, maxAttempts = 10): Promise<BlinkCommandStatus> {
+  async pollCommand(
+    networkId: number,
+    commandId: number,
+    maxAttempts = 10,
+    fallbackIntervalSeconds = 5,
+  ): Promise<BlinkCommandStatus> {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const status = await this.getCommandStatus(networkId, commandId);
 
@@ -805,8 +848,7 @@ export class BlinkApi {
         throw new Error(`Blink command ${commandId} failed`);
       }
 
-      // Use polling_interval from response, default to 5 seconds
-      const delayMs = (status.polling_interval ?? 5) * 1000;
+      const delayMs = (status.polling_interval ?? fallbackIntervalSeconds) * 1000;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
 

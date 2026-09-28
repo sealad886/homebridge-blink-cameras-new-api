@@ -1,0 +1,72 @@
+# Blink API Contract for AI Agents
+
+The canonical static contract is `blink-59.2-29823413.json`. Its schema is
+`schema.json`; `blink-59.2-29823413.md` is generated for human review.
+
+The JSON is factual interface metadata recovered from the official Android APK.
+It does not contain APK code, credentials, account identifiers, device
+identifiers, or live traffic. Static declarations do not prove that a server
+currently accepts a request.
+
+## Deterministic queries
+
+```js
+const contract = require('./docs/api-contract/blink-59.2-29823413.json');
+
+// Locate a wire contract.
+const media = contract.endpoints.filter(endpoint =>
+  endpoint.lifecycle !== 'removed' && endpoint.path.includes('/media'));
+
+// Resolve host, auth, and parameters.
+const target = contract.endpoints.find(endpoint => endpoint.id === 'EP_ID');
+console.log(target.baseHostTemplate, target.authentication, target.parameters);
+
+// Inspect recovered first-party invocation arguments and local sequencing.
+console.log(target.callSites, target.interaction);
+
+// Follow request and response model references.
+const schemaModels = target.lifecycle === 'removed'
+  ? contract.baseline.models : contract.models;
+const models = new Map(schemaModels.map(model => [model.qualifiedName, model]));
+console.log(target.requestModelRefs.map(name => models.get(name)));
+
+// Exclude destructive operations.
+const readSafe = contract.endpoints.filter(endpoint =>
+  endpoint.lifecycle !== 'removed' && !endpoint.security.destructive);
+
+// Compare the current APK with 57.1.
+const delta = contract.endpoints.filter(endpoint =>
+  endpoint.lifecycle !== 'unchanged');
+```
+
+Always inspect `confidence`, `recovery`, `evidence`, `lifecycle`, and
+`unresolved` before using a record. The catalog explicitly records unresolved
+response/error/polling and device-family attribution per endpoint. Recovered
+`callSites` map invocation expressions to Retrofit parameter locations and wire
+names; `interaction` summarizes only the local static control flow visible to
+JADX and any corroborated cross-method `workflow` recovered from smali. Empty
+arrays are not evidence that those behaviors do not exist. Treat
+`inferred` and `unresolved` as leads, not confirmed wire behavior. Never use
+this catalog as authorization to call destructive,
+privacy-sensitive, account-management, or media-bearing endpoints.
+
+Model references are version-scoped. Removed contracts use `baseline.models`;
+active contracts use `models`. Converter-specific variants can carry a policy
+suffix in `qualifiedName`; use the exact reference, not a simple class name.
+Unknown nullability and requiredness are `null`. An absent `default` value is
+not a JSON-null default: inspect `defaultState`. Unresolved naming policies
+must not be used to synthesize request field names.
+
+## Regeneration
+
+The APK and decompiler directories are deliberately git-ignored. With the
+expected evidence directories present, run:
+
+```sh
+npm run blink-api:generate
+npm run blink-api:validate
+```
+
+The generator normalizes duplicate Retrofit overloads, corroborates JADX output
+with apktool smali, compares the current build with 57.1, validates the result,
+and regenerates the Markdown view.

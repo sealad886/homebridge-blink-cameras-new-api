@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-beta.0] - 2026-09-28
+
+### Added
+
+- Add a reproducible static-analysis pipeline for the official Blink Android
+  59.2 APK set, with JADX and smali recovery, native/protocol scanning, strict
+  JSON Schema validation, and deterministic generated documentation.
+- Publish an AI-readable declaration catalog covering 343 active normalized
+  API contracts and 677 request/response models, including recovered call
+  sites, state-command workflows, and recursive
+  model-shape lifecycle comparison with the retained Android 57.1 evidence
+  baseline.
+- Surface discovery, authentication, and sustained polling failures in HomeKit
+  through a temporary `Blink Connection` diagnostic accessory with an explicit
+  retry control and automatic removal after recovery.
+
+### Changed
+
+- Advance the `0.10.0` release line to beta for broader acceptance of network
+  exclusions, hosted-authentication state handling, and serialized motion
+  commands delivered during the alpha stage.
+- Treat first-party static content and observability hosts separately from API
+  contracts so unresolved and unclassified endpoint counts remain meaningful.
+- Serialize the complete network arm/disarm and per-device motion mutation
+  lifecycles, reconcile HTTP 409 conflicts against fresh homescreen state, and
+  retry unresolved conflicts after 1, 2, and 4 seconds.
+- Match the official app's one-second arm/disarm command polling cadence and
+  report final command failures through HomeKit `StatusFault` and service
+  communication errors instead of silently requiring another user action.
+
+### Known limitations
+
+- Blink's interfaces remain private and can change without notice. Static APK
+  declarations do not prove current server behavior or authorize destructive
+  API calls.
+- The catalog explicitly marks server response semantics and device-family
+  attribution as unresolved where the retained static evidence does not
+  establish them uniquely; static workflow recovery is not live acceptance.
+- Beta runtime acceptance still requires private hosted sign-in, logout and
+  relogin, offline recovery, at least 24 hours of observation, and one natural
+  token refresh after exact-version installation.
+
 ## [0.10.0-alpha.2] - 2026-09-20
 
 ### Fixed

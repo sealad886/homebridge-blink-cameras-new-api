@@ -27,6 +27,7 @@ type MutableBlinkApi = {
   disarmNetwork: BlinkApi['disarmNetwork'];
   enableCameraMotion: BlinkApi['enableCameraMotion'];
   disableCameraMotion: BlinkApi['disableCameraMotion'];
+  requestCameraThumbnail: BlinkApi['requestCameraThumbnail'];
   pollCommand: BlinkApi['pollCommand'];
   auth: {
     login: jest.Mock;
@@ -1075,7 +1076,7 @@ describe('BlinkApi', () => {
   it('arms and disarms networks using ensured account id', async () => {
     const { api, auth, http } = createApi();
     auth.getAccountId.mockReturnValue(3);
-    http.post.mockResolvedValue({ command_id: 1 });
+    http.post.mockResolvedValue({});
 
     await api.armNetwork(5);
     await api.disarmNetwork(5);
@@ -1083,6 +1084,116 @@ describe('BlinkApi', () => {
     expect(auth.ensureValidToken).toHaveBeenCalled();
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/arm');
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/disarm');
+  });
+
+  it('uses the official app one-second fallback while polling arm commands', async () => {
+    const { api, auth } = createApi();
+    auth.getAccountId.mockReturnValue(3);
+    api.sharedHttp.post.mockResolvedValueOnce({ command_id: 71 });
+    const poll = jest.spyOn(api, 'pollCommand').mockResolvedValueOnce({ complete: true });
+
+    await api.armNetwork(5);
+
+    expect(poll).toHaveBeenCalledWith(5, 71, 10, 1);
+  });
+
+  it('serializes network arm ahead of a following camera mutation', async () => {
+    const { api } = createApi();
+    const armHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    const motionHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    api.sharedHttp = armHttp;
+    api.sharedRootHttp = motionHttp;
+    let releaseArm!: () => void;
+    armHttp.post.mockImplementationOnce(() => new Promise(resolve => { releaseArm = () => resolve({}); }));
+    motionHttp.post.mockResolvedValue(undefined);
+
+    const arm = api.armNetwork(5);
+    const camera = api.disableCameraMotion(5, 1);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(armHttp.post).toHaveBeenCalledTimes(1);
+    expect(motionHttp.post).not.toHaveBeenCalled();
+
+    releaseArm();
+    await Promise.all([arm, camera]);
+    expect(motionHttp.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles a network conflict before retrying when Blink already reached the target state', async () => {
+    const { api, auth } = createApi();
+    const sharedHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    api.sharedHttp = sharedHttp;
+    auth.getAccountId.mockReturnValue(3);
+    sharedHttp.post.mockRejectedValueOnce(new BlinkHttpError('Conflict', 409, 'Conflict', 'https://example.com', 'POST'));
+    sharedHttp.get.mockResolvedValueOnce({
+      account: { account_id: 3 }, networks: [{ id: 5, name: 'Home', armed: true }],
+      cameras: [], doorbells: [], owls: [], sync_modules: [],
+    });
+
+    await expect(api.armNetwork(5)).resolves.toEqual({});
+    expect(sharedHttp.post).toHaveBeenCalledTimes(1);
+    expect(sharedHttp.get).toHaveBeenCalledWith('v4/accounts/3/homescreen');
+  });
+
+  it('automatically retries a network conflict when the target state was not reached', async () => {
+    const { api, auth } = createApi();
+    const sharedHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    api.sharedHttp = sharedHttp;
+    auth.getAccountId.mockReturnValue(3);
+    sharedHttp.post
+      .mockRejectedValueOnce(new BlinkHttpError('Conflict', 409, 'Conflict', 'https://example.com', 'POST'))
+      .mockResolvedValueOnce({});
+    sharedHttp.get.mockResolvedValueOnce({
+      account: { account_id: 3 }, networks: [{ id: 5, name: 'Home', armed: false }],
+      cameras: [], doorbells: [], owls: [], sync_modules: [],
+    });
+
+    await expect(api.armNetwork(5)).resolves.toEqual({});
+    expect(sharedHttp.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds the state mutation queue until an arm command finishes polling', async () => {
+    const { api } = createApi();
+    const armHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    const motionHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    api.sharedHttp = armHttp;
+    api.sharedRootHttp = motionHttp;
+    armHttp.post.mockResolvedValueOnce({ command_id: 41 });
+    let finishPolling!: () => void;
+    motionHttp.get.mockImplementationOnce(() => new Promise(resolve => {
+      finishPolling = () => resolve({ complete: true });
+    }));
+    motionHttp.post.mockResolvedValue(undefined);
+
+    const arm = api.armNetwork(5);
+    const camera = api.disableCameraMotion(5, 1);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(motionHttp.get).toHaveBeenCalledWith('accounts/10/networks/5/commands/41');
+    expect(motionHttp.post).not.toHaveBeenCalled();
+
+    finishPolling();
+    await Promise.all([arm, camera]);
+    expect(motionHttp.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not block thumbnail reads behind a pending network mutation', async () => {
+    const { api } = createApi();
+    const armHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    const rootHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
+    api.sharedHttp = armHttp;
+    api.sharedRootHttp = rootHttp;
+    let releaseArm!: () => void;
+    armHttp.post.mockImplementationOnce(() => new Promise(resolve => {
+      releaseArm = () => resolve({});
+    }));
+    rootHttp.post.mockResolvedValueOnce({ command_id: 42 });
+
+    const arm = api.armNetwork(5);
+    const thumbnail = api.requestCameraThumbnail(5, 1);
+    await expect(thumbnail).resolves.toEqual({ command_id: 42 });
+    expect(rootHttp.post).toHaveBeenCalledWith('accounts/10/networks/5/cameras/1/thumbnail');
+
+    releaseArm();
+    await arm;
   });
 
   it('serializes motion commands across cameras and recovers after a conflict', async () => {
