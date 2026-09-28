@@ -237,6 +237,19 @@ outcome, findings, pattern analysis, fixes, and verification here.
   suites and 590 tests passed; lint, build, the 39 release-workflow tests, and
   Graphify refresh passed. Round 5 remains pending.
 
+### Round 5
+
+- Base/head: `origin/main` / `8632aba8e99145aa4d53dab06dfcf726e546c5c7`.
+- Codex report: `/tmp/codex-pr41-r5.tCK8Pw`, exit 0. Explicit clean result:
+  no actionable regressions found across HAP naming, cached accessory handling,
+  startup/runtime recovery, authentication classification, or concurrent
+  retries. Reviewer independently passed all 26 suites/590 tests and TypeScript
+  checking; live Blink and Apple Home behavior remains a separate post-release
+  gate.
+- Codex is retired for this PR under the review-loop policy. Its clean result is
+  bound to `8632aba`; later documentation or commit-message-only changes do not
+  imply that Codex reviewed a newer SHA.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
