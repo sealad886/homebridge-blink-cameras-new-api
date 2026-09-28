@@ -268,11 +268,17 @@ describe('BlinkCamerasPlatform', () => {
     hapApi = createApi() as unknown as MockAPI;
     const blinkApi = buildBlinkApi();
     let resolveHomescreen: ((value: BlinkHomescreen) => void) | undefined;
-    blinkApi.getHomescreen.mockReturnValue(new Promise<BlinkHomescreen>(resolve => {
-      resolveHomescreen = resolve;
-    }));
+    blinkApi.getHomescreen
+      .mockResolvedValueOnce({
+        account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+      })
+      .mockReturnValueOnce(new Promise<BlinkHomescreen>(resolve => {
+        resolveHomescreen = resolve;
+      }));
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, config, hapApi);
+    await (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices();
+    jest.clearAllMocks();
     const recover = (platform as unknown as {
       recoverConnection: (authenticate: boolean) => Promise<boolean>;
     }).recoverConnection.bind(platform);
@@ -290,6 +296,32 @@ describe('BlinkCamerasPlatform', () => {
     expect(blinkApi.login).toHaveBeenCalledTimes(1);
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
     expect(platform.accessories.some(accessory => accessory.context.device)).toBe(false);
+  });
+
+  it('completes initial inventory after startup discovery fails', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    blinkApi.getHomescreen
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce({
+        account: { account_id: 1 },
+        networks: [{ id: 9, name: 'Recovered Network', armed: false }],
+        cameras: [], doorbells: [], owls: [], sync_modules: [],
+      });
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, config, hapApi);
+    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
+    const recover = (platform as unknown as {
+      recoverConnection: (authenticate: boolean) => Promise<boolean>;
+    }).recoverConnection.bind(platform);
+
+    await expect(discover()).resolves.toBe(false);
+    await expect(recover(true)).resolves.toBe(true);
+
+    expect(platform.isOperational()).toBe(true);
+    expect(platform.accessories.filter(accessory => accessory.context.device)
+      .map(accessory => accessory.context.device.name)).toEqual(['Recovered Network']);
+    expect((platform as unknown as { networkAccessories: Map<number, unknown> }).networkAccessories.has(9)).toBe(true);
   });
 
   it.each(['1', 'Away'])('excludes a whole network by %s, removes its cached accessories, and supports re-enabling', async (identifier) => {

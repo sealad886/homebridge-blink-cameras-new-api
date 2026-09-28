@@ -108,10 +108,12 @@ healthy -> degraded -> faulted -> recovering -> healthy
 ```
 
 Initial discovery continues to authenticate, fetch homescreen data, reconcile
-inventory, initialize handlers, and start polling. Runtime recovery only
-coalesces concurrent attempts, validates the current Blink session, fetches a
-homescreen, updates existing handlers, and changes connection state. It cannot
-register or unregister Blink device accessories.
+inventory, initialize handlers, and start polling. If startup fails before that
+initialization completes, the first successful recovery finishes initial
+inventory exactly once. After initialization, runtime recovery only coalesces
+concurrent attempts, validates the current Blink session, fetches a homescreen,
+updates existing handlers, and changes connection state. Ordinary runtime
+recovery cannot register or unregister Blink device accessories.
 
 Polling retains the three-consecutive-failure threshold. The first two failures
 move to degraded state without opening the HomeKit sensor. The third faults the
@@ -127,8 +129,8 @@ operation and closes the fault only after handler updates finish.
 | WI-3 Add stable status and retry accessories | Complete | `src/platform.ts`; platform recovery tests |
 | WI-4 Separate startup discovery from runtime recovery | Complete | Coalesced `recoverConnection`; success, failure, polling, and concurrency tests |
 | WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/584 tests, 39 release tests, lint, build, and Graphify update passed |
-| WI-6 Conventional Commit milestones | In progress | `198bf18` plan milestone; implementation commit pending |
-| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | Planned | Pending PR/review ledger |
+| WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; review fix pending |
+| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; round 1 below |
 | WI-8 Merge and task-scoped branch cleanup | Planned | Pending merge/cleanup receipts |
 
 ## Risks and rollback
@@ -147,10 +149,29 @@ operation and closes the fault only after handler updates finish.
 
 ## Review-round ledger
 
-No review round has started. Round limit: 10. Planned sources: CodeRabbit CLI
-and an independent Codex review. Each round will record base, head SHA, request
-time, saved report, explicit outcome, findings, pattern analysis, fixes, and
-verification here.
+Round limit: 10. Planned sources: CodeRabbit CLI and an independent Codex
+review. Each round records base, head SHA, request time, saved report, explicit
+outcome, findings, pattern analysis, fixes, and verification here.
+
+### Round 1
+
+- Base/head: `origin/main` / `4e29c576d51ad850b2f66ec4ead6e6092a4c53ef`.
+- Codex report: `/tmp/codex-pr41-r1.8uJ5IO`, exit 0. One actionable P1:
+  recovery after failed startup could clear the fault without constructing any
+  device handlers or registering a first inventory.
+- Pattern analysis: Codanna index covered this repository and resolved
+  `performConnectionRecovery`, `registerDevices`, and `updateDeviceStates`.
+  Caller/callee and depth-3 impact analysis localized the lifecycle ownership to
+  platform discovery/recovery. Repository-wide search found no parallel device
+  initialization path. Classification: broken lifecycle invariant at the shared
+  recovery boundary, not an isolated call-site error. Repair: track successful
+  initial inventory, complete it once after startup failure, and retain
+  state-only behavior for ordinary runtime recovery.
+- Verification after repair: 3 focused suites and 71 tests passed; the full 26
+  suites and 585 tests passed; lint, build, and Graphify update passed.
+- CodeRabbit CLI 0.8.1 preflight passed authentication, but review execution is
+  blocked pending explicit authorization to transmit the committed diff to the
+  external CodeRabbit service. No CodeRabbit outcome is claimed.
 
 ## Local verification evidence
 

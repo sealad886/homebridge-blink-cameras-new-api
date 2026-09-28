@@ -114,6 +114,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private connectionState: ConnectionState = 'healthy';
   private discoveryPromise: Promise<boolean> | null = null;
   private recoveryPromise: Promise<boolean> | null = null;
+  private inventoryInitialized = false;
   private consecutivePollFailures = 0;
   private readonly reportedNameAdjustments = new Set<string>();
 
@@ -376,6 +377,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);
+      this.inventoryInitialized = true;
       this.startPolling();
       this.setConnectionHealthy();
       return true;
@@ -580,7 +582,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         await this.apiClient.login(this.config.twoFactorCode);
       }
       const homescreen = await this.apiClient.getHomescreen();
-      this.updateDeviceStates(homescreen);
+      if (this.inventoryInitialized) {
+        this.updateDeviceStates(homescreen);
+      } else {
+        // A startup failure occurs before handlers exist. Complete initial
+        // discovery exactly once; ordinary runtime recovery remains state-only.
+        this.registerDevices(homescreen);
+        this.inventoryInitialized = true;
+      }
       this.setConnectionHealthy();
       return true;
     } catch (error) {
