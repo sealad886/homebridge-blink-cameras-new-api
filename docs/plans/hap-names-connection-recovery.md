@@ -264,9 +264,13 @@ outcome, findings, pattern analysis, fixes, and verification here.
   organization`: `/tmp/coderabbit-pr41-r1.lfbzqJ` and
   `/tmp/coderabbit-pr41-r1-retry.oEdEG2` (reviewer exit 1, tee exit 0).
 - An OAuth refresh was started without clearing credentials, but timed out at
-  the GitHub credential screen. CodeRabbit now requires the user to run
-  `coderabbit auth login` in a user-controlled terminal before another review
-  attempt. No CodeRabbit findings or clean outcome are claimed.
+  the initial GitHub credential screen. A later host-side `coderabbit auth
+  login --agent` completed successfully as `sealad886`, but both committed-local
+  and documented remote-repository review modes still failed before analysis
+  with the same `403 FORBIDDEN: Invalid organization`. Host execution therefore
+  rules out sandboxing and stale OAuth as causes. CodeRabbit reports plan `Free`,
+  seat `not assigned`, and no alternate organization; provider account/workspace
+  repair is required. No CodeRabbit findings or clean outcome are claimed.
 
 ## Local verification evidence
 
