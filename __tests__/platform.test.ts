@@ -118,6 +118,121 @@ describe('BlinkCamerasPlatform', () => {
     expect(platform.accessories.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('surfaces failed discovery in HomeKit and retries without deleting cached accessories', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const log = createLogger() as unknown as Logger;
+    const blinkApi = buildBlinkApi();
+    blinkApi.getHomescreen
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce({
+        account: { account_id: 1 },
+        networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+      });
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(
+      log,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      hapApi,
+    );
+    const cached = new hapApi.platformAccessory('Cached Camera', hapApi.hap.uuid.generate('blink-camera-2'));
+    cached.context.device = { id: 2, network_id: 1, name: 'Cached Camera', enabled: true };
+    const cachedMotion = cached.addService(hapApi.hap.Service.MotionSensor, 'Cached Camera', 'motion-sensor');
+    platform.configureAccessory(cached);
+
+    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
+    await expect(discover()).resolves.toBe(false);
+
+    expect(platform.isOperational()).toBe(false);
+    expect(cachedMotion.getCharacteristic(hapApi.hap.Characteristic.StatusFault).value).toBe(1);
+    expect(cachedMotion.getCharacteristic(hapApi.hap.Characteristic.StatusActive).value).toBe(false);
+    expect(hapApi.unregisterPlatformAccessories).not.toHaveBeenCalled();
+
+    const diagnostic = platform.accessories.find(accessory => accessory.context.blinkConnectionDiagnostic);
+    expect(diagnostic).toBeDefined();
+    expect(hapApi.registerPlatformAccessories).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      [diagnostic],
+    );
+    const connection = diagnostic?.getServiceById(hapApi.hap.Service.ContactSensor, 'blink-connection-status');
+    expect(connection?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(1);
+    expect(connection?.getCharacteristic(hapApi.hap.Characteristic.StatusFault).value).toBe(1);
+    const retry = diagnostic?.getServiceById(hapApi.hap.Service.Switch, 'blink-connection-retry');
+    expect(retry?.name).toBe('Check Network & Blink Sign-In, Then Retry');
+
+    const retryOn = retry?.getCharacteristic(hapApi.hap.Characteristic.On) as unknown as {
+      onSetHandler?: (value: unknown) => unknown | Promise<unknown>;
+      value: unknown;
+    };
+    await retryOn.onSetHandler?.(true);
+
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(2);
+    expect(platform.isOperational()).toBe(true);
+    expect(retryOn.value).toBe(false);
+    expect(platform.accessories).toEqual([cached]);
+    expect(hapApi.unregisterPlatformAccessories).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      [diagnostic],
+    );
+    expect(cachedMotion.getCharacteristic(hapApi.hap.Characteristic.StatusFault).value).toBe(0);
+  });
+
+  it('coalesces concurrent discovery attempts into one Blink request', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    let resolveHomescreen: ((value: BlinkHomescreen) => void) | undefined;
+    const homescreenPromise = new Promise<BlinkHomescreen>(resolve => {
+      resolveHomescreen = resolve;
+    });
+    blinkApi.getHomescreen.mockReturnValue(homescreenPromise);
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(
+      createLogger() as unknown as Logger,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      hapApi,
+    );
+    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
+
+    const first = discover();
+    const second = discover();
+    resolveHomescreen?.({ account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [] });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('faults HomeKit after repeated polling failures and clears the diagnostic on recovery', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    blinkApi.getHomescreen
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({
+        account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+      });
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(
+      createLogger() as unknown as Logger,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      hapApi,
+    );
+    const poll = (platform as unknown as { pollDeviceStates: () => Promise<void> }).pollDeviceStates.bind(platform);
+
+    await poll();
+    await poll();
+    expect(platform.isOperational()).toBe(true);
+    await poll();
+    expect(platform.isOperational()).toBe(false);
+    expect(platform.accessories.some(accessory => accessory.context.blinkConnectionDiagnostic)).toBe(true);
+
+    await poll();
+    expect(platform.isOperational()).toBe(true);
+    expect(platform.accessories.some(accessory => accessory.context.blinkConnectionDiagnostic)).toBe(false);
+  });
+
   it.each(['1', 'Away'])('excludes a whole network by %s, removes its cached accessories, and supports re-enabling', async (identifier) => {
     hapApi = createApi() as unknown as MockAPI;
     hapApi.unregisterPlatformAccessories = jest.fn();

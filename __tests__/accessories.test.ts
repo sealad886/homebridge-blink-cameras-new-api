@@ -29,7 +29,8 @@ jest.mock('node:child_process', () => {
   };
 });
 
-type PlatformStub = Pick<BlinkCamerasPlatform, 'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig'>;
+type PlatformStub = Pick<BlinkCamerasPlatform,
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational'>;
 type CameraSourceFfmpegAccess = {
   buildFfmpegArgs: (input: string, request: unknown, session: unknown) => string[];
 };
@@ -240,6 +241,7 @@ describe('Accessory handlers', () => {
       log: log as unknown as BlinkCamerasPlatform['log'],
       api: { hap } as unknown as BlinkCamerasPlatform['api'],
       streamingConfig: resolveStreamingConfig({ enabled: false, ...streamingConfigOverrides }),
+      isOperational: () => true,
     };
 
     return { hap, apiClient, platform, log };
@@ -260,8 +262,34 @@ describe('Accessory handlers', () => {
     await characteristic?.onSetHandler?.(1);
 
     expect(apiClient.armNetwork).toHaveBeenCalledWith(1);
+    expect(apiClient.pollCommand).not.toHaveBeenCalled();
+    expect(accessory.getService(hap.Service.SecuritySystem)
+      ?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(hap.Characteristic.StatusFault.NO_FAULT);
     expect(device.armed).toBe(true);
     expect(handler).toBeInstanceOf(NetworkAccessory);
+  });
+
+  it('surfaces a terminal arm failure as a HomeKit security-system fault', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    apiClient.armNetwork.mockRejectedValueOnce(new Error('conflict retries exhausted'));
+    const accessory = new MockAccessory('Network', 'uuid-network', hap);
+    const device: BlinkNetwork = { id: 1, name: 'Network', armed: false };
+    const handler = new NetworkAccessory(
+      platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory,
+      device,
+    );
+    const service = accessory.getService(hap.Service.SecuritySystem);
+
+    await expect(service?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState).onSetHandler?.(1))
+      .rejects.toMatchObject({ hapStatus: hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE });
+    expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value)
+      .toBe(hap.Characteristic.StatusFault.GENERAL_FAULT);
+    expect(device.armed).toBe(false);
+
+    handler.updateState({ ...device, armed: true });
+    expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value)
+      .toBe(hap.Characteristic.StatusFault.NO_FAULT);
   });
 
   it('disarms network via SecuritySystem', async () => {
