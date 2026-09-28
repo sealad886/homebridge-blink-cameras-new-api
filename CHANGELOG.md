@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.1] - 2026-09-28
+
+### Added
+
+- Report safe network failure categories, native error codes, destination
+  hostnames, and elapsed request time to help distinguish DNS, connection,
+  timeout, TLS, and socket failures without logging credentials or URL queries.
+
+### Fixed
+
+- Coalesce concurrent snapshot refreshes per camera and apply a 15-second
+  cooldown after failed refreshes to reduce repeated requests and duplicate
+  errors during Blink or network outages.
+
+### Upgrade notes
+
+- Install this exact prerelease from npm and restart the Blink child bridge.
+  Existing camera identities, cached snapshots, and HomeKit automations are
+  retained.
+
+### Known limitations
+
+- Improved diagnostics do not establish the cause of earlier transport errors
+  whose native error details were not retained.
+- This runtime update restarts RC acceptance: physical critical-path testing,
+  at least 48 hours of observation, and two natural token refreshes are still
+  required before stable promotion.
+
 ## [0.10.0-rc.0] - 2026-09-28
 
 ### Added
