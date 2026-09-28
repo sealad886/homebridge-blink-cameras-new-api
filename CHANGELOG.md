@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.0] - 2026-09-28
+
+### Added
+
+- Expose persistent `Blink Connection` and `Retry Blink Connection`
+  accessories so HomeKit shows Blink outages, authentication requirements,
+  recovery progress, and an explicit user retry path.
+
+### Fixed
+
+- Normalize plugin-owned accessory and service names at the HAP boundary,
+  including cached accessories restored while Blink is unavailable, while
+  preserving stable accessory UUIDs and HomeKit automations.
+- Enforce HAP's 64 UTF-16-code-unit name limit without splitting supplementary
+  Unicode characters.
+- Serialize startup discovery and connection recovery so concurrent polling and
+  manual retries cannot register duplicate controllers or falsely clear a
+  cached outage before Blink responds.
+- Complete initial device inventory after a failed startup recovers, and keep
+  automatic recovery enabled for transient token-refresh and transport errors.
+- Pause automatic retries only when Blink authentication genuinely requires
+  user action, with child-bridge restart guidance when stored authentication
+  changes underneath a running process.
+
+### Upgrade notes
+
+- Existing Blink device identities and HomeKit automations are retained. After
+  installing, restart the Blink child bridge and verify the new connection and
+  retry accessories in HomeKit.
+
+### Known limitations
+
+- Blink's interfaces remain private and can change without notice.
+- Registry publication and automated review do not establish live Blink or
+  HomeKit acceptance. RC promotion still requires physical critical-path
+  testing, at least 48 hours of observation, and two natural token refreshes;
+  any runtime fix restarts that observation window.
+
 ## [0.10.0-beta.0] - 2026-09-28
 
 ### Added
