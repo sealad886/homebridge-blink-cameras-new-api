@@ -308,6 +308,15 @@ outcome, findings, pattern analysis, fixes, and verification here.
   rewrote that commit to `7a60268` with an identical tree. This evidence-only
   plan update does not change the reviewed implementation.
 
+### Merge-policy correction
+
+- GitHub's repository ruleset contained `copilot_code_review` with
+  `review_on_push: true`. That setting made Copilot sometimes available as an
+  automatic reviewer; it did not establish a required reviewer or approval.
+- The directive was removed from ruleset `12535621` at the user's request.
+  Required signatures, squash-only pull requests, resolved review threads, and
+  the commitlint plus Node 20/22/24 status checks remain enforced unchanged.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
