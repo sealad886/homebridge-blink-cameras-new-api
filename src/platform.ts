@@ -110,11 +110,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private readonly pollInterval: number;
   private readonly motionTimeout: number;
   private readonly enableMotionPolling: boolean;
-  private operational = true;
-  private connectionState: ConnectionState = 'healthy';
+  private operational = false;
+  // Startup is unverified until Blink returns a usable homescreen. Keeping the
+  // HomeKit surface faulted while recovering also preserves a cached outage
+  // across a child-bridge restart instead of briefly publishing false health.
+  private connectionState: ConnectionState = 'recovering';
   private discoveryPromise: Promise<boolean> | null = null;
   private recoveryPromise: Promise<boolean> | null = null;
   private inventoryInitialized = false;
+  private connectionFailureConfirmed = false;
   private consecutivePollFailures = 0;
   private readonly reportedNameAdjustments = new Set<string>();
 
@@ -503,13 +507,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private setConnectionFailure(error?: unknown): void {
-    const wasOperational = this.operational;
+    const shouldReportFailure = this.connectionState !== 'faulted' &&
+      this.connectionState !== 'authentication-required';
     this.connectionState = this.isAuthenticationFailure(error) ? 'authentication-required' : 'faulted';
     this.operational = false;
+    this.connectionFailureConfirmed = true;
     this.updateCachedAccessoryFaults(true);
     this.ensureConnectionAccessories();
 
-    if (wasOperational) {
+    if (shouldReportFailure) {
       this.log.error(
         'Blink is unavailable in HomeKit. Check the Homebridge host network and Blink sign-in, then turn on "Retry Blink Connection".',
       );
@@ -517,9 +523,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private setConnectionHealthy(): void {
-    const wasFaulted = !this.operational;
+    const wasFaulted = this.connectionFailureConfirmed;
     this.connectionState = 'healthy';
     this.operational = true;
+    this.connectionFailureConfirmed = false;
     this.consecutivePollFailures = 0;
     this.updateCachedAccessoryFaults(false);
     for (const handler of [
@@ -563,12 +570,26 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (this.recoveryPromise) {
       return this.recoveryPromise;
     }
-    this.recoveryPromise = this.performConnectionRecovery(authenticate);
+    this.recoveryPromise = this.performSerializedConnectionRecovery(authenticate);
     try {
       return await this.recoveryPromise;
     } finally {
       this.recoveryPromise = null;
     }
+  }
+
+  private async performSerializedConnectionRecovery(authenticate: boolean): Promise<boolean> {
+    // Initial discovery owns first inventory construction. A retry requested
+    // while it is in flight must join it so two callers cannot register the
+    // same HAP controllers. If discovery fails, this caller may then make the
+    // requested recovery attempt through the normal single-flight path.
+    if (this.discoveryPromise) {
+      const discovered = await this.discoveryPromise;
+      if (discovered) {
+        return true;
+      }
+    }
+    return this.performConnectionRecovery(authenticate);
   }
 
   private async performConnectionRecovery(authenticate: boolean): Promise<boolean> {

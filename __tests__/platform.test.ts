@@ -176,6 +176,7 @@ describe('BlinkCamerasPlatform', () => {
     expect(hapApi.unregisterPlatformAccessories).not.toHaveBeenCalled();
     expect(connection?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(0);
     expect(cachedMotion.getCharacteristic(hapApi.hap.Characteristic.StatusFault).value).toBe(0);
+    expect(log.info).toHaveBeenCalledWith('Blink connection restored; cleared the HomeKit connection fault.');
   });
 
   it('keeps the connection fault open and resets retry after recovery fails', async () => {
@@ -231,10 +232,60 @@ describe('BlinkCamerasPlatform', () => {
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
   });
 
+  it('coalesces a startup retry with in-flight discovery and initializes inventory once', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    let resolveHomescreen: ((value: BlinkHomescreen) => void) | undefined;
+    blinkApi.getHomescreen.mockReturnValue(new Promise<BlinkHomescreen>(resolve => {
+      resolveHomescreen = resolve;
+    }));
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, config, hapApi);
+    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
+    const recover = (platform as unknown as {
+      recoverConnection: (authenticate: boolean) => Promise<boolean>;
+    }).recoverConnection.bind(platform);
+
+    const startup = discover();
+    const retry = recover(true);
+    resolveHomescreen?.({
+      account: { account_id: 1 },
+      networks: [],
+      cameras: [{ id: 7, network_id: 1, name: 'Front Camera', enabled: true }],
+      doorbells: [], owls: [], sync_modules: [],
+    });
+
+    await expect(Promise.all([startup, retry])).resolves.toEqual([true, true]);
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+    expect(platform.isOperational()).toBe(true);
+    expect(platform.accessories.filter(accessory => accessory.context.device)).toHaveLength(1);
+  });
+
+  it('keeps the connection surface faulted until startup verifies Blink', () => {
+    hapApi = createApi() as unknown as MockAPI;
+    (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, config, hapApi);
+    const ensureConnectionAccessories = (platform as unknown as {
+      ensureConnectionAccessories: () => void;
+    }).ensureConnectionAccessories.bind(platform);
+
+    ensureConnectionAccessories();
+
+    const status = platform.accessories.find(accessory => accessory.context.blinkConnectionDiagnostic)
+      ?.getServiceById(hapApi.hap.Service.ContactSensor, 'blink-connection-status');
+    expect(platform.isOperational()).toBe(false);
+    expect(status?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(1);
+    expect(status?.getCharacteristic(hapApi.hap.Characteristic.StatusFault).value).toBe(1);
+  });
+
   it('faults HomeKit after repeated polling failures and clears the diagnostic on recovery', async () => {
     hapApi = createApi() as unknown as MockAPI;
     const blinkApi = buildBlinkApi();
     blinkApi.getHomescreen
+      .mockResolvedValueOnce({
+        account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+      })
       .mockRejectedValueOnce(new Error('offline'))
       .mockRejectedValueOnce(new Error('offline'))
       .mockRejectedValueOnce(new Error('offline'))
@@ -247,6 +298,7 @@ describe('BlinkCamerasPlatform', () => {
       { ...config, enableStreaming: false, videoEncoder: 'libx264' },
       hapApi,
     );
+    await (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices();
     const poll = (platform as unknown as { pollDeviceStates: () => Promise<void> }).pollDeviceStates.bind(platform);
 
     await poll();
@@ -261,7 +313,7 @@ describe('BlinkCamerasPlatform', () => {
     const connection = platform.accessories.find(accessory => accessory.context.blinkConnectionDiagnostic)
       ?.getServiceById(hapApi.hap.Service.ContactSensor, 'blink-connection-status');
     expect(connection?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(0);
-    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expect(blinkApi.login).toHaveBeenCalledTimes(2);
   });
 
   it('coalesces concurrent runtime recovery without reconciling accessory inventory', async () => {

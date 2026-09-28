@@ -128,9 +128,9 @@ operation and closes the fault only after handler updates finish.
 | WI-2 Centralize HAP-safe accessory and service names | Complete | `src/hap-name.ts`; name and cached-migration tests |
 | WI-3 Add stable status and retry accessories | Complete | `src/platform.ts`; platform recovery tests |
 | WI-4 Separate startup discovery from runtime recovery | Complete | Coalesced `recoverConnection`; success, failure, polling, and concurrency tests |
-| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/584 tests, 39 release tests, lint, build, and Graphify update passed |
-| WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; review fix pending |
-| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; round 1 below |
+| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/587 tests, 39 release tests, lint, build, and Graphify update passed |
+| WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; `8540162` first review fix; second review fix pending |
+| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; rounds 1-2 below |
 | WI-8 Merge and task-scoped branch cleanup | Planned | Pending merge/cleanup receipts |
 
 ## Risks and rollback
@@ -173,16 +173,37 @@ outcome, findings, pattern analysis, fixes, and verification here.
   blocked pending explicit authorization to transmit the committed diff to the
   external CodeRabbit service. No CodeRabbit outcome is claimed.
 
+### Round 2
+
+- Base/head: `origin/main` / `85401620cdfe061e285032938ce572b226044ebb`.
+- Codex report: `/tmp/codex-pr41-r2.0icGvD`, exit 0. Two actionable P2s:
+  a retry could race in-flight startup discovery and register HAP controllers
+  twice, and startup reset the persisted connection surface to healthy before
+  receiving a fresh Blink response.
+- Pattern analysis: refreshed Codanna indexing resolved `discoverDevices`,
+  `recoverConnection`, `performSerializedConnectionRecovery`, and the status
+  accessory caller path. Caller/callee analysis and repository-wide search
+  found one initial-inventory owner and two entry points into recovery. The
+  findings are one lifecycle-serialization defect and one false-health initial
+  state at the same platform boundary, not isolated accessory defects.
+- Repair: manual/poll recovery now joins in-flight discovery before attempting
+  another request; startup begins non-operational and recovering, so HomeKit
+  remains faulted until a usable homescreen is processed. Confirmed-failure
+  state is tracked separately so genuine restoration still receives its log.
+- Verification after repair: 3 focused suites and 73 tests passed; the full 26
+  suites and 587 tests passed; lint, build, the 39 release-workflow tests, and
+  Graphify refresh passed. The next review round remains pending.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
 `0.14.0`:
 
-- `npm test -- --runInBand`: 26 suites and 584 tests passed.
+- `npm test -- --runInBand`: 26 suites and 587 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed.
 - `node --test .github/scripts/*.test.mjs`: 39 tests passed.
-- `zsh -lic 'graphify update .'`: graph rebuilt with 2,030 nodes and 3,713
+- `zsh -lic 'graphify update .'`: graph rebuilt with 2,034 nodes and 3,727
   edges; generated graph files remain repository-ignored.
 - `node .github/scripts/verify-package.mjs`: not completed locally because npm
   `12.0.2` changed `npm pack --json` from an array to an object keyed by package
