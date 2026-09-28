@@ -4,6 +4,7 @@ import { BlinkApi } from '../src/blink-api';
 import { createApi, createLogger } from './helpers/homebridge';
 import { BlinkHomescreen } from '../src/types';
 import { CameraAccessory, NetworkAccessory } from '../src/accessories';
+import { AuthStateChangedError } from '../src/blink-api/auth-storage';
 
 jest.mock('../src/blink-api');
 
@@ -205,6 +206,55 @@ describe('BlinkCamerasPlatform', () => {
     expect(retry.value).toBe(false);
     expect(status?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(1);
     expect(hapApi.registerPlatformAccessories).toHaveBeenCalledTimes(2);
+  });
+
+  it('suspends automatic polling while authentication needs user action', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    const authError = new Error('2FA verification required');
+    authError.name = 'Blink2FARequiredError';
+    blinkApi.login.mockRejectedValue(authError);
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(
+      createLogger() as unknown as Logger,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      hapApi,
+    );
+    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
+    const poll = (platform as unknown as { pollDeviceStates: () => Promise<void> }).pollDeviceStates.bind(platform);
+
+    await expect(discover()).resolves.toBe(false);
+    await poll();
+    await poll();
+
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expect(blinkApi.getHomescreen).not.toHaveBeenCalled();
+    expect(platform.isOperational()).toBe(false);
+  });
+
+  it('instructs a child-bridge restart when stored authentication changes', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const log = createLogger() as unknown as Logger;
+    const blinkApi = buildBlinkApi();
+    blinkApi.login.mockRejectedValue(new AuthStateChangedError());
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(
+      log,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      hapApi,
+    );
+
+    await expect((platform as unknown as {
+      discoverDevices: () => Promise<boolean>;
+    }).discoverDevices()).resolves.toBe(false);
+
+    expect(log.error).toHaveBeenCalledWith(
+      'Device discovery failed (stored Blink authentication changed; restart the child bridge). ' +
+      'Check the preceding bounded authentication/API diagnostics.',
+    );
+    expect(log.error).toHaveBeenCalledWith(
+      'Blink authentication changed while Homebridge was running. Restart the Blink child bridge to use the current sign-in.',
+    );
   });
 
   it('coalesces concurrent discovery attempts into one Blink request', async () => {

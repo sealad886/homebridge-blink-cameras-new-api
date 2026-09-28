@@ -128,9 +128,9 @@ operation and closes the fault only after handler updates finish.
 | WI-2 Centralize HAP-safe accessory and service names | Complete | `src/hap-name.ts`; name and cached-migration tests |
 | WI-3 Add stable status and retry accessories | Complete | `src/platform.ts`; platform recovery tests |
 | WI-4 Separate startup discovery from runtime recovery | Complete | Coalesced `recoverConnection`; success, failure, polling, and concurrency tests |
-| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/587 tests, 39 release tests, lint, build, and Graphify update passed |
-| WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; `8540162` first review fix; second review fix pending |
-| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; rounds 1-2 below |
+| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/589 tests, 39 release tests, lint, build, and Graphify update passed |
+| WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; `8540162` first review fix; later review fixes committed; `03e9bd0` message correction pending |
+| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; rounds 1-3 below |
 | WI-8 Merge and task-scoped branch cleanup | Planned | Pending merge/cleanup receipts |
 
 ## Risks and rollback
@@ -194,16 +194,39 @@ outcome, findings, pattern analysis, fixes, and verification here.
   suites and 587 tests passed; lint, build, the 39 release-workflow tests, and
   Graphify refresh passed. The next review round remains pending.
 
+### Round 3
+
+- Base/head: `origin/main` / `03e9bd0645361330a3a1f40bbbe0a4eedadab987`.
+- Codex report: `/tmp/codex-pr41-r3.FsAa8P`, exit 0. Two actionable P2s:
+  polling repeatedly restarted authentication that required user input, and an
+  `AuthStateChangedError` lost its required child-bridge restart instruction.
+- Pattern analysis: refreshed Codanna indexing resolved both authentication
+  errors plus the single polling and recovery entry points. Caller/callee and
+  repository-wide searches found the shared platform failure classifier and
+  polling state gate as the correct ownership boundary. Hosted-auth handling
+  already preserves `AuthStateChangedError`; it is a correct sibling, not a
+  second defect. Classification: two shared platform-state omissions.
+- Repair: automatic polling now pauses in `authentication-required`; an
+  explicit HomeKit retry remains available after the user supplies required
+  authentication. Stored-auth replacement receives bounded, secret-free
+  restart guidance instead of an ineffective retry instruction.
+- Verification after repair: 3 focused suites and 75 tests passed; the full 26
+  suites and 589 tests passed; lint, build, the 39 release-workflow tests, and
+  Graphify refresh passed. Round 4 remains pending.
+- CI on the reviewed head: Node 22/24 and GitGuardian passed; commitlint rejected
+  `03e9bd0` because its body line exceeds 100 characters. Correcting that
+  already-pushed commit requires explicit history-rewrite authorization.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
 `0.14.0`:
 
-- `npm test -- --runInBand`: 26 suites and 587 tests passed.
+- `npm test -- --runInBand`: 26 suites and 589 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed.
 - `node --test .github/scripts/*.test.mjs`: 39 tests passed.
-- `zsh -lic 'graphify update .'`: graph rebuilt with 2,034 nodes and 3,727
+- `zsh -lic 'graphify update .'`: graph rebuilt with 2,034 nodes and 3,731
   edges; generated graph files remain repository-ignored.
 - `node .github/scripts/verify-package.mjs`: not completed locally because npm
   `12.0.2` changed `npm pack --json` from an array to an object keyed by package

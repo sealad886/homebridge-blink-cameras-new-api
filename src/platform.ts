@@ -20,6 +20,7 @@ import {
   Service,
 } from 'homebridge';
 import { BlinkApi } from './blink-api';
+import { AuthStateChangedError } from './blink-api/auth-storage';
 import {
   BlinkHomescreen,
   BlinkMediaClip,
@@ -516,9 +517,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     this.ensureConnectionAccessories();
 
     if (shouldReportFailure) {
-      this.log.error(
-        'Blink is unavailable in HomeKit. Check the Homebridge host network and Blink sign-in, then turn on "Retry Blink Connection".',
-      );
+      if (error instanceof AuthStateChangedError) {
+        this.log.error(
+          'Blink authentication changed while Homebridge was running. Restart the Blink child bridge to use the current sign-in.',
+        );
+      } else {
+        this.log.error(
+          'Blink is unavailable in HomeKit. Check the Homebridge host network and Blink sign-in, then turn on "Retry Blink Connection".',
+        );
+      }
     }
   }
 
@@ -552,6 +559,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private describeConnectionFailure(error: unknown): string {
     if (!(error instanceof Error)) {
       return 'unexpected failure';
+    }
+    if (error instanceof AuthStateChangedError) {
+      return 'stored Blink authentication changed; restart the child bridge';
     }
     const description = `${error.name} ${error.message}`;
     if (/auth|sign.?in|token|verification|credential/i.test(description)) {
@@ -790,6 +800,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Poll device states from homescreen and check for motion events
    */
   private async pollDeviceStates(): Promise<void> {
+    if (this.connectionState === 'authentication-required') {
+      return;
+    }
     try {
       await this.recoverConnection(!this.operational);
 
