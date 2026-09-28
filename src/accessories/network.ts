@@ -16,6 +16,7 @@
 
 import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
+import { setHapServiceName, toHapName } from '../hap-name';
 import { BlinkNetwork } from '../types';
 
 export class NetworkAccessory {
@@ -35,7 +36,16 @@ export class NetworkAccessory {
     // Use SecuritySystem service for proper arm/disarm in HomeKit
     this.service =
       this.accessory.getService(this.platform.Service.SecuritySystem) ||
-      this.accessory.addService(this.platform.Service.SecuritySystem, device.name);
+      this.accessory.addService(
+        this.platform.Service.SecuritySystem,
+        toHapName(device.name, 'Blink Network'),
+      );
+    setHapServiceName(
+      this.service,
+      this.platform.Characteristic.Name,
+      device.name,
+      'Blink Network',
+    );
 
     // Remove any legacy Switch service if present
     const legacySwitch = this.accessory.getService(this.platform.Service.Switch);

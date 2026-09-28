@@ -1,7 +1,9 @@
 # HAP names and HomeKit connection recovery
 
-Status: implementation in progress  
-Branch: `codex/hap-names-connection-recovery`  
+Status: implementation and local verification complete; PR review pending
+
+Branch: `codex/hap-names-connection-recovery`
+
 Last updated: 2026-09-28
 
 This document is the implementation source of truth for HAP-safe naming and
@@ -121,11 +123,11 @@ operation and closes the fault only after handler updates finish.
 | Work item | State | Evidence |
 | --- | --- | --- |
 | WI-1 Create living design and delivery record | Complete | This document |
-| WI-2 Centralize HAP-safe accessory and service names | In progress | Pending implementation/tests |
-| WI-3 Add stable status and retry accessories | Planned | Pending implementation/tests |
-| WI-4 Separate startup discovery from runtime recovery | Planned | Pending implementation/tests |
-| WI-5 Run focused and repository-wide verification | Planned | Pending commands/results |
-| WI-6 Conventional Commit milestones | Planned | Pending commit hashes |
+| WI-2 Centralize HAP-safe accessory and service names | Complete | `src/hap-name.ts`; name and cached-migration tests |
+| WI-3 Add stable status and retry accessories | Complete | `src/platform.ts`; platform recovery tests |
+| WI-4 Separate startup discovery from runtime recovery | Complete | Coalesced `recoverConnection`; success, failure, polling, and concurrency tests |
+| WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/584 tests, 39 release tests, lint, build, and Graphify update passed |
+| WI-6 Conventional Commit milestones | In progress | `198bf18` plan milestone; implementation commit pending |
 | WI-7 Push, PR, CodeRabbit CLI and Codex review loop | Planned | Pending PR/review ledger |
 | WI-8 Merge and task-scoped branch cleanup | Planned | Pending merge/cleanup receipts |
 
@@ -149,3 +151,21 @@ No review round has started. Round limit: 10. Planned sources: CodeRabbit CLI
 and an independent Codex review. Each round will record base, head SHA, request
 time, saved report, explicit outcome, findings, pattern analysis, fixes, and
 verification here.
+
+## Local verification evidence
+
+Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
+`0.14.0`:
+
+- `npm test -- --runInBand`: 26 suites and 584 tests passed.
+- `npm run lint`: passed.
+- `npm run build`: passed.
+- `node --test .github/scripts/*.test.mjs`: 39 tests passed.
+- `zsh -lic 'graphify update .'`: graph rebuilt with 2,030 nodes and 3,713
+  edges; generated graph files remain repository-ignored.
+- `node .github/scripts/verify-package.mjs`: not completed locally because npm
+  `12.0.2` changed `npm pack --json` from an array to an object keyed by package
+  name, while the existing verifier expects an array. A direct `npm pack`
+  produced the expected package and included `dist/hap-name.*`. This unrelated
+  verifier compatibility gap remains for CI to adjudicate using its declared
+  Node/npm matrix; it is not counted as a passing package-verification result.
