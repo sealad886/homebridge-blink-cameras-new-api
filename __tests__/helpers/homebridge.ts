@@ -5,11 +5,20 @@ const ProgrammableSwitchEvent = Object.assign(
 );
 
 export const createHap = () => ({
+  HAPStatus: {
+    SERVICE_COMMUNICATION_FAILURE: -70402,
+  },
+  HapStatusError: class HapStatusError extends Error {
+    constructor(public readonly hapStatus: number) {
+      super(`HAP status ${hapStatus}`);
+    }
+  },
   Service: {
     AccessoryInformation: 'AccessoryInformation',
     Switch: 'Switch',
     SecuritySystem: 'SecuritySystem',
     MotionSensor: 'MotionSensor',
+    ContactSensor: 'ContactSensor',
     Doorbell: 'Doorbell',
   },
   Characteristic: {
@@ -32,6 +41,16 @@ export const createHap = () => ({
     },
     MotionDetected: 'MotionDetected',
     StatusActive: 'StatusActive',
+    StatusFault: Object.assign(() => 'StatusFault', {
+      NO_FAULT: 0,
+      GENERAL_FAULT: 1,
+      toString: () => 'StatusFault',
+    }),
+    ContactSensorState: Object.assign(() => 'ContactSensorState', {
+      CONTACT_DETECTED: 0,
+      CONTACT_NOT_DETECTED: 1,
+      toString: () => 'ContactSensorState',
+    }),
     ProgrammableSwitchEvent,
   },
   uuid: {
@@ -97,10 +116,14 @@ export class MockService {
 
 export class MockAccessory {
   public context: Record<string, unknown> = {};
-  public services = new Map<string, MockService>();
+  private readonly serviceMap = new Map<string, MockService>();
+
+  public get services(): MockService[] {
+    return [...this.serviceMap.values()];
+  }
 
   constructor(public readonly displayName: string, public readonly UUID: string, private readonly hap: ReturnType<typeof createHap>) {
-    this.services.set(this.getServiceKey(this.hap.Service.AccessoryInformation), new MockService(this.hap.Service.AccessoryInformation, displayName));
+    this.serviceMap.set(this.getServiceKey(this.hap.Service.AccessoryInformation), new MockService(this.hap.Service.AccessoryInformation, displayName));
   }
 
   private getServiceKey(type: string, subtype?: string): string {
@@ -108,7 +131,7 @@ export class MockAccessory {
   }
 
   getService(name: string): MockService | undefined {
-    for (const service of this.services.values()) {
+    for (const service of this.serviceMap.values()) {
       if (service.type === name) {
         return service;
       }
@@ -117,13 +140,22 @@ export class MockAccessory {
   }
 
   getServiceById(name: string, subtype: string): MockService | undefined {
-    return this.services.get(this.getServiceKey(name, subtype));
+    return this.serviceMap.get(this.getServiceKey(name, subtype));
   }
 
   addService(name: string, displayName?: string, subtype?: string): MockService {
     const service = new MockService(name, displayName);
-    this.services.set(this.getServiceKey(name, subtype), service);
+    this.serviceMap.set(this.getServiceKey(name, subtype), service);
     return service;
+  }
+
+  removeService(service: MockService): void {
+    for (const [key, candidate] of this.serviceMap) {
+      if (candidate === service) {
+        this.serviceMap.delete(key);
+        return;
+      }
+    }
   }
 
   configureController(_controller: unknown): void {
@@ -149,6 +181,7 @@ export const createApi = (hap = createHap()) => {
     hap,
     platformAccessory,
     registerPlatformAccessories: jest.fn(),
+    unregisterPlatformAccessories: jest.fn(),
     on: jest.fn((event: string, callback: () => void) => {
       listeners[event] = listeners[event] ?? [];
       listeners[event].push(callback);
