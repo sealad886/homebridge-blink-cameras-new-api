@@ -485,6 +485,160 @@ function mergeEndpoints(javaEndpoints, smaliEndpoints) {
   return merged;
 }
 
+function findMatchingParenthesis(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === '(') depth += 1;
+    if (character === ')' && --depth === 0) return index;
+  }
+  return -1;
+}
+
+function enclosingJavaSymbol(text, index, fallbackClass) {
+  const prefix = text.slice(0, index);
+  const methods = [...prefix.matchAll(/(?:public|protected|private)\s+(?:static\s+)?(?:final\s+)?[\w$.<>?, \[\]]+\s+([\w$]+)\s*\([^;{}]*\)\s*\{/g)];
+  return `${fallbackClass}.${methods.at(-1)?.[1] || 'decompiled-block'}`;
+}
+
+function recoverEndpointInteractions(endpoints, sourcesRoot, apkHash) {
+  const byMethod = new Map();
+  for (const endpoint of endpoints) {
+    endpoint.callSites = [];
+    endpoint.interaction = {
+      callSites: [],
+      requestConstruction: 'No unique first-party invocation was recovered from retained JADX sources.',
+      responseHandling: 'Runtime response handling remains unresolved.',
+      sequencing: [],
+      workflow: [],
+    };
+    for (const binding of endpoint.bindings || []) {
+      if (!binding.methodName || !binding.package) continue;
+      if (!byMethod.has(binding.methodName)) byMethod.set(binding.methodName, []);
+      byMethod.get(binding.methodName).push({ endpoint, binding });
+    }
+  }
+
+  for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
+    const text = fs.readFileSync(file, 'utf8');
+    const rel = relative(sourcesRoot, file);
+    const pkg = sourcePackage(text);
+    const imports = new Set([...text.matchAll(/^import\s+([\w.$]+);/gm)].map(match => match[1]));
+    const className = sourceClass(text, file);
+    const invokedMethods = new Set([...text.matchAll(/\.\s*([A-Za-z_$][\w$]*)\s*\(/g)].map(match => match[1]));
+    for (const methodName of invokedMethods) {
+      const candidates = byMethod.get(methodName);
+      if (!candidates) continue;
+      if (!text.includes(`.${methodName}(`) && !text.includes(`.${methodName} (`)) continue;
+      const pattern = new RegExp(`\\b([A-Za-z_$][\\w$]*)\\.${methodName}\\s*\\(`, 'g');
+      for (const match of text.matchAll(pattern)) {
+        const openIndex = match.index + match[0].lastIndexOf('(');
+        const closeIndex = findMatchingParenthesis(text, openIndex);
+        if (closeIndex < 0) continue;
+        const argumentExpressions = splitParameters(text.slice(openIndex + 1, closeIndex));
+        const eligible = candidates.filter(({ endpoint, binding }) => {
+          const owner = `${binding.package}.${binding.className}`;
+          const ownerVisible = imports.has(owner)
+            || text.includes(owner)
+            || (pkg === binding.package && new RegExp(`\\b${binding.className}\\b`).test(text));
+          if (!ownerVisible || endpoint.evidence.some(item => item.source === rel)) return false;
+          const declaredArguments = binding.signature
+            ? splitParameters(binding.signature.slice(binding.signature.indexOf('(') + 1, binding.signature.lastIndexOf(')')))
+            : [];
+          return !declaredArguments.length || declaredArguments.length === argumentExpressions.length;
+        });
+        const eligibleEndpoints = new Set(eligible.map(({ endpoint }) => endpoint.id));
+        if (eligibleEndpoints.size !== 1) continue;
+        for (const { endpoint, binding } of eligible) {
+          const owner = `${binding.package}.${binding.className}`;
+          const line = lineNumber(text, match.index);
+          const lineStart = text.lastIndexOf('\n', match.index) + 1;
+          const lineEnd = text.indexOf('\n', closeIndex);
+          const statement = text.slice(lineStart, lineEnd < 0 ? closeIndex + 1 : lineEnd).trim().replace(/;$/, '');
+          const assigned = statement.match(/(?:[\w$.<>?]+\s+)?([\w$]+)\s*=\s*[^;]*$/)?.[1] || null;
+          const window = text.slice(Math.max(0, lineStart - 800), Math.min(text.length, (lineEnd < 0 ? closeIndex : lineEnd) + 800));
+          const controlFlow = [
+            /getCOROUTINE_SUSPENDED|coroutine_suspended/.test(window) && 'coroutine-suspension-boundary',
+            /throwOnFailure/.test(window) && 'throws-on-kotlin-result-failure',
+            /RestApiKt\.resultOf/.test(window) && 'wrapped-as-kotlin-result',
+          ].filter(Boolean);
+          const symbol = enclosingJavaSymbol(text, match.index, className);
+          const callSite = {
+            source: rel,
+            line,
+            enclosingSymbol: symbol,
+            receiver: match[1],
+            binding: `${owner}.${methodName}`,
+            arguments: endpoint.parameters.map((parameter, index) => ({
+              location: parameter.location,
+              wireName: parameter.wireName,
+              expression: argumentExpressions[index] ?? null,
+            })),
+            result: assigned ? `assigned:${assigned}` : /^return\b/.test(statement) ? 'returned' : 'invoked',
+            controlFlow,
+            evidence: {
+              apkSha256: apkHash,
+              split: 'base.apk',
+              dex: dexName(text),
+              source: rel,
+              line,
+              symbol,
+              method: 'jadx',
+            },
+          };
+          const key = `${callSite.source}:${callSite.line}:${callSite.binding}`;
+          if (!endpoint.callSites.some(item => `${item.source}:${item.line}:${item.binding}` === key)) endpoint.callSites.push(callSite);
+        }
+      }
+    }
+  }
+
+  for (const endpoint of endpoints) {
+    endpoint.callSites.sort((a, b) => a.source.localeCompare(b.source) || a.line - b.line || a.binding.localeCompare(b.binding));
+    endpoint.interaction.callSites = endpoint.callSites;
+    if (endpoint.callSites.length) {
+      endpoint.recovery.callSites = 'resolved';
+      endpoint.interaction.requestConstruction = 'Invocation argument expressions are mapped by declaration order to recovered Retrofit parameter locations and wire names.';
+      const resultModes = [...new Set(endpoint.callSites.map(item => item.result))];
+      endpoint.interaction.responseHandling = `Direct call result handling recovered as: ${resultModes.join(', ')}. Server status and semantic error mapping remain unresolved unless separately declared.`;
+      endpoint.interaction.sequencing = [...new Set(endpoint.callSites.flatMap(item => item.controlFlow))].sort();
+    }
+    if (/\/networks\/\{[^}]+\}\/state\/(?:arm|disarm)$/.test(endpoint.path)) {
+      const systemFlow = 'smali_classes10/com/immediasemi/blink/apphome/ui/systems/system/SystemViewModel$armDisarmSystem$2.smali';
+      endpoint.interaction.workflow = [
+        {
+          order: 1,
+          behavior: 'Launch the REST arm/disarm repository operation while a separate coroutine invokes the RDIS arm use case.',
+          evidence: [
+            `${systemFlow}:${endpoint.path.endsWith('/arm') ? 393 : 415}`,
+            'smali_classes10/com/immediasemi/blink/apphome/ui/systems/system/SystemViewModel$armDisarmSystem$1.smali:237',
+          ],
+        },
+        {
+          order: 2,
+          behavior: 'If the returned Kommand has a nonzero identifier, poll command status at a one-second interval until a terminal result.',
+          evidence: [`${systemFlow}:526`, `${systemFlow}:596`],
+        },
+        {
+          order: 3,
+          behavior: 'Request an immediate homescreen synchronization after terminal success or failure; failure retains rollback UI state and emits the REST error path.',
+          evidence: [`${systemFlow}:626`, `${systemFlow}:901`],
+        },
+      ];
+    }
+  }
+  return endpoints;
+}
+
 function buildClassIndex(sourcesRoot) {
   const index = new Map();
   for (const file of walk(sourcesRoot, item => item.endsWith('.java'))) {
@@ -997,6 +1151,7 @@ function extractSnapshot({ apkDir, decompiledDir }) {
   const smaliEndpoints = apktoolRoots.flatMap(item => parseSmaliEndpoints(item.root, item.split.sha256, item.split.file));
   const models = extractModels(javaEndpoints, sourcesRoot, metadata.baseSha256);
   const endpoints = mergeEndpoints(javaEndpoints, smaliEndpoints);
+  recoverEndpointInteractions(endpoints, sourcesRoot, metadata.baseSha256);
   const scanRoots = [path.join(decompiledDir, 'jadx'), ...apktoolRoots.map(item => item.root)];
   const urls = [...extractUrls(scanRoots), ...extractNativeUrls([decompiledDir])];
   const classifications = classifyUrls(urls, endpoints);
@@ -1130,6 +1285,8 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
     unresolvedModels: current.models.filter(model => model.confidence === 'unresolved').length,
     firstPartySmaliFilesInspected: firstPartySmaliFiles.length,
     firstPartyEvidenceFiles: endpointEvidenceSources.size,
+    activeContractsWithRecoveredCallSites: activeEndpoints.filter(item => item.callSites.length).length,
+    recoveredCallSites: activeEndpoints.reduce((count, item) => count + item.callSites.length, 0),
     unclassifiedFirstPartyCandidates: current.classifications.firstPartyCandidates
       .filter(item => item.classification === 'first-party-candidate').length,
   };
@@ -1191,7 +1348,7 @@ function buildContract({ apkDir, decompiledDir, baselineApkDir, baselineDecompil
   const unresolved = [...new Map([...current.classifications.unresolved, ...behavioralUnresolved, ...modelReferenceUnresolved, ...extractionUnresolved].map(item => [item.id, item])).values()]
     .sort((a, b) => a.id.localeCompare(b.id));
   const contract = {
-    schemaVersion: '1.1.0',
+    schemaVersion: '1.2.0',
     artifact: {
       ...current.metadata,
       acquiredAt: acquiredAt || null,
@@ -1242,7 +1399,7 @@ function validateContract(contract) {
   const errors = [];
   const allowedConfidence = new Set(['direct', 'corroborated', 'inferred', 'unresolved']);
   const allowedLifecycle = new Set(['added', 'changed', 'unchanged', 'removed']);
-  if (contract.schemaVersion !== '1.1.0') errors.push('schemaVersion must be 1.1.0');
+  if (contract.schemaVersion !== '1.2.0') errors.push('schemaVersion must be 1.2.0');
   for (const key of ['artifact', 'endpoints', 'models', 'thirdPartyExclusions', 'unresolved', 'diagnostics', 'completeness']) {
     if (contract[key] == null) errors.push(`missing top-level property: ${key}`);
   }
@@ -1412,6 +1569,34 @@ function renderMarkdown(contract) {
     }
     lines.push('');
   }
+  lines.push('## Recovered endpoint interactions', '',
+    'These records map first-party JADX invocation expressions to each Retrofit declaration. They describe static client construction and local control flow, not captured traffic or guaranteed server behavior.', '');
+  for (const endpoint of active) {
+    lines.push(`### ${endpoint.method} \`${markdownEscape(endpoint.path)}\``, '',
+      `- Endpoint ID: \`${endpoint.id}\``,
+      `- Call-site recovery: \`${endpoint.recovery.callSites}\``,
+      `- Request construction: ${markdownEscape(endpoint.interaction.requestConstruction)}`,
+      `- Response handling: ${markdownEscape(endpoint.interaction.responseHandling)}`,
+      `- Sequencing signals: ${endpoint.interaction.sequencing.map(item => `\`${markdownEscape(item)}\``).join(', ') || 'none recovered'}`);
+    if (endpoint.interaction.workflow.length) {
+      lines.push('- Recovered workflow:');
+      for (const step of endpoint.interaction.workflow) {
+        lines.push(`  ${step.order}. ${markdownEscape(step.behavior)} Evidence: ${step.evidence.map(item => `\`${markdownEscape(item)}\``).join(', ')}.`);
+      }
+    }
+    if (!endpoint.callSites.length) {
+      lines.push('- Direct call sites: none uniquely attributable in retained JADX sources', '');
+      continue;
+    }
+    lines.push('- Direct call sites:');
+    for (const callSite of endpoint.callSites) {
+      const argumentsSummary = callSite.arguments
+        .map(argument => `${argument.location}${argument.wireName == null ? '' : `:${argument.wireName}`} = \`${markdownEscape(argument.expression)}\``)
+        .join('; ');
+      lines.push(`  - \`${markdownEscape(`${callSite.source}:${callSite.line}`)}\` in \`${markdownEscape(callSite.enclosingSymbol)}\`: ${argumentsSummary || 'no wire arguments'}; result \`${markdownEscape(callSite.result)}\``);
+    }
+    lines.push('');
+  }
   lines.push('## Request and response schema index', '', '| Model | Kind | Fields | Confidence | Evidence |', '|---|---|---:|---|---|');
   for (const model of contract.models) {
     const evidence = model.evidence[0];
@@ -1503,6 +1688,7 @@ module.exports = {
   extractSnapshot,
   extractProtocolIndicators,
   extractModels,
+  recoverEndpointInteractions,
   mergeEndpoints,
   normalizePath,
   parseJavaEndpoints,

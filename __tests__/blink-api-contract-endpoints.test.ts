@@ -44,4 +44,35 @@ describe('endpoint wire contract identity', () => {
     expect(current.effectiveResponseType).toBe('List<test.ReplyA>');
     expect(current.lifecycle).toBe('changed');
   });
+
+  it('maps unique invocation expressions to endpoint wire parameters', () => {
+    const parsed = extractor.parseJavaEndpoints(root, 'a'.repeat(64));
+    const merged = extractor.mergeEndpoints(parsed, []);
+    extractor.recoverEndpointInteractions(merged, root, 'a'.repeat(64));
+    const endpoint = merged.find((item: { bindings: { methodName: string }[] }) =>
+      item.bindings.some((binding: { methodName: string }) => binding.methodName === 'rx'));
+    expect(endpoint.recovery.callSites).toBe('resolved');
+    expect(endpoint.callSites).toEqual([expect.objectContaining({
+      source: 'Caller.java',
+      binding: 'test.Api.rx',
+      arguments: [{ location: 'query', wireName: 'q', expression: 'query' }],
+      result: 'assigned:response',
+    })]);
+    expect(endpoint.interaction.workflow).toEqual([]);
+  });
+
+  it('records the corroborated official-app workflow for network arm endpoints', () => {
+    const parsed = extractor.parseJavaEndpoints(root, 'a'.repeat(64));
+    const endpoint = parsed.find((item: { bindings: { methodName: string }[] }) =>
+      item.bindings.some((binding: { methodName: string }) => binding.methodName === 'rx'));
+    endpoint.path = 'v1/accounts/{injected_account_id}/networks/{networkId}/state/arm';
+    extractor.recoverEndpointInteractions([endpoint], root, 'a'.repeat(64));
+
+    expect(endpoint.recovery.responseSemantics).toBe('unresolved');
+    expect(endpoint.interaction.workflow.map((step: { behavior: string }) => step.behavior)).toEqual([
+      expect.stringContaining('RDIS'),
+      expect.stringContaining('one-second interval'),
+      expect.stringContaining('homescreen synchronization'),
+    ]);
+  });
 });

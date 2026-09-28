@@ -96,18 +96,10 @@ export class NetworkAccessory {
 
     try {
       if (shouldArm) {
-        const response = await this.platform.apiClient.armNetwork(this.device.id);
-        const commandId = response.id ?? response.command_id;
-        if (commandId) {
-          await this.platform.apiClient.pollCommand(this.device.id, commandId);
-        }
+        await this.platform.apiClient.armNetwork(this.device.id);
         this.platform.log.info(`Armed network: ${this.device.name}`);
       } else {
-        const response = await this.platform.apiClient.disarmNetwork(this.device.id);
-        const commandId = response.id ?? response.command_id;
-        if (commandId) {
-          await this.platform.apiClient.pollCommand(this.device.id, commandId);
-        }
+        await this.platform.apiClient.disarmNetwork(this.device.id);
         this.platform.log.info(`Disarmed network: ${this.device.name}`);
       }
 
@@ -121,9 +113,17 @@ export class NetworkAccessory {
         .updateValue(
           shouldArm ? SecuritySystemCurrentState.AWAY_ARM : SecuritySystemCurrentState.DISARMED,
         );
+      this.service
+        .getCharacteristic(this.platform.Characteristic.StatusFault)
+        .updateValue(this.platform.Characteristic.StatusFault.NO_FAULT);
     } catch (error) {
+      this.service
+        .getCharacteristic(this.platform.Characteristic.StatusFault)
+        .updateValue(this.platform.Characteristic.StatusFault.GENERAL_FAULT);
       this.platform.log.error(`Failed to ${shouldArm ? 'arm' : 'disarm'} network ${this.device.name}:`, error);
-      throw error;
+      throw new this.platform.api.hap.HapStatusError(
+        this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+      );
     }
   }
 
@@ -138,6 +138,11 @@ export class NetworkAccessory {
     const previousArmed = this.device.armed;
     this.device = device;
     this.accessory.context.device = device;
+    if (this.platform.isOperational()) {
+      this.service
+        .getCharacteristic(this.platform.Characteristic.StatusFault)
+        .updateValue(this.platform.Characteristic.StatusFault.NO_FAULT);
+    }
 
     if (previousArmed !== device.armed) {
       const { SecuritySystemCurrentState, SecuritySystemTargetState } = this.platform.Characteristic;

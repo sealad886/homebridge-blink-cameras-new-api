@@ -359,6 +359,24 @@ pending.
 
 ## Troubleshooting
 
+### Blink connection failure in HomeKit
+
+If startup authentication or device discovery fails, cached Blink accessories
+remain in HomeKit so rooms, names, and automations are preserved, but their
+services report a fault instead of appearing healthy. HomeKit also receives a
+temporary **Blink Connection** accessory. It shows the connection as open and
+faulted and includes a **Check Network & Blink Sign-In, Then Retry** switch.
+The same diagnostic appears after three consecutive runtime status-poll
+failures, while a single transient polling failure leaves HomeKit unchanged.
+
+Check that the Homebridge host has working network access. Then open this
+plugin's Homebridge settings and use **Test Connection**; sign in with Blink
+again if requested. Return to Home and turn on **Check Network & Blink Sign-In,
+Then Retry**. The switch resets after the attempt. A failed retry keeps the
+diagnostic visible; a successful retry refreshes Blink devices and removes the
+diagnostic accessory automatically. Normal status polling also removes it after
+connectivity recovers.
+
 ### 401 Unauthorized / 403 Forbidden
 
 - Keep `deviceId` stable and use **Test Connection** to retry with stored tokens.

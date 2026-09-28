@@ -21,6 +21,9 @@ const media = contract.endpoints.filter(endpoint =>
 const target = contract.endpoints.find(endpoint => endpoint.id === 'EP_ID');
 console.log(target.baseHostTemplate, target.authentication, target.parameters);
 
+// Inspect recovered first-party invocation arguments and local sequencing.
+console.log(target.callSites, target.interaction);
+
 // Follow request and response model references.
 const schemaModels = target.lifecycle === 'removed'
   ? contract.baseline.models : contract.models;
@@ -38,8 +41,11 @@ const delta = contract.endpoints.filter(endpoint =>
 
 Always inspect `confidence`, `recovery`, `evidence`, `lifecycle`, and
 `unresolved` before using a record. The catalog explicitly records unresolved
-call-site, response/error/polling, and device-family attribution per endpoint;
-empty arrays are not evidence that those behaviors do not exist. Treat
+response/error/polling and device-family attribution per endpoint. Recovered
+`callSites` map invocation expressions to Retrofit parameter locations and wire
+names; `interaction` summarizes only the local static control flow visible to
+JADX and any corroborated cross-method `workflow` recovered from smali. Empty
+arrays are not evidence that those behaviors do not exist. Treat
 `inferred` and `unresolved` as leads, not confirmed wire behavior. Never use
 this catalog as authorization to call destructive,
 privacy-sensitive, account-management, or media-bearing endpoints.
