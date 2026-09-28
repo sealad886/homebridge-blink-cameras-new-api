@@ -4,6 +4,7 @@ import {
   BlinkHostedReauthenticationRequiredError,
 } from '../../src/blink-api/auth';
 import { BlinkAuthStorage, BlinkConfig, BlinkLogger } from '../../src/types';
+import { describeNetworkFailure } from '../../src/blink-api/network-diagnostics';
 
 describe('BlinkHttp', () => {
   const mockAuth = () => {
@@ -61,6 +62,56 @@ describe('BlinkHttp', () => {
     }
     expect(JSON.stringify(messages)).not.toContain(secret);
     expect((fetch as jest.Mock).mock.calls[0][1].signal).toBeInstanceOf(globalThis.AbortSignal);
+  });
+
+  it.each([
+    ['DNS failures', new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } }), 'dns', 'ENOTFOUND'],
+    ['connect timeouts', new TypeError('fetch failed', { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } }),
+      'connect-timeout', 'UND_ERR_CONNECT_TIMEOUT'],
+    ['aborts', Object.assign(new Error('aborted'), { name: 'AbortError' }), 'aborted', undefined],
+  ])('reports bounded transport diagnostics for %s', async (_label, rejection, type, code) => {
+    const errorLog = jest.fn();
+    const http = new BlinkHttp(mockAuth(), { ...mockConfig,
+      logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: errorLog } });
+    (fetch as jest.Mock).mockRejectedValueOnce(rejection);
+
+    let caught: unknown;
+    try { await http.get('v1/example'); } catch (error) { caught = error; }
+
+    expect(caught).toBeInstanceOf(BlinkHttpError);
+    const httpError = caught as BlinkHttpError;
+    expect(httpError.networkDiagnostic).toMatchObject({
+      type,
+      ...(code ? { code } : {}),
+      hostname: 'rest-prod.immedia-semi.com',
+    });
+    expect(httpError.networkDiagnostic?.elapsedMs).toEqual(expect.any(Number));
+    expect(httpError.toLogString()).toContain(`Network: type=${type}`);
+    expect(errorLog).toHaveBeenCalledWith(httpError.toLogString());
+  });
+
+  it('traverses aggregate causes while rejecting unknown codes and all untrusted text', () => {
+    const secret = 'token=transport-secret https://private-host.example/private-path';
+    const nested = Object.assign(new Error(secret), {
+      code: `EVIL_${secret}`,
+      address: secret,
+      cause: new AggregateError([
+        Object.assign(new Error(secret), { code: 'EAI_AGAIN', hostname: secret }),
+      ], secret),
+    });
+
+    const diagnostic = describeNetworkFailure(nested, 'https://rest-prod.immedia-semi.com/api/v1/example', 100, 175);
+    const serialized = JSON.stringify(diagnostic);
+
+    expect(diagnostic).toEqual({
+      type: 'dns',
+      code: 'EAI_AGAIN',
+      elapsedMs: 75,
+      hostname: 'rest-prod.immedia-semi.com',
+    });
+    expect(serialized).not.toContain('transport-secret');
+    expect(serialized).not.toContain('EVIL_');
+    expect(serialized).not.toContain('private-path');
   });
 
   it('redacts stream capability URLs embedded in otherwise ordinary response fields', async () => {
