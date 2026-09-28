@@ -1,6 +1,7 @@
 # HAP names and HomeKit connection recovery
 
-Status: implementation and local verification complete; PR review pending
+Status: implementation, local verification, Codex review, and CI complete;
+CodeRabbit authentication pending
 
 Branch: `codex/hap-names-connection-recovery`
 
@@ -129,8 +130,8 @@ operation and closes the fault only after handler updates finish.
 | WI-3 Add stable status and retry accessories | Complete | `src/platform.ts`; platform recovery tests |
 | WI-4 Separate startup discovery from runtime recovery | Complete | Coalesced `recoverConnection`; success, failure, polling, and concurrency tests |
 | WI-5 Run focused and repository-wide verification | Complete with noted local tooling gap | 26 suites/590 tests, 39 release tests, lint, build, and Graphify update passed |
-| WI-6 Conventional Commit milestones | In progress | `198bf18` plan; `4e29c57` implementation; `8540162` first review fix; later review fixes committed; `03e9bd0` message correction pending |
-| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | In progress | PR #41; rounds 1-3 below |
+| WI-6 Conventional Commit milestones | Complete | `198bf18` plan; `4e29c57` implementation; `8540162` first review fix; `ea3f13c`, `db8b97e`, and `ab78bc3` later review fixes; message-only rewrite verified tree-identical |
+| WI-7 Push, PR, CodeRabbit CLI and Codex review loop | Blocked | PR #41; Codex clean in round 5; CodeRabbit CLI rejected the only configured organization before review |
 | WI-8 Merge and task-scoped branch cleanup | Planned | Pending merge/cleanup receipts |
 
 ## Risks and rollback
@@ -249,6 +250,23 @@ outcome, findings, pattern analysis, fixes, and verification here.
 - Codex is retired for this PR under the review-loop policy. Its clean result is
   bound to `8632aba`; later documentation or commit-message-only changes do not
   imply that Codex reviewed a newer SHA.
+
+### CodeRabbit round 1
+
+- Review scope after the approved history correction: `origin/main` /
+  `c327875af4f460d1e26a4cbf9eeeae93f8a7e6f8`, committed changes only.
+- The lease-protected rewrite changed only the malformed `03e9bd0` commit
+  message and descendant hashes. `git diff` proved the old and new heads have
+  identical trees. CI then passed commitlint, Node 20/22/24, and GitGuardian.
+- CodeRabbit CLI 0.8.1 authenticated as `sealad886`, doctor passed all nine
+  checks, and the only listed organization was `sealad886`. Both captured
+  review attempts failed before analysis with `403 FORBIDDEN: Invalid
+  organization`: `/tmp/coderabbit-pr41-r1.lfbzqJ` and
+  `/tmp/coderabbit-pr41-r1-retry.oEdEG2` (reviewer exit 1, tee exit 0).
+- An OAuth refresh was started without clearing credentials, but timed out at
+  the GitHub credential screen. CodeRabbit now requires the user to run
+  `coderabbit auth login` in a user-controlled terminal before another review
+  attempt. No CodeRabbit findings or clean outcome are claimed.
 
 ## Local verification evidence
 
