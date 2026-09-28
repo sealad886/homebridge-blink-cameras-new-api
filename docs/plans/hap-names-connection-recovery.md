@@ -304,8 +304,9 @@ outcome, findings, pattern analysis, fixes, and verification here.
 - Explicit clean result: CodeRabbit completed review of all nine changed source,
   test, helper, and plan files with zero findings.
 - CodeRabbit is retired for this PR under the review-loop policy. Its clean
-  result is bound to `54594ce`; this evidence-only plan update does not change
-  the reviewed implementation.
+  result was produced on `54594ce`; the message-only commitlint correction
+  rewrote that commit to `7a60268` with an identical tree. This evidence-only
+  plan update does not change the reviewed implementation.
 
 ## Local verification evidence
 
