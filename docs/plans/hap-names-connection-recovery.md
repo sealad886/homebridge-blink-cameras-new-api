@@ -297,6 +297,16 @@ outcome, findings, pattern analysis, fixes, and verification here.
   release-workflow tests, and Graphify refresh passed. The follow-up CodeRabbit
   round remains pending.
 
+### CodeRabbit round 3
+
+- Base/head: `origin/main` / `54594ce`, committed changes only. Captured report:
+  `/tmp/coderabbit-pr41-r3.81HD3K/review.txt` (reviewer exit 0, tee exit 0).
+- Explicit clean result: CodeRabbit completed review of all nine changed source,
+  test, helper, and plan files with zero findings.
+- CodeRabbit is retired for this PR under the review-loop policy. Its clean
+  result is bound to `54594ce`; this evidence-only plan update does not change
+  the reviewed implementation.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
