@@ -317,6 +317,17 @@ outcome, findings, pattern analysis, fixes, and verification here.
   Required signatures, squash-only pull requests, resolved review threads, and
   the commitlint plus Node 20/22/24 status checks remain enforced unchanged.
 
+### Final Codex Security review
+
+- Scan `de46b4ca-776f-49ba-8e3f-778c1152cce8` reviewed the immutable Git range
+  `42e9664...9f7063e` before merge.
+- The scan covered all eight changed source and test files plus their directly
+  affected authentication, storage, HomeKit, Blink API, media, and release
+  boundaries. It completed with zero findings, no deferred candidates, and
+  complete coverage.
+- The sealed scan is bound to implementation head `9f7063e`; this evidence-only
+  plan update does not change the reviewed implementation.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
