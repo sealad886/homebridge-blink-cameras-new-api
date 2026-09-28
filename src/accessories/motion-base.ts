@@ -12,6 +12,7 @@
 
 import { CameraController, CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
+import { setHapServiceName, toHapName } from '../hap-name';
 import { setTimeout, clearTimeout } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, DeviceType } from './camera-source';
 
@@ -72,7 +73,17 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
     this.switchService =
       this.accessory.getServiceById(this.platform.Service.Switch, 'motion-switch') ||
-      this.accessory.addService(this.platform.Service.Switch, `${device.name} Motion`, 'motion-switch');
+      this.accessory.addService(
+        this.platform.Service.Switch,
+        toHapName(`${device.name} Motion`, 'Blink Motion'),
+        'motion-switch',
+      );
+    setHapServiceName(
+      this.switchService,
+      this.platform.Characteristic.Name,
+      `${device.name} Motion`,
+      'Blink Motion',
+    );
 
     this.switchService
       .getCharacteristic(this.platform.Characteristic.On)
@@ -83,9 +94,15 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.accessory.getServiceById(this.platform.Service.MotionSensor, 'motion-sensor') ||
       this.accessory.addService(
         this.platform.Service.MotionSensor,
-        motionSensorDisplayName ?? device.name,
+        toHapName(motionSensorDisplayName ?? device.name, 'Blink Motion'),
         'motion-sensor',
       );
+    setHapServiceName(
+      this.motionService,
+      this.platform.Characteristic.Name,
+      motionSensorDisplayName ?? device.name,
+      'Blink Motion',
+    );
 
     this.motionService
       .getCharacteristic(this.platform.Characteristic.MotionDetected)
@@ -117,11 +134,21 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     const existingRefreshService = this.accessory.getServiceById(this.platform.Service.Switch, 'snapshot-refresh');
     if (this.platform.streamingConfig.persistSnapshotCache) {
       this.refreshSnapshotService = existingRefreshService ??
-        this.accessory.addService(this.platform.Service.Switch, `${device.name} Refresh Snapshot`, 'snapshot-refresh');
+        this.accessory.addService(
+          this.platform.Service.Switch,
+          toHapName(`${device.name} Refresh Snapshot`, 'Blink Refresh Snapshot'),
+          'snapshot-refresh',
+        );
       this.refreshSnapshotService
         .getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => false)
         .onSet(async (value) => this.refreshSnapshot(value));
+      setHapServiceName(
+        this.refreshSnapshotService,
+        this.platform.Characteristic.Name,
+        `${device.name} Refresh Snapshot`,
+        'Blink Refresh Snapshot',
+      );
     } else if (existingRefreshService) {
       this.accessory.removeService(existingRefreshService);
     }

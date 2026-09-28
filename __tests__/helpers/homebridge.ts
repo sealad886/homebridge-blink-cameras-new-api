@@ -25,6 +25,7 @@ export const createHap = () => ({
     Manufacturer: 'Manufacturer',
     Model: 'Model',
     SerialNumber: 'SerialNumber',
+    Name: 'Name',
     On: 'On',
     SecuritySystemCurrentState: {
       STAY_ARM: 0,
@@ -93,8 +94,11 @@ export class MockCharacteristic {
 export class MockService {
   public readonly characteristics = new Map<string, MockCharacteristic>();
   public readonly setCharacteristic = jest.fn(() => this);
+  public displayName: string;
 
-  constructor(public readonly type: string, public readonly name?: string) {}
+  constructor(public readonly type: string, public readonly name?: string) {
+    this.displayName = name ?? '';
+  }
 
   getCharacteristic(type: string | Record<string, number> | ((...args: unknown[]) => unknown)): MockCharacteristic {
     // Handle string keys, enum objects (like SecuritySystemTargetState), and function types
@@ -122,7 +126,7 @@ export class MockAccessory {
     return [...this.serviceMap.values()];
   }
 
-  constructor(public readonly displayName: string, public readonly UUID: string, private readonly hap: ReturnType<typeof createHap>) {
+  constructor(public displayName: string, public readonly UUID: string, private readonly hap: ReturnType<typeof createHap>) {
     this.serviceMap.set(this.getServiceKey(this.hap.Service.AccessoryInformation), new MockService(this.hap.Service.AccessoryInformation, displayName));
   }
 

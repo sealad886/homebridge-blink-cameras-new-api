@@ -21,12 +21,22 @@ import {
 } from 'homebridge';
 import { BlinkApi } from './blink-api';
 import {
+  Blink2FARequiredError,
+  BlinkAuthenticationError,
+  BlinkHostedReauthenticationRequiredError,
+  BlinkHostedTokenExchangeError,
+} from './blink-api/auth';
+import { InvalidAuthStateError } from './blink-api/auth-state';
+import { AuthStateChangedError } from './blink-api/auth-storage';
+import { BlinkRestVerificationRequiredError } from './blink-api/client';
+import {
   BlinkHomescreen,
   BlinkMediaClip,
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
 import { probeVideoEncoder } from './accessories/encoder-probe';
+import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 
 const DEFAULT_POLL_INTERVAL = 60;
@@ -35,8 +45,11 @@ const MIN_POLL_INTERVAL = 15;
 const MIN_MOTION_TIMEOUT = 5;
 const POLL_FAILURE_THRESHOLD = 3;
 const CONNECTION_DIAGNOSTIC_UUID = 'blink-connection-diagnostic';
+const CONNECTION_RETRY_UUID = 'blink-connection-retry';
 const CONNECTION_STATUS_SUBTYPE = 'blink-connection-status';
 const CONNECTION_RETRY_SUBTYPE = 'blink-connection-retry';
+
+type ConnectionState = 'healthy' | 'degraded' | 'faulted' | 'recovering' | 'authentication-required';
 
 interface DeviceSettings {
   motionTimeout?: number;
@@ -106,9 +119,17 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private readonly pollInterval: number;
   private readonly motionTimeout: number;
   private readonly enableMotionPolling: boolean;
-  private operational = true;
+  private operational = false;
+  // Startup is unverified until Blink returns a usable homescreen. Keeping the
+  // HomeKit surface faulted while recovering also preserves a cached outage
+  // across a child-bridge restart instead of briefly publishing false health.
+  private connectionState: ConnectionState = 'recovering';
   private discoveryPromise: Promise<boolean> | null = null;
+  private recoveryPromise: Promise<boolean> | null = null;
+  private inventoryInitialized = false;
+  private connectionFailureConfirmed = false;
   private consecutivePollFailures = 0;
+  private readonly reportedNameAdjustments = new Set<string>();
 
   // Maps for quick accessory lookup by device ID
   private networkAccessories = new Map<number, NetworkAccessory>();
@@ -196,6 +217,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', () => {
       this.log.info('Finished launching; starting Blink discovery');
+      this.ensureConnectionAccessories();
       this.discoverDevices().catch((error) => {
         this.log.error('Failed to discover devices', error);
       });
@@ -324,11 +346,37 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
+    const cachedDevice = accessory.context.device;
+    if (
+      cachedDevice &&
+      typeof cachedDevice === 'object' &&
+      typeof cachedDevice.id === 'number' &&
+      typeof cachedDevice.name === 'string'
+    ) {
+      const displayName = this.hapName(
+        this.getDeviceDisplayName(cachedDevice as { id: number; name: string; serial?: string }),
+        'Blink Device',
+      );
+      accessory.displayName = displayName;
+      for (const service of accessory.services) {
+        setHapServiceName(service, this.Characteristic.Name, service.displayName, displayName);
+      }
+    }
     this.accessories.push(accessory);
   }
 
   public isOperational(): boolean {
     return this.operational;
+  }
+
+  public hapName(value: string | undefined, fallback: string): string {
+    const normalized = toHapName(value, fallback);
+    const adjustment = `${value ?? ''}\0${normalized}`;
+    if (value && normalized !== value && !this.reportedNameAdjustments.has(adjustment)) {
+      this.reportedNameAdjustments.add(adjustment);
+      this.log.warn(`Adjusted HomeKit name for HAP compatibility: "${value}" -> "${normalized}"`);
+    }
+    return normalized;
   }
 
   private async discoverDevices(): Promise<boolean> {
@@ -358,56 +406,75 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);
+      this.inventoryInitialized = true;
       this.startPolling();
-      this.clearConnectionFailure();
+      this.setConnectionHealthy();
       return true;
-    } catch {
+    } catch (error) {
       this.log.error(
-        'Device discovery failed. Check the preceding bounded authentication/API diagnostics.',
+        `Device discovery failed (${this.describeConnectionFailure(error)}). ` +
+        'Check the preceding bounded authentication/API diagnostics.',
       );
-      this.showConnectionFailure();
+      this.setConnectionFailure(error);
+      this.startPolling();
       return false;
     }
   }
 
-  private showConnectionFailure(): void {
-    this.operational = false;
-    this.updateCachedAccessoryFaults(true);
+  private ensureConnectionAccessories(): void {
+    const statusAccessory = this.ensureConnectionAccessory(
+      CONNECTION_DIAGNOSTIC_UUID,
+      'Blink Connection',
+      'blinkConnectionDiagnostic',
+    );
 
-    const uuid = this.api.hap.uuid.generate(CONNECTION_DIAGNOSTIC_UUID);
-    let accessory = this.accessories.find(candidate => candidate.UUID === uuid);
-    if (!accessory) {
-      accessory = new this.api.platformAccessory('Blink Connection', uuid);
-      accessory.context.blinkConnectionDiagnostic = true;
-      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.accessories.push(accessory);
-    }
-
-    accessory.getService(this.Service.AccessoryInformation)
+    statusAccessory.getService(this.Service.AccessoryInformation)
       ?.setCharacteristic(this.Characteristic.Manufacturer, 'Blink')
       .setCharacteristic(this.Characteristic.Model, 'Connection Diagnostic')
       .setCharacteristic(this.Characteristic.SerialNumber, CONNECTION_DIAGNOSTIC_UUID);
 
     const statusService =
-      accessory.getServiceById(this.Service.ContactSensor, CONNECTION_STATUS_SUBTYPE) ||
-      accessory.addService(this.Service.ContactSensor, 'Blink Connection', CONNECTION_STATUS_SUBTYPE);
-    statusService
-      .getCharacteristic(this.Characteristic.ContactSensorState)
-      .updateValue(this.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
-    statusService
-      .getCharacteristic(this.Characteristic.StatusActive)
-      .updateValue(false);
-    statusService
-      .getCharacteristic(this.Characteristic.StatusFault)
-      .updateValue(this.Characteristic.StatusFault.GENERAL_FAULT);
+      statusAccessory.getServiceById(this.Service.ContactSensor, CONNECTION_STATUS_SUBTYPE) ||
+      statusAccessory.addService(
+        this.Service.ContactSensor,
+        toHapName('Blink Connection', 'Blink Connection'),
+        CONNECTION_STATUS_SUBTYPE,
+      );
+    setHapServiceName(
+      statusService,
+      this.Characteristic.Name,
+      'Blink Connection',
+      'Blink Connection',
+    );
+
+    const legacyRetryService = statusAccessory.getServiceById(this.Service.Switch, CONNECTION_RETRY_SUBTYPE);
+    if (legacyRetryService) {
+      statusAccessory.removeService(legacyRetryService);
+    }
+
+    const retryAccessory = this.ensureConnectionAccessory(
+      CONNECTION_RETRY_UUID,
+      'Retry Blink Connection',
+      'blinkConnectionRetry',
+    );
+    retryAccessory.getService(this.Service.AccessoryInformation)
+      ?.setCharacteristic(this.Characteristic.Manufacturer, 'Blink')
+      .setCharacteristic(this.Characteristic.Model, 'Connection Recovery')
+      .setCharacteristic(this.Characteristic.SerialNumber, CONNECTION_RETRY_UUID);
 
     const retryService =
-      accessory.getServiceById(this.Service.Switch, CONNECTION_RETRY_SUBTYPE) ||
-      accessory.addService(
+      retryAccessory.getServiceById(this.Service.Switch, CONNECTION_RETRY_SUBTYPE) ||
+      retryAccessory.addService(
         this.Service.Switch,
-        'Check Network & Blink Sign-In, Then Retry',
+        toHapName('Retry Blink Connection', 'Blink Retry'),
         CONNECTION_RETRY_SUBTYPE,
       );
+    setHapServiceName(
+      retryService,
+      this.Characteristic.Name,
+      'Retry Blink Connection',
+      'Blink Retry',
+    );
     retryService
       .getCharacteristic(this.Characteristic.On)
       .onGet(() => false)
@@ -417,7 +484,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         }
         this.log.info('HomeKit requested Blink connection retry.');
         try {
-          await this.discoverDevices();
+          await this.recoverConnection(true);
         } finally {
           retryService
             .getCharacteristic(this.Characteristic.On)
@@ -425,13 +492,72 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         }
       });
 
-    this.log.error(
-      'Blink is unavailable in HomeKit. Check the Homebridge host network and Blink sign-in, then turn on "Check Network & Blink Sign-In, Then Retry" in the Blink Connection accessory.',
+    this.updateConnectionAccessoryState(statusService);
+  }
+
+  private ensureConnectionAccessory(uuidSeed: string, displayName: string, contextKey: string): PlatformAccessory {
+    const uuid = this.api.hap.uuid.generate(uuidSeed);
+    let accessory = this.accessories.find(candidate => candidate.UUID === uuid);
+    const hapDisplayName = this.hapName(displayName, 'Blink Connection');
+    if (!accessory) {
+      accessory = new this.api.platformAccessory(hapDisplayName, uuid);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      this.accessories.push(accessory);
+    } else {
+      accessory.displayName = hapDisplayName;
+    }
+    accessory.context[contextKey] = true;
+    accessory.getService(this.Service.AccessoryInformation)
+      ?.setCharacteristic(this.Characteristic.Name, hapDisplayName);
+    return accessory;
+  }
+
+  private updateConnectionAccessoryState(statusService?: Service): void {
+    const service = statusService ?? this.accessories
+      .find(candidate => candidate.UUID === this.api.hap.uuid.generate(CONNECTION_DIAGNOSTIC_UUID))
+      ?.getServiceById(this.Service.ContactSensor, CONNECTION_STATUS_SUBTYPE);
+    if (!service) {
+      return;
+    }
+    const healthy = this.connectionState === 'healthy' || this.connectionState === 'degraded';
+    service.getCharacteristic(this.Characteristic.ContactSensorState).updateValue(
+      healthy
+        ? this.Characteristic.ContactSensorState.CONTACT_DETECTED
+        : this.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED,
+    );
+    service.getCharacteristic(this.Characteristic.StatusActive).updateValue(healthy);
+    service.getCharacteristic(this.Characteristic.StatusFault).updateValue(
+      healthy ? this.Characteristic.StatusFault.NO_FAULT : this.Characteristic.StatusFault.GENERAL_FAULT,
     );
   }
 
-  private clearConnectionFailure(): void {
+  private setConnectionFailure(error?: unknown): void {
+    const shouldReportFailure = this.connectionState !== 'faulted' &&
+      this.connectionState !== 'authentication-required';
+    this.connectionState = this.requiresAuthenticationAction(error) ? 'authentication-required' : 'faulted';
+    this.operational = false;
+    this.connectionFailureConfirmed = true;
+    this.updateCachedAccessoryFaults(true);
+    this.ensureConnectionAccessories();
+
+    if (shouldReportFailure) {
+      if (error instanceof AuthStateChangedError) {
+        this.log.error(
+          'Blink authentication changed while Homebridge was running. Restart the Blink child bridge to use the current sign-in.',
+        );
+      } else {
+        this.log.error(
+          'Blink is unavailable in HomeKit. Check the Homebridge host network and Blink sign-in, then turn on "Retry Blink Connection".',
+        );
+      }
+    }
+  }
+
+  private setConnectionHealthy(): void {
+    const wasFaulted = this.connectionFailureConfirmed;
+    this.connectionState = 'healthy';
     this.operational = true;
+    this.connectionFailureConfirmed = false;
     this.consecutivePollFailures = 0;
     this.updateCachedAccessoryFaults(false);
     for (const handler of [
@@ -441,16 +567,105 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     ]) {
       handler.updateAvailability();
     }
-
-    const uuid = this.api.hap.uuid.generate(CONNECTION_DIAGNOSTIC_UUID);
-    const accessory = this.accessories.find(candidate => candidate.UUID === uuid);
-    if (!accessory) {
-      return;
+    this.ensureConnectionAccessories();
+    if (wasFaulted) {
+      this.log.info('Blink connection restored; cleared the HomeKit connection fault.');
     }
+  }
 
-    this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-    this.accessories.splice(this.accessories.indexOf(accessory), 1);
-    this.log.info('Blink connection restored; removed the HomeKit connection diagnostic.');
+  private requiresAuthenticationAction(error: unknown): boolean {
+    if (
+      error instanceof AuthStateChangedError ||
+      error instanceof InvalidAuthStateError ||
+      error instanceof Blink2FARequiredError ||
+      error instanceof BlinkHostedReauthenticationRequiredError ||
+      error instanceof BlinkHostedTokenExchangeError ||
+      error instanceof BlinkRestVerificationRequiredError
+    ) {
+      return true;
+    }
+    if (error instanceof BlinkAuthenticationError) {
+      return error.details.requires2FA ||
+        error.details.requiresUpdate ||
+        [400, 401, 403].includes(error.details.status);
+    }
+    return false;
+  }
+
+  private describeConnectionFailure(error: unknown): string {
+    if (!(error instanceof Error)) {
+      return 'unexpected failure';
+    }
+    if (error instanceof AuthStateChangedError) {
+      return 'stored Blink authentication changed; restart the child bridge';
+    }
+    const description = `${error.name} ${error.message}`;
+    if (/auth|sign.?in|token|verification|credential/i.test(description)) {
+      return 'Blink sign-in required';
+    }
+    if (/network|fetch|socket|timeout|timed out|econn|enotfound|unreachable/i.test(description)) {
+      return 'network unavailable';
+    }
+    if (/BlinkHttpError|\bHTTP\b|\b4\d\d\b|\b5\d\d\b/i.test(description)) {
+      return 'Blink API request failed';
+    }
+    return 'unexpected failure';
+  }
+
+  private async recoverConnection(authenticate: boolean): Promise<boolean> {
+    if (this.recoveryPromise) {
+      return this.recoveryPromise;
+    }
+    this.recoveryPromise = this.performSerializedConnectionRecovery(authenticate);
+    try {
+      return await this.recoveryPromise;
+    } finally {
+      this.recoveryPromise = null;
+    }
+  }
+
+  private async performSerializedConnectionRecovery(authenticate: boolean): Promise<boolean> {
+    // Initial discovery owns first inventory construction. A retry requested
+    // while it is in flight must join it so two callers cannot register the
+    // same HAP controllers. If discovery fails, this caller may then make the
+    // requested recovery attempt through the normal single-flight path.
+    if (this.discoveryPromise) {
+      const discovered = await this.discoveryPromise;
+      if (discovered) {
+        return true;
+      }
+    }
+    return this.performConnectionRecovery(authenticate);
+  }
+
+  private async performConnectionRecovery(authenticate: boolean): Promise<boolean> {
+    const startedFaulted = !this.operational;
+    if (startedFaulted) {
+      this.connectionState = 'recovering';
+      this.updateConnectionAccessoryState();
+    }
+    try {
+      if (authenticate) {
+        await this.apiClient.login(this.config.twoFactorCode);
+      }
+      const homescreen = await this.apiClient.getHomescreen();
+      if (this.inventoryInitialized) {
+        this.updateDeviceStates(homescreen);
+      } else {
+        // A startup failure occurs before handlers exist. Complete initial
+        // discovery exactly once; ordinary runtime recovery remains state-only.
+        this.registerDevices(homescreen);
+        this.inventoryInitialized = true;
+      }
+      this.setConnectionHealthy();
+      return true;
+    } catch (error) {
+      if (startedFaulted || authenticate) {
+        this.log.error(`Blink connection recovery failed (${this.describeConnectionFailure(error)}).`);
+        this.setConnectionFailure(error);
+      }
+      throw error;
+    }
   }
 
   private updateCachedAccessoryFaults(failed: boolean): void {
@@ -464,7 +679,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     ];
 
     for (const accessory of this.accessories) {
-      if (accessory.context.blinkConnectionDiagnostic) {
+      if (accessory.context.blinkConnectionDiagnostic || accessory.context.blinkConnectionRetry) {
         continue;
       }
       for (const serviceType of serviceTypes) {
@@ -580,10 +795,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   ): void {
     const uuid = this.api.hap.uuid.generate(`${uuidPrefix}${device.id}`);
     const existing = this.accessories.find((acc) => acc.UUID === uuid);
-    const displayName = this.getDeviceDisplayName(device);
+    const displayName = this.hapName(this.getDeviceDisplayName(device), `Blink ${deviceLabel}`);
 
     if (existing) {
       existing.displayName = displayName;
+      existing.getService(this.Service.AccessoryInformation)
+        ?.setCharacteristic(this.Characteristic.Name, displayName);
       existing.context.device = device;
       const handler = new HandlerClass(this, existing, device);
       accessoryMap.set(device.id, handler);
@@ -619,15 +836,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Poll device states from homescreen and check for motion events
    */
   private async pollDeviceStates(): Promise<void> {
+    if (this.connectionState === 'authentication-required') {
+      return;
+    }
     try {
-      // Refresh homescreen data
-      const homescreen = await this.apiClient.getHomescreen();
-      this.updateDeviceStates(homescreen);
-      if (!this.operational) {
-        this.clearConnectionFailure();
-      } else {
-        this.consecutivePollFailures = 0;
-      }
+      await this.recoverConnection(!this.operational);
 
       // Check for new motion events
       if (this.enableMotionPolling) {
@@ -635,9 +848,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       }
     } catch (error) {
       this.consecutivePollFailures++;
-      this.log.error('Polling failed:', error);
+      this.log.error(`Polling failed (${this.describeConnectionFailure(error)}).`);
       if (this.consecutivePollFailures === POLL_FAILURE_THRESHOLD) {
-        this.showConnectionFailure();
+        this.setConnectionFailure(error);
+      } else if (this.operational) {
+        this.connectionState = 'degraded';
+        this.updateConnectionAccessoryState();
       }
     }
   }

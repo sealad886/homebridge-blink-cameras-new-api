@@ -13,6 +13,7 @@
 
 import { PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
+import { setHapServiceName, toHapName } from '../hap-name';
 import { BlinkDoorbell } from '../types';
 import { MotionDeviceBase } from './motion-base';
 
@@ -28,7 +29,17 @@ export class DoorbellAccessory extends MotionDeviceBase<BlinkDoorbell> {
 
     this.doorbellService =
       this.accessory.getService(this.platform.Service.Doorbell) ||
-      this.accessory.addService(this.platform.Service.Doorbell, device.name, 'doorbell');
+      this.accessory.addService(
+        this.platform.Service.Doorbell,
+        toHapName(device.name, 'Blink Doorbell'),
+        'doorbell',
+      );
+    setHapServiceName(
+      this.doorbellService,
+      this.platform.Characteristic.Name,
+      device.name,
+      'Blink Doorbell',
+    );
 
     this.doorbellService
       .getCharacteristic(this.platform.Characteristic.ProgrammableSwitchEvent)
