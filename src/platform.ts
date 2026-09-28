@@ -346,6 +346,22 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
+    const cachedDevice = accessory.context.device;
+    if (
+      cachedDevice &&
+      typeof cachedDevice === 'object' &&
+      typeof cachedDevice.id === 'number' &&
+      typeof cachedDevice.name === 'string'
+    ) {
+      const displayName = this.hapName(
+        this.getDeviceDisplayName(cachedDevice as { id: number; name: string; serial?: string }),
+        'Blink Device',
+      );
+      accessory.displayName = displayName;
+      for (const service of accessory.services) {
+        setHapServiceName(service, this.Characteristic.Name, service.displayName, displayName);
+      }
+    }
     this.accessories.push(accessory);
   }
 

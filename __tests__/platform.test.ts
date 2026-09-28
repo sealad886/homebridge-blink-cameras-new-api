@@ -599,6 +599,32 @@ describe('BlinkCamerasPlatform', () => {
     expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
   });
 
+  it('repairs cached names from stored device context before Blink discovery', () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, config, hapApi);
+    const device = { id: 9, network_id: 1, name: 'Offline Camera (ABC)', enabled: true };
+    const uuid = hapApi.hap.uuid.generate('blink-camera-9');
+    const cached = new hapApi.platformAccessory(device.name, uuid);
+    cached.context.device = device;
+    const information = cached.getService(hapApi.hap.Service.AccessoryInformation);
+    const motion = cached.addService(hapApi.hap.Service.MotionSensor, `${'A'.repeat(63)}𐐀`, 'motion-sensor');
+
+    platform.configureAccessory(cached);
+
+    expect(cached.UUID).toBe(uuid);
+    expect(cached.displayName).toBe('Offline Camera (ABC');
+    expect(information?.displayName).toBe('Offline Camera (ABC');
+    expect(information?.setCharacteristic).toHaveBeenCalledWith(
+      hapApi.hap.Characteristic.Name,
+      'Offline Camera (ABC',
+    );
+    expect(motion.displayName).toBe('A'.repeat(63));
+    expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(blinkApi.getHomescreen).not.toHaveBeenCalled();
+  });
+
   it('forwards verifyImmisTls into the runtime streaming config', () => {
     hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;

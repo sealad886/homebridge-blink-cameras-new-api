@@ -56,7 +56,15 @@ function normalizeCandidate(value: string): string {
     validEnd--;
   }
 
-  const bounded = fromValidStart.slice(0, validEnd + 1).slice(0, HAP_NAME_MAX_LENGTH);
+  const bounded: string[] = [];
+  let codeUnitLength = 0;
+  for (const character of fromValidStart.slice(0, validEnd + 1)) {
+    if (codeUnitLength + character.length > HAP_NAME_MAX_LENGTH) {
+      break;
+    }
+    bounded.push(character);
+    codeUnitLength += character.length;
+  }
   while (bounded.length > 0 && !HAP_NAME_EDGE_CHARACTER.test(bounded[bounded.length - 1])) {
     bounded.pop();
   }

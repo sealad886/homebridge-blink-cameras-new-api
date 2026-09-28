@@ -22,4 +22,8 @@ describe('toHapName', () => {
   it('caps names at the current HAP limit and retains an alphanumeric ending', () => {
     expect(toHapName(`${'A'.repeat(63)}-)`, 'Blink Camera')).toBe('A'.repeat(63));
   });
+
+  it('caps names by UTF-16 code units without splitting a supplementary character', () => {
+    expect(toHapName(`${'A'.repeat(63)}𐐀`, 'Blink Camera')).toBe('A'.repeat(63));
+  });
 });

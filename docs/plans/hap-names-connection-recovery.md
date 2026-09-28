@@ -272,16 +272,41 @@ outcome, findings, pattern analysis, fixes, and verification here.
   seat `not assigned`, and no alternate organization; provider account/workspace
   repair is required. No CodeRabbit findings or clean outcome are claimed.
 
+### CodeRabbit round 2
+
+- Base/head: `origin/main` / `a0322894a9299350cd7576a82b83d0dfe4faf9bf`,
+  committed changes only. Captured report:
+  `/tmp/coderabbit-pr41-retry.iZq5LA/review.txt` (reviewer exit 0, tee exit 0).
+- CodeRabbit completed using the free CLI allowance and reported two actionable
+  major findings: the HAP name bound counted Unicode code points instead of
+  HAP-NodeJS's UTF-16 code units, and cached accessory names were not repaired
+  until successful Blink discovery.
+- Pattern analysis: Graphify traced `toHapName`, `configureAccessory`,
+  `registerDevice`, and cached accessory tests to the shared platform naming
+  boundary. Repository-wide search found no parallel normalization helper.
+  HAP-NodeJS 0.14.0's installed `Characteristic` validator directly confirmed
+  that string length is measured with JavaScript `value.length`. Both findings
+  are shared-boundary defects rather than isolated call-site errors.
+- Repair: accumulate complete Unicode characters only while their UTF-16 code
+  units fit the 64-unit limit. During cached accessory restoration, derive the
+  configured name from stored device context and repair the accessory plus all
+  restored service `Name` characteristics before any Blink request, preserving
+  UUIDs and offline availability.
+- Verification after repair: the HAP-name and platform suites passed all 32
+  focused tests; the full 26 suites and 592 tests passed; lint, build, all 39
+  release-workflow tests, and Graphify refresh passed. The follow-up CodeRabbit
+  round remains pending.
+
 ## Local verification evidence
 
 Verified on Node.js `24.15.0`, Homebridge `1.11.1`, and local HAP-NodeJS
 `0.14.0`:
 
-- `npm test -- --runInBand`: 26 suites and 590 tests passed.
+- `npm test -- --runInBand`: 26 suites and 592 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed.
 - `node --test .github/scripts/*.test.mjs`: 39 tests passed.
-- `zsh -lic 'graphify update .'`: graph rebuilt with 2,035 nodes and 3,745
+- `zsh -lic 'graphify update .'`: graph rebuilt with 2,039 nodes and 3,756
   edges; generated graph files remain repository-ignored.
 - `node .github/scripts/verify-package.mjs`: not completed locally because npm
   `12.0.2` changed `npm pack --json` from an array to an object keyed by package
