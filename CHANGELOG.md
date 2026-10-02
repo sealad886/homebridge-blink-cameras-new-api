@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.2] - 2026-10-02
+
+### Fixed
+
+- Coordinate thumbnail capture with motion and network commands through command
+  completion, reconcile motion conflicts against fresh state, and preserve the
+  command queue after failures and expired requests.
+- Bound HomeKit writes and snapshot responses to 12 seconds, return defined
+  HomeKit errors, and preserve confirmed state and manual snapshot caching.
+- Retry one transient homescreen transport failure within a bounded polling
+  cycle, confirm outages after three failed cycles, and share automatic/manual
+  recovery without rebuilding accessories.
+- Keep the connection monitor active during cloud outages and distinguish
+  completed captures, existing-image fallbacks, and cache age in diagnostics.
+
+### Upgrade notes and acceptance
+
+- Existing accessory identities, configuration, and persistent snapshot cache
+  behavior are retained. Enable Apple Home sensor activity notifications on each
+  device; use the existing Retry Blink Connection switch to retry. Dismissing
+  a notification leaves automatic recovery running.
+- Physical notification delivery, concurrent camera operations, and runtime
+  recovery remain acceptance gates. This runtime fix restarts RC observation:
+  at least 48 hours and two natural token refreshes are required before stable
+  promotion. Historical transport outage cause remains unresolved.
+
 ## [0.10.0-rc.1] - 2026-09-28
 
 ### Added

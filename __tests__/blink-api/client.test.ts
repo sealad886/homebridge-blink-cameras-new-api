@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 import { BlinkApi } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
+import { OperationTimeoutError } from '../../src/operation-budget';
 import { BlinkHttpError } from '../../src/blink-api/http';
 import { readOwnerOnlyJsonFile } from '../../src/blink-api/secure-json-file';
 import {
@@ -1082,8 +1083,8 @@ describe('BlinkApi', () => {
     await api.disarmNetwork(5);
 
     expect(auth.ensureValidToken).toHaveBeenCalled();
-    expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/arm');
-    expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/disarm');
+    expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/arm', undefined, [409], expect.objectContaining({ deadline: expect.any(Number) }));
+    expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/disarm', undefined, [409], expect.objectContaining({ deadline: expect.any(Number) }));
   });
 
   it('uses the official app one-second fallback while polling arm commands', async () => {
@@ -1094,7 +1095,7 @@ describe('BlinkApi', () => {
 
     await api.armNetwork(5);
 
-    expect(poll).toHaveBeenCalledWith(5, 71, 10, 1);
+    expect(poll).toHaveBeenCalledWith(5, 71, 60, 1, expect.objectContaining({ deadline: expect.any(Number) }));
   });
 
   it('serializes network arm ahead of a following camera mutation', async () => {
@@ -1131,7 +1132,7 @@ describe('BlinkApi', () => {
 
     await expect(api.armNetwork(5)).resolves.toEqual({});
     expect(sharedHttp.post).toHaveBeenCalledTimes(1);
-    expect(sharedHttp.get).toHaveBeenCalledWith('v4/accounts/3/homescreen');
+    expect(sharedHttp.get).toHaveBeenCalledWith('v4/accounts/3/homescreen', expect.objectContaining({ deadline: expect.any(Number) }));
   });
 
   it('automatically retries a network conflict when the target state was not reached', async () => {
@@ -1167,7 +1168,7 @@ describe('BlinkApi', () => {
     const arm = api.armNetwork(5);
     const camera = api.disableCameraMotion(5, 1);
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(motionHttp.get).toHaveBeenCalledWith('accounts/10/networks/5/commands/41');
+    expect(motionHttp.get).toHaveBeenCalledWith('accounts/10/networks/5/commands/41', expect.objectContaining({ deadline: expect.any(Number) }));
     expect(motionHttp.post).not.toHaveBeenCalled();
 
     finishPolling();
@@ -1175,25 +1176,29 @@ describe('BlinkApi', () => {
     expect(motionHttp.post).toHaveBeenCalledTimes(1);
   });
 
-  it('does not block thumbnail reads behind a pending network mutation', async () => {
-    const { api } = createApi();
-    const armHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
-    const rootHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
-    api.sharedHttp = armHttp;
-    api.sharedRootHttp = rootHttp;
+  it('holds captures behind pending mutations and holds mutations until capture completes, without blocking reads', async () => {
+    const { api, http } = createApi();
+    const screen = { account: { account_id: 10 }, networks: [], cameras: [{ id: 1, network_id: 5, enabled: true, thumbnail: '/new.jpg' }], doorbells: [], owls: [], sync_modules: [] };
     let releaseArm!: () => void;
-    armHttp.post.mockImplementationOnce(() => new Promise(resolve => {
-      releaseArm = () => resolve({});
-    }));
-    rootHttp.post.mockResolvedValueOnce({ command_id: 42 });
-
+    let releaseCapture!: () => void;
+    http.post.mockImplementationOnce(() => new Promise(resolve => { releaseArm = () => resolve({}); }))
+      .mockResolvedValueOnce({ command_id: 42 }).mockResolvedValueOnce({});
+    http.get.mockImplementation((path: string) => path.includes('/commands/')
+      ? new Promise(resolve => { releaseCapture = () => resolve({ complete: true }); }) : Promise.resolve(screen));
     const arm = api.armNetwork(5);
     const thumbnail = api.requestCameraThumbnail(5, 1);
-    await expect(thumbnail).resolves.toEqual({ command_id: 42 });
-    expect(rootHttp.post).toHaveBeenCalledWith('accounts/10/networks/5/cameras/1/thumbnail');
-
+    const motion = api.disableCameraMotion(5, 1);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(http.post).toHaveBeenCalledTimes(1);
+    await expect(api.getHomescreen()).resolves.toEqual(screen);
     releaseArm();
     await arm;
+    await new Promise(resolve => setTimeout(resolve, 350));
+    expect(http.post).toHaveBeenCalledTimes(2);
+    releaseCapture();
+    await expect(thumbnail).resolves.toMatchObject({ command_id: 42, captureOutcome: 'completed', thumbnail: '/new.jpg' });
+    await motion;
+    expect(http.post).toHaveBeenCalledTimes(3);
   });
 
   it('serializes motion commands across cameras and recovers after a conflict', async () => {
@@ -1248,6 +1253,133 @@ describe('BlinkApi', () => {
 
     await expect(api.enableCameraMotion(5, 1)).rejects.toBe(conflict);
     expect(http.post).toHaveBeenCalledTimes(3);
+  });
+
+  it('reconciles motion conflicts only for the matching device type, network and target', async () => {
+    const { api, http } = createApi();
+    api.accountId = 10;
+    const conflict = new BlinkHttpError('Conflict', 409, '', 'https://example.com', 'POST');
+    http.post.mockRejectedValue(conflict);
+    http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
+      cameras: [{ id: 1, network_id: 5, enabled: true }], doorbells: [], owls: [] });
+    await expect(api.enableCameraMotion(5, 1)).resolves.toBeUndefined();
+    expect(http.post).toHaveBeenCalledTimes(1);
+    http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
+      cameras: [{ id: 1, network_id: 6, enabled: true }], doorbells: [{ id: 1, network_id: 5, enabled: true }], owls: [] });
+    await expect(api.enableCameraMotion(5, 1)).rejects.toBe(conflict);
+    expect(http.post).toHaveBeenCalledTimes(4);
+  });
+
+  it('waits for returned motion command completion before sending the next mutation', async () => {
+    const { api, http } = createApi();
+    api.accountId = 10;
+    let complete!: () => void;
+    let started!: () => void;
+    const sent = new Promise<void>(resolve => { started = resolve; });
+    http.post.mockImplementationOnce(() => { started(); return Promise.resolve({ command_id: 9 }); }).mockResolvedValue({});
+    http.get.mockImplementation(() => new Promise(resolve => { complete = () => resolve({ complete: true }); }));
+    const first = api.enableCameraMotion(5, 1);
+    const second = api.disableCameraMotion(5, 2);
+    await sent;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(http.post).toHaveBeenCalledTimes(1);
+    complete();
+    await Promise.all([first, second]);
+    expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns current thumbnail and explicitly labels a busy fallback', async () => {
+    const { api, http } = createApi();
+    api.accountId = 10;
+    http.post.mockRejectedValue(new BlinkHttpError('Busy', 409, '', 'https://example.com', 'POST'));
+    http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
+      cameras: [{ id: 1, network_id: 5, thumbnail: '/current.jpg' }], doorbells: [], owls: [] });
+    await expect(api.requestCameraThumbnail(5, 1)).resolves.toEqual({ captureOutcome: 'existing-thumbnail', thumbnail: '/current.jpg' });
+    expect(http.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires queued work without sending it and allows started work to finish after caller deadline', async () => {
+    jest.useFakeTimers();
+    try {
+      const { api, http } = createApi();
+      api.accountId = 10;
+    api.accountId = 10;
+      let release!: () => void;
+      http.post.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({}); })).mockResolvedValue({});
+      const first = api.enableCameraMotion(5, 1, { queueDeadline: Date.now() + 12_000 });
+      const expired = api.disableCameraMotion(5, 2, { queueDeadline: Date.now() + 12_000 });
+      const rejection = expect(expired).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(12_000);
+      await rejection;
+      expect(http.post).toHaveBeenCalledTimes(1);
+      release();
+      await first;
+      await jest.advanceTimersByTimeAsync(300);
+      const next = api.disableCameraMotion(5, 3);
+      await jest.advanceTimersByTimeAsync(300);
+      await next;
+      expect(http.post.mock.calls.map(([path]) => path)).toEqual([
+        'accounts/10/networks/5/cameras/1/enable', 'accounts/10/networks/5/cameras/3/disable']);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('releases the queue after capture execution budget expires', async () => {
+    jest.useFakeTimers();
+    try {
+      const { api, http } = createApi();
+      api.accountId = 10;
+    api.accountId = 10;
+      http.post.mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue({});
+      const capture = api.requestCameraThumbnail(5, 1);
+      const failed = expect(capture).rejects.toBeInstanceOf(OperationTimeoutError);
+      const motion = api.enableCameraMotion(5, 1);
+      await jest.advanceTimersByTimeAsync(60_300);
+      await failed;
+      await motion;
+      expect(http.post).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('retries only transient homescreen transport failure once within polling budget', async () => {
+    jest.useFakeTimers();
+    try {
+      const { api, http } = createApi();
+      api.accountId = 10;
+    api.accountId = 10;
+      const failure = new BlinkHttpError('Network', 0, '', 'https://example.com', 'GET', undefined, undefined, 'network',
+        { type: 'connect-timeout', code: 'UND_ERR_CONNECT_TIMEOUT', hostname: 'rest-e006.immedia-semi.com', elapsedMs: 10_000 });
+      const screen = { account: { account_id: 10 }, networks: [], cameras: [], doorbells: [], owls: [] };
+      http.get.mockRejectedValueOnce(failure).mockResolvedValueOnce(screen);
+      const poll = api.getHomescreen({ deadline: Date.now() + 25_000, retryTransient: true });
+      await jest.advanceTimersByTimeAsync(1000);
+      await expect(poll).resolves.toEqual(screen);
+      expect(http.get).toHaveBeenCalledTimes(2);
+      http.get.mockRejectedValue(failure);
+      const exhausted = api.getHomescreen({ deadline: Date.now() + 25_000, retryTransient: true });
+      const rejected = expect(exhausted).rejects.toBe(failure);
+      await jest.advanceTimersByTimeAsync(1000);
+      await rejected;
+      expect(http.get).toHaveBeenCalledTimes(4);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('bounds polling even when transport never settles and does not retry authentication failures', async () => {
+    jest.useFakeTimers();
+    try {
+      const { api, http } = createApi();
+      api.accountId = 10;
+    api.accountId = 10;
+      const authFailure = new BlinkHttpError('Forbidden', 403, '', 'https://example.com', 'GET');
+      http.get.mockRejectedValueOnce(authFailure);
+      await expect(api.getHomescreen({ deadline: Date.now() + 25_000, retryTransient: true })).rejects.toBe(authFailure);
+      expect(http.get).toHaveBeenCalledTimes(1);
+      http.get.mockImplementation(() => new Promise(() => {}));
+      const poll = api.getHomescreen({ deadline: Date.now() + 25_000, retryTransient: true });
+      const rejected = expect(poll).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(25_000);
+      await rejected;
+      expect(http.get).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
   });
 
   it('polls command status until completion', async () => {

@@ -8,6 +8,7 @@
  */
 
 import { BlinkAuth } from './auth';
+import { RequestOptions, OperationTimeoutError, checkRequestBudget, withinRequestBudget, budgetedDelay } from '../operation-budget';
 import { BlinkHttp, BlinkHttpError } from './http';
 import {
   BLINK_PRODUCTION_BOOTSTRAP_TIERS,
@@ -46,6 +47,13 @@ export class BlinkRestVerificationRequiredError extends Error {
   }
 }
 
+export interface BlinkCaptureResult extends BlinkCommandResponse {
+  captureOutcome: 'completed' | 'existing-thumbnail';
+  thumbnail?: string;
+}
+
+interface ConflictResolution<T> { resolved: boolean; value?: T }
+
 export class BlinkApi {
   private stateCommandTail: Promise<void> = Promise.resolve();
   private hasSentStateCommand = false;
@@ -73,52 +81,84 @@ export class BlinkApi {
     }
   }
 
-  /** Blink rejects overlapping network and per-device state mutations with HTTP 409. */
+  /** Serialize remote capture and mutations, including command completion. */
   private queueStateCommand<T>(
-    label: 'Motion' | 'Network',
-    send: () => Promise<T>,
+    label: 'Motion' | 'Network' | 'Capture',
+    send: (options: RequestOptions) => Promise<T>,
     retryDelays: number[],
-    conflictResolution?: () => Promise<T | undefined>,
+    conflictResolution?: (options: RequestOptions) => Promise<ConflictResolution<T>>,
+    options: RequestOptions = {},
   ): Promise<T> {
+    let started = false;
+    let queueTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     const command = this.stateCommandTail.then(async () => {
-      if (this.hasSentStateCommand) {
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
+      const checkQueued = () => {
+        options.signal?.throwIfAborted();
+        if (options.queueDeadline !== undefined && options.queueDeadline <= Date.now()) throw new OperationTimeoutError();
+      };
+      checkQueued();
+      if (this.hasSentStateCommand) await budgetedDelay(300, options);
+      checkQueued();
+      started = true;
+      if (queueTimer) globalThis.clearTimeout(queueTimer);
       this.hasSentStateCommand = true;
-
+      const execution = { ...options, deadline: Math.min(options.deadline ?? Infinity, Date.now() + 60_000) };
       for (let attempt = 0; ; attempt++) {
+        checkRequestBudget(execution);
         try {
-          return await send();
+          return await withinRequestBudget(send(execution), execution);
         } catch (error) {
-          if (!(error instanceof BlinkHttpError) || error.status !== 409) {
-            throw error;
-          }
-          const reconciled = await conflictResolution?.();
-          if (reconciled !== undefined) {
-            this.log.info(`[${label}] Blink reached the requested state despite the conflict response.`);
-            return reconciled;
+          if (!(error instanceof BlinkHttpError) || error.status !== 409) throw error;
+          const reconciled = await conflictResolution?.(execution);
+          if (reconciled?.resolved) {
+            this.log.info(`[${label}] Requested state verified after conflict (attempt ${attempt + 1}).`);
+            return reconciled.value as T;
           }
           const delay = retryDelays[attempt];
-          if (delay === undefined) {
-            throw error;
-          }
-          this.log.warn(`[${label}] Blink reported a state conflict; retrying in ${delay}ms (${attempt + 1}/${retryDelays.length}).`);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          if (delay === undefined) throw error;
+          this.log.warn(`[${label}] State conflict; retry in ${delay}ms (attempt ${attempt + 1}/${retryDelays.length}).`);
+          await budgetedDelay(delay, execution);
         }
       }
     });
     this.stateCommandTail = command.then(() => undefined, () => undefined);
-    return command;
+    if (options.queueDeadline === undefined) return command;
+    return new Promise<T>((resolve, reject) => {
+      queueTimer = globalThis.setTimeout(() => {
+        if (!started) reject(new OperationTimeoutError());
+      }, Math.max(0, options.queueDeadline! - Date.now()));
+      command.then(resolve, reject).finally(() => {
+        if (queueTimer) globalThis.clearTimeout(queueTimer);
+      });
+    });
   }
 
-  private async networkReachedState(networkId: number, armed: boolean): Promise<boolean> {
+  private async networkReachedState(networkId: number, armed: boolean, options: RequestOptions): Promise<boolean> {
     try {
-      const homescreen = await this.getHomescreen();
+      const homescreen = await this.getHomescreen(options);
       return homescreen.networks.some(network => network.id === networkId && network.armed === armed);
-    } catch (error) {
-      this.logDebug(`Network state reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      checkRequestBudget(options);
       return false;
     }
+  }
+
+  private async motionReachedState(type: 'camera' | 'owl' | 'doorbell', networkId: number, deviceId: number,
+    enabled: boolean, options: RequestOptions): Promise<ConflictResolution<void>> {
+    try {
+      const homescreen = await this.getHomescreen(options);
+      const devices = type === 'camera' ? homescreen.cameras : type === 'owl' ? homescreen.owls : homescreen.doorbells;
+      return { resolved: devices.some(device => device.id === deviceId && device.network_id === networkId && device.enabled === enabled) };
+    } catch {
+      checkRequestBudget(options);
+      return { resolved: false };
+    }
+  }
+
+  private async completeRemoteCommand(networkId: number, response: BlinkCommandResponse | undefined,
+    options: RequestOptions, interval = 1): Promise<void> {
+    const id = response?.id ?? response?.command_id;
+    if (id) await this.pollCommand(networkId, id, 60, interval, options);
   }
 
   getSharedRestRootUrl(): string {
@@ -550,15 +590,28 @@ export class BlinkApi {
    * Source: API Dossier Section 3.9 - GET v4/accounts/{account_id}/homescreen
    * Evidence: smali_classes10/com/immediasemi/blink/utils/sync/HomeScreenApi.smali
    */
-  async getHomescreen(): Promise<BlinkHomescreen> {
-    await this.auth.ensureValidToken();
+  async getHomescreen(options?: RequestOptions & { retryTransient?: boolean }): Promise<BlinkHomescreen> {
+    checkRequestBudget(options);
+    await withinRequestBudget(this.auth.ensureValidToken(), options);
+    checkRequestBudget(options);
     this.accountId = this.accountId ?? this.auth.getAccountId();
-
-    const accountId = await this.ensureAccountId();
-
-    const homescreen = await this.sharedHttp.get<BlinkHomescreen>(`v4/accounts/${accountId}/homescreen`);
-    this.accountId = homescreen.account?.account_id ?? accountId;
-    return homescreen;
+    const accountId = await withinRequestBudget(this.ensureAccountId(), options);
+    for (let attempt = 0; ; attempt++) {
+      checkRequestBudget(options);
+      try {
+        const path = `v4/accounts/${accountId}/homescreen`;
+        const homescreen = await withinRequestBudget(options
+          ? this.sharedHttp.get<BlinkHomescreen>(path, options)
+          : this.sharedHttp.get<BlinkHomescreen>(path), options);
+        this.accountId = homescreen.account?.account_id ?? accountId;
+        return homescreen;
+      } catch (error) {
+        const transientCodes = ['UND_ERR_CONNECT_TIMEOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_SOCKET'];
+        if (attempt !== 0 || !options?.retryTransient || !(error instanceof BlinkHttpError)
+          || error.failure !== 'network' || !transientCodes.includes(error.networkDiagnostic?.code ?? '')) throw error;
+        await budgetedDelay(500 + Math.floor(Math.random() * 501), options);
+      }
+    }
   }
 
   /**
@@ -566,17 +619,13 @@ export class BlinkApi {
    * Source: API Dossier Section 3.7 - POST v1/accounts/{account_id}/networks/{networkId}/state/arm
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/NetworkApi.smali
    */
-  async armNetwork(networkId: number): Promise<BlinkCommandResponse> {
-    return this.queueStateCommand('Network', async () => {
-      const accountId = await this.ensureAccountId();
-      const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`);
-      const commandId = response.id ?? response.command_id;
-      if (commandId) {
-        await this.pollCommand(networkId, commandId, 10, 1);
-      }
+  async armNetwork(networkId: number, options?: RequestOptions): Promise<BlinkCommandResponse> {
+    return this.queueStateCommand('Network', async execution => {
+      const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`, undefined, [409], execution);
+      await this.completeRemoteCommand(networkId, response, execution);
       return response;
-    }, [1000, 2000, 4000], async () =>
-      await this.networkReachedState(networkId, true) ? {} : undefined);
+    }, [1000, 2000, 4000], async execution => ({ resolved: await this.networkReachedState(networkId, true, execution), value: {} }), options);
   }
 
   /**
@@ -584,17 +633,27 @@ export class BlinkApi {
    * Source: API Dossier Section 3.7 - POST v1/accounts/{account_id}/networks/{network_id}/state/disarm
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/NetworkApi.smali
    */
-  async disarmNetwork(networkId: number): Promise<BlinkCommandResponse> {
-    return this.queueStateCommand('Network', async () => {
-      const accountId = await this.ensureAccountId();
-      const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`);
-      const commandId = response.id ?? response.command_id;
-      if (commandId) {
-        await this.pollCommand(networkId, commandId, 10, 1);
-      }
+  async disarmNetwork(networkId: number, options?: RequestOptions): Promise<BlinkCommandResponse> {
+    return this.queueStateCommand('Network', async execution => {
+      const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`, undefined, [409], execution);
+      await this.completeRemoteCommand(networkId, response, execution);
       return response;
-    }, [1000, 2000, 4000], async () =>
-      await this.networkReachedState(networkId, false) ? {} : undefined);
+    }, [1000, 2000, 4000], async execution => ({ resolved: await this.networkReachedState(networkId, false, execution), value: {} }), options);
+  }
+
+  private setDeviceMotion(type: 'camera' | 'owl' | 'doorbell', networkId: number, deviceId: number,
+    enabled: boolean, options?: RequestOptions): Promise<void> {
+    return this.queueStateCommand('Motion', async execution => {
+      const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      checkRequestBudget(execution);
+      const kind = type === 'camera' ? 'cameras' : type === 'owl' ? 'owls' : 'doorbells';
+      const prefix = type === 'camera' ? '' : 'v1/';
+      const http = type === 'camera' ? this.sharedRootHttp : this.sharedHttp;
+      const response = await http.post<BlinkCommandResponse>(`${prefix}accounts/${accountId}/networks/${networkId}/${kind}/${deviceId}/${enabled ? 'enable' : 'disable'}`,
+        undefined, [409], execution);
+      await this.completeRemoteCommand(networkId, response, execution);
+    }, [500, 1000], execution => this.motionReachedState(type, networkId, deviceId, enabled, execution), options);
   }
 
   /**
@@ -603,11 +662,8 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
    * Note: No version prefix - uses root URL (without /api/)
    */
-  async enableCameraMotion(networkId: number, cameraId: number): Promise<void> {
-    return this.queueStateCommand('Motion', async () => {
-      const accountId = await this.ensureAccountId();
-      await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/enable`);
-    }, [500, 1000]);
+  async enableCameraMotion(networkId: number, cameraId: number, options?: RequestOptions): Promise<void> {
+    return this.setDeviceMotion('camera', networkId, cameraId, true, options);
   }
 
   /**
@@ -616,11 +672,8 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
    * Note: No version prefix - uses root URL (without /api/)
    */
-  async disableCameraMotion(networkId: number, cameraId: number): Promise<void> {
-    return this.queueStateCommand('Motion', async () => {
-      const accountId = await this.ensureAccountId();
-      await this.sharedRootHttp.post(`accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/disable`);
-    }, [500, 1000]);
+  async disableCameraMotion(networkId: number, cameraId: number, options?: RequestOptions): Promise<void> {
+    return this.setDeviceMotion('camera', networkId, cameraId, false, options);
   }
 
   /**
@@ -628,11 +681,8 @@ export class BlinkApi {
    * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{network}/doorbells/{lotus}/enable
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
-  async enableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    return this.queueStateCommand('Motion', async () => {
-      const accountId = await this.ensureAccountId();
-      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/enable`);
-    }, [500, 1000]);
+  async enableDoorbellMotion(networkId: number, doorbellId: number, options?: RequestOptions): Promise<void> {
+    return this.setDeviceMotion('doorbell', networkId, doorbellId, true, options);
   }
 
   /**
@@ -640,11 +690,8 @@ export class BlinkApi {
    * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{network}/doorbells/{lotus}/disable
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
-  async disableDoorbellMotion(networkId: number, doorbellId: number): Promise<void> {
-    return this.queueStateCommand('Motion', async () => {
-      const accountId = await this.ensureAccountId();
-      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/disable`);
-    }, [500, 1000]);
+  async disableDoorbellMotion(networkId: number, doorbellId: number, options?: RequestOptions): Promise<void> {
+    return this.setDeviceMotion('doorbell', networkId, doorbellId, false, options);
   }
 
   /**
@@ -652,11 +699,8 @@ export class BlinkApi {
    * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/enable
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
-  async enableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    return this.queueStateCommand('Motion', async () => {
-      const accountId = await this.ensureAccountId();
-      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/enable`);
-    }, [500, 1000]);
+  async enableOwlMotion(networkId: number, owlId: number, options?: RequestOptions): Promise<void> {
+    return this.setDeviceMotion('owl', networkId, owlId, true, options);
   }
 
   /**
@@ -664,11 +708,8 @@ export class BlinkApi {
    * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/disable
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
-  async disableOwlMotion(networkId: number, owlId: number): Promise<void> {
-    return this.queueStateCommand('Motion', async () => {
-      const accountId = await this.ensureAccountId();
-      await this.sharedHttp.post(`v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/disable`);
-    }, [500, 1000]);
+  async disableOwlMotion(networkId: number, owlId: number, options?: RequestOptions): Promise<void> {
+    return this.setDeviceMotion('owl', networkId, owlId, false, options);
   }
 
   /**
@@ -710,17 +751,39 @@ export class BlinkApi {
     return this.sharedHttp.get<BlinkUnwatchedMediaResponse>(`v4/accounts/${accountId}/unwatched_media`);
   }
 
+  private captureThumbnail(type: 'camera' | 'owl' | 'doorbell', networkId: number, deviceId: number,
+    options?: RequestOptions): Promise<BlinkCaptureResult> {
+    return this.queueStateCommand('Capture', async execution => {
+      const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      checkRequestBudget(execution);
+      const kind = type === 'camera' ? 'cameras' : type === 'owl' ? 'owls' : 'doorbells';
+      const prefix = type === 'camera' ? '' : 'v1/';
+      const http = type === 'camera' ? this.sharedRootHttp : this.sharedHttp;
+      let response: BlinkCommandResponse = {};
+      let captureOutcome: BlinkCaptureResult['captureOutcome'] = 'completed';
+      try {
+        response = await http.post<BlinkCommandResponse>(`${prefix}accounts/${accountId}/networks/${networkId}/${kind}/${deviceId}/thumbnail`, undefined, [409], execution);
+        await this.completeRemoteCommand(networkId, response, execution, 1);
+      } catch (error) {
+        if (!(error instanceof BlinkHttpError) || error.failure !== 'http' || error.status !== 409) throw error;
+        captureOutcome = 'existing-thumbnail';
+      }
+      const homescreen = await this.getHomescreen(execution);
+      const devices = type === 'camera' ? homescreen.cameras : type === 'owl' ? homescreen.owls : homescreen.doorbells;
+      const device = devices.find(device => device.id === deviceId && device.network_id === networkId);
+      if (!device) throw new Error('Blink camera unavailable after capture.');
+      return { ...response, captureOutcome, thumbnail: device.thumbnail };
+    }, [], undefined, options);
+  }
+
   /**
    * Request thumbnail capture for a camera
    * Source: API Dossier Section 3.3 - POST accounts/{account_id}/networks/{network}/cameras/{camera}/thumbnail
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/CameraApi.smali
    * Note: No version prefix - uses root URL (without /api/)
    */
-  async requestCameraThumbnail(networkId: number, cameraId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedRootHttp.post<BlinkCommandResponse>(
-      `accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/thumbnail`,
-    );
+  async requestCameraThumbnail(networkId: number, cameraId: number, options?: RequestOptions): Promise<BlinkCaptureResult> {
+    return this.captureThumbnail('camera', networkId, cameraId, options);
   }
 
   /**
@@ -728,11 +791,8 @@ export class BlinkApi {
    * Source: API Dossier Section 3.4 - POST v1/accounts/{account_id}/networks/{networkId}/owls/{owlId}/thumbnail
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/wired/OwlApi.smali
    */
-  async requestOwlThumbnail(networkId: number, owlId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v1/accounts/${accountId}/networks/${networkId}/owls/${owlId}/thumbnail`,
-    );
+  async requestOwlThumbnail(networkId: number, owlId: number, options?: RequestOptions): Promise<BlinkCaptureResult> {
+    return this.captureThumbnail('owl', networkId, owlId, options);
   }
 
   /**
@@ -740,11 +800,8 @@ export class BlinkApi {
    * Source: API Dossier Section 3.5 - POST v1/accounts/{account_id}/networks/{network}/doorbells/{lotus}/thumbnail
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/camera/doorbell/DoorbellApi.smali
    */
-  async requestDoorbellThumbnail(networkId: number, doorbellId: number): Promise<BlinkCommandResponse> {
-    const accountId = await this.ensureAccountId();
-    return this.sharedHttp.post<BlinkCommandResponse>(
-      `v1/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/thumbnail`,
-    );
+  async requestDoorbellThumbnail(networkId: number, doorbellId: number, options?: RequestOptions): Promise<BlinkCaptureResult> {
+    return this.captureThumbnail('doorbell', networkId, doorbellId, options);
   }
 
   /**
@@ -819,10 +876,11 @@ export class BlinkApi {
    * Source: API Dossier Section 3.10 - GET /accounts/{account_id}/networks/{network}/commands/{command}
    * Note: No version prefix - uses root URL (without /api/)
    */
-  async getCommandStatus(networkId: number, commandId: number): Promise<BlinkCommandStatus> {
+  async getCommandStatus(networkId: number, commandId: number, options?: RequestOptions): Promise<BlinkCommandStatus> {
     const accountId = await this.ensureAccountId();
     return this.sharedRootHttp.get<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
+      options,
     );
   }
 
@@ -836,9 +894,11 @@ export class BlinkApi {
     commandId: number,
     maxAttempts = 10,
     fallbackIntervalSeconds = 5,
+    options?: RequestOptions,
   ): Promise<BlinkCommandStatus> {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const status = await this.getCommandStatus(networkId, commandId);
+      checkRequestBudget(options);
+      const status = await withinRequestBudget(this.getCommandStatus(networkId, commandId, options), options);
 
       if (status.complete || status.status === 'complete') {
         return status;
@@ -849,7 +909,7 @@ export class BlinkApi {
       }
 
       const delayMs = (status.polling_interval ?? fallbackIntervalSeconds) * 1000;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await budgetedDelay(delayMs, options);
     }
 
     throw new Error(`Blink command ${commandId} timed out after ${maxAttempts} attempts`);

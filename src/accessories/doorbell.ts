@@ -1,3 +1,4 @@
+import { RequestOptions } from '../operation-budget';
 /**
  * Blink Doorbell Accessory
  *
@@ -46,12 +47,12 @@ export class DoorbellAccessory extends MotionDeviceBase<BlinkDoorbell> {
       .setProps({ maxValue: 0, minValue: 0, validValues: [0] });
   }
 
-  protected async enableMotionApi(): Promise<void> {
-    await this.platform.apiClient.enableDoorbellMotion(this.device.network_id, this.device.id);
+  protected async enableMotionApi(options?: RequestOptions): Promise<void> {
+    await this.platform.apiClient.enableDoorbellMotion(this.device.network_id, this.device.id, options);
   }
 
-  protected async disableMotionApi(): Promise<void> {
-    await this.platform.apiClient.disableDoorbellMotion(this.device.network_id, this.device.id);
+  protected async disableMotionApi(options?: RequestOptions): Promise<void> {
+    await this.platform.apiClient.disableDoorbellMotion(this.device.network_id, this.device.id, options);
   }
 
   triggerRing(): void {

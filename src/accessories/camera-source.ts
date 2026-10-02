@@ -20,6 +20,8 @@ import {
   StreamRequestCallback,
   StreamingRequest,
 } from 'homebridge';
+import { withResponseBudget, RequestOptions, checkRequestBudget } from '../operation-budget';
+import { toHapError } from '../hap-errors';
 import { BlinkApi } from '../blink-api/client';
 import { BlinkHttpError } from '../blink-api/http';
 import {
@@ -308,6 +310,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private readonly ongoingSessions = new Map<string, ActiveStreamSession>();
   private cachedSnapshot: Buffer | null = null;
   private cachedSnapshotTime = 0;
+  private lastSuccessfulCaptureTime = 0;
   private freshSnapshotPromise: Promise<Buffer> | null = null;
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
@@ -355,7 +358,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const persistSnapshotCache = this.streamingConfig.persistSnapshotCache ?? false;
     if (this.cachedSnapshot && persistSnapshotCache) {
-      this.log(`Snapshot returned from persistent cache (${this.cachedSnapshot.length} bytes)`);
+      this.log(`Snapshot returned from persistent cache (${this.cachedSnapshot.length} bytes, download age ${Math.round((Date.now() - this.cachedSnapshotTime) / 1000)}s, capture age ${this.lastSuccessfulCaptureTime ? Math.round((Date.now() - this.lastSuccessfulCaptureTime) / 1000) + 's' : 'unknown'})`);
       callback(undefined, this.cachedSnapshot);
       return;
     }
@@ -371,12 +374,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     try {
-      const buffer = await this.fetchFreshSnapshot();
+      const buffer = await withResponseBudget(this.fetchFreshSnapshot());
 
       this.log(`Snapshot returned (${buffer.length} bytes)`);
       callback(undefined, buffer);
     } catch (error) {
-      callback(error as Error);
+      callback(toHapError(this.hap, error));
     }
   }
 
@@ -405,7 +408,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const request = (async () => {
       try {
-        const buffer = await this.fetchSnapshotBuffer();
+        const buffer = await withResponseBudget(this.fetchSnapshotBuffer(Date.now() + 60_000), 60_000);
         this.cacheSnapshot(buffer);
         this.snapshotFailure = null;
         this.snapshotFailureCooldownUntil = 0;
@@ -446,12 +449,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     this.cachedSnapshotTime = Date.now();
   }
 
-  private async fetchSnapshotBuffer(): Promise<Buffer> {
-    // Request fresh thumbnail from Blink
-    await this.requestThumbnail();
-
-    // Get thumbnail URL from device data
-    const url = this.getThumbnailUrl();
+  private async fetchSnapshotBuffer(deadline: number): Promise<Buffer> {
+    const capture = await this.requestThumbnail({ deadline });
+    checkRequestBudget({ deadline });
+    const url = capture.thumbnail;
+    if (capture.completed) {
+      this.lastSuccessfulCaptureTime = Date.now();
+      this.log('Thumbnail capture completed');
+    } else {
+      this.log('Thumbnail capture busy; downloading existing thumbnail');
+    }
     if (!url) {
       throw new Error('No thumbnail URL available');
     }
@@ -480,7 +487,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       response = await fetch(resourceUrl.toString(), {
         headers: this.api.getAuthHeaders(),
         redirect: 'error',
-        signal: globalThis.AbortSignal.timeout(30_000),
+        signal: globalThis.AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now()))),
       });
     } catch (error) {
       throw new SnapshotNetworkError(describeNetworkFailure(error, resourceUrl, startedAtMs));
@@ -490,8 +497,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error(`Failed to fetch thumbnail: ${response.status}`);
     }
     try {
-      return Buffer.from(await response.arrayBuffer());
+      const buffer = Buffer.from(await response.arrayBuffer());
+      checkRequestBudget({ deadline });
+      return buffer;
     } catch {
+      checkRequestBudget({ deadline });
       throw new Error('Blink thumbnail response could not be read.');
     }
   }
@@ -500,33 +510,18 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Request a fresh thumbnail from Blink API.
    * Uses the appropriate endpoint based on device type.
    */
-  private async requestThumbnail(): Promise<void> {
+  private async requestThumbnail(options: RequestOptions): Promise<{ completed: boolean; thumbnail?: string }> {
     try {
-      let response;
-
-      switch (this.deviceType) {
-        case 'camera':
-          response = await this.api.requestCameraThumbnail(this.networkId, this.deviceId);
-          break;
-        case 'owl':
-          response = await this.api.requestOwlThumbnail(this.networkId, this.deviceId);
-          break;
-        case 'doorbell':
-          response = await this.api.requestDoorbellThumbnail(this.networkId, this.deviceId);
-          break;
-      }
-
-      // Poll for command completion
-      if (response) {
-        const commandId = response.id ?? response.command_id;
-        if (commandId) {
-          await this.api.pollCommand(this.networkId, commandId);
-        }
-      }
+      const response = this.deviceType === 'camera'
+        ? await this.api.requestCameraThumbnail(this.networkId, this.deviceId, options)
+        : this.deviceType === 'owl'
+          ? await this.api.requestOwlThumbnail(this.networkId, this.deviceId, options)
+          : await this.api.requestDoorbellThumbnail(this.networkId, this.deviceId, options);
+      return { completed: response.captureOutcome === 'completed', thumbnail: response.thumbnail };
     } catch (error) {
-      // Only a typed HTTP conflict permits downloading the existing thumbnail.
-      // Authentication, persistence, and transport failures must stop before bearer use.
-      if (error instanceof BlinkHttpError && error.failure === 'http' && error.status === 409) return;
+      if (error instanceof BlinkHttpError && error.failure === 'http' && error.status === 409) {
+        return { completed: false, thumbnail: this.getThumbnailUrl() };
+      }
       throw error;
     }
   }

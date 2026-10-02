@@ -1,3 +1,4 @@
+import { RequestOptions } from '../operation-budget';
 /**
  * Blink Camera Accessory
  *
@@ -28,11 +29,11 @@ export class CameraAccessory extends MotionDeviceBase<BlinkCamera> {
     );
   }
 
-  protected async enableMotionApi(): Promise<void> {
-    await this.platform.apiClient.enableCameraMotion(this.device.network_id, this.device.id);
+  protected async enableMotionApi(options?: RequestOptions): Promise<void> {
+    await this.platform.apiClient.enableCameraMotion(this.device.network_id, this.device.id, options);
   }
 
-  protected async disableMotionApi(): Promise<void> {
-    await this.platform.apiClient.disableCameraMotion(this.device.network_id, this.device.id);
+  protected async disableMotionApi(options?: RequestOptions): Promise<void> {
+    await this.platform.apiClient.disableCameraMotion(this.device.network_id, this.device.id, options);
   }
 }

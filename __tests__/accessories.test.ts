@@ -63,7 +63,7 @@ describe('Accessory handlers', () => {
     () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
     const callback = jest.fn();
     await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
-    expect(callback).toHaveBeenCalledWith(error);
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
     expect(headers).not.toHaveBeenCalled();
   });
 
@@ -87,8 +87,8 @@ describe('Accessory handlers', () => {
   });
 
   it('coalesces concurrent HomeKit and manual snapshot refreshes', async () => {
-    let finishThumbnailRequest!: (value: { command_id: number }) => void;
-    const thumbnailRequest = new Promise<{ command_id: number }>((resolve) => {
+    let finishThumbnailRequest!: (value: { command_id: number; captureOutcome: string; thumbnail: string }) => void;
+    const thumbnailRequest = new Promise<{ command_id: number; captureOutcome: string; thumbnail: string }>((resolve) => {
       finishThumbnailRequest = resolve;
     });
     const requestCameraThumbnail = jest.fn().mockReturnValue(thumbnailRequest);
@@ -114,7 +114,7 @@ describe('Accessory handlers', () => {
       const manual = source.refreshSnapshotCache();
 
       expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
-      finishThumbnailRequest({ command_id: 10 });
+      finishThumbnailRequest({ command_id: 10, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' });
       await Promise.all([first, second, manual]);
 
       expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
@@ -132,7 +132,7 @@ describe('Accessory handlers', () => {
     const failure = new Error('temporary transport failure');
     const requestCameraThumbnail = jest.fn()
       .mockRejectedValueOnce(failure)
-      .mockResolvedValue({ command_id: 11 });
+      .mockResolvedValue({ command_id: 11, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -159,13 +159,13 @@ describe('Accessory handlers', () => {
       ]);
 
       expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
-      expect(firstCallback).toHaveBeenCalledWith(failure);
-      expect(secondCallback).toHaveBeenCalledWith(failure);
+      expect(firstCallback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
+      expect(secondCallback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
       expect(errorLog).toHaveBeenCalledTimes(1);
 
       now += 14_999;
       await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, cooldownCallback);
-      expect(cooldownCallback).toHaveBeenCalledWith(failure);
+      expect(cooldownCallback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
       expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledTimes(1);
       await expect(source.refreshSnapshotCache()).rejects.toBe(failure);
@@ -196,7 +196,7 @@ describe('Accessory handlers', () => {
       },
     })) as unknown as typeof fetch;
     const source = new BlinkCameraSource({
-      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10 }),
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' }),
       pollCommand: jest.fn().mockResolvedValue({ complete: true }),
       getAuthHeaders: jest.fn().mockReturnValue({}),
     } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
@@ -241,7 +241,7 @@ describe('Accessory handlers', () => {
     () => 'https://rest-prod.immedia-semi.com/thumbnail.jpg', () => true, jest.fn());
     const callback = jest.fn();
     await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
-    expect(callback).toHaveBeenCalledWith(expect.any(AuthStateChangedError));
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
     expect(headers).not.toHaveBeenCalled();
   });
   it.each([
@@ -258,7 +258,7 @@ describe('Accessory handlers', () => {
     try {
       const headers = jest.fn().mockReturnValue({ Authorization: 'Bearer secret' });
       const source = new BlinkCameraSource({
-        requestCameraThumbnail: jest.fn().mockResolvedValue(undefined),
+        requestCameraThumbnail: jest.fn().mockResolvedValue({ captureOutcome: 'completed', thumbnail: url }),
         getSharedRestRootUrl: () => 'https://rest-prod.immedia-semi.com/',
         getAuthHeaders: headers,
       } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
@@ -280,7 +280,7 @@ describe('Accessory handlers', () => {
     try {
       const errorLog = jest.fn();
       const source = new BlinkCameraSource({
-        requestCameraThumbnail: jest.fn().mockResolvedValue(undefined),
+        requestCameraThumbnail: jest.fn().mockResolvedValue({ captureOutcome: 'completed', thumbnail: '/media/thumbnail.jpg' }),
         getSharedRestRootUrl: () => 'https://rest-prde.immedia-semi.com/',
         getAuthHeaders: () => ({ Authorization: 'Bearer secret123' }),
       } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
@@ -306,7 +306,7 @@ describe('Accessory handlers', () => {
     try {
       const errorLog = jest.fn();
       const source = new BlinkCameraSource({
-        requestCameraThumbnail: jest.fn().mockResolvedValue(undefined),
+        requestCameraThumbnail: jest.fn().mockResolvedValue({ captureOutcome: 'completed', thumbnail: 'https://rest-prde.immedia-semi.com/media/thumbnail.jpg?token=secret123' }),
         getAuthHeaders: jest.fn().mockReturnValue({}),
       } as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
       () => 'https://rest-prde.immedia-semi.com/media/thumbnail.jpg?token=secret123',
@@ -319,7 +319,7 @@ describe('Accessory handlers', () => {
 
       expect(globalThis.fetch).toHaveBeenCalledTimes(1);
       expect(firstCallback).toHaveBeenCalledWith(expect.any(Error));
-      expect(cooldownCallback).toHaveBeenCalledWith(firstCallback.mock.calls[0][0]);
+      expect(cooldownCallback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(
         'type=dns code=ENOTFOUND hostname=rest-prde.immedia-semi.com elapsedMs=',
@@ -335,7 +335,7 @@ describe('Accessory handlers', () => {
     const trace = jest.fn();
     const error = jest.fn();
     const source = new BlinkCameraSource(
-      { requestCameraThumbnail: jest.fn().mockResolvedValue(undefined) } as unknown as BlinkApi,
+      { requestCameraThumbnail: jest.fn().mockResolvedValue({ captureOutcome: 'completed', thumbnail: undefined }) } as unknown as BlinkApi,
       createHap() as unknown as HAP, 1, 2, 'camera', 'serial', () => undefined,
       () => true, trace, { ffmpegDebug: false }, error,
     );
@@ -360,9 +360,9 @@ describe('Accessory handlers', () => {
       disableDoorbellMotion: jest.fn(),
       enableOwlMotion: jest.fn(),
       disableOwlMotion: jest.fn(),
-      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
-      requestOwlThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
-      requestDoorbellThumbnail: jest.fn().mockResolvedValue({ command_id: 1 }),
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 1, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' }),
+      requestOwlThumbnail: jest.fn().mockResolvedValue({ command_id: 1, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' }),
+      requestDoorbellThumbnail: jest.fn().mockResolvedValue({ command_id: 1, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' }),
     };
 
     const platform: PlatformStub = {
@@ -378,6 +378,91 @@ describe('Accessory handlers', () => {
     return { hap, apiClient, platform, log };
   };
 
+  it('bounds each snapshot caller while allowing a shared capture to populate cache later', async () => {
+    jest.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([8]).buffer });
+    let finish!: (value: unknown) => void;
+    const capture = new Promise(resolve => { finish = resolve; });
+    const requestCameraThumbnail = jest.fn().mockReturnValue(capture);
+    try {
+      const source = new BlinkCameraSource({ requestCameraThumbnail, getAuthHeaders: () => ({}) } as unknown as BlinkApi,
+        createHap() as unknown as HAP, 1, 2, 'camera', 'serial', () => undefined, () => true, jest.fn(),
+        { persistSnapshotCache: true });
+      const first = jest.fn();
+      const second = jest.fn();
+      const waiting = Promise.all([
+        source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, first),
+        source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, second),
+      ]);
+      await jest.advanceTimersByTimeAsync(12_000);
+      await waiting;
+      expect(first).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70408 }));
+      expect(second).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70408 }));
+      finish({ captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/new.jpg' });
+      await jest.advanceTimersByTimeAsync(0);
+      const cached = jest.fn();
+      await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, cached);
+      expect(cached).toHaveBeenCalledWith(undefined, Buffer.from([8]));
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(requestCameraThumbnail).toHaveBeenCalledTimes(1);
+    } finally { globalThis.fetch = originalFetch; jest.useRealTimers(); }
+  });
+
+  it('keeps confirmed motion state after failure and clears its fault on verified polling', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    apiClient.enableCameraMotion.mockRejectedValue(new Error('failed'));
+    const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: false };
+    const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    const on = accessory.getServiceById(hap.Service.Switch, 'motion-switch')?.getCharacteristic(hap.Characteristic.On);
+    const fault = accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')?.getCharacteristic(hap.Characteristic.StatusFault);
+    await expect(on?.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70402 });
+    expect(device.enabled).toBe(false);
+    expect(fault?.value).toBe(1);
+    camera.updateState({ ...device, enabled: true });
+    expect(fault?.value).toBe(0);
+  });
+
+  it('times out a motion write without optimistic state, then accepts late confirmed success', async () => {
+    jest.useFakeTimers();
+    let finish!: () => void;
+    try {
+      const { hap, apiClient, platform } = buildPlatform();
+      apiClient.enableCameraMotion.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+      const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+      const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: false };
+      new CameraAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory, device);
+      const on = accessory.getServiceById(hap.Service.Switch, 'motion-switch')?.getCharacteristic(hap.Characteristic.On);
+      const fault = accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')?.getCharacteristic(hap.Characteristic.StatusFault);
+      const result = expect(on?.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70408 });
+      await jest.advanceTimersByTimeAsync(12_000);
+      await result;
+      expect(device.enabled).toBe(false);
+      expect(fault?.value).toBe(1);
+      finish();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(device.enabled).toBe(true);
+      expect(fault?.value).toBe(0);
+      expect(apiClient.enableCameraMotion).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('returns controlled refresh failure and resets the momentary switch', async () => {
+    const refresh = jest.spyOn(BlinkCameraSource.prototype, 'refreshSnapshotCache').mockRejectedValue(new Error('failed'));
+    try {
+      const { hap, platform } = buildPlatform({ persistSnapshotCache: true });
+      const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+      new CameraAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+        { id: 2, network_id: 1, name: 'Camera', enabled: true });
+      const on = accessory.getServiceById(hap.Service.Switch, 'snapshot-refresh')?.getCharacteristic(hap.Characteristic.On);
+      await expect(on?.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70402 });
+      expect(on?.value).toBe(false);
+    } finally { refresh.mockRestore(); }
+  });
+
   it('toggles network arm state via SecuritySystem', async () => {
     const { hap, apiClient, platform } = buildPlatform();
     const accessory = new MockAccessory('Network', 'uuid-network', hap);
@@ -392,7 +477,7 @@ describe('Accessory handlers', () => {
     // 1 = AWAY_ARM in HomeKit
     await characteristic?.onSetHandler?.(1);
 
-    expect(apiClient.armNetwork).toHaveBeenCalledWith(1);
+    expect(apiClient.armNetwork).toHaveBeenCalledWith(1, expect.objectContaining({ queueDeadline: expect.any(Number) }));
     expect(apiClient.pollCommand).not.toHaveBeenCalled();
     expect(accessory.getService(hap.Service.SecuritySystem)
       ?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(hap.Characteristic.StatusFault.NO_FAULT);
@@ -418,9 +503,42 @@ describe('Accessory handlers', () => {
       .toBe(hap.Characteristic.StatusFault.GENERAL_FAULT);
     expect(device.armed).toBe(false);
 
+    handler.updateState({ ...device, armed: false });
+    expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value)
+      .toBe(hap.Characteristic.StatusFault.GENERAL_FAULT);
     handler.updateState({ ...device, armed: true });
     expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value)
       .toBe(hap.Characteristic.StatusFault.NO_FAULT);
+  });
+
+  it('bounds network writes while late completion updates confirmed state and preserves platform fault', async () => {
+    jest.useFakeTimers();
+    let finish!: (value: { command_id: number }) => void;
+    try {
+      const { hap, apiClient, platform } = buildPlatform();
+      apiClient.armNetwork.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+      const accessory = new MockAccessory('Network', 'uuid-network', hap);
+      const device: BlinkNetwork = { id: 1, name: 'Network', armed: false };
+      const handler = new NetworkAccessory(platform as unknown as BlinkCamerasPlatform,
+        accessory as unknown as PlatformAccessory, device);
+      const service = accessory.getService(hap.Service.SecuritySystem);
+      const failure = expect(service?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState).onSetHandler?.(1))
+        .rejects.toMatchObject({ hapStatus: -70408 });
+      await jest.advanceTimersByTimeAsync(12_000);
+      await failure;
+      expect(device.armed).toBe(false);
+      expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(1);
+      platform.isOperational = () => false;
+      finish({ command_id: 1 });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(device.armed).toBe(true);
+      expect(service?.getCharacteristic(hap.Characteristic.SecuritySystemCurrentState).value).toBe(1);
+      expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(1);
+      platform.isOperational = () => true;
+      handler.updateAvailability();
+      expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(0);
+      expect(apiClient.armNetwork).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
   });
 
   it('disarms network via SecuritySystem', async () => {
@@ -437,7 +555,7 @@ describe('Accessory handlers', () => {
     // 3 = DISARM in HomeKit
     await characteristic?.onSetHandler?.(3);
 
-    expect(apiClient.disarmNetwork).toHaveBeenCalledWith(1);
+    expect(apiClient.disarmNetwork).toHaveBeenCalledWith(1, expect.objectContaining({ queueDeadline: expect.any(Number) }));
     expect(device.armed).toBe(false);
     expect(handler).toBeInstanceOf(NetworkAccessory);
   });
@@ -476,8 +594,8 @@ describe('Accessory handlers', () => {
     await characteristic?.onSetHandler?.(true);
     await characteristic?.onSetHandler?.(false);
 
-    expect(apiClient.enableCameraMotion).toHaveBeenCalledWith(1, 2);
-    expect(apiClient.disableCameraMotion).toHaveBeenCalledWith(1, 2);
+    expect(apiClient.enableCameraMotion).toHaveBeenCalledWith(1, 2, expect.objectContaining({ queueDeadline: expect.any(Number) }));
+    expect(apiClient.disableCameraMotion).toHaveBeenCalledWith(1, 2, expect.objectContaining({ queueDeadline: expect.any(Number) }));
     expect(device.enabled).toBe(false);
     expect(handler).toBeInstanceOf(CameraAccessory);
   });
@@ -514,7 +632,7 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(false);
 
-    expect(apiClient.disableDoorbellMotion).toHaveBeenCalledWith(1, 3);
+    expect(apiClient.disableDoorbellMotion).toHaveBeenCalledWith(1, 3, expect.objectContaining({ queueDeadline: expect.any(Number) }));
     expect(device.enabled).toBe(false);
     expect(handler).toBeInstanceOf(DoorbellAccessory);
   });
@@ -551,7 +669,7 @@ describe('Accessory handlers', () => {
     const characteristic = accessory.getService(hap.Service.Switch)?.getCharacteristic(hap.Characteristic.On);
     await characteristic?.onSetHandler?.(true);
 
-    expect(apiClient.enableOwlMotion).toHaveBeenCalledWith(2, 4);
+    expect(apiClient.enableOwlMotion).toHaveBeenCalledWith(2, 4, expect.objectContaining({ queueDeadline: expect.any(Number) }));
     expect(device.enabled).toBe(true);
     expect(handler).toBeInstanceOf(OwlAccessory);
   });
@@ -1404,7 +1522,7 @@ describe('Accessory handlers', () => {
     const hap = createHap();
     const logFn = jest.fn();
     const apiClient = {
-      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10 }),
+      requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' }),
       requestOwlThumbnail: jest.fn(),
       requestDoorbellThumbnail: jest.fn(),
       pollCommand: jest.fn().mockResolvedValue({ complete: true }),
@@ -1440,8 +1558,8 @@ describe('Accessory handlers', () => {
 
       await source.refreshSnapshotCache();
 
-      expect(apiClient.requestCameraThumbnail).toHaveBeenCalledWith(1, 2);
-      expect(apiClient.pollCommand).toHaveBeenCalledWith(1, 10);
+      expect(apiClient.requestCameraThumbnail).toHaveBeenCalledWith(1, 2, expect.objectContaining({ deadline: expect.any(Number) }));
+      expect(apiClient.pollCommand).not.toHaveBeenCalled();
       expect(testSource.cachedSnapshot?.equals(freshBuffer)).toBe(true);
 
       const callback = jest.fn();

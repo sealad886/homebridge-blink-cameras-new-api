@@ -1,3 +1,4 @@
+import { OperationTimeoutError } from '../../src/operation-budget';
 import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
 import {
   BlinkAuth,
@@ -39,6 +40,41 @@ describe('BlinkHttp', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('does not send an expired operation or replay a POST transport failure', async () => {
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.post('state/arm', undefined, [], { deadline: Date.now() - 1 })).rejects.toBeInstanceOf(OperationTimeoutError);
+    expect(fetch).not.toHaveBeenCalled();
+    (fetch as jest.Mock).mockRejectedValueOnce(new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }));
+    await expect(http.post('state/arm')).rejects.toBeInstanceOf(BlinkHttpError);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes authentication preflight and JSON parsing in the absolute deadline', async () => {
+    jest.useFakeTimers();
+    try {
+      const auth = mockAuth();
+      (auth.ensureValidToken as jest.Mock).mockImplementationOnce(() => new Promise(() => {}));
+      const http = new BlinkHttp(auth, mockConfig);
+      const preflight = expect(http.get('homescreen', { deadline: Date.now() + 100 })).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(100);
+      await preflight;
+      expect(fetch).not.toHaveBeenCalled();
+      (fetch as jest.Mock).mockResolvedValueOnce({ ...response(200), json: () => new Promise(() => {}) });
+      const body = expect(http.get('homescreen', { deadline: Date.now() + 100 })).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(100);
+      await body;
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('keeps expected handled conflicts out of error banners', async () => {
+    const error = jest.fn();
+    const http = new BlinkHttp(mockAuth(), { ...mockConfig, logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error } });
+    (fetch as jest.Mock).mockResolvedValueOnce(response(409));
+    await expect(http.post('camera/enable', undefined, [409])).rejects.toMatchObject({ status: 409 });
+    expect(error).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('keeps transport and response parsing errors safe with debug=%s', async (debugAuth) => {

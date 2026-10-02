@@ -18,9 +18,13 @@ import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
 import { setHapServiceName, toHapName } from '../hap-name';
 import { BlinkNetwork } from '../types';
+import { withResponseBudget } from '../operation-budget';
+import { toHapError } from '../hap-errors';
 
 export class NetworkAccessory {
   private readonly service: Service;
+  private operationFault = false;
+  private failedTarget?: boolean;
 
   constructor(
     private readonly platform: BlinkCamerasPlatform,
@@ -104,37 +108,40 @@ export class NetworkAccessory {
       return;
     }
 
+    this.failedTarget = shouldArm;
     try {
-      if (shouldArm) {
-        await this.platform.apiClient.armNetwork(this.device.id);
-        this.platform.log.info(`Armed network: ${this.device.name}`);
-      } else {
-        await this.platform.apiClient.disarmNetwork(this.device.id);
-        this.platform.log.info(`Disarmed network: ${this.device.name}`);
-      }
-
-      // Update local state
-      this.device.armed = shouldArm;
-      this.accessory.context.device = this.device;
-
-      // Update current state characteristic
-      this.service
-        .getCharacteristic(SecuritySystemCurrentState)
-        .updateValue(
+      const options = { queueDeadline: Date.now() + 12_000 };
+      const operation = (shouldArm
+        ? this.platform.apiClient.armNetwork(this.device.id, options)
+        : this.platform.apiClient.disarmNetwork(this.device.id, options)).then(() => {
+        this.device.armed = shouldArm;
+        this.accessory.context.device = this.device;
+        this.operationFault = false;
+        this.failedTarget = undefined;
+        this.service.getCharacteristic(SecuritySystemCurrentState).updateValue(
           shouldArm ? SecuritySystemCurrentState.AWAY_ARM : SecuritySystemCurrentState.DISARMED,
         );
-      this.service
-        .getCharacteristic(this.platform.Characteristic.StatusFault)
-        .updateValue(this.platform.Characteristic.StatusFault.NO_FAULT);
+        this.service.getCharacteristic(SecuritySystemTargetState).updateValue(
+          shouldArm ? SecuritySystemTargetState.AWAY_ARM : SecuritySystemTargetState.DISARM,
+        );
+        this.updateAvailability();
+        this.platform.log.info(`${shouldArm ? 'Armed' : 'Disarmed'} network: ${this.device.name}`);
+      });
+      await withResponseBudget(operation);
     } catch (error) {
-      this.service
-        .getCharacteristic(this.platform.Characteristic.StatusFault)
-        .updateValue(this.platform.Characteristic.StatusFault.GENERAL_FAULT);
-      this.platform.log.error(`Failed to ${shouldArm ? 'arm' : 'disarm'} network ${this.device.name}:`, error);
-      throw new this.platform.api.hap.HapStatusError(
-        this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-      );
+      this.operationFault = true;
+      this.updateAvailability();
+      this.platform.log.error(`Failed to ${shouldArm ? 'arm' : 'disarm'} network ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`);
+      throw toHapError(this.platform.api.hap, error);
     }
+  }
+
+  public updateAvailability(): void {
+    this.service.getCharacteristic(this.platform.Characteristic.StatusFault).updateValue(
+      this.operationFault || !this.platform.isOperational()
+        ? this.platform.Characteristic.StatusFault.GENERAL_FAULT
+        : this.platform.Characteristic.StatusFault.NO_FAULT,
+    );
   }
 
   /**
@@ -146,13 +153,13 @@ export class NetworkAccessory {
    */
   updateState(device: BlinkNetwork): void {
     const previousArmed = this.device.armed;
+    if (this.failedTarget !== undefined && device.armed === this.failedTarget) {
+      this.operationFault = false;
+      this.failedTarget = undefined;
+    }
     this.device = device;
     this.accessory.context.device = device;
-    if (this.platform.isOperational()) {
-      this.service
-        .getCharacteristic(this.platform.Characteristic.StatusFault)
-        .updateValue(this.platform.Characteristic.StatusFault.NO_FAULT);
-    }
+    this.updateAvailability();
 
     if (previousArmed !== device.armed) {
       const { SecuritySystemCurrentState, SecuritySystemTargetState } = this.platform.Characteristic;

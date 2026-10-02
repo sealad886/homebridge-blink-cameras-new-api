@@ -38,6 +38,9 @@ import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPrefere
 import { probeVideoEncoder } from './accessories/encoder-probe';
 import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
+import { withResponseBudget } from './operation-budget';
+import { toHapError } from './hap-errors';
+import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -120,6 +123,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private readonly motionTimeout: number;
   private readonly enableMotionPolling: boolean;
   private operational = false;
+  private monitorActive = true;
   // Startup is unverified until Blink returns a usable homescreen. Keeping the
   // HomeKit surface faulted while recovering also preserves a cached outage
   // across a child-bridge restart instead of briefly publishing false health.
@@ -129,6 +133,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private inventoryInitialized = false;
   private connectionFailureConfirmed = false;
   private consecutivePollFailures = 0;
+  private firstFailedPoll: number | null = null;
+  private lastSuccessfulPoll: number | null = null;
+  private outageConfirmedAt: number | null = null;
   private readonly reportedNameAdjustments = new Set<string>();
 
   // Maps for quick accessory lookup by device ID
@@ -224,6 +231,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     });
 
     this.api.on('shutdown', () => {
+      this.monitorActive = false;
+      this.updateConnectionAccessoryState();
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
@@ -484,7 +493,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         }
         this.log.info('HomeKit requested Blink connection retry.');
         try {
-          await this.recoverConnection(true);
+          await withResponseBudget(this.recoverConnection(
+            !this.inventoryInitialized || this.connectionState === 'authentication-required',
+          ));
+        } catch (error) {
+          throw toHapError(this.api.hap, error);
         } finally {
           retryService
             .getCharacteristic(this.Characteristic.On)
@@ -520,23 +533,30 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       return;
     }
     const healthy = this.connectionState === 'healthy' || this.connectionState === 'degraded';
-    service.getCharacteristic(this.Characteristic.ContactSensorState).updateValue(
-      healthy
-        ? this.Characteristic.ContactSensorState.CONTACT_DETECTED
-        : this.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED,
-    );
-    service.getCharacteristic(this.Characteristic.StatusActive).updateValue(healthy);
+    const contactState = healthy
+      ? this.Characteristic.ContactSensorState.CONTACT_DETECTED
+      : this.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
+    const contact = service.getCharacteristic(this.Characteristic.ContactSensorState);
+    if (contact.value !== contactState) {
+      contact.updateValue(contactState);
+    }
+    service.getCharacteristic(this.Characteristic.StatusActive).updateValue(this.monitorActive);
     service.getCharacteristic(this.Characteristic.StatusFault).updateValue(
       healthy ? this.Characteristic.StatusFault.NO_FAULT : this.Characteristic.StatusFault.GENERAL_FAULT,
     );
   }
 
   private setConnectionFailure(error?: unknown): void {
-    const shouldReportFailure = this.connectionState !== 'faulted' &&
-      this.connectionState !== 'authentication-required';
+    const shouldReportFailure = !this.connectionFailureConfirmed;
     this.connectionState = this.requiresAuthenticationAction(error) ? 'authentication-required' : 'faulted';
     this.operational = false;
     this.connectionFailureConfirmed = true;
+    if (shouldReportFailure) {
+      this.outageConfirmedAt = Date.now();
+      this.log.warn(`Blink outage confirmed after ${this.consecutivePollFailures} failed cycles; ` +
+        `last successful poll ${this.lastSuccessfulPoll === null ? 'not yet verified' : new Date(this.lastSuccessfulPoll).toISOString()}.`);
+      void this.sampleConnectionDiagnostic();
+    }
     this.updateCachedAccessoryFaults(true);
     this.ensureConnectionAccessories();
 
@@ -553,14 +573,32 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
   }
 
+  private async sampleConnectionDiagnostic(): Promise<void> {
+    try {
+      const sample = await sampleBlinkConnection(this.apiClient.getSharedRestRootUrl());
+      this.log.warn(`Blink outage diagnostic: DNS ${sample.dns}, address count ${sample.addressCount ?? 0}, ` +
+        `connection ${sample.connection}, elapsed ${sample.elapsedMs}ms.`);
+    } catch {
+      this.log.warn('Blink outage diagnostic unavailable.');
+    }
+  }
+
   private setConnectionHealthy(): void {
     const wasFaulted = this.connectionFailureConfirmed;
     this.connectionState = 'healthy';
     this.operational = true;
     this.connectionFailureConfirmed = false;
+    if (wasFaulted) {
+      this.log.info(`Blink outage recovered after ${Date.now() - (this.firstFailedPoll ?? this.outageConfirmedAt ?? Date.now())}ms; ` +
+        `${this.consecutivePollFailures} failed polling cycles.`);
+    }
+    this.lastSuccessfulPoll = Date.now();
+    this.firstFailedPoll = null;
+    this.outageConfirmedAt = null;
     this.consecutivePollFailures = 0;
     this.updateCachedAccessoryFaults(false);
     for (const handler of [
+      ...this.networkAccessories.values(),
       ...this.cameraAccessories.values(),
       ...this.doorbellAccessories.values(),
       ...this.owlAccessories.values(),
@@ -648,7 +686,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       if (authenticate) {
         await this.apiClient.login(this.config.twoFactorCode);
       }
-      const homescreen = await this.apiClient.getHomescreen();
+      const homescreen = await this.apiClient.getHomescreen({ deadline: Date.now() + 25000, retryTransient: true });
       if (this.inventoryInitialized) {
         this.updateDeviceStates(homescreen);
       } else {
@@ -840,13 +878,17 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       return;
     }
     try {
-      await this.recoverConnection(!this.operational);
+      await this.recoverConnection(!this.inventoryInitialized);
 
       // Check for new motion events
       if (this.enableMotionPolling) {
         await this.checkMotionEvents();
       }
     } catch (error) {
+      if (this.firstFailedPoll === null) {
+        this.firstFailedPoll = Date.now();
+        this.log.warn('Blink polling degraded; recording outage start.');
+      }
       this.consecutivePollFailures++;
       this.log.error(`Polling failed (${this.describeConnectionFailure(error)}).`);
       if (this.consecutivePollFailures === POLL_FAILURE_THRESHOLD) {
