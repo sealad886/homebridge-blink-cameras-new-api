@@ -450,6 +450,94 @@ describe('Accessory handlers', () => {
     } finally { jest.useRealTimers(); }
   });
 
+  it.each([['network', false], ['motion', false], ['network', true], ['motion', true]])(
+    'preserves opposite %s intent after timeout (queued expiry: %s)', async (kind, expires) => {
+    jest.useFakeTimers();
+    try {
+      const { hap, apiClient, platform } = buildPlatform();
+      let finishFirst!: () => void;
+      let finishSecond!: () => void;
+      let rejectSecond!: (error: Error) => void;
+      const first = new Promise<void>(resolve => { finishFirst = resolve; });
+      const second = new Promise<void>((resolve, reject) => { finishSecond = resolve; rejectSecond = reject; });
+      const accessory = new MockAccessory('Device', 'uuid-device', hap);
+      let characteristic;
+      const isNetwork = kind === 'network';
+      if (isNetwork) {
+        apiClient.armNetwork.mockReturnValue(first);
+        apiClient.disarmNetwork.mockReturnValue(second);
+        new NetworkAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+          { id: 1, name: 'Device', armed: false });
+        characteristic = accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState);
+      } else {
+        apiClient.enableCameraMotion.mockReturnValue(first);
+        apiClient.disableCameraMotion.mockReturnValue(second);
+        new CameraAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+          { id: 2, network_id: 1, name: 'Device', enabled: false });
+        characteristic = accessory.getServiceById(hap.Service.Switch, 'motion-switch')?.getCharacteristic(hap.Characteristic.On);
+      }
+      const timedOut = expect(characteristic?.onSetHandler?.(isNetwork ? 1 : true))
+        .rejects.toMatchObject({ hapStatus: -70408 });
+      await jest.advanceTimersByTimeAsync(12_000);
+      await timedOut;
+      const opposite = characteristic?.onSetHandler?.(isNetwork ? 3 : false);
+      expect(isNetwork ? apiClient.disarmNetwork : apiClient.disableCameraMotion).toHaveBeenCalledTimes(1);
+      characteristic?.updateValue(isNetwork ? 3 : false);
+      if (expires) {
+        const failure = expect(opposite).rejects.toMatchObject({ hapStatus: -70408 });
+        rejectSecond(Object.assign(new Error('queued job expired'), { name: 'TimeoutError' }));
+        await failure;
+      }
+      finishFirst();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(characteristic?.value).toBe(isNetwork ? 3 : false);
+      if (expires) {
+        const fault = isNetwork
+          ? accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.StatusFault)
+          : accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')?.getCharacteristic(hap.Characteristic.StatusFault);
+        expect(fault?.value).toBe(1);
+        expect(isNetwork ? apiClient.disarmNetwork : apiClient.disableCameraMotion).toHaveBeenCalledTimes(1);
+      } else {
+        finishSecond();
+        await opposite;
+        expect(characteristic?.onGetHandler?.()).toBe(isNetwork ? 3 : false);
+      }
+    } finally { jest.useRealTimers(); }
+  });
+
+  it.each(['motion', 'refresh'])('keeps the %s fault through unrelated success and polling', async (failedOperation) => {
+    const refresh = jest.spyOn(BlinkCameraSource.prototype, 'refreshSnapshotCache');
+    try {
+      const { hap, apiClient, platform } = buildPlatform({ persistSnapshotCache: true });
+      const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+      const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: false };
+      const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+        accessory as unknown as PlatformAccessory, device);
+      const motion = accessory.getServiceById(hap.Service.Switch, 'motion-switch')?.getCharacteristic(hap.Characteristic.On);
+      const snapshot = accessory.getServiceById(hap.Service.Switch, 'snapshot-refresh')?.getCharacteristic(hap.Characteristic.On);
+      const fault = accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')?.getCharacteristic(hap.Characteristic.StatusFault);
+      if (failedOperation === 'motion') {
+        apiClient.enableCameraMotion.mockRejectedValueOnce(new Error('motion failed'));
+        await expect(motion?.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70402 });
+        refresh.mockResolvedValue();
+        await snapshot?.onSetHandler?.(true);
+        camera.updateState({ ...device, enabled: false });
+        expect(fault?.value).toBe(1);
+        camera.updateState({ ...device, enabled: true });
+      } else {
+        refresh.mockRejectedValueOnce(new Error('refresh failed'));
+        await expect(snapshot?.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70402 });
+        apiClient.enableCameraMotion.mockResolvedValue(undefined);
+        await motion?.onSetHandler?.(true);
+        camera.updateState({ ...device, enabled: true });
+        expect(fault?.value).toBe(1);
+        refresh.mockResolvedValue();
+        await snapshot?.onSetHandler?.(true);
+      }
+      expect(fault?.value).toBe(0);
+    } finally { refresh.mockRestore(); }
+  });
+
   it('returns controlled refresh failure and resets the momentary switch', async () => {
     const refresh = jest.spyOn(BlinkCameraSource.prototype, 'refreshSnapshotCache').mockRejectedValue(new Error('failed'));
     try {

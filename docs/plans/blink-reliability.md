@@ -35,7 +35,8 @@ change is required. Existing unrelated checkout artifacts are preserved.
 - [x] M3: bounded snapshot callers and shared refresh results.
 - [x] M4: connection state, safe retry and outage diagnostics.
 - [x] Final independent review and all local gates recorded.
-- [ ] Authorized commit, push, focused PR, current-head review and CI on Node 20/22/24.
+- [x] Authorized commit, push and focused PR #47; Node 20/22/24 CI passed.
+- [ ] Final review of hosted feedback corrections and current-head CI.
 - [ ] Authorized merge, next unused candidate version and CI registry publication.
 - [ ] Authorized exact registry installation, backup and runtime identity readback.
 - [ ] Physical notification/retry, simultaneous capture/motion, snapshot freshness tests.
@@ -85,6 +86,26 @@ single version writer. Publication uses the existing explicit CI dispatch on
 main after reviewed merge; ordinary merges do not publish. Commit, PR review,
 merge, and this CI release are authorized; Pi installation remains separate.
 The release receipt must bind the artifact to reviewed committed source.
+
+## Review correction ledger
+
+CodeRabbit's first CLI review completed. Its observation-gate mismatch was
+corrected; its proposed fallback after a failed post-capture metadata read was
+declined because current thumbnail metadata is required for honest freshness.
+The next CLI review hit a rate limit. The user authorized independent Codex
+review as the final gate and authorized rewording the task commit to satisfy
+commitlint, with an exact force-with-lease. Source trees were unchanged.
+
+Hosted Copilot feedback identified two further in-scope patterns before merge:
+network and motion handlers could skip an opposite request during an outstanding
+command, and motion/refresh shared fault state could hide an unresolved failure.
+Indexed symbol/caller/impact analysis and global source search located the state
+pattern in the two existing handlers and the fault pattern in shared motion-base.
+Repair stays in those owners; snapshot single-flight and platform retry remain
+intentional operations with different semantics. Regression tests must prove
+late completions retain newer requested targets and unrelated successes cannot
+clear an operation fault. Both documentation threads refer to the already
+corrected canonical RC gate.
 
 ## Risks and rollback
 

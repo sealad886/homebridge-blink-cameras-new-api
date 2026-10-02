@@ -25,6 +25,8 @@ export class NetworkAccessory {
   private readonly service: Service;
   private operationFault = false;
   private failedTarget?: boolean;
+  private pendingOperations = 0;
+  private intentRevision = 0;
 
   constructor(
     private readonly platform: BlinkCamerasPlatform,
@@ -104,10 +106,12 @@ export class NetworkAccessory {
     const shouldArm = target !== SecuritySystemTargetState.DISARM;
 
     // Skip if already in desired state
-    if (shouldArm === this.device.armed) {
+    if (this.pendingOperations === 0 && shouldArm === this.device.armed) {
       return;
     }
 
+    const revision = ++this.intentRevision;
+    this.pendingOperations++;
     this.failedTarget = shouldArm;
     try {
       const options = { queueDeadline: Date.now() + 12_000 };
@@ -116,20 +120,24 @@ export class NetworkAccessory {
         : this.platform.apiClient.disarmNetwork(this.device.id, options)).then(() => {
         this.device.armed = shouldArm;
         this.accessory.context.device = this.device;
-        this.operationFault = false;
-        this.failedTarget = undefined;
+        if (revision === this.intentRevision) {
+          this.operationFault = false;
+          this.failedTarget = undefined;
+        }
         this.service.getCharacteristic(SecuritySystemCurrentState).updateValue(
           shouldArm ? SecuritySystemCurrentState.AWAY_ARM : SecuritySystemCurrentState.DISARMED,
         );
-        this.service.getCharacteristic(SecuritySystemTargetState).updateValue(
-          shouldArm ? SecuritySystemTargetState.AWAY_ARM : SecuritySystemTargetState.DISARM,
-        );
+        if (revision === this.intentRevision) {
+          this.service.getCharacteristic(SecuritySystemTargetState).updateValue(
+            shouldArm ? SecuritySystemTargetState.AWAY_ARM : SecuritySystemTargetState.DISARM,
+          );
+        }
         this.updateAvailability();
         this.platform.log.info(`${shouldArm ? 'Armed' : 'Disarmed'} network: ${this.device.name}`);
-      });
+      }).finally(() => { this.pendingOperations--; });
       await withResponseBudget(operation);
     } catch (error) {
-      this.operationFault = true;
+      if (revision === this.intentRevision) { this.operationFault = true; }
       this.updateAvailability();
       this.platform.log.error(`Failed to ${shouldArm ? 'arm' : 'disarm'} network ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`);
       throw toHapError(this.platform.api.hap, error);
@@ -153,7 +161,7 @@ export class NetworkAccessory {
    */
   updateState(device: BlinkNetwork): void {
     const previousArmed = this.device.armed;
-    if (this.failedTarget !== undefined && device.armed === this.failedTarget) {
+    if (this.pendingOperations === 0 && this.failedTarget !== undefined && device.armed === this.failedTarget) {
       this.operationFault = false;
       this.failedTarget = undefined;
     }
@@ -170,11 +178,13 @@ export class NetworkAccessory {
           device.armed ? SecuritySystemCurrentState.AWAY_ARM : SecuritySystemCurrentState.DISARMED,
         );
 
-      this.service
-        .getCharacteristic(SecuritySystemTargetState)
-        .updateValue(
-          device.armed ? SecuritySystemTargetState.AWAY_ARM : SecuritySystemTargetState.DISARM,
-        );
+      if (this.pendingOperations === 0) {
+        this.service
+          .getCharacteristic(SecuritySystemTargetState)
+          .updateValue(
+            device.armed ? SecuritySystemTargetState.AWAY_ARM : SecuritySystemTargetState.DISARM,
+          );
+      }
 
       this.platform.log.info(
         `Network ${device.name} state changed: ${device.armed ? 'armed' : 'disarmed'}`,

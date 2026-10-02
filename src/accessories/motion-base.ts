@@ -37,7 +37,10 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   protected motionDetected = false;
   protected motionTimeout: ReturnType<typeof setTimeout> | null = null;
   private readonly refreshSnapshotService?: Service;
-  private operationFault = false;
+  private motionFault = false;
+  private refreshFault = false;
+  private pendingMotionOperations = 0;
+  private motionIntentRevision = 0;
   private failedMotionTarget?: boolean;
 
   private isDeviceAvailable(): boolean {
@@ -168,13 +171,13 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
     try {
       await withResponseBudget(this.cameraSource.refreshSnapshotCache().then(() => {
-        this.operationFault = false;
+        this.refreshFault = false;
         this.updateAvailability();
       }));
       this.platform.log.info(`Manually refreshed snapshot for ${this.deviceLabel}: ${this.device.name}`);
     } catch (error) {
       this.platform.log.error(`Failed to refresh snapshot for ${this.deviceLabel} ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`);
-      this.operationFault = true;
+      this.refreshFault = true;
       this.updateAvailability();
       throw toHapError(this.platform.api.hap, error);
     } finally {
@@ -187,28 +190,32 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   private async setMotionEnabled(value: CharacteristicValue): Promise<void> {
     const target = Boolean(value);
 
-    if (target === this.device.enabled) {
+    if (this.pendingMotionOperations === 0 && target === this.device.enabled) {
       return;
     }
 
+    const revision = ++this.motionIntentRevision;
+    this.pendingMotionOperations++;
     this.failedMotionTarget = target;
     try {
       const options = { queueDeadline: Date.now() + 12_000 };
       const operation = (target ? this.enableMotionApi(options) : this.disableMotionApi(options)).then(() => {
         this.device.enabled = target;
         this.accessory.context.device = this.device;
-        this.operationFault = false;
-        this.failedMotionTarget = undefined;
-        this.switchService.getCharacteristic(this.platform.Characteristic.On).updateValue(target);
+        if (revision === this.motionIntentRevision) {
+          this.motionFault = false;
+          this.failedMotionTarget = undefined;
+          this.switchService.getCharacteristic(this.platform.Characteristic.On).updateValue(target);
+        }
         this.updateAvailability();
         this.platform.log.info(`${target ? 'Enabled' : 'Disabled'} motion detection for ${this.deviceLabel}: ${this.device.name}`);
-      });
+      }).finally(() => { this.pendingMotionOperations--; });
       await withResponseBudget(operation);
     } catch (error) {
       this.platform.log.error(
         `Failed to ${target ? 'enable' : 'disable'} motion for ${this.deviceLabel} ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`,
       );
-      this.operationFault = true;
+      if (revision === this.motionIntentRevision) { this.motionFault = true; }
       this.updateAvailability();
       throw toHapError(this.platform.api.hap, error);
     }
@@ -216,14 +223,14 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
   updateState(device: TDevice): void {
     const previousEnabled = this.device.enabled;
-    if (this.failedMotionTarget !== undefined && device.enabled === this.failedMotionTarget) {
-      this.operationFault = false;
+    if (this.pendingMotionOperations === 0 && this.failedMotionTarget !== undefined && device.enabled === this.failedMotionTarget) {
+      this.motionFault = false;
       this.failedMotionTarget = undefined;
     }
     this.device = device;
     this.accessory.context.device = device;
 
-    if (previousEnabled !== device.enabled) {
+    if (previousEnabled !== device.enabled && this.pendingMotionOperations === 0) {
       this.switchService
         .getCharacteristic(this.platform.Characteristic.On)
         .updateValue(device.enabled);
@@ -238,7 +245,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   public updateAvailability(): void {
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusFault)
-      .updateValue(this.operationFault || !this.platform.isOperational() || !this.isDeviceAvailable() ? 1 : 0);
+      .updateValue(this.motionFault || this.refreshFault || !this.platform.isOperational() || !this.isDeviceAvailable() ? 1 : 0);
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .updateValue(this.isMotionServiceActive());
