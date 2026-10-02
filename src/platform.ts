@@ -981,21 +981,21 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // Try camera first
     const cameraHandler = this.cameraAccessories.get(clip.camera_id);
     if (cameraHandler) {
-      cameraHandler.triggerMotion(this.motionTimeout);
+      cameraHandler.triggerMotion();
       return;
     }
 
     // Try owl
     const owlHandler = this.owlAccessories.get(clip.camera_id);
     if (owlHandler) {
-      owlHandler.triggerMotion(this.motionTimeout);
+      owlHandler.triggerMotion();
       return;
     }
 
     // Try doorbell
     const doorbellHandler = this.doorbellAccessories.get(clip.camera_id);
     if (doorbellHandler) {
-      doorbellHandler.triggerMotion(this.motionTimeout);
+      doorbellHandler.triggerMotion();
       return;
     }
 

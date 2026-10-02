@@ -99,6 +99,7 @@ describe('BlinkCamerasPlatform', () => {
   afterEach(() => {
     hapApi?.emit('shutdown');
     hapApi = null;
+    jest.restoreAllMocks();
     jest.useRealTimers();
   });
 
@@ -125,6 +126,46 @@ describe('BlinkCamerasPlatform', () => {
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
     // With new implementation, registration count may differ due to deduplication logic
     expect(platform.accessories.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
+    ['cameras', 'CAM-123', 5000],
+    ['doorbells', '2', 5000],
+    ['owls', 'Motion Device', 5000],
+    ['cameras', 'unmatched-device', 30000],
+  ] as const)('applies configured motion duration to polled %s events (%s)', async (kind, identifier, duration) => {
+    // Node's timers module retains its own functions; route them through Jest's clock.
+    const timers = jest.requireActual<typeof import('timers')>('timers');
+    jest.spyOn(timers, 'setTimeout').mockImplementation(globalThis.setTimeout);
+    jest.spyOn(timers, 'clearTimeout').mockImplementation(globalThis.clearTimeout);
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const device = { id: 2, network_id: 1, name: 'Motion Device', serial: 'CAM-123', enabled: true };
+    blinkApi.getHomescreen.mockResolvedValue({
+      account: { account_id: 1 },
+      networks: [{ id: 1, name: 'Network', armed: true }],
+      cameras: [], doorbells: [], owls: [], sync_modules: [],
+      [kind]: [device],
+    });
+    blinkApi.getUnwatchedMedia.mockResolvedValue({ unwatched_clips: 1 });
+    Object.assign(blinkApi, { getMedia: jest.fn().mockResolvedValue({ media: [{
+      camera_id: 2, created_at: new Date(Date.now() + 1000).toISOString(),
+    }] }) });
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
+      ...config, enableStreaming: false, videoEncoder: 'libx264', motionTimeout: 30,
+      deviceSettingOverrides: [{ deviceIdentifier: identifier, motionTimeout: 5 }],
+    }, hapApi);
+    await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
+    await (platform as unknown as { checkMotionEvents: () => Promise<void> }).checkMotionEvents();
+    const accessory = platform.accessories.find((item) => item.context.device?.id === 2);
+    const motion = accessory?.getServiceById(hapApi.hap.Service.MotionSensor, 'motion-sensor')
+      ?.getCharacteristic(hapApi.hap.Characteristic.MotionDetected);
+    expect(motion?.value).toBe(true);
+    jest.advanceTimersByTime(duration - 1);
+    expect(motion?.value).toBe(true);
+    jest.advanceTimersByTime(1);
+    expect(motion?.value).toBe(false);
   });
 
   it('surfaces failed discovery in HomeKit and retries without deleting cached accessories', async () => {
