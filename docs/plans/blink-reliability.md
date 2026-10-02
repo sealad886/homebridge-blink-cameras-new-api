@@ -39,7 +39,7 @@ change is required. Existing unrelated checkout artifacts are preserved.
 - [ ] Authorized merge, next unused candidate version and CI registry publication.
 - [ ] Authorized exact registry installation, backup and runtime identity readback.
 - [ ] Physical notification/retry, simultaneous capture/motion, snapshot freshness tests.
-- [ ] At least 24 hours observation and acceptance reconciliation.
+- [ ] At least 48 hours RC observation, two natural token refreshes, and acceptance reconciliation.
 
 Only one checklist item becomes active at a time. Implementation/tests/docs stay
 in one focused PR; platform publication, installation and physical evidence remain

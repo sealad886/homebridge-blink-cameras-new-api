@@ -59,5 +59,6 @@ resolved-address logs, or arbitrary destinations.
 Deterministic tests cover serialization, reconciliation, deadlines, late results,
 controlled HAP failures, retry classification, recovery, identity retention,
 cache policy, and diagnostic privacy. Physical Home notification delivery,
-concurrent camera behavior, exact registry installation, and a 24-hour observation
-remain required. Local tests do not close those gates. Follow docs/RELEASE.md.
+concurrent camera behavior, exact registry installation, and at least 48 hours of
+RC observation with two natural token refreshes remain required. Local tests do
+not close those gates. Follow docs/RELEASE.md.
