@@ -30,26 +30,15 @@
         "type": "string"
       },
       "tier": {
-        "title": "Blink Region",
-        "description": "Blink API region. Use 'Production' for most users. The plugin auto-discovers the correct endpoint after first login.",
+        "title": "Discovered Blink API Tier",
+        "description": "Assigned automatically by Blink after sign-in. Shown in connection status; do not choose a tier based on your location.",
         "type": "string",
         "default": "prod",
-        "oneOf": [
-          { "title": "Production (Default)", "enum": ["prod"] },
-          { "title": "Europe (EU)", "enum": ["prde"] },
-          { "title": "Asia Pacific (APAC)", "enum": ["prsg"] },
-          { "title": "Australia (AU)", "enum": ["a001"] },
-          { "title": "Production (e001)", "enum": ["e001"] },
-          { "title": "Production (e002)", "enum": ["e002"] },
-          { "title": "Production (e003)", "enum": ["e003"] },
-          { "title": "Production (e004)", "enum": ["e004"] },
-          { "title": "Production (e005)", "enum": ["e005"] },
-          { "title": "Production (e006)", "enum": ["e006"] }
-        ]
+        "pattern": "^[A-Za-z0-9]{4}$"
       },
       "persistAuth": {
         "title": "Persist Auth Tokens",
-        "description": "Persist OAuth tokens across restarts to avoid repeated logins and verification prompts.",
+        "description": "Hosted sign-in requires persisted tokens across restarts. Managed automatically by the sign-in screen.",
         "type": "boolean",
         "default": true
       },
@@ -67,7 +56,7 @@
       },
       "debugAuth": {
         "title": "Debug Authentication",
-        "description": "Enable verbose diagnostic logging for Blink API authentication. WARNING: May log sensitive request details.",
+        "description": "Enable verbose authentication diagnostics. Sensitive fields are redacted; review logs before sharing.",
         "type": "boolean",
         "default": false
       },
@@ -142,8 +131,8 @@
         ]
       },
       "maxStreams": {
-        "title": "Max Concurrent Streams",
-        "description": "Maximum number of simultaneous HomeKit streams.",
+        "title": "Max Concurrent Streams per Camera",
+        "description": "Maximum number of simultaneous HomeKit streams for each camera.",
         "type": "integer",
         "default": 1,
         "minimum": 1,
@@ -151,7 +140,7 @@
       },
       "enableAudio": {
         "title": "Enable Audio",
-        "description": "Enable audio streaming from camera to HomeKit.",
+        "description": "Enable audio streaming from camera to HomeKit. Two-way talkback is currently unavailable.",
         "type": "boolean",
         "default": true
       },
@@ -280,8 +269,7 @@
       "type": "fieldset",
       "title": "Platform Settings",
       "items": [
-        "name",
-        "tier"
+        "name"
       ]
     },
     {
@@ -317,7 +305,6 @@
         "ffmpegPath",
         "maxStreams",
         "enableAudio",
-        "twoWayAudio",
         "audioCodec",
         "audioBitrate",
         "videoBitrate",
@@ -374,9 +361,7 @@
       "expandable": true,
       "expanded": false,
       "items": [
-        "persistAuth",
         "trustDevice",
-        "authLocked",
         "debugAuth"
       ]
     }

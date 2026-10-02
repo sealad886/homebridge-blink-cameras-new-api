@@ -145,7 +145,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `ffmpegPath` | No | `ffmpeg` | Path to the FFmpeg binary |
 | `ffmpegDebug` | No | `false` | Log FFmpeg debug output |
 | `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
-| `maxStreams` | No | `1` | Max concurrent HomeKit streams |
+| `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
 | `enableAudio` | No | `true` | Enable audio streaming from camera |
 | `twoWayAudio` | No | `false` (forced off) | Talkback is currently disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
 | `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
