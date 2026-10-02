@@ -4,10 +4,14 @@ import { BlinkApi } from '../src/blink-api';
 import { createApi, createLogger } from './helpers/homebridge';
 import { BlinkHomescreen } from '../src/types';
 import { CameraAccessory, NetworkAccessory } from '../src/accessories';
+import { sampleBlinkConnection } from '../src/blink-api/connection-diagnostics';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
 import { Blink2FARequiredError, BlinkTokenRefreshError } from '../src/blink-api/auth';
 
 jest.mock('../src/blink-api');
+jest.mock('../src/blink-api/connection-diagnostics', () => ({
+  sampleBlinkConnection: jest.fn().mockResolvedValue({ dns: 'ok', addressCount: 1, connection: 'ok', elapsedMs: 1 }),
+}));
 
 type MockedBlinkApi = jest.Mocked<{
   login: () => Promise<void>;
@@ -21,6 +25,7 @@ type MockedBlinkApi = jest.Mocked<{
   enableOwlMotion: jest.Mock;
   disableOwlMotion: jest.Mock;
   getUnwatchedMedia: jest.Mock;
+  getSharedRestRootUrl: jest.Mock;
 }>;
 
 type MockAPI = API & { emit: (event: string) => void };
@@ -37,6 +42,7 @@ const buildBlinkApi = (): MockedBlinkApi => ({
   enableOwlMotion: jest.fn(),
   disableOwlMotion: jest.fn(),
   getUnwatchedMedia: jest.fn().mockResolvedValue({ media: [] }),
+  getSharedRestRootUrl: jest.fn().mockReturnValue('https://rest-e006.immedia-semi.com'),
 });
 
 describe('BlinkCamerasPlatform', () => {
@@ -59,6 +65,7 @@ describe('BlinkCamerasPlatform', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    jest.mocked(sampleBlinkConnection).mockResolvedValue({ dns: 'ok', addressCount: 1, connection: 'ok', elapsedMs: 1 });
     jest.useFakeTimers();
     hapApi = null;
   });
@@ -201,12 +208,43 @@ describe('BlinkCamerasPlatform', () => {
         value: unknown;
       };
 
-    await expect(retry.onSetHandler?.(true)).rejects.toThrow('network unavailable');
+    await expect(retry.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70402 });
 
     expect(platform.isOperational()).toBe(false);
     expect(retry.value).toBe(false);
     expect(status?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(1);
+    expect(status?.getCharacteristic(hapApi.hap.Characteristic.StatusActive).value).toBe(true);
     expect(hapApi.registerPlatformAccessories).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds Retry response while shared recovery can finish later', async () => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    const homescreen: BlinkHomescreen = {
+      account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+    };
+    blinkApi.getHomescreen.mockResolvedValueOnce(homescreen);
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger,
+      { ...config, enableStreaming: false, videoEncoder: 'libx264' }, hapApi);
+    await (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices();
+    let complete: (screen: BlinkHomescreen) => void = () => {};
+    blinkApi.getHomescreen.mockReturnValue(new Promise(resolve => { complete = resolve; }));
+    const retry = platform.accessories.find(accessory => accessory.context.blinkConnectionRetry)
+      ?.getServiceById(hapApi.hap.Service.Switch, 'blink-connection-retry')
+      ?.getCharacteristic(hapApi.hap.Characteristic.On) as unknown as {
+        onSetHandler: (value: unknown) => Promise<unknown>; value: unknown;
+      };
+    const pending = retry.onSetHandler(true);
+    const failure = expect(pending).rejects.toMatchObject({ hapStatus: -70408 });
+    await jest.advanceTimersByTimeAsync(12000);
+    await failure;
+    expect(retry.value).toBe(false);
+    complete(homescreen);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(2);
   });
 
   it('suspends automatic polling while authentication needs user action', async () => {
@@ -379,8 +417,10 @@ describe('BlinkCamerasPlatform', () => {
     await poll();
     await poll();
     expect(platform.isOperational()).toBe(true);
+    expect(sampleBlinkConnection).not.toHaveBeenCalled();
     await poll();
     expect(platform.isOperational()).toBe(false);
+    expect(sampleBlinkConnection).toHaveBeenCalledTimes(1);
     expect(platform.accessories.some(accessory => accessory.context.blinkConnectionDiagnostic)).toBe(true);
 
     await poll();
@@ -388,7 +428,7 @@ describe('BlinkCamerasPlatform', () => {
     const connection = platform.accessories.find(accessory => accessory.context.blinkConnectionDiagnostic)
       ?.getServiceById(hapApi.hap.Service.ContactSensor, 'blink-connection-status');
     expect(connection?.getCharacteristic(hapApi.hap.Characteristic.ContactSensorState).value).toBe(0);
-    expect(blinkApi.login).toHaveBeenCalledTimes(2);
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
   });
 
   it('coalesces concurrent runtime recovery without reconciling accessory inventory', async () => {

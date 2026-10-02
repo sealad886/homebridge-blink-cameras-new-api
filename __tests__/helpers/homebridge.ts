@@ -7,6 +7,7 @@ const ProgrammableSwitchEvent = Object.assign(
 export const createHap = () => ({
   HAPStatus: {
     SERVICE_COMMUNICATION_FAILURE: -70402,
+      OPERATION_TIMED_OUT: -70408,
   },
   HapStatusError: class HapStatusError extends Error {
     constructor(public readonly hapStatus: number) {

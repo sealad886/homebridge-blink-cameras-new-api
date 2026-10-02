@@ -7,6 +7,7 @@
  */
 
 import { BlinkAuth } from './auth';
+import { RequestOptions, checkRequestBudget, withinRequestBudget, budgetedDelay } from '../operation-budget';
 import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
@@ -26,7 +27,6 @@ import {
  * - LOCALE: Device locale
  */
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Redact authorization headers for logging
@@ -150,12 +150,12 @@ export class BlinkHttp {
     }
   }
 
-  async get<T>(path: string): Promise<T> {
-    return this.request<T>('GET', path);
+  async get<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('GET', path, undefined, 0, true, [], options);
   }
 
-  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = []): Promise<T> {
-    return this.request<T>('POST', path, body, 0, true, expectedErrorStatuses);
+  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = [], options?: RequestOptions): Promise<T> {
+    return this.request<T>('POST', path, body, 0, true, expectedErrorStatuses, options);
   }
 
   async delete<T>(path: string): Promise<T> {
@@ -181,9 +181,12 @@ export class BlinkHttp {
     attempt = 0,
     runPreflight = true,
     expectedErrorStatuses: readonly number[] = [],
+    options: RequestOptions = {},
   ): Promise<T> {
+    checkRequestBudget(options);
     if (runPreflight) {
-      await this.auth.ensureValidToken();
+      await withinRequestBudget(this.auth.ensureValidToken(), options);
+      checkRequestBudget(options);
     }
 
     const url = this.buildUrl(path);
@@ -209,16 +212,20 @@ export class BlinkHttp {
     }
 
     const startTime = Date.now();
+    const timeoutMs = Math.max(1, Math.min(30_000, (options.deadline ?? startTime + 30_000) - startTime));
+    const timeoutSignal = globalThis.AbortSignal.timeout(timeoutMs);
+    const signal = options.signal ? globalThis.AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
     let response: Awaited<ReturnType<typeof fetch>>;
     try {
-      response = await fetch(url, {
+      response = await withinRequestBudget(fetch(url, {
         method,
         redirect: 'error',
         headers,
         body: body ? JSON.stringify(body) : undefined,
-        signal: globalThis.AbortSignal.timeout(30_000),
-      });
+        signal,
+      }), options);
     } catch (cause) {
+      checkRequestBudget(options);
       const diagnostic = describeNetworkFailure(cause, url, startTime);
       const error = new BlinkHttpError('Blink API network request failed or timed out.', 0, '', safeUrl, method,
         undefined, undefined, 'network', diagnostic);
@@ -233,8 +240,8 @@ export class BlinkHttp {
     if ((response.status === 401 || response.status === 403) && attempt < 1) {
       this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
       await response.body?.cancel().catch(() => undefined);
-      await this.auth.refreshTokens();
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses);
+      await withinRequestBudget(this.auth.refreshTokens(), options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
     }
 
     // Rate limited - exponential backoff
@@ -242,8 +249,8 @@ export class BlinkHttp {
       const delay = 1000 * Math.pow(2, attempt);
       this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);
-      await sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses);
+      await budgetedDelay(delay, options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
     }
 
     // Server error - linear backoff
@@ -251,8 +258,8 @@ export class BlinkHttp {
       const delay = 500 * (attempt + 1);
       this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);
-      await sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses);
+      await budgetedDelay(delay, options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
     }
 
     if (!response.ok) {
@@ -273,8 +280,9 @@ export class BlinkHttp {
 
     let responseData: T;
     try {
-      responseData = (await response.json()) as T;
+      responseData = (await withinRequestBudget(response.json(), options)) as T;
     } catch {
+      checkRequestBudget(options);
       const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,
         undefined, undefined, 'response');
       this.log.error(error.toLogString());

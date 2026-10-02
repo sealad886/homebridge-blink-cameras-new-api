@@ -1,3 +1,4 @@
+import { RequestOptions } from '../operation-budget';
 /**
  * Blink Owl (Mini Camera) Accessory
  *
@@ -26,11 +27,11 @@ export class OwlAccessory extends MotionDeviceBase<BlinkOwl> {
     super(platform, accessory, device, 'Mini', 'Mini', 'owl');
   }
 
-  protected async enableMotionApi(): Promise<void> {
-    await this.platform.apiClient.enableOwlMotion(this.device.network_id, this.device.id);
+  protected async enableMotionApi(options?: RequestOptions): Promise<void> {
+    await this.platform.apiClient.enableOwlMotion(this.device.network_id, this.device.id, options);
   }
 
-  protected async disableMotionApi(): Promise<void> {
-    await this.platform.apiClient.disableOwlMotion(this.device.network_id, this.device.id);
+  protected async disableMotionApi(options?: RequestOptions): Promise<void> {
+    await this.platform.apiClient.disableOwlMotion(this.device.network_id, this.device.id, options);
   }
 }

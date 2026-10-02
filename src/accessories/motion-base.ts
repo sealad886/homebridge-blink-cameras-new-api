@@ -11,6 +11,8 @@
  */
 
 import { CameraController, CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import { withResponseBudget, RequestOptions } from '../operation-budget';
+import { toHapError } from '../hap-errors';
 import { BlinkCamerasPlatform } from '../platform';
 import { setHapServiceName, toHapName } from '../hap-name';
 import { setTimeout, clearTimeout } from 'timers';
@@ -35,6 +37,11 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   protected motionDetected = false;
   protected motionTimeout: ReturnType<typeof setTimeout> | null = null;
   private readonly refreshSnapshotService?: Service;
+  private motionFault = false;
+  private refreshFault = false;
+  private pendingMotionOperations = 0;
+  private motionIntentRevision = 0;
+  private failedMotionTarget?: boolean;
 
   private isDeviceAvailable(): boolean {
     const status = this.device.status?.trim().toLowerCase();
@@ -154,8 +161,8 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     }
   }
 
-  protected abstract enableMotionApi(): Promise<void>;
-  protected abstract disableMotionApi(): Promise<void>;
+  protected abstract enableMotionApi(options?: RequestOptions): Promise<void>;
+  protected abstract disableMotionApi(options?: RequestOptions): Promise<void>;
 
   private async refreshSnapshot(value: CharacteristicValue): Promise<void> {
     if (value !== true) {
@@ -163,11 +170,16 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     }
 
     try {
-      await this.cameraSource.refreshSnapshotCache();
+      await withResponseBudget(this.cameraSource.refreshSnapshotCache().then(() => {
+        this.refreshFault = false;
+        this.updateAvailability();
+      }));
       this.platform.log.info(`Manually refreshed snapshot for ${this.deviceLabel}: ${this.device.name}`);
     } catch (error) {
-      this.platform.log.error(`Failed to refresh snapshot for ${this.deviceLabel} ${this.device.name}:`, error);
-      throw error;
+      this.platform.log.error(`Failed to refresh snapshot for ${this.deviceLabel} ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`);
+      this.refreshFault = true;
+      this.updateAvailability();
+      throw toHapError(this.platform.api.hap, error);
     } finally {
       this.refreshSnapshotService
         ?.getCharacteristic(this.platform.Characteristic.On)
@@ -178,40 +190,47 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   private async setMotionEnabled(value: CharacteristicValue): Promise<void> {
     const target = Boolean(value);
 
-    if (target === this.device.enabled) {
+    if (this.pendingMotionOperations === 0 && target === this.device.enabled) {
       return;
     }
 
+    const revision = ++this.motionIntentRevision;
+    this.pendingMotionOperations++;
+    this.failedMotionTarget = target;
     try {
-      if (target) {
-        await this.enableMotionApi();
-        this.platform.log.info(`Enabled motion detection for ${this.deviceLabel}: ${this.device.name}`);
-      } else {
-        await this.disableMotionApi();
-        this.platform.log.info(`Disabled motion detection for ${this.deviceLabel}: ${this.device.name}`);
-      }
-
-      this.device.enabled = target;
-      this.accessory.context.device = this.device;
-
-      this.motionService
-        .getCharacteristic(this.platform.Characteristic.StatusActive)
-        .updateValue(this.isMotionServiceActive());
+      const options = { queueDeadline: Date.now() + 12_000 };
+      const operation = (target ? this.enableMotionApi(options) : this.disableMotionApi(options)).then(() => {
+        this.device.enabled = target;
+        this.accessory.context.device = this.device;
+        if (revision === this.motionIntentRevision) {
+          this.motionFault = false;
+          this.failedMotionTarget = undefined;
+          this.switchService.getCharacteristic(this.platform.Characteristic.On).updateValue(target);
+        }
+        this.updateAvailability();
+        this.platform.log.info(`${target ? 'Enabled' : 'Disabled'} motion detection for ${this.deviceLabel}: ${this.device.name}`);
+      }).finally(() => { this.pendingMotionOperations--; });
+      await withResponseBudget(operation);
     } catch (error) {
       this.platform.log.error(
-        `Failed to ${target ? 'enable' : 'disable'} motion for ${this.deviceLabel} ${this.device.name}:`,
-        error,
+        `Failed to ${target ? 'enable' : 'disable'} motion for ${this.deviceLabel} ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`,
       );
-      throw error;
+      if (revision === this.motionIntentRevision) { this.motionFault = true; }
+      this.updateAvailability();
+      throw toHapError(this.platform.api.hap, error);
     }
   }
 
   updateState(device: TDevice): void {
     const previousEnabled = this.device.enabled;
+    if (this.pendingMotionOperations === 0 && this.failedMotionTarget !== undefined && device.enabled === this.failedMotionTarget) {
+      this.motionFault = false;
+      this.failedMotionTarget = undefined;
+    }
     this.device = device;
     this.accessory.context.device = device;
 
-    if (previousEnabled !== device.enabled) {
+    if (previousEnabled !== device.enabled && this.pendingMotionOperations === 0) {
       this.switchService
         .getCharacteristic(this.platform.Characteristic.On)
         .updateValue(device.enabled);
@@ -224,6 +243,9 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   }
 
   public updateAvailability(): void {
+    this.motionService
+      .getCharacteristic(this.platform.Characteristic.StatusFault)
+      .updateValue(this.motionFault || this.refreshFault || !this.platform.isOperational() || !this.isDeviceAvailable() ? 1 : 0);
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusActive)
       .updateValue(this.isMotionServiceActive());

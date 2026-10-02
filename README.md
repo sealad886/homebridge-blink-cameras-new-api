@@ -370,19 +370,38 @@ pending.
 
 If startup authentication or device discovery fails, cached Blink accessories
 remain in HomeKit so rooms, names, and automations are preserved, but their
-services report a fault instead of appearing healthy. HomeKit also receives a
-temporary **Blink Connection** accessory. It shows the connection as open and
-faulted and includes a **Check Network & Blink Sign-In, Then Retry** switch.
-The same diagnostic appears after three consecutive runtime status-poll
-failures, while a single transient polling failure leaves HomeKit unchanged.
+services report a fault instead of appearing healthy.
 
-Check that the Homebridge host has working network access. Then open this
-plugin's Homebridge settings and use **Test Connection**; sign in with Blink
-again if requested. Return to Home and turn on **Check Network & Blink Sign-In,
-Then Retry**. The switch resets after the attempt. A failed retry keeps the
-diagnostic visible; a successful retry refreshes Blink devices and removes the
-diagnostic accessory automatically. Normal status polling also removes it after
-connectivity recovers.
+The stable **Blink Connection** contact sensor reports confirmed outages after
+three failed polling cycles. Its monitor remains active while the child bridge
+runs; an open contact and fault describe unavailable Blink connectivity. A
+separate **Retry Blink Connection** switch triggers recovery using stored sign-in
+state. Repeated requests join the same recovery attempt. Both accessories retain
+their identities after recovery; no re-pairing is needed.
+
+To receive Apple's supported connection alerts, open Home Settings, choose the
+sensor accessory type, select **Blink Connection**, and enable Activity
+Notifications on each Apple device. Remote alerts require a home hub. Apple Home
+controls notification presentation: this plugin cannot add a custom Retry/Cancel
+dialog. Dismiss an alert to leave automatic recovery running; use the Retry
+switch to request an immediate check. Physical notification delivery must be
+verified on your devices; a Homebridge log entry is not proof of delivery.
+See [Apple's notification instructions](https://support.apple.com/en-ie/105042).
+
+HomeKit writes and fresh snapshot responses have a 12-second response limit.
+Started Blink commands may finish later; a timeout does not replay a mutation.
+Queued mutations that expire before starting are not sent. Thumbnail captures
+share the mutation queue until command completion, while reads and image
+downloads remain independent. An HTTP 409 is reconciled against fresh state or
+retried within bounded limits; exhausted conflicts return a HomeKit error.
+
+Persistent snapshots remain manual-refresh images. Their download/cache age and
+last observed successful capture age are separate diagnostics. A busy capture
+may return an existing thumbnail and is explicitly labelled as a fallback.
+Automatic status recovery retries one transient homescreen GET failure within a
+25-second budget, without automatically signing in again for network outages.
+Confirmed outages log a bounded, unauthenticated DNS/connection diagnostic;
+credentials, response bodies, and resolved IP addresses are excluded.
 
 ### 401 Unauthorized / 403 Forbidden
 
