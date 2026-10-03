@@ -19,7 +19,7 @@ import uuid
 import fcntl
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 
 DEFAULT_RETENTION_SECONDS = 14 * 24 * 60 * 60
@@ -560,7 +560,11 @@ class Store:
                 raise KeyError(event_id)
             return self._read_row(row)
 
-    def read_events(self, since: float | None = None, until: float | None = None) -> Iterator[dict[str, Any]]:
+    @contextmanager
+    def read_snapshot(
+        self, since: float | None = None, until: float | None = None,
+    ) -> Iterator[Callable[[], Iterator[dict[str, Any]]]]:
+        """Repeatable streaming reads without blocking appends or extending segment retention."""
         with self._locked(False):
             clauses, args = [], []
             if since is not None:
@@ -575,21 +579,30 @@ class Store:
                 + " ORDER BY coalesce(source_time,received_at),event_id"
             )
 
-        def generate() -> Iterator[dict[str, Any]]:
-            snapshot = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True, timeout=30)
-            try:
-                snapshot.execute("BEGIN")
-                cursor = snapshot.execute(query, args)
-                while True:
-                    with self._locked(False):
-                        rows = cursor.fetchmany(64)
-                        if not rows:
-                            break
-                        batch = [self._read_row(row) for row in rows]
-                    yield from batch
-            finally:
-                snapshot.close()
+        snapshot = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True, timeout=30)
+        try:
+            snapshot.execute("BEGIN")
+            # Pin the WAL view now, including an empty corpus, before yielding the factory.
+            snapshot.execute("SELECT event_id FROM events LIMIT 1").fetchone()
 
+            def generate() -> Iterator[dict[str, Any]]:
+                cursor = snapshot.execute(query, args)
+                try:
+                    for row in cursor:
+                        with self._locked(False):
+                            event = self._read_row(row)
+                        yield event
+                finally:
+                    cursor.close()
+
+            yield generate
+        finally:
+            snapshot.close()
+
+    def read_events(self, since: float | None = None, until: float | None = None) -> Iterator[dict[str, Any]]:
+        def generate() -> Iterator[dict[str, Any]]:
+            with self.read_snapshot(since, until) as read:
+                yield from read()
         return generate()
 
     def get_checkpoint(self, name: str, default: Any = None) -> Any:

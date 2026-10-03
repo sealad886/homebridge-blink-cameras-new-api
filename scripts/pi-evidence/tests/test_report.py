@@ -9,6 +9,8 @@ import threading
 import socket
 import subprocess
 import shlex
+import tracemalloc
+import time
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from unittest import mock
@@ -225,6 +227,53 @@ class ReportTests(unittest.TestCase):
         self.store.max_bytes = self.store.status()["managed_bytes"]
         with self.assertRaisesRegex(report.BundleError, "capacity"):
             report.export_bundle(self.store, 0, 100, self.store.root / "exports" / "too-large")
+
+    def test_large_refused_export_streams_sizing_with_bounded_memory(self) -> None:
+        for index in range(5000):
+            self.store.append("large", {"payload": "x" * 16384}, source_id=f"large-{index}")
+        self.store.max_bytes = self.store.status()["managed_bytes"]
+        output = self.store.root / "exports" / "refused-large"
+        with mock.patch.object(report.tempfile, "mkdtemp") as staging, \
+                mock.patch.object(self.store, "write_reserved") as materialize:
+            tracemalloc.start()
+            try:
+                with self.assertRaisesRegex(report.BundleError, "capacity reservation failed"):
+                    report.export_bundle(self.store, 0, 100, output)
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+        self.assertLess(peak, 4 * 1024 * 1024, f"sizing retained corpus: peak={peak}")
+        staging.assert_not_called()
+        materialize.assert_not_called()
+        self.assertFalse(output.exists())
+        self.assertEqual(self.store.status()["reserved_bytes"], 0)
+
+    def test_repeatable_reader_pins_membership_before_first_iteration(self) -> None:
+        initial_ids = {event["event_id"] for event in self.store.read_events()}
+        with self.store.read_snapshot() as read:
+            self.store.append("concurrent", {"payload": "later"}, source_id="after-pinning")
+            self.assertEqual({event["event_id"] for event in read()}, initial_ids)
+            self.assertEqual({event["event_id"] for event in read()}, initial_ids)
+        self.assertTrue(any(event["source_id"] == "after-pinning" for event in self.store.read_events()))
+
+    def test_retained_segment_expiry_between_passes_fails_and_cleans_export(self) -> None:
+        original_reserve = self.store.reserve
+        output = self.store.root / "exports" / "expired"
+
+        @contextmanager
+        def expire_after_sizing(size):
+            with original_reserve(size) as reservation:
+                expired = self.store.expire(now=time.time() + self.store.retention_seconds + 1)
+                self.assertEqual(expired["events"], 2)
+                yield reservation
+
+        with mock.patch.object(self.store, "reserve", expire_after_sizing):
+            with self.assertRaises(store.CorruptEventError):
+                report.export_bundle(self.store, 0, 100, output)
+        self.assertFalse(output.exists())
+        self.assertEqual(list(output.parent.glob(".expired.tmp-*")), [])
+        self.assertEqual(self.store.status()["reserved_bytes"], 0)
+        self.assertEqual(list(self.store.read_events()), [])
 
     def test_append_after_sizing_does_not_change_reserved_export_snapshot(self) -> None:
         output = self.store.root / "exports" / "snapshot"

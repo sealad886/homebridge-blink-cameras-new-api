@@ -15,6 +15,7 @@ import csv
 import io
 import platform
 import stat
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -127,25 +128,28 @@ def export_bundle(
         raise ValueError("start must be earlier than end")
     target = _safe_output(store, output)
     normalizer = _load_normalizer()
-    # Size and materialize one immutable read snapshot. A second Store read can
-    # include appends that were never covered by this export's reservation.
-    snapshot = [
-        (json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
-         float(event["received_at"]))
-        for event in store.read_events()
-    ]
-    raw_size = sum(len(data) for data, _received in snapshot)
-
-    parent = target.parent
-    source_size = sum(
-        p.stat().st_size for p in (Path(__file__).resolve().parent / name for name in _BUNDLED_SOURCES)
-    )
-    estimated = raw_size * 4 + source_size + 10 * 1024 * 1024
+    # Repeat both passes against one WAL view; keep only one serialized event in memory.
+    snapshot_scope = ExitStack()
     try:
-        reservation = store.reserve(estimated)
-        reservation_id = reservation.__enter__()
-    except Exception as exc:
-        raise BundleError(f"export capacity reservation failed: {exc}") from exc
+        read_snapshot = snapshot_scope.enter_context(store.read_snapshot())
+        def serialized_events():
+            for event in read_snapshot():
+                yield (json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
+                       float(event["received_at"]))
+        raw_size = sum(len(data) for data, _received in serialized_events())
+        parent = target.parent
+        source_size = sum(
+            p.stat().st_size for p in (Path(__file__).resolve().parent / name for name in _BUNDLED_SOURCES)
+        )
+        estimated = raw_size * 4 + source_size + 10 * 1024 * 1024
+        try:
+            reservation = store.reserve(estimated)
+            reservation_id = reservation.__enter__()
+        except Exception as exc:
+            raise BundleError(f"export capacity reservation failed: {exc}") from exc
+    except Exception:
+        snapshot_scope.close()
+        raise
     staging = None
     try:
         staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=parent))
@@ -160,7 +164,7 @@ def export_bundle(
         raw_written = 0
         raw_buffer = bytearray()
         try:
-            for data, received in snapshot:
+            for data, received in serialized_events():
                 if raw_written + len(data) > raw_budget:
                     raise BundleError(
                         f"raw export exceeded reserved capacity: next={raw_written + len(data)} budget={raw_budget}"
@@ -178,8 +182,8 @@ def export_bundle(
         finally:
             os.close(raw_fd)
 
-        # Normalization has its own materialization phase; do not retain both.
-        del snapshot
+        # Release the WAL view before the existing normalizer materialization phase.
+        snapshot_scope.close()
 
         def raw_events():
             with raw_path.open("r", encoding="utf-8") as handle:
@@ -289,6 +293,7 @@ def export_bundle(
             shutil.rmtree(staging, ignore_errors=True)
         raise
     finally:
+        snapshot_scope.close()
         reservation.__exit__(None, None, None)
 
     result = verify_bundle(target)
