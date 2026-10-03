@@ -1,8 +1,8 @@
 {
-  "recorded_at_utc": "2026-10-03T14:24:44.940799+00:00",
+  "recorded_at_utc": "2026-10-03T14:47:33.035827+00:00",
   "baseline_revision": "fb96b9b33921e39d825f1be8636705e8a9839d20",
   "branch": "codex/security-hardening",
-  "source_state": "review round 2 corrections on aef14077dd631464281cfadbcb855ac7a1bbba60; hashes identify tested source; not a registry artifact",
+  "source_state": "review round 3 corrections on 89f0a1ea62058d347dbbcfe3734a4abca8160479; hashes identify tested source; not a registry artifact",
   "scan_id": "247931cc-e452-4dff-bfec-5054e0481242",
   "source_files": {
     ".github/scripts/verify-package.mjs": "f03caba34a7d514d76b66ea240976fa5031bc8f5f66cc277124100984a6a6709",
@@ -10,8 +10,8 @@
     "__tests__/accessories.test.ts": "e058c2367812149f1dd357ffda2830d4d779ff554104a1a7ad8248f2d9f636c3",
     "__tests__/blink-api/auth-hosted.test.ts": "1803bc5d122ec1a57052a35691ad920e6b0ea7aa8991e6ef8e4077ebf10b0624",
     "__tests__/blink-api/auth.test.ts": "3d2f2ffc675b01e53729df1f3f32932877668de6b4939aa9076c3c5bed7972e8",
-    "__tests__/blink-api/client.test.ts": "fbf0d9dcdda477f31775e5797c2a85205024b48db827587d46c9ec39a3e3a027",
-    "__tests__/blink-api/http.test.ts": "3a899cbf606e2921dab9ccff5db4cb0d4323a29edc902059ef25b8115c85c348",
+    "__tests__/blink-api/client.test.ts": "2f78fa650f104ccfd07e13cafd24254cfefdec0cf1f49e70c28077d6d1f03101",
+    "__tests__/blink-api/http.test.ts": "ab4b3ee379e1cfb7ede3e720a33d523498d4e68dbb2003abd2d694d2bd2fbaa4",
     "__tests__/blink-api/immis-proxy.test.ts": "7a187fb2214f39deef97d39037e59af1234c9efe0d47e061e4c6360540e82d7d",
     "__tests__/blink-api/response-body.test.ts": "13c08d4306297bf0c11784178d73438e11259077578372aad46b782e428a0bdc",
     "__tests__/helpers/response.ts": "d5b879a89e57b52d3d634761a53ea98e813b6613926af24b00303cd1054b4dc5",
@@ -23,29 +23,30 @@
     "scripts/oauth-diagnostic-transport.ts": "74c6bd319c4f1a312683d0867fac4376a096dd5b0cea456b0c9ddc8adb066ab5",
     "scripts/pi-evidence/README.md": "29dae6debb262f537b91a8a2ec4d2ae311bb13f90ffc1a09355914321ad8271d",
     "scripts/pi-evidence/normalize.py": "6e1db855445cd5d1449278d70e8b8d7abf87dfb6f44255cf122376e8b8855792",
-    "scripts/pi-evidence/report.py": "b50b578bdaae21191721c4f444589fcb1e79893113598ab2e5a56d8415ddf8bb",
+    "scripts/pi-evidence/report.py": "a04f12dda07c7ca695f7f76bf3a70299271882e3c8719b33fc16d4b20fc9d99d",
     "scripts/pi-evidence/store.py": "1b37bf9be84012f5b3e2351d2af536b688889775484498d2bb42b9437d16f77e",
     "scripts/pi-evidence/tests/test_normalize.py": "d7268737eca3a3824b2d92c111acf3a6b9f16cfb51d2d3615776961a20b4b0d7",
-    "scripts/pi-evidence/tests/test_report.py": "3b483e0a5f82ea837eddf29153745287e86bca49366feeb66af8ec8dbdd5f180",
+    "scripts/pi-evidence/tests/test_report.py": "cd9c60cad4e4320ca7a062d2c8658f7958dc8387174da5aa2dc1d4bcf57717c9",
     "src/accessories/camera-source.ts": "6837ab80e285bf2f188786b8c4d7a178725d2cefbf684ad72fc2eecb96407428",
     "src/blink-api/auth.ts": "093ba0b9479025c43b6079009d5d35ca37844301c805f3d0731616e8f8038cc2",
     "src/blink-api/client.ts": "bf670b87c28c628b62d6cc3e2884a10ab1c96b74849a5c3c31a9756f0fcda5cc",
-    "src/blink-api/domain-validation.ts": "a93f2ad41de12ef4d86238060b97a675222936702e0be4f63e393d50db48c07e",
-    "src/blink-api/http.ts": "91aa115d87f8b4f686673fd80fe40fc5bddae5a229c0814a2906611e5dabc1a4",
+    "src/blink-api/domain-validation.ts": "9a7ca6f6b4f2f6e4fefe4ca6adaea5447e1392cb14e2082ccb26bc41fdb634a6",
+    "src/blink-api/http.ts": "b14e2707cd29785e915fc2c2af621a119852ab5597f4a82514fc793fdcc7316f",
     "src/blink-api/immis-proxy.ts": "5402a013164424f6c57c2961f3cdee9871797a54bc2c5d5b461fd8290018bd0c",
     "src/blink-api/network-diagnostics.ts": "3cbc4c534ece15d49e7230c2e7fd55d61fa953ee7884958a83f54da8c8fa6d81",
     "src/blink-api/response-body.ts": "4285e4325105ca13017432eace225eb9193d926aef6e13c4e03bb12625a3a11f",
     "src/platform.ts": "afe3a660c08efc90b7cdda73346c48a779a123070197066cd0b7db3aef541e6d",
-    ".github/workflows/test.yml": "e8c36944404eaaefa9a7b24c4dff91d401ae0cf66f7cbece419613be0241112e"
+    ".github/workflows/test.yml": "e8c36944404eaaefa9a7b24c4dff91d401ae0cf66f7cbece419613be0241112e",
+    "__tests__/blink-api/domain-validation.test.ts": "e581d09aaff1d672bf1c864e62b5bf7b8928e7d5093331e7d0ad8d0e35b5ff78"
   },
   "checks": {
     "jest": {
-      "passed": 722,
-      "suites": 33,
+      "passed": 733,
+      "suites": 34,
       "runtime": "Node 24.15.0"
     },
     "python_unittest": {
-      "passed": 42,
+      "passed": 44,
       "environment": ".venv"
     },
     "release_safety_node_tests": {
@@ -101,5 +102,11 @@
     "evidence_window": "known ended sessions ending at window start excluded; unknown-end context retained",
     "oauth": "missing authorization code warning reachable; whole-script synthetic success/failure harness passed without provider requests",
     "review_status": "next CodeRabbit/Copilot review required"
+  },
+  "review_round_3": {
+    "manifest": "only root manifest exempt; nested same-name files require membership and hashes in export and verification",
+    "domain": "required entity names bounded before expansion; optional sync-module names retain their contract",
+    "http": "path identifiers rejected before authentication, storage access or refresh; valid near-expiry requests still refresh",
+    "review_status": "CodeRabbit explicit clean at preceding head and retired; Copilot next review required"
   }
 }

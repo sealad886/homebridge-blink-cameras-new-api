@@ -120,7 +120,7 @@ they do not measure RSS, CPU, first-frame latency or physical resource trends.
 Node 24 runs locally; existing CI Node 20/22/24 coverage is preserved but Node 20/22
 were not executed here. Native platform claims remain withheld.
 
-Final local checks after review round 2: 722 Jest tests / 33 suites, 42 Python tests, 39 release-safety
+Final local checks after review round 3: 733 Jest tests / 34 suites, 44 Python tests, 39 release-safety
 Node tests; lint, build, script typecheck, contract validation and packaged plugin
 loadability passed. Independent receipts found no remaining blocker in reviewed local
 slices. Native feasibility and physical/release gates remain open; this is a staged
@@ -157,3 +157,13 @@ the requested start are excluded from the half-open window; unknown-end context
 remains conservative. The OAuth diagnostic missing-code warning is reachable.
 Focused lifecycle, evidence boundary and synthetic whole-script checks pass.
 The next active review round remains required before publication.
+
+## Review round 3 corrections
+
+Bundle export and verification exempt only the root manifest path; nested files
+with that basename require membership and hashes. Homescreen entity names follow
+required bounded contracts before accessory expansion. HTTP path identifiers are
+validated before authentication can load or refresh tokens. Near-expiry valid
+requests still refresh normally. Full Jest, evidence tests, lint, build and package
+loadability pass. CodeRabbit returned explicit clean on the preceding revision and
+is retired; Copilot review of these corrections remains required.
