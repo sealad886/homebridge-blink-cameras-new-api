@@ -120,7 +120,7 @@ they do not measure RSS, CPU, first-frame latency or physical resource trends.
 Node 24 runs locally; existing CI Node 20/22/24 coverage is preserved but Node 20/22
 were not executed here. Native platform claims remain withheld.
 
-Final local checks after review round 1: 721 Jest tests / 33 suites, 40 Python tests, 39 release-safety
+Final local checks after review round 2: 722 Jest tests / 33 suites, 42 Python tests, 39 release-safety
 Node tests; lint, build, script typecheck, contract validation and packaged plugin
 loadability passed. Independent receipts found no remaining blocker in reviewed local
 slices. Native feasibility and physical/release gates remain open; this is a staged
@@ -148,3 +148,12 @@ special filesystem entries and generated commands use the trusted installed path
 CI now typechecks maintained OAuth scripts and runs trusted evidence tests.
 The refreshed local receipt records tested source hashes. Further bot review and
 CI remain required before merge or publication. F05/F06 remain open.
+
+## Review round 2 corrections
+
+Intentional STOP with pending readiness no longer counts a worker failure; genuine
+readiness rejection still fails closed. Known-ended evidence sessions ending at
+the requested start are excluded from the half-open window; unknown-end context
+remains conservative. The OAuth diagnostic missing-code warning is reachable.
+Focused lifecycle, evidence boundary and synthetic whole-script checks pass.
+The next active review round remains required before publication.
