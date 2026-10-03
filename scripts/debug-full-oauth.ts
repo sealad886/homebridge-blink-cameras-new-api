@@ -21,18 +21,18 @@ let cookieJar: string[] = [];
 
 function mergeCookies(setCookieHeaders: string[] | undefined): void {
   if (!setCookieHeaders) return;
-  
+
   for (const setCookie of setCookieHeaders) {
     const cookiePart = setCookie.split(';')[0];
     const [name] = cookiePart.split('=');
     if (!name) continue;
-    
+
     // Remove any existing cookie with same name
     const oldCount = cookieJar.length;
     cookieJar = cookieJar.filter(c => !c.startsWith(name.trim() + '='));
     // Add new cookie
     cookieJar.push(cookiePart);
-    
+
     if (oldCount !== cookieJar.length - 1) {
       console.log(`      🍪 Updated ${'<redacted>'} cookie`);
     }
@@ -60,7 +60,7 @@ function extractCsrfToken(html: string): string | null {
 async function httpsRequestWithRedirects(url: string, options: https.RequestOptions, body?: string, maxRedirects = 5): Promise<{statusCode: number, headers: IncomingMessage['headers'], body: string, rawSetCookies: string[], finalUrl: string}> {
   let currentUrl = url;
   let allSetCookies: string[] = [];
-  
+
   for (let i = 0; i < maxRedirects; i++) {
     const res = await diagnosticRequest(currentUrl, {
       ...options,
@@ -69,15 +69,15 @@ async function httpsRequestWithRedirects(url: string, options: https.RequestOpti
         'Cookie': getCookieHeader(),
       },
     }, body);
-    
+
     // Collect cookies from this response
     allSetCookies = [...allSetCookies, ...res.rawSetCookies];
     mergeCookies(res.rawSetCookies);
-    
+
     if (res.rawSetCookies.length > 0) {
       console.log(`    [Redirect ${i}] Got ${res.rawSetCookies.length} cookies`);
     }
-    
+
     // Check if we need to follow a redirect
     if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
       const location = res.headers.location as string;
@@ -86,7 +86,7 @@ async function httpsRequestWithRedirects(url: string, options: https.RequestOpti
       }
       currentUrl = diagnosticUrl(location, currentUrl).toString();
       console.log(`    [Redirect ${i}] ${res.statusCode} -> ${'<redacted>'}...`);
-      
+
       // For 303, change to GET
       if (res.statusCode === 303 || ([301, 302].includes(res.statusCode) && options.method === 'POST')) {
         options.method = 'GET';
@@ -100,7 +100,7 @@ async function httpsRequestWithRedirects(url: string, options: https.RequestOpti
       }
       continue;
     }
-    
+
     // No redirect, return the response
     return {
       ...res,
@@ -108,7 +108,7 @@ async function httpsRequestWithRedirects(url: string, options: https.RequestOpti
       finalUrl: currentUrl,
     };
   }
-  
+
   throw new Error('Too many redirects');
 }
 
@@ -221,7 +221,7 @@ async function main() {
     method: 'GET',
     headers: baseHeaders,
   });
-  
+
   console.log(`  Final status: ${authCodeRes.statusCode}`);
   console.log(`  Final URL: ${'<redacted>'}`);
 
