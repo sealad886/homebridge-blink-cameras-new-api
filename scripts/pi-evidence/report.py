@@ -127,9 +127,14 @@ def export_bundle(
         raise ValueError("start must be earlier than end")
     target = _safe_output(store, output)
     normalizer = _load_normalizer()
-    raw_size = 0
-    for event in store.read_events():
-        raw_size += len(json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")) + 1
+    # Size and materialize one immutable read snapshot. A second Store read can
+    # include appends that were never covered by this export's reservation.
+    snapshot = [
+        (json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
+         float(event["received_at"]))
+        for event in store.read_events()
+    ]
+    raw_size = sum(len(data) for data, _received in snapshot)
 
     parent = target.parent
     source_size = sum(
@@ -155,8 +160,7 @@ def export_bundle(
         raw_written = 0
         raw_buffer = bytearray()
         try:
-            for event in store.read_events():
-                data = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            for data, received in snapshot:
                 if raw_written + len(data) > raw_budget:
                     raise BundleError(
                         f"raw export exceeded reserved capacity: next={raw_written + len(data)} budget={raw_budget}"
@@ -167,13 +171,15 @@ def export_bundle(
                     raw_buffer.clear()
                 raw_written += len(data)
                 event_count += 1
-                received = float(event["received_at"])
                 earliest = received if earliest is None else min(earliest, received)
             if raw_buffer:
                 store.write_reserved(reservation_id, raw_fd, raw_buffer)
             os.fsync(raw_fd)
         finally:
             os.close(raw_fd)
+
+        # Normalization has its own materialization phase; do not retain both.
+        del snapshot
 
         def raw_events():
             with raw_path.open("r", encoding="utf-8") as handle:
