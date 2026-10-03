@@ -24,6 +24,26 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(s['boundary_state'], 'paired')
         self.assertIn('+01:00', s['start_local'])
 
+    def test_known_session_overlap_uses_half_open_requested_window(self):
+        cases = ((10, 99.999, False), (10, 100, False), (10, 100.001, True),
+                 (100, 110, True), (199.999, 210, True), (200, 210, False))
+        for left, right, intersects in cases:
+            for ordered in (False, True):
+                with self.subTest(left=left, right=right, already_ordered=ordered):
+                    rows = [event(left, raw={'session_id':'s', 'event':'start'}),
+                            event(right, raw={'session_id':'s', 'event':'end'})]
+                    report = build_report(rows, 100, 200, already_ordered=ordered)
+                    self.assertEqual(bool(report['sessions']), intersects)
+                    if intersects:
+                        self.assertEqual(report['sessions'][0]['window_intersection'], 'observed')
+
+    def test_unknown_end_before_window_remains_possible_context(self):
+        rows = [event(10, raw={'session_id':'s', 'event':'start'}),
+                event(99.999, raw={'session_id':'s', 'event':'heartbeat'})]
+        session = build_report(rows, 100, 200)['sessions'][0]
+        self.assertIsNone(session['end'])
+        self.assertEqual(session['window_intersection'], 'possible_end_unknown')
+
     def test_expired_start_is_not_invented(self):
         rows = [event(150, raw={'session_id':'s','event':'heartbeat'}),
                 event(200, raw={'session_id':'s','event':'end'})]

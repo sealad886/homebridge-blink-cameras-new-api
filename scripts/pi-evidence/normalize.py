@@ -385,7 +385,7 @@ def build_report(events, start, end, already_ordered=False):
         # A missing end cannot establish ongoing activity past the last observation.
         left = s['start'] if s['start'] is not None else s['first_observed']
         right = s['end'] if s['end'] is not None else s['last_observed']
-        if left >= end or (s['end'] is not None and right < start):
+        if left >= end or (s['end'] is not None and right <= start):
             continue
         s['window_intersection'] = 'possible_end_unknown' if right < start else 'observed'
         a, b = s.pop('_start_mono', None), s.pop('_end_mono', None)

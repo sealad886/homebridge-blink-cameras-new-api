@@ -265,41 +265,39 @@ async function main() {
 
       // The redirect should contain the code
       if (codeMatch) {
-        if (codeMatch) {
-          const authCode = codeMatch[1];
-          console.log(`\n🎉 Authorization Code: ${'<redacted>'}`);
+        const authCode = codeMatch[1];
+        console.log(`\n🎉 Authorization Code: ${'<redacted>'}`);
 
-          // Step 7: Exchange for token
-          console.log('\n📡 Step 7: Exchange code for tokens');
-          const tokenData = new URLSearchParams({
-            grant_type: 'authorization_code',
-            code: authCode,
-            code_verifier: codeVerifier,
-            client_id: OAUTH_CLIENT_ID,
-            redirect_uri: OAUTH_REDIRECT_URI,
-            scope: OAUTH_SCOPE,
-            hardware_id: hardwareId,
-            app_brand: 'blink',
-          }).toString();
+        // Step 7: Exchange for token
+        console.log('\n📡 Step 7: Exchange code for tokens');
+        const tokenData = new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: codeVerifier,
+          client_id: OAUTH_CLIENT_ID,
+          redirect_uri: OAUTH_REDIRECT_URI,
+          scope: OAUTH_SCOPE,
+          hardware_id: hardwareId,
+          app_brand: 'blink',
+        }).toString();
 
-          res = await request('https://api.oauth.blink.com/oauth/token', {
-            method: 'POST',
-            headers: {
-              ...baseHeaders,
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Content-Length': Buffer.byteLength(tokenData).toString(),
-            },
-          }, tokenData);
+        res = await request('https://api.oauth.blink.com/oauth/token', {
+          method: 'POST',
+          headers: {
+            ...baseHeaders,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': Buffer.byteLength(tokenData).toString(),
+          },
+        }, tokenData);
 
-          console.log(`  Status: ${res.status}`);
-          console.log(`  Body: ${'<redacted>'}`);
+        console.log(`  Status: ${res.status}`);
+        console.log(`  Body: ${'<redacted>'}`);
 
-          if (res.status === 200) {
-            console.log('\n✅ OAuth flow complete! Tokens received.');
-          }
-        } else {
-          console.log(`  ⚠️ No code in redirect URL: ${'<redacted>'}`);
+        if (res.status === 200) {
+          console.log('\n✅ OAuth flow complete! Tokens received.');
         }
+      } else {
+        console.log(`  ⚠️ No code in redirect URL: ${'<redacted>'}`);
       }
     }
   }
