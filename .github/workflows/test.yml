@@ -49,3 +49,61 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
           fail_ci_if_error: false
+
+  # Prototype evidence only: Windows/macOS x64/Linux arm64 and five-target gate remain open.
+  native-validation:
+    name: Native prototype (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            architecture: x86_64
+          - runner: macos-15
+            architecture: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Check runner tools and architecture
+        shell: bash
+        env:
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          for tool in cc make cmake pkg-config gpg; do command -v "$tool"; done
+          python - <<'PY'
+          import os, platform, sys
+          assert sys.version_info[:2] == (3, 12)
+          assert platform.machine().lower() == os.environ['NATIVE_ARCHITECTURE']
+          PY
+      - name: Check offline source-fetch boundaries
+        run: python -m unittest discover -s native/dependencies -p 'test_*.py' -v
+      - name: Verify pinned sources and build private static prefix
+        shell: bash
+        run: |
+          # Assembly disabled explicitly for prototype CI; performance is not release evidence.
+          python native/dependencies/prepare.py --build-local --jobs 3 --disable-assembly --prefix-file native/build/deps/ci-prefix.txt
+      - name: Build and test private-pipe native prototype
+        shell: bash
+        run: |
+          IFS= read -r native_prefix < native/build/deps/ci-prefix.txt
+          native_cc=cc
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            native_cc=/usr/bin/clang
+            export MACOSX_DEPLOYMENT_TARGET=13.0
+          fi
+          make -C native test FFMPEG_PREFIX="$native_prefix" SRTP_PREFIX="$native_prefix" PKG_CONFIG_FLAGS=--static CC="$native_cc" PYTHON=python
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Test parent IPC against the built worker
+        shell: bash
+        run: |
+          npm ci
+          BLINK_MEDIA_TEST_WORKER_PATH="$PWD/native/build/blink-codec-worker" npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts

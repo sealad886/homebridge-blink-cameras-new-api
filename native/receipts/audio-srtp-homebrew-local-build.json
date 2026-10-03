@@ -1,0 +1,69 @@
+{
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "ffmpeg_version": "9.0.2",
+  "historical_receipt": "receipts/video-only-local-build.json preserves prior video-only evidence; its source hashes are historical",
+  "installed_bottle_receipt_sha256": "220d184d7561d61bdb53564108875e47bec0c299d91f2c2a048723b941da5334",
+  "installed_header_sha256": {
+    "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
+    "libavformat/avformat.h": "694da025f30497481f4703e06de106bd417a5718f8fdcdf5e09e34f4b5f21114",
+    "libavformat/avio.h": "30312971fc299e65bc69cf1beddb76f50394e044d9c71fe32fec3ae9c13bd1af",
+    "libavutil/avutil.h": "01a511d927eaab20cf57076611ff5649bc6089d2d766c4b20c9d11c3da095efd",
+    "libswresample/swresample.h": "b23e625ab295d57a3d1ae0142c937b485dc386a36e4ed63f4b99ed886dc905e1",
+    "libswscale/swscale.h": "3c3c7c2aec2494f4881e8fed8baf01ef0db8c08e7c01a3300946ea3bb102a162"
+  },
+  "installed_library_sha256": {
+    "libavcodec.63.1.102.dylib": "f3359c960778d4f8469700a051d5e9adbacaeeeb7ffdc68c87a1d5d66cd74680",
+    "libavformat.63.1.102.dylib": "7037cf9835b02aca3ae66b8cb2c2eed380e5083fa432c3f9ef71e3efebb61262",
+    "libavutil.61.1.102.dylib": "d8735f7e878ea9f44d7ec15f0aee0bf473bacb5d44f7a46df1a299462372f664",
+    "libswresample.7.1.102.dylib": "cb7096d9fbedbec10b878e68244167e2c9cc7ba8907f9840b6b39becc91969ad",
+    "libswscale.10.1.102.dylib": "5677ad33d0c49eb31262e3a4a7fe0eec06544756b53e816f19f598cd8a94bd9e"
+  },
+  "installed_prefix_label": "Homebrew ffmpeg/9.0.2",
+  "output_sha256": {
+    "audio-capabilities": "48c2bb2c1bdf9aae4e623e46578de9090b965ba523648c8daf57dc5e51bb5af8",
+    "blink-codec-worker": "11f52bff23699b9b35074753ba9f48c0c7a08e12a0fff3d22d63d56cc5af6d7d",
+    "check-output": "d705ed35c04eaab14a492db39c97b7ec976e6a736b57de05c20121e10475d21d",
+    "fixture": "73984f4cc2d429df1dd7b84e59e06bea101375552ace3f0440de501be3380dad"
+  },
+  "prototype_source_sha256": {
+    "AUDIO-OUTPUT-GATES.md": "a82602969bf0f8caeed2fdcbf37f71b70cdbc238bcc5d5b5ed5400534bbc8f93",
+    "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "Makefile": "83c730a83d6ea0d9bdd873bdc13d70b2c4f9eb255a4b2c2ab128c312fdbf2d66",
+    "README.md": "151b28b4142ed2c237ae6d5d0948fa5ec7cd1b522430bdbc0edbd1c6f0b79ba8",
+    "RTSP-ALTERNATIVES.md": "3b85475293c9e3b4fb541fb7bcdafa1e984c4eb4ee38e9558a9e742b909f1df9",
+    "audio.inc": "9717c0c39900d4c90e37008da23ba8e67ca5672926319c8dc7ceeb0bd8554488",
+    "output.inc": "bd62b142324b9730af57e9ae12ee15276be42ce71b0956fc72a21511f28e893b",
+    "protection.inc": "f089571f448c8261f48b5dad38b61d1f5b7126eda98d64b490e5a4d2c3bb5ea9",
+    "protocol.h": "b33abae3282616db3df43c05caa41eb4714a41c04ffbccc56d142672a7fb9106",
+    "tests/audio-capabilities.c": "2eaa868a8b6f0f268402eb88c3fab2ad289033a0d6edda13f685898a96ce3d29",
+    "tests/check-output.c": "d6987e0e62b79ea66ac2bf7e8492867ca2beda0162d6ec7af17e0e7be79105d4",
+    "tests/fixture.c": "2675e620e55bb0ab1e7b84a68ca6826280ece63ce9ab077cc2e2940261a5deeb",
+    "tests/test_worker.py": "074ae87cf61c3709ebf1c90523bc574bbcdf76a3fdb35215843255f27ba1fd04",
+    "third-party/libsrtp-LICENSE": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae",
+    "worker.c": "fe02dc054280eaa41f03a08bfb2fedd38cd4969f625c2d3e36c6896ae74a0be4"
+  },
+  "scope": "local macOS arm64 development build; not a distribution receipt",
+  "srtp_actual_inputs": {
+    "dependency_receipt_sha256": "b17800d0e46ec26880eb7332243cf1d8bcea897e558d64d2c5f597c1687c36d0",
+    "header_sha256": "e4ac6bbeb78f9101e2e7c9397a4acd9e31d1e5288c22d2106e77d1b2dfe7a3c5",
+    "source": {
+      "filename": "libsrtp-2.8.1.tar.gz",
+      "license": "BSD-3-Clause",
+      "name": "libsrtp",
+      "root": "libsrtp-6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+      "sha256": "1ef3e6315e0ea3cd05f4980c8b5f7a9df369e3d586f5e0616e6cc4c778401d4c",
+      "url": "https://codeload.github.com/cisco/libsrtp/tar.gz/6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+      "version": "2.8.1"
+    },
+    "static_library_sha256": "53b445c78c6cfb3813e50e39a453d45f773fe711e98fd0402ee62ba3f8db46eb"
+  },
+  "transitive_dependency_closure": "not inventoried; remains distribution gate",
+  "upstream_source_commit": "unverified; no source SHA inferred",
+  "validation": {
+    "audio_capability_probe": "Opus/PCMA/PCMU opened; native AAC-ELD rejected with -22",
+    "command": "make -C native FFMPEG_PREFIX=<actual pinned FFmpeg9.0.2 installation> SRTP_PREFIX=<actual verified libsrtp2.8.1 prefix> test",
+    "scope": "macOS arm64 only; no physical runtime/distribution proof",
+    "srtp": "published pinned srtp_validate RTP/SRTCP ciphertext vectors, correlation, session rejection, output deadline and STOP while protection stdout blocked",
+    "tests_passed": 17
+  }
+}
