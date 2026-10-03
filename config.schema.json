@@ -192,12 +192,6 @@
           { "title": "Linux VAAPI (advanced)", "enum": ["h264_vaapi"] }
         ]
       },
-      "verifyImmisTls": {
-        "title": "Verify IMMIS TLS",
-        "description": "Verify TLS certificates and hostnames for Blink IMMIS live streams. Keep enabled unless Blink support has confirmed your camera requires an insecure self-signed stream endpoint.",
-        "type": "boolean",
-        "default": true
-      },
       "excludedNetworks": {
         "title": "Excluded Networks",
         "description": "Network IDs or exact Blink network names to exclude, including all their cameras. Restart the Blink child bridge after changing this setting.",
@@ -309,7 +303,6 @@
         "audioBitrate",
         "videoBitrate",
         "videoEncoder",
-        "verifyImmisTls",
         "rtspTransport",
         "ffmpegDebug",
         "debugStreamPath"

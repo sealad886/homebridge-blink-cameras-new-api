@@ -20,6 +20,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
+import { describeMediaDestination, resolveMediaDestination, MediaDestination } from './media-destination';
 import { URL } from 'node:url';
 import { recordSecurityBoundaryEvent } from './network-diagnostics';
 
@@ -35,7 +36,7 @@ export interface ImmisProxyConfig {
   debug?: boolean;
   /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
   saveStreamPath?: string;
-  /** Verify the upstream IMMIS TLS certificate and hostname. */
+  /** @deprecated Ignored: upstream TLS certificate and hostname verification is mandatory. */
   verifyTls?: boolean;
   /**
    * Promise that resolves when the Blink command is ready.
@@ -165,6 +166,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private streamFile: fs.WriteStream | null = null;
   private streamBytesWritten = 0;
   private targetSocket: tls.TLSSocket | null = null;
+  private readonly destination: MediaDestination;
+  private resolving: Promise<void> | null = null;
+  private resolutionController: globalThis.AbortController | null = null;
   private isRunning = false;
   private keepAliveInterval: ReturnType<typeof globalThis.setInterval> | null = null;
   private keepAliveSequence = 0;
@@ -186,7 +190,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   constructor(config: ImmisProxyConfig) {
     super();
 
-    this.parsedUrl = new URL(config.immisUrl.replace('immis://', 'https://'));
+    this.destination = describeMediaDestination(config.immisUrl);
+    this.parsedUrl = new URL(config.immisUrl);
     const clientId = this.parsedUrl.searchParams.get('client_id');
     if (clientId === null || !/^(0|[1-9][0-9]*)$/.test(clientId) || Number(clientId) > 0xffffffff) {
       throw new Error('IMMIS client_id must be a canonical uint32');
@@ -201,7 +206,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       saveStreamPath: config.saveStreamPath,
       debug: config.debug,
       waitForReady: config.waitForReady,
-      verifyTls: config.verifyTls ?? true,
+      verifyTls: true,
     };
 
     // If a waitForReady promise is provided, set up the ready state handler
@@ -276,8 +281,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   /** After stop(), resolves only after startup and owned transport/file handles close. */
   get whenClosed(): Promise<void> {
     return (async () => {
-      while (this.recordingStart || this.closingHandles.size) {
+      while (this.recordingStart || this.resolving || this.closingHandles.size) {
         if (this.recordingStart) await this.recordingStart.catch(() => undefined);
+        if (this.resolving) await this.resolving;
         await Promise.all([...this.closingHandles]);
       }
     })();
@@ -529,17 +535,36 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Connect to the Blink immis server via TLS
    */
   private connectToImmisServer(): void {
-    if (!this.isRunning || !this.isCommandReady || !this.consumer) return;
-    const hostname = this.parsedUrl.hostname;
-    const port = parseInt(this.parsedUrl.port, 10) || 443;
+    if (!this.isRunning || !this.isCommandReady || !this.consumer || this.targetSocket || this.resolving) return;
+    const controller = new globalThis.AbortController();
+    this.resolutionController = controller;
+    const pending = (async () => {
+      try {
+        const destination = await resolveMediaDestination(this.destination, controller.signal);
+        if (controller.signal.aborted || !this.isRunning || !this.consumer) return;
+        this.openImmisSocket(destination.address, destination.servername);
+      } catch {
+        if (!controller.signal.aborted && this.isRunning) {
+          recordSecurityBoundaryEvent('destination_rejection');
+          this.safeEmit('error', new Error('IMMIS destination connection refused'));
+          this.stop();
+        }
+      } finally {
+        if (this.resolutionController === controller) {
+          this.resolutionController = null;
+          this.resolving = null;
+        }
+      }
+    })();
+    this.resolving = pending;
+  }
 
-    this.log(`Connecting to immis server: ${hostname}:${port}`);
-
+  private openImmisSocket(address: string, hostname: string): void {
     const socket = tls.connect(
       {
-        host: hostname,
-        port: port,
-        rejectUnauthorized: this.config.verifyTls,
+        host: address,
+        port: 443,
+        rejectUnauthorized: true,
         servername: hostname,
         minVersion: 'TLSv1.2',
       },
@@ -569,8 +594,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.debug('Ignoring SSL close notify error');
         return;
       }
-      this.log(`Immis connection error: ${error.message}`);
-      this.safeEmit('error', error);
+      this.log('IMMIS TLS connection failed');
+      this.safeEmit('error', new Error('IMMIS TLS connection failed'));
     });
 
     socket.on('close', () => {
@@ -936,6 +961,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     }
 
     this.isRunning = false;
+    this.resolutionController?.abort();
     this.log('Stopping proxy server');
 
     // Stop stream recording

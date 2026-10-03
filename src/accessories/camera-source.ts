@@ -122,7 +122,7 @@ export const resolveStreamingConfig = (
     rtspTransport: config?.rtspTransport ?? DEFAULT_STREAMING_CONFIG.rtspTransport,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
-    verifyImmisTls: config?.verifyImmisTls ?? DEFAULT_STREAMING_CONFIG.verifyImmisTls,
+    verifyImmisTls: true,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
     audio: {

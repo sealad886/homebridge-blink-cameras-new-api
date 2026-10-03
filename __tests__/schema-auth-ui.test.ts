@@ -432,16 +432,10 @@ describe('schema layout integrity', () => {
     expect(hits).toEqual([]);
   });
 
-  it('exposes IMMIS TLS verification as secure-by-default streaming config', () => {
+  it('does not offer an IMMIS TLS bypass', () => {
     const schema = readJson<SchemaDocument>('config.schema.json');
-    const properties = schema.schema?.properties ?? {};
-    const verifyImmisTls = properties.verifyImmisTls as Record<string, unknown>;
-
-    expect(verifyImmisTls.type).toBe('boolean');
-    expect(verifyImmisTls.default).toBe(true);
-
-    const layoutReferences = findLayoutKeyReferences(schema.layout ?? [], new Set(['verifyImmisTls']));
-    expect(layoutReferences).toEqual(['verifyImmisTls']);
+    expect(schema.schema?.properties).not.toHaveProperty('verifyImmisTls');
+    expect(findLayoutKeyReferences(schema.layout ?? [], new Set(['verifyImmisTls']))).toEqual([]);
   });
 
   it('uses array-based device customization instead of object additionalProperties', () => {

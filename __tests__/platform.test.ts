@@ -706,7 +706,7 @@ describe('BlinkCamerasPlatform', () => {
     expect(blinkApi.getHomescreen).not.toHaveBeenCalled();
   });
 
-  it('forwards verifyImmisTls into the runtime streaming config', () => {
+  it('enforces IMMIS TLS verification even when old configuration requests a bypass', () => {
     hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;
     const blinkApi = buildBlinkApi();
@@ -718,6 +718,6 @@ describe('BlinkCamerasPlatform', () => {
       hapApi,
     );
 
-    expect(platform.streamingConfig.verifyImmisTls).toBe(false);
+    expect(platform.streamingConfig.verifyImmisTls).toBe(true);
   });
 });
