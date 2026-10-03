@@ -43,13 +43,13 @@ function extractCsrfToken(html: string): string | null {
   return null;
 }
 
-function request(url: string, opts: https.RequestOptions, body?: string): Promise<{status: number, location: string | null, cookies: string[], body: string}> {
+function request(url: string, opts: https.RequestOptions, body?: string): Promise<{status: number, location: string | null, cookies: string[], body: string, requestUrl: string}> {
   if (isDiagnosticCallback(url)) {
-    return Promise.resolve({ status: 302, location: url, cookies: [], body: '' });
+    return Promise.resolve({ status: 302, location: url, cookies: [], body: '', requestUrl: url });
   }
   return diagnosticRequest(url, opts, body).then(res => ({
     status: res.statusCode, location: res.headers.location || null,
-    cookies: res.rawSetCookies, body: res.body,
+    cookies: res.rawSetCookies, body: res.body, requestUrl: url,
   }));
 }
 
@@ -84,7 +84,7 @@ async function main() {
   // Step 2: If redirected, follow to signin
   if (res.status === 302 && res.location?.includes('/signin')) {
     console.log('\n📡 Step 2: Follow redirect to /signin');
-    const signinUrl = diagnosticUrl(res.location).toString();
+    const signinUrl = diagnosticUrl(res.location, res.requestUrl).toString();
 
     res = await request(signinUrl, {
       method: 'GET',
@@ -97,7 +97,7 @@ async function main() {
   // If ANOTHER redirect, follow it too
   if (res.status === 302 && res.location) {
     console.log('\n📡 Step 2b: Follow another redirect');
-    const url = isDiagnosticCallback(res.location) ? res.location : diagnosticUrl(res.location).toString();
+    const url = isDiagnosticCallback(res.location) ? res.location : diagnosticUrl(res.location, res.requestUrl).toString();
 
     res = await request(url, {
       method: 'GET',
@@ -316,7 +316,7 @@ async function main() {
     // If redirected to authorize, follow to get the code
     if (res.location?.includes('/authorize') || res.location?.includes('code=')) {
       console.log('\n📡 Step 5: Follow redirect to get auth code');
-      const url = isDiagnosticCallback(res.location) ? res.location : diagnosticUrl(res.location).toString();
+      const url = isDiagnosticCallback(res.location) ? res.location : diagnosticUrl(res.location, res.requestUrl).toString();
 
       res = await request(url, {
         method: 'GET',

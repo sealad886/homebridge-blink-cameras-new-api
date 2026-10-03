@@ -72,3 +72,11 @@ describe('OAuth diagnostic transport boundary', () => {
     await expect(pending).rejects.toThrow('OAuth diagnostic transport failed');
   });
 });
+
+it('preserves relative redirect path and query across successive request URLs', () => {
+  const first = diagnosticUrl('signin', 'https://api.oauth.blink.com/oauth/v2/authorize?state=one');
+  const second = diagnosticUrl('?state=two', first.toString());
+  expect(second.pathname).toBe('/oauth/v2/signin');
+  expect(second.searchParams.get('state')).toBe('two');
+  expect(() => diagnosticUrl('//evil.test/signin', second.toString())).toThrow();
+});

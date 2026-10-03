@@ -6,6 +6,9 @@ import sys
 import tempfile
 import unittest
 import threading
+import socket
+import subprocess
+import shlex
 from unittest import mock
 from pathlib import Path
 
@@ -94,6 +97,60 @@ class ReportTests(unittest.TestCase):
         extra.write_text("x")
         with self.assertRaisesRegex(report.BundleError, "file set differs"):
             report.verify_bundle(output)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO unavailable')
+    def test_verification_rejects_fifo_before_hashing_listed_or_unlisted(self) -> None:
+        output = self.store.root / 'exports' / 'special'
+        report.export_bundle(self.store, 0, 100, output)
+        extra = output / 'unexpected-fifo'
+        os.mkfifo(extra)
+        for listed in (False, True):
+            with self.subTest(listed=listed):
+                if listed:
+                    with (output / 'manifest.sha256').open('a') as manifest:
+                        manifest.write('0' * 64 + '  unexpected-fifo\n')
+                with mock.patch.object(report, '_hash', side_effect=AssertionError('must reject before hashing')):
+                    with self.assertRaisesRegex(report.BundleError, 'unsafe entries'):
+                        report.verify_bundle(output)
+
+    @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix socket unavailable')
+    def test_verification_rejects_unlisted_socket(self) -> None:
+        output = self.store.root / 'exports' / 'socket'
+        report.export_bundle(self.store, 0, 100, output)
+        with tempfile.TemporaryDirectory(dir='/tmp') as short_root:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                short_socket = Path(short_root) / 'socket'
+                listener.bind(str(short_socket))
+                short_socket.rename(output / 'unexpected.sock')
+                with self.assertRaisesRegex(report.BundleError, 'unsafe entries'):
+                    report.verify_bundle(output)
+
+    def test_verification_rejects_symlink_and_unlisted_directory(self) -> None:
+        output = self.store.root / 'exports' / 'unsafe'
+        report.export_bundle(self.store, 0, 100, output)
+        extra = output / 'unexpected'
+        extra.symlink_to(output / 'report.json')
+        with self.assertRaisesRegex(report.BundleError, 'unsafe entries'):
+            report.verify_bundle(output)
+        extra.unlink()
+        extra.mkdir()
+        with self.assertRaisesRegex(report.BundleError, 'directory set differs'):
+            report.verify_bundle(output)
+
+    def test_generated_trusted_commands_locate_installed_repository_tool(self) -> None:
+        output = self.store.root / 'exports' / 'commands'
+        report.export_bundle(self.store, 0, 100, output)
+        commands = json.loads((output / 'provenance.json').read_text())['reproduction']
+        readme = (output / 'README.txt').read_text()
+        repository = HERE.parents[1]
+        for field in ('verify_command', 'reproduce_command'):
+            command = commands[field]
+            self.assertIn('/trusted/install/scripts/pi-evidence/report.py', command)
+            argv = shlex.split(command.replace('/trusted/install', str(repository)).replace('/path/to/bundle', str(output)))
+            argv[0] = sys.executable
+            result = subprocess.run(argv, check=True, capture_output=True, text=True, timeout=10)
+            self.assertTrue(json.loads(result.stdout)['valid' if field == 'verify_command' else 'reproduced'])
+        self.assertIn(commands['reproduce_command'], readme)
 
     def test_export_must_remain_in_managed_exports_and_respect_budget(self) -> None:
         with self.assertRaisesRegex(report.BundleError, "direct child"):

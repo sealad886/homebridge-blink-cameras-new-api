@@ -147,6 +147,7 @@ def build_report(events, start, end, already_ordered=False):
     if not already_ordered:
         events = sorted(events, key=lambda e: (timestamp(e), e.get('event_id', '')))
     event_count = 0
+    window_event_count = 0
     sessions, active, activity, timeline, gaps = [], {}, [], [], []
     completed = {}
     source_seen, audit = {}, {}
@@ -166,8 +167,11 @@ def build_report(events, start, end, already_ordered=False):
             active[key] = s
         if raw.get('pid') is not None:
             aliases = s.setdefault('pid_aliases', [])
-            if str(raw['pid']) not in aliases:
-                aliases.append(str(raw['pid']))
+            pid = str(raw['pid'])
+            if pid not in aliases:
+                aliases.append(pid)
+            observed_from = s.setdefault('_pid_observed_from', {})
+            observed_from[pid] = min(observed_from.get(pid, t), t)
         s['last_observed'] = max(s['last_observed'], t)
         s['evidence_ids'].append(event.get('event_id'))
         if boundary == 'start':
@@ -185,6 +189,8 @@ def build_report(events, start, end, already_ordered=False):
         event_count += 1
         r = decoded(e)
         t = timestamp(e, r)
+        if start <= t < end:
+            window_event_count += 1
         src = e.get('source', 'unknown')
         boot = boot_identity(e, r)
         bounds = source_seen.setdefault(src, [t, t])
@@ -281,6 +287,9 @@ def build_report(events, start, end, already_ordered=False):
                 # OpenSSH 10 privilege separation logs authentication/PAM under
                 # root PID and disconnect/channel records under user child PID.
                 ssh_connections[base] = key
+                # A linked child/channel log proves this alias only from its own time.
+                if key in active and not auth:
+                    observe(key, 'ssh_connection', e, {'pid': pid})
             else:
                 key = f'{base}:unknown-start'
             channel = re.search(r'Starting session:.*\bid (\d+)', msg)
@@ -339,8 +348,9 @@ def build_report(events, start, end, already_ordered=False):
         # Attribute only direct children while a verified shell was observed alive.
         # A coincident time or reused PID outside that interval proves nothing.
         matches = [s for s in sessions if s['kind'] in ('connect_shell_process', 'ssh_connection')
-                   and s['boot_id'] == boot and row.get('ppid') in s.get('pid_aliases', [])
-                   and s['start'] is not None and s['start'] <= t <= s['last_observed']]
+                   and s['boot_id'] == boot and row.get('ppid') in s.get('_pid_observed_from', {})
+                   and s['start'] is not None
+                   and max(s['start'], s['_pid_observed_from'][row['ppid']]) <= t <= s['last_observed']]
         if len(matches) == 1:
             row['session_id'] = matches[0]['session_id']
             row['attribution'] = 'direct_child_of_observed_shell' if matches[0]['kind'] == 'connect_shell_process' else 'direct_child_of_observed_ssh_process'
@@ -356,20 +366,22 @@ def build_report(events, start, end, already_ordered=False):
                 or row.get('ses') in unset_audit_sessions):
             continue
         key = (row['boot_id'], row['ses'])
-        origin = audit_session_origins.setdefault(key, {'sessions': set(), 'evidence_ids': set()})
+        origin = audit_session_origins.setdefault(key, {'sessions': set(), 'proofs': []})
         origin['sessions'].add(row['session_id'])
-        origin['evidence_ids'].update(row['evidence_ids'])
+        origin['proofs'].append((row['at'], row['evidence_ids']))
     for row in activity:
         if row['attribution'] != 'unproven' or row.get('ses') in unset_audit_sessions:
             continue
         origin = audit_session_origins.get((row['boot_id'], row['ses']))
-        if origin and len(origin['sessions']) == 1:
+        prior_proofs = [ids for at, ids in origin['proofs'] if at <= row['at']] if origin else []
+        if origin and len(origin['sessions']) == 1 and prior_proofs:
             row['session_id'] = next(iter(origin['sessions']))
             row['attribution'] = 'kernel_audit_session_origin'
-            row['attribution_evidence_ids'] = sorted(origin['evidence_ids'])
+            row['attribution_evidence_ids'] = sorted({ident for ids in prior_proofs for ident in ids})
 
     selected = []
     for s in sessions:
+        s.pop('_pid_observed_from', None)
         # A missing end cannot establish ongoing activity past the last observation.
         left = s['start'] if s['start'] is not None else s['first_observed']
         right = s['end'] if s['end'] is not None else s['last_observed']
@@ -386,7 +398,7 @@ def build_report(events, start, end, already_ordered=False):
             s[field] = iso(value)
         selected.append(s)
     coverage = {'window_start': iso(start), 'window_end': iso(end),
-                'state': 'source_gap' if gaps else 'capture_observed' if event_count else 'collector_not_yet_deployed',
+                'state': 'source_gap' if gaps else 'capture_observed' if window_event_count else 'no_window_observation' if event_count else 'collector_not_yet_deployed',
                 'gaps': gaps, 'sources': {k: {'first': iso(min(v)), 'last': iso(max(v))} for k, v in sorted(source_seen.items())},
                 'limitations': ['Audit capture for elevated descendants of Connect shells with unset audit login ID is not guaranteed.',
                                 'No browser identity or screen/terminal recording.',

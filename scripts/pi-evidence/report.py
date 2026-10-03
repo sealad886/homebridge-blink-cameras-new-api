@@ -15,6 +15,7 @@ import csv
 import io
 import platform
 import inspect
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ class BundleError(RuntimeError):
 
 
 _BUNDLED_SOURCES = ("normalize.py",)
+_TRUSTED_REPORT = "/trusted/install/scripts/pi-evidence/report.py"
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -202,8 +204,8 @@ def export_bundle(
             "store_status": store.status(),
             "parameters": {"all_retained_context_included": True},
             "reproduction": {
-                "verify_command": "python3 /trusted/install/report.py verify /path/to/bundle",
-                "reproduce_command": "python3 /trusted/install/report.py reproduce /path/to/bundle",
+                "verify_command": f"python3 {_TRUSTED_REPORT} verify /path/to/bundle",
+                "reproduce_command": f"python3 {_TRUSTED_REPORT} reproduce /path/to/bundle",
                 "normalizer_sha256": _hash(Path(__file__).resolve().parent / "normalize.py"),
                 "python_version": platform.python_version(),
                 "platform": platform.platform(),
@@ -247,7 +249,7 @@ def export_bundle(
             "Files are owner-only and may contain sensitive raw command arguments.\n"
             "Capacity limits govern pi-evidence writes; they are not a filesystem quota for external processes.\n"
             "Verify with trusted installed report.py; bundled sources are provenance data only.\n"
-            "Reproduce: python3 /trusted/install/report.py reproduce /path/to/bundle\n"
+            f"Reproduce: python3 {_TRUSTED_REPORT} reproduce /path/to/bundle\n"
             f"Evidence retention deadline (Unix UTC): {evidence_expires_at}\n"
         ).encode("utf-8")
         _write(staging / "README.txt", readme, reserved_writer)
@@ -315,7 +317,8 @@ def verify_bundle(bundle: os.PathLike[str] | str) -> dict[str, Any]:
             raise BundleError(f"unsafe or duplicate manifest name at line {number}")
         expected[name] = digest
     entries = list(root.rglob("*"))
-    unsafe = [str(p.relative_to(root)) for p in entries if p.is_symlink()]
+    unsafe = [str(p.relative_to(root)) for p in entries
+              if not (stat.S_ISREG(p.lstat().st_mode) or stat.S_ISDIR(p.lstat().st_mode))]
     if unsafe:
         raise BundleError(f"bundle contains unsafe entries: {sorted(unsafe)}")
     actual_names = {

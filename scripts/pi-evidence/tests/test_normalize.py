@@ -112,6 +112,7 @@ class NormalizeTests(unittest.TestCase):
 
     def test_direct_ssh_child_attribution_requires_live_parent_interval(self):
         rows = [event(100, 'journal', {'MESSAGE':'Accepted publickey for a from 1.2.3.4 port 2 ssh2', '_PID':'10'}),
+                event(110, 'journal', {'MESSAGE':'Starting session: shell on pts/0 for a from 1.2.3.4 port 2 id 0', '_PID':'11'}),
                 event(150, 'journal', {'MESSAGE':'Disconnected from user a 1.2.3.4 port 2', '_PID':'11'}),
                 event(120, 'audit', 'type=SYSCALL msg=audit(120.0:1): pid=20 ppid=11 uid=1000'),
                 event(180, 'audit', 'type=SYSCALL msg=audit(180.0:2): pid=21 ppid=11 uid=1000')]
@@ -191,6 +192,53 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(activity[0]['attribution'], 'direct_child_of_observed_ssh_process')
         self.assertEqual(activity[1]['attribution'], 'direct_child_of_observed_ssh_process')
         self.assertEqual(activity[2]['attribution'], 'unproven')
+
+    def test_retained_context_does_not_prove_capture_in_requested_window(self):
+        rows = [event(10, raw={'session_id':'s', 'event':'start'}),
+                event(200, raw={'session_id':'s', 'event':'end'})]
+        report = build_report(rows, 100, 150)
+        self.assertEqual(report['coverage']['state'], 'no_window_observation')
+        self.assertEqual(len(report['sessions']), 1)
+
+    def test_coverage_uses_half_open_execution_time_window_not_receipt(self):
+        for at, observed in ((99.999, False), (100, True), (149.999, True), (150, False)):
+            with self.subTest(executed_at=at):
+                row = event(120, 'audit', f'type=SYSCALL msg=audit({at}:1): pid=20 ppid=10')
+                report = build_report([row], 100, 150)
+                self.assertEqual(report['coverage']['state'], 'capture_observed' if observed else 'no_window_observation')
+
+    def test_late_ssh_pid_alias_does_not_attribute_earlier_execution(self):
+        rows = [event(100, 'journal', {'MESSAGE':'Accepted publickey for a from 1.2.3.4 port 2 ssh2', '_PID':'10'}),
+                event(150, 'journal', {'MESSAGE':'Disconnected from user a 1.2.3.4 port 2', '_PID':'11'}),
+                event(120, 'audit', 'type=SYSCALL msg=audit(120.0:1): pid=20 ppid=11 uid=1000')]
+        for ordered in (False, True):
+            with self.subTest(already_ordered=ordered):
+                row = build_report(rows, 0, 200, already_ordered=ordered)['activity'][0]
+                self.assertEqual(row['attribution'], 'unproven')
+                self.assertIsNone(row['session_id'])
+
+    def test_pid_alias_proof_respects_generation_and_boot(self):
+        rows = [event(100, 'journal', {'MESSAGE':'Accepted publickey for a from 1.2.3.4 port 2 ssh2', '_PID':'10'}),
+                event(150, 'journal', {'MESSAGE':'Disconnected from user a 1.2.3.4 port 2', '_PID':'11'}),
+                event(160, 'journal', {'MESSAGE':'Accepted publickey for a from 1.2.3.4 port 3 ssh2', '_PID':'10'}),
+                event(190, 'journal', {'MESSAGE':'Disconnected from user a 1.2.3.4 port 3', '_PID':'12'}),
+                event(170, 'audit', 'type=SYSCALL msg=audit(170.0:1): pid=20 ppid=11 uid=1000'),
+                event(120, 'audit', 'type=SYSCALL msg=audit(120.0:2): pid=21 ppid=10 uid=1000', boot='other')]
+        self.assertTrue(all(row['attribution'] == 'unproven' for row in build_report(rows, 0, 200)['activity']))
+
+    def test_kernel_origin_proof_never_propagates_backward(self):
+        rows = [event(100, 'journal', {'MESSAGE':'Accepted publickey for a from 1.2.3.4 port 2 ssh2', '_PID':'10'}),
+                event(150, 'journal', {'MESSAGE':'Disconnected from user a 1.2.3.4 port 2', '_PID':'11'}),
+                event(105, 'audit', 'type=SYSCALL msg=audit(105.0:1): pid=21 ppid=20 uid=1000 ses=7'),
+                event(110, 'audit', 'type=SYSCALL msg=audit(110.0:2): pid=20 ppid=10 uid=1000 ses=7'),
+                event(120, 'audit', 'type=SYSCALL msg=audit(120.0:3): pid=22 ppid=20 uid=1000 ses=7'),
+                event(130, 'audit', 'type=SYSCALL msg=audit(130.0:4): pid=23 ppid=10 uid=1000 ses=7')]
+        for ordered in (False, True):
+            with self.subTest(already_ordered=ordered):
+                activity = build_report(rows, 0, 200, already_ordered=ordered)['activity']
+                self.assertEqual(activity[0]['attribution'], 'unproven')
+                self.assertEqual(activity[2]['attribution'], 'kernel_audit_session_origin')
+                self.assertEqual(activity[2]['attribution_evidence_ids'], activity[1]['evidence_ids'])
 
     def test_empty_window_has_no_claim_of_absence(self):
         self.assertEqual(build_report([],0,200)['coverage']['state'],'collector_not_yet_deployed')
