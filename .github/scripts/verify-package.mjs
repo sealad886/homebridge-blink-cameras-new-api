@@ -14,9 +14,17 @@ assert.equal(lock.version, manifest.version);
 assert.equal(lock.packages[''].version, manifest.version);
 const sha = process.env.GITHUB_SHA ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 assert.match(sha, /^[a-f0-9]{40}$/);
+// npm 12 returns a package-name keyed object; earlier supported npm returns an array.
+const packedResults = (output) => {
+  const parsed = JSON.parse(output);
+  const results = Array.isArray(parsed) ? parsed : Object.values(parsed);
+  assert.equal(results.length, 1, 'Expected exactly one packed package');
+  assert.equal(typeof results[0]?.filename, 'string', 'Missing packed artifact filename');
+  return results;
+};
 const scratch = mkdtempSync(join(tmpdir(), 'blink-package-'));
 try {
-  const [initial] = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { encoding: 'utf8' }));
+  const [initial] = packedResults(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { encoding: 'utf8' }));
   const paths = initial.files.map((file) => file.path);
   for (const path of [manifest.main, manifest.types, 'config.schema.json', 'dist/homebridge-ui/server.js', 'dist/homebridge-ui/public/index.html', 'CHANGELOG.md', 'scripts/preuninstall.js']) {
     assert(paths.includes(path), `Package is missing ${path}`);
@@ -34,7 +42,7 @@ try {
   const registrations = [];
   plugin({ registerPlatform: (...args) => registrations.push(args) });
   assert.equal(registrations.length, 1, 'Packed plugin does not register its platform');
-  const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { cwd: packageRoot, encoding: 'utf8' }));
+  const [packed] = packedResults(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { cwd: packageRoot, encoding: 'utf8' }));
   const destination = resolve(process.env.PACKAGE_OUTPUT ?? join(scratch, 'verified.tgz'));
   copyFileSync(join(scratch, packed.filename), destination);
   const receipt = { name: manifest.name, version: manifest.version, sha, integrity: packed.integrity, filename: destination };
