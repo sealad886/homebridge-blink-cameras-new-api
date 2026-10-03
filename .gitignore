@@ -247,3 +247,18 @@ vite.config.ts.timestamp-*
 .dolt/
 *.db
 .github/hooks/
+
+# Maintained security diagnostics and trusted evidence reporting sources
+!/scripts/debug-full-oauth.ts
+!/scripts/debug-simple-oauth.ts
+!/scripts/oauth-diagnostic-transport.ts
+!/scripts/pi-evidence/
+/scripts/pi-evidence/*
+!/scripts/pi-evidence/report.py
+!/scripts/pi-evidence/normalize.py
+!/scripts/pi-evidence/store.py
+!/scripts/pi-evidence/tests/
+/scripts/pi-evidence/tests/*
+!/scripts/pi-evidence/tests/test_report.py
+!/scripts/pi-evidence/tests/test_normalize.py
+!/scripts/pi-evidence/README.md
