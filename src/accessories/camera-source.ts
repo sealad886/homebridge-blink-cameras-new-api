@@ -20,11 +20,13 @@ import {
   StreamRequestCallback,
   StreamingRequest,
 } from 'homebridge';
-import { withResponseBudget, RequestOptions, checkRequestBudget } from '../operation-budget';
+import { withResponseBudget, RequestOptions, checkRequestBudget, budgetedDelay } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkApi } from '../blink-api/client';
+import { readBoundedBody } from '../blink-api/response-body';
 import { BlinkHttpError } from '../blink-api/http';
 import {
+  recordSecurityBoundaryEvent,
   describeNetworkFailure,
   formatNetworkFailureDiagnostic,
   NetworkFailureDiagnostic,
@@ -35,7 +37,7 @@ import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
-import { setInterval, clearInterval, setTimeout } from 'node:timers';
+
 import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
@@ -136,7 +138,23 @@ export const resolveStreamingConfig = (
   };
 };
 
+type SessionPhase = 'PREPARING' | 'PREPARED' | 'STARTING' | 'RUNNING' | 'RETIRING' | 'CLOSED';
+interface SessionOwner {
+  phase: SessionPhase;
+  preparing: boolean;
+  ports: Set<number>;
+  abort: globalThis.AbortController;
+  expiry?: ReturnType<typeof setTimeout>;
+  retirement?: Promise<void>;
+  children: Set<ChildProcess>;
+  cancelStart?: () => void;
+  localStarting?: boolean;
+  transportClosed?: boolean;
+  release?: () => void;
+}
+
 interface PendingStreamSession {
+  owner?: SessionOwner;
   address: string;
   addressVersion: 'ipv4' | 'ipv6';
   sessionId: string;
@@ -159,7 +177,7 @@ interface ActiveStreamSession extends PendingStreamSession {
   talkback?: ChildProcess;
   commandId?: number;
   liveviewUrl?: string;
-  keepAliveTimer?: ReturnType<typeof setInterval> | null;
+  keepAliveTimer?: ReturnType<typeof setTimeout> | null;
   stopped?: boolean;
   immisProxy?: ImmisProxyServer;
   selectedVideoEncoder?: VideoEncoderPreference;
@@ -291,7 +309,6 @@ const buildRtpUrl = (
 
 const toSrtpParams = (srtp: Buffer): string => srtp.toString('base64');
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // HomeKit may ask for the same camera snapshot several times within a few
 // seconds. Keep transport failures from turning that retry burst into an
@@ -306,6 +323,7 @@ class SnapshotNetworkError extends Error {
 
 export class BlinkCameraSource implements CameraStreamingDelegate {
   private readonly streamingConfig: BlinkCameraStreamingConfig;
+  private readonly sessionOwners = new Map<string, SessionOwner>();
   private readonly pendingSessions = new Map<string, PendingStreamSession>();
   private readonly ongoingSessions = new Map<string, ActiveStreamSession>();
   private cachedSnapshot: Buffer | null = null;
@@ -478,6 +496,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     if (resourceUrl.protocol !== 'https:'
       || !/^rest-[a-z0-9]{4}\.immedia-semi\.com$/.test(resourceUrl.hostname)
       || resourceUrl.username || resourceUrl.password || resourceUrl.port) {
+      recordSecurityBoundaryEvent('destination_rejection');
       throw new Error('Blink returned an untrusted thumbnail destination.');
     }
 
@@ -497,7 +516,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error(`Failed to fetch thumbnail: ${response.status}`);
     }
     try {
-      const buffer = Buffer.from(await response.arrayBuffer());
+      const buffer = await readBoundedBody(response, { kind: 'thumbnail', deadline });
       checkRequestBudget({ deadline });
       return buffer;
     } catch {
@@ -543,18 +562,37 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     request: PrepareStreamRequest,
     callback: PrepareStreamCallback,
   ): Promise<void> {
+    const sessionId = request.sessionID;
+    if (this.sessionOwners.has(sessionId) || this.sessionOwners.size >= this.streamingConfig.maxStreams * 2) {
+      callback(new Error('Streaming preparation capacity reached or session already owned'));
+      return;
+    }
+    const owner: SessionOwner = { phase: 'PREPARING', preparing: true, ports: new Set(), abort: new globalThis.AbortController(), children: new Set() };
+    this.sessionOwners.set(sessionId, owner);
+    const allocateOwned = async (): Promise<number> => {
+      const port = await allocatePort();
+      owner.ports.add(port); // Adopt late allocations before checking cancellation.
+      if (owner.abort.signal.aborted) {
+        releasePort(port);
+        owner.ports.delete(port);
+        throw new Error('Streaming preparation cancelled');
+      }
+      return port;
+    };
+    owner.expiry = setTimeout(() => { void this.stopStream(sessionId); }, 30_000);
+    owner.expiry.unref?.();
     try {
-      const sessionId = request.sessionID;
       const videoSSRC = randomBytes(4).readUInt32BE(0);
-      const localVideoPort = await allocatePort();
+      const localVideoPort = await allocateOwned();
 
       const session: PendingStreamSession = {
+        owner,
         address: request.targetAddress,
         addressVersion: request.addressVersion,
         sessionId,
         videoPort: request.video.port,
         localVideoPort,
-        localVideoRtcpPort: await allocatePort(),
+        localVideoRtcpPort: await allocateOwned(),
         videoCryptoSuite: request.video.srtpCryptoSuite,
         videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
         videoSSRC,
@@ -562,8 +600,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       if (this.streamingConfig.audio.enabled) {
         const audioSSRC = randomBytes(4).readUInt32BE(0);
-        const localAudioPort = await allocatePort();
-        const localAudioRtcpPort = await allocatePort();
+        const localAudioPort = await allocateOwned();
+        const localAudioRtcpPort = await allocateOwned();
         session.audioPort = request.audio.port;
         session.localAudioPort = localAudioPort;
         session.localAudioRtcpPort = localAudioRtcpPort;
@@ -572,6 +610,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         session.audioSSRC = audioSSRC;
       }
 
+      owner.preparing = false;
+      owner.phase = 'PREPARED';
       this.pendingSessions.set(sessionId, session);
 
       const response: PrepareStreamResponse = {
@@ -601,6 +641,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       );
       callback(undefined, response);
     } catch (error) {
+      owner.preparing = false;
+      owner.retirement = undefined;
+      await this.stopStream(sessionId);
       this.logError(`Stream preparation failed: ${error}`);
       callback(error as Error);
     }
@@ -646,21 +689,24 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     const activeStreamCount = Array.from(this.ongoingSessions.values())
-      .filter((session) => !session.stopped)
+      .filter((session) => session.owner?.phase !== 'CLOSED')
       .length;
     if (activeStreamCount >= this.streamingConfig.maxStreams) {
       this.log(
         `Stream start rejected for session ${sessionId}: maxStreams=${this.streamingConfig.maxStreams} already reached`,
       );
-      releasePort(pending.localVideoPort);
-      releasePort(pending.localVideoRtcpPort);
-      releasePort(pending.localAudioPort);
-      releasePort(pending.localAudioRtcpPort);
-      this.pendingSessions.delete(sessionId);
+      await this.stopStream(sessionId, pending.owner);
       callback(new Error(`Maximum live stream count (${this.streamingConfig.maxStreams}) reached`));
       return;
     }
 
+    const owner = pending.owner!;
+    globalThis.clearTimeout(owner.expiry);
+    owner.phase = 'STARTING';
+    const originalCallback = callback;
+    let callbackDone = false;
+    callback = (error) => { if (!callbackDone) { callbackDone = true; originalCallback(error); } };
+    owner.cancelStart = () => callback(new Error('Streaming startup cancelled'));
     const active: ActiveStreamSession = {
       ...pending,
       keepAliveTimer: null,
@@ -670,6 +716,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     try {
       const liveview = await this.requestLiveView();
+      active.commandId = liveview.command_id ?? liveview.id;
+      if (!this.ownsSession(sessionId, active)) {
+        if (active.commandId) void this.completeLiveview(active.commandId);
+        throw new Error('Streaming startup cancelled');
+      }
       const originalUrl = liveview.server;
       if (!originalUrl) {
         throw new Error('Live view did not return a server URL');
@@ -680,6 +731,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.liveviewUrl = originalUrl;
 
       let ffmpegInputUrl: string;
+      const readiness = commandId ? this.waitForLiveViewReady(commandId, originalUrl.startsWith('immis://') ? 2 : liveview.polling_interval ?? 5, originalUrl.startsWith('immis://') ? 30 : 6, owner) : Promise.resolve();
+      readiness.catch(() => undefined);
 
       // Handle immis:// protocol using our proxy server
       if (originalUrl.startsWith('immis://')) {
@@ -690,9 +743,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         // the camera has finished initializing, which would cause immediate disconnect.
         // For IMMIS streams, use aggressive polling (2s intervals, 30 attempts = 60s max)
         // because HomeKit has a ~10s timeout expectation for initial stream data.
-        const readyPromise = commandId
-          ? this.waitForLiveViewReady(commandId, 2, 30)
-          : Promise.resolve();
+        const readyPromise = readiness;
 
         const immisProxy = new ImmisProxyServer({
           immisUrl: originalUrl,
@@ -715,17 +766,27 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
             active.readyNotified = true;
             callback(error);
           }
-          void this.stopStream(sessionId);
+          void this.stopStream(sessionId, owner);
         });
 
         active.immisProxy = immisProxy;
-        ffmpegInputUrl = await immisProxy.start();
-        this.log(`IMMIS proxy ready at ${ffmpegInputUrl}`);
+        owner.localStarting = true;
+        try { ffmpegInputUrl = await immisProxy.start(); }
+        finally {
+          owner.localStarting = false;
+          if (owner.abort.signal.aborted) {
+            immisProxy.stop();
+            void immisProxy.whenClosed.then(() => { owner.transportClosed = true; owner.release?.(); });
+          }
+        }
+        if (!this.ownsSession(sessionId, active)) { immisProxy.stop(); throw new Error('Streaming startup cancelled'); }
+        this.log(`IMMIS private transport ready`);
       } else {
         // Standard RTSPS URL - use directly
         ffmpegInputUrl = originalUrl;
       }
 
+      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       this.startFfmpegStream(sessionId, ffmpegInputUrl, request, active, callback);
 
       // Start keep-alive and liveview polling in the BACKGROUND (non-blocking)
@@ -734,14 +795,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (commandId) {
         // For IMMIS streams, waitForLiveViewReady is already handled via the proxy's waitForReady promise
         // For non-IMMIS streams, poll for readiness in background
-        if (!isImmisStream) {
-          this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5)
-            .catch((error) => {
-              this.logError(`Live view readiness check failed: ${error}`);
-            });
-        }
         // Start keep-alive immediately
-        this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval);
+        // Readiness owns status polling until complete; keepalive starts afterward.
+        void readiness
+          .then(() => { if (this.ownsSession(sessionId, active)) this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval); })
+          .catch(() => undefined);
       }
 
       // Two-way audio handling
@@ -756,76 +814,78 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
     } catch (error) {
       this.logError(`Failed to start stream ${sessionId}: ${error}`);
-      await this.stopStream(sessionId);
+      await this.stopStream(sessionId, owner);
       callback(error as Error);
     }
   }
 
-  private async stopStream(sessionId: string): Promise<void> {
-    const pending = this.pendingSessions.get(sessionId);
-    if (pending) {
-      releasePort(pending.localVideoPort);
-      releasePort(pending.localVideoRtcpPort);
-      releasePort(pending.localAudioPort);
-      releasePort(pending.localAudioRtcpPort);
-      this.pendingSessions.delete(sessionId);
-    }
+  private ownsSession(sessionId: string, active: ActiveStreamSession): boolean {
+    return this.ongoingSessions.get(sessionId) === active && !active.stopped
+      && !active.owner?.abort.signal.aborted;
+  }
 
+  private async completeLiveview(commandId: number): Promise<void> {
+    try {
+      await withResponseBudget(this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000 }), 5000);
+    } catch { this.logError('Live view remote cleanup failed or timed out'); }
+  }
+
+  private async closeChild(child: ChildProcess): Promise<void> {
+    if (child.exitCode !== null && child.exitCode !== undefined) return;
+    await new Promise<void>((resolve) => {
+      let finished = false;
+      const finish = (): void => { if (!finished) { finished = true; globalThis.clearTimeout(force); globalThis.clearTimeout(limit); resolve(); } };
+      child.once('close', finish);
+      const force = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* Observe close. */ } }, 1000);
+      const limit = setTimeout(() => {
+        // An unconfirmed child keeps its port reservation until actual close.
+        recordSecurityBoundaryEvent('cleanup_timeout');
+        this.logError('Media child cleanup timeout; reservation retained');
+        finish();
+      }, 3000);
+      try { child.stdin?.end(); child.kill('SIGTERM'); } catch { /* Still observe closure. */ }
+    });
+  }
+
+  private async stopStream(sessionId: string, expectedOwner?: SessionOwner): Promise<void> {
+    const owner = this.sessionOwners.get(sessionId);
     const active = this.ongoingSessions.get(sessionId);
-    if (!active || active.stopped) {
-      return;
-    }
-
-    active.stopped = true;
-
-    if (active.keepAliveTimer) {
-      clearInterval(active.keepAliveTimer);
+    const pending = this.pendingSessions.get(sessionId);
+    if (!owner || (expectedOwner && owner !== expectedOwner)) return;
+    if (owner.retirement) return owner.retirement;
+    owner.phase = 'RETIRING';
+    recordSecurityBoundaryEvent('cancellation');
+    owner.abort.abort(new Error('Streaming session retired'));
+    owner.cancelStart?.();
+    globalThis.clearTimeout(owner.expiry);
+    if (active) {
+      active.stopped = true;
+      if (active.keepAliveTimer) globalThis.clearTimeout(active.keepAliveTimer);
       active.keepAliveTimer = null;
+      try { active.immisProxy?.stopAudio(); active.immisProxy?.stop(); } catch { this.logError('Media transport cleanup failed'); }
     }
-
-    try {
-      active.ffmpeg?.kill('SIGKILL');
-    } catch (error) {
-      this.logError(`Error stopping FFmpeg for session ${sessionId}: ${error}`);
-    }
-
-    try {
-      active.talkback?.kill('SIGKILL');
-    } catch (error) {
-      this.logError(`Error stopping talkback FFmpeg for session ${sessionId}: ${error}`);
-    }
-
-    // Signal IMMIS audio stop if applicable
-    try {
-      active.immisProxy?.stopAudio?.();
-    } catch (error) {
-      this.logError(`Error sending IMMIS stopAudio for session ${sessionId}: ${error}`);
-    }
-
-    // Stop the IMMIS proxy if it was used
-    if (active.immisProxy) {
-      try {
-        active.immisProxy.stop();
-      } catch (error) {
-        this.logError(`Error stopping IMMIS proxy for session ${sessionId}: ${error}`);
+    if (pending) this.pendingSessions.delete(sessionId);
+    const transportClosure = active?.immisProxy?.whenClosed;
+    owner.transportClosed = !transportClosure;
+    owner.retirement = (async () => {
+      await Promise.all([...owner.children].map(child => this.closeChild(child)));
+      const release = (): void => {
+        if (owner.children.size || owner.preparing || owner.localStarting || owner.transportClosed === false) return;
+        for (const port of owner.ports) releasePort(port);
+        owner.ports.clear(); owner.phase = 'CLOSED';
+        if (this.sessionOwners.get(sessionId) === owner) this.sessionOwners.delete(sessionId);
+        if (this.ongoingSessions.get(sessionId) === active) this.ongoingSessions.delete(sessionId);
+      };
+      owner.release = release;
+      if (transportClosure) {
+        void transportClosure.then(() => { owner.transportClosed = true; release(); });
+        await withResponseBudget(transportClosure, 3000).catch(() => { recordSecurityBoundaryEvent('cleanup_timeout'); this.logError('Media transport cleanup timeout; reservation retained'); });
       }
-    }
-
-    releasePort(active.localVideoPort);
-    releasePort(active.localVideoRtcpPort);
-    releasePort(active.localAudioPort);
-    releasePort(active.localAudioRtcpPort);
-
-    if (active.commandId) {
-      try {
-        await this.api.completeCommand(this.networkId, active.commandId);
-      } catch (error) {
-        this.logError(`Failed to end live view command ${active.commandId}: ${error}`);
-      }
-    }
-
-    this.ongoingSessions.delete(sessionId);
-    this.log(`Stopped stream session ${sessionId}`);
+      for (const child of owner.children) child.once('close', () => { owner.children.delete(child); release(); });
+      release();
+      if (active?.commandId) void this.completeLiveview(active.commandId);
+    })();
+    return owner.retirement;
   }
 
   private async requestLiveView(): Promise<{ server: string; command_id?: number; polling_interval?: number; continue_interval?: number; id?: number; }> {
@@ -843,9 +903,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     commandId: number,
     pollingInterval: number,
     maxAttempts: number = 6,
+    owner?: SessionOwner,
   ): Promise<void> {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const status = await this.api.getCommandStatus(this.networkId, commandId);
+      owner?.abort.signal.throwIfAborted();
+      const status = await this.api.getCommandStatus(this.networkId, commandId, { signal: owner?.abort.signal });
+      owner?.abort.signal.throwIfAborted();
       if (status.complete || status.status === 'complete' || status.status === 'running') {
         return;
       }
@@ -854,7 +917,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
       // Use the provided pollingInterval unless the response explicitly specifies one
       const delayMs = pollingInterval * 1000;
-      await sleep(delayMs);
+      await budgetedDelay(delayMs, { signal: owner?.abort.signal });
     }
   }
 
@@ -868,20 +931,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
-    const intervalMs = Math.max(5, intervalSeconds - 2) * 1000;
-    active.keepAliveTimer = setInterval(async () => {
+    const intervalMs = Math.max(5, Math.min(60, intervalSeconds - 2)) * 1000;
+    const poll = async (): Promise<void> => {
+      if (!this.ownsSession(sessionId, active)) return;
       try {
-        const status = await this.api.getCommandStatus(this.networkId, commandId);
-        if (status.complete || status.status === 'complete' || status.status === 'failed') {
-          if (active.keepAliveTimer) {
-            clearInterval(active.keepAliveTimer);
-            active.keepAliveTimer = null;
-          }
-        }
-      } catch (error) {
-        this.logError(`Failed to poll live view command ${commandId}: ${error}`);
-      }
-    }, intervalMs);
+        const status = await this.api.getCommandStatus(this.networkId, commandId, { signal: active.owner?.abort.signal, deadline: Date.now() + 30_000 });
+        if (!this.ownsSession(sessionId, active) || status.complete || status.status === 'complete' || status.status === 'failed') return;
+      } catch { if (!this.ownsSession(sessionId, active)) return; this.logError('Live view polling failed'); }
+      active.keepAliveTimer = setTimeout(() => { void poll(); }, intervalMs);
+    };
+    active.keepAliveTimer = setTimeout(() => { void poll(); }, intervalMs);
   }
 
   private buildTalkbackSdp(
@@ -986,7 +1045,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       stdio: ['pipe', 'ignore', 'pipe'],
     });
     const stderrState: FfmpegStderrState = {};
+    talkback.stdin?.on('error', () => { if (active.talkback === talkback && this.ownsSession(sessionId, active)) void this.stopStream(sessionId, active.owner); });
     active.talkback = talkback;
+    active.owner?.children.add(talkback);
+    talkback.once('close', () => active.owner?.children.delete(talkback));
     talkback.stdin?.end(sdp);
 
     talkback.stderr.on('data', (data) => {
@@ -1041,7 +1103,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const stderrState: FfmpegStderrState = {};
+    talkback.stdin?.on('error', () => { if (active.talkback === talkback && this.ownsSession(sessionId, active)) void this.stopStream(sessionId, active.owner); });
     active.talkback = talkback;
+    active.owner?.children.add(talkback);
+    talkback.once('close', () => active.owner?.children.delete(talkback));
     talkback.stdin?.end(sdp);
 
     // Attach FFmpeg stdout (LATM frames) to immis proxy
@@ -1095,6 +1160,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     callback: StreamRequestCallback,
     useSoftwareFallback = false,
   ): void {
+    if (active.owner && !this.ownsSession(sessionId, active)) return;
     const videoEncoder = useSoftwareFallback ? SOFTWARE_VIDEO_ENCODER : this.resolveVideoEncoder();
     const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active, videoEncoder);
     active.selectedVideoEncoder = videoEncoder;
@@ -1106,32 +1172,39 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
+    ffmpeg.stdin.on('error', () => { if (active.ffmpeg === ffmpeg && this.ownsSession(sessionId, active)) void this.stopStream(sessionId, active.owner); });
     active.ffmpeg = ffmpeg;
+    active.owner?.children.add(ffmpeg);
+    ffmpeg.once('close', () => active.owner?.children.delete(ffmpeg));
+    if (liveviewUrl === 'pipe:0') active.immisProxy?.attachConsumer(ffmpeg.stdin);
 
     ffmpeg.on('spawn', () => {
-      if (active.ffmpeg !== ffmpeg) {
+      if (active.ffmpeg !== ffmpeg || active.stopped || (active.owner && !this.ownsSession(sessionId, active))) {
         return;
       }
       if (!active.readyNotified) {
         active.readyNotified = true;
+        if (active.owner) active.owner.phase = 'RUNNING';
         this.log(`FFmpeg spawned for session ${sessionId}, signaling stream ready`);
         callback();
       }
     });
 
     ffmpeg.stderr.on('data', (data) => {
+      if (active.stopped || active.ffmpeg !== ffmpeg) return;
       this.handleFfmpegStderr(sessionId, active, data);
     });
 
     ffmpeg.on('error', (error) => {
-      if (active.ffmpeg !== ffmpeg) {
+      if (active.ffmpeg !== ffmpeg || active.stopped || (active.owner && !this.ownsSession(sessionId, active))) {
         return;
       }
       this.flushFfmpegStderr(sessionId, active);
 
+      recordSecurityBoundaryEvent('worker_failure');
       this.logError(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
 
-      if (!useSoftwareFallback && videoEncoder !== SOFTWARE_VIDEO_ENCODER && !active.fallbackVideoEncoderTried) {
+      if (!ffmpeg.pid && !useSoftwareFallback && videoEncoder !== SOFTWARE_VIDEO_ENCODER && !active.fallbackVideoEncoderTried) {
         active.fallbackVideoEncoderTried = true;
         this.log(`Retrying stream ${sessionId} with software encoder ${SOFTWARE_VIDEO_ENCODER}`);
         this.startFfmpegStream(sessionId, liveviewUrl, request, active, callback, true);
@@ -1141,11 +1214,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (!active.readyNotified) {
         callback(error);
       }
-      void this.stopStream(sessionId);
+      void this.stopStream(sessionId, active.owner);
     });
 
-    ffmpeg.on('exit', (code, signal) => {
-      if (active.ffmpeg !== ffmpeg) {
+    ffmpeg.on('close', (code, signal) => {
+      if (active.ffmpeg !== ffmpeg || active.stopped || (active.owner && !this.ownsSession(sessionId, active))) {
         return;
       }
       this.flushFfmpegStderr(sessionId, active);
@@ -1169,7 +1242,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (!active.stopped && (code !== 0 || signal)) {
         this.logError(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
-      void this.stopStream(sessionId);
+      void this.stopStream(sessionId, active.owner);
     });
   }
 
@@ -1332,7 +1405,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     ];
 
     // Configure input based on URL type
-    if (liveviewUrl.startsWith('tcp://')) {
+    if (liveviewUrl === 'pipe:0') {
       args.push(
         '-fflags', 'nobuffer',
         '-flags', 'low_delay',

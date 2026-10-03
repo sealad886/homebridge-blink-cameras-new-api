@@ -34,6 +34,10 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --runInBand --coverage
+      - name: Check maintained OAuth diagnostic scripts
+        run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck scripts/debug-full-oauth.ts scripts/debug-simple-oauth.ts scripts/oauth-diagnostic-transport.ts
+      - name: Test trusted evidence reporting
+        run: python3 -m unittest discover -s scripts/pi-evidence/tests
       - name: Test release safety contracts
         run: node --test .github/scripts/*.test.mjs
       - name: Verify package contents and loadability

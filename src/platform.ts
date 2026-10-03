@@ -1,3 +1,5 @@
+import { getSecurityBoundaryCounters } from './blink-api/network-diagnostics';
+import { validateHomescreen } from './blink-api/domain-validation';
 /**
  * Blink Cameras Platform for Homebridge
  *
@@ -574,6 +576,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private async sampleConnectionDiagnostic(): Promise<void> {
+    this.log.warn(`Blink security boundary counters: ${JSON.stringify(getSecurityBoundaryCounters())}`);
     try {
       const sample = await sampleBlinkConnection(this.apiClient.getSharedRestRootUrl());
       this.log.warn(`Blink outage diagnostic: DNS ${sample.dns}, address count ${sample.addressCount ?? 0}, ` +
@@ -742,6 +745,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private registerDevices(homescreen: BlinkHomescreen): void {
+    validateHomescreen(homescreen);
     let excludedCount = 0;
     const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number }>([
       ...homescreen.networks.map(device => [this.api.hap.uuid.generate(`blink-network-${device.id}`), device] as const),
@@ -981,21 +985,21 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // Try camera first
     const cameraHandler = this.cameraAccessories.get(clip.camera_id);
     if (cameraHandler) {
-      cameraHandler.triggerMotion(this.motionTimeout);
+      cameraHandler.triggerMotion();
       return;
     }
 
     // Try owl
     const owlHandler = this.owlAccessories.get(clip.camera_id);
     if (owlHandler) {
-      owlHandler.triggerMotion(this.motionTimeout);
+      owlHandler.triggerMotion();
       return;
     }
 
     // Try doorbell
     const doorbellHandler = this.doorbellAccessories.get(clip.camera_id);
     if (doorbellHandler) {
-      doorbellHandler.triggerMotion(this.motionTimeout);
+      doorbellHandler.triggerMotion();
       return;
     }
 

@@ -1,3 +1,4 @@
+import { testResponse } from '../helpers/response';
 import { AuthStateChangedError, FileAuthStorage } from '../../src/blink-api/auth-storage';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -99,7 +100,7 @@ const successfulTokenResponse = (
     region: string;
     tier: string;
   }> = {},
-): Response => ({
+): Response => (testResponse({
   ok: true,
   status: 200,
   statusText: 'OK',
@@ -116,9 +117,9 @@ const successfulTokenResponse = (
     ...overrides,
   }),
   text: async () => '',
-}) as unknown as Response;
+})) as unknown as Response;
 
-const failedTokenResponse = (status = 400): Response => ({
+const failedTokenResponse = (status = 400): Response => (testResponse({
   ok: false,
   status,
   statusText: status === 401 ? 'Unauthorized' : 'Bad Request',
@@ -131,7 +132,7 @@ const failedTokenResponse = (status = 400): Response => ({
     error: 'invalid_grant',
     error_description: UPSTREAM_BODY,
   }),
-}) as unknown as Response;
+})) as unknown as Response;
 
 const tokenResponse = (
   body: unknown,
@@ -142,14 +143,14 @@ const tokenResponse = (
   } = {},
 ): Response => {
   const status = options.status ?? 200;
-  return {
+  return testResponse({
     ok: status >= 200 && status < 300,
     status,
     statusText: options.statusText ?? (status >= 400 ? 'Bad Request' : 'OK'),
     headers: new Headers(options.headers),
     json: async () => body,
     text: async () => JSON.stringify(body),
-  } as unknown as Response;
+  }) as unknown as Response;
 };
 
 const validTokenBody = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -189,29 +190,29 @@ const queueLegacyLoginResponses = (
   }),
 ): void => {
   fetchMock
-    .mockResolvedValueOnce({
+    .mockResolvedValueOnce(testResponse({
       ok: true,
       status: 302,
       statusText: 'Found',
       headers: responseHeaders(),
-    } as Response)
-    .mockResolvedValueOnce({
+    }) as Response)
+    .mockResolvedValueOnce(testResponse({
       ok: true,
       status: 200,
       statusText: 'OK',
       text: async () => '<input name="_token" value="replacement-csrf">',
       headers: responseHeaders(),
-    } as Response)
-    .mockResolvedValueOnce({
+    }) as Response)
+    .mockResolvedValueOnce(testResponse({
       ok: true,
       status: 302,
       statusText: 'Found',
       headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=replacement-code' }),
-    } as Response)
-    .mockResolvedValueOnce({
+    }) as Response)
+    .mockResolvedValueOnce(testResponse({
       ...tokenResponse(tokenBody),
       headers: responseHeaders({ 'token-auth': 'replacement-token-auth' }),
-    } as Response);
+    }) as Response);
 };
 
 const tokenState = (auth: BlinkAuth): MutableTokenState => {
@@ -634,10 +635,10 @@ describe('BlinkAuth hosted OAuth', () => {
     });
     const { logger, entries } = createLogger();
     const auth = new BlinkAuth(makeConfig(storage, logger));
-    fetchMock.mockResolvedValueOnce({
+    fetchMock.mockResolvedValueOnce(testResponse({
       ...successfulTokenResponse({ refresh_token: legacyRefresh }),
       headers: new Headers({ 'TOKEN-AUTH': legacyTokenAuth }),
-    } as Response);
+    }) as Response);
 
     await auth.refreshTokens();
 
@@ -897,7 +898,7 @@ describe('BlinkAuth hosted OAuth', () => {
     const { logger, entries } = createLogger();
     const auth = new BlinkAuth(makeConfig(storage, logger));
     const { pending, callbackUrl } = await startHostedLogin(auth);
-    fetchMock.mockResolvedValueOnce({
+    fetchMock.mockResolvedValueOnce(testResponse({
       ok: true,
       status: 200,
       statusText: 'OK',
@@ -905,7 +906,7 @@ describe('BlinkAuth hosted OAuth', () => {
       json: async () => {
         throw new Error(`${UPSTREAM_BODY}|${ACCESS_TOKEN}|${REFRESH_TOKEN}`);
       },
-    } as unknown as Response);
+    }) as unknown as Response);
 
     let caught: unknown;
     try {
@@ -1572,7 +1573,7 @@ describe('BlinkAuth hosted OAuth', () => {
       const auth = new BlinkAuth(makeConfig(storage, logger));
       fetchMock.mockImplementation(async () => phase === 'headers'
         ? new Promise<Response>(() => undefined)
-        : { ok: true, status: 200, json: () => new Promise(() => undefined) } as unknown as Response);
+        : testResponse({ ok: true, status: 200, json: () => new Promise(() => undefined) }) as unknown as Response);
       const failed = auth.refreshTokens().catch(error => error);
       await jest.runAllTimersAsync();
       expect(await failed).toBeInstanceOf(BlinkTokenRefreshError);
@@ -1654,9 +1655,9 @@ describe('BlinkAuth hosted OAuth', () => {
       const storage = createStorage(null);
       const { logger, entries } = createLogger();
       const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
-      fetchMock.mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders() } as Response);
-      fetchMock.mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
-        text: async () => { throw failure; } } as unknown as Response);
+      fetchMock.mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders() }) as Response);
+      fetchMock.mockResolvedValueOnce(testResponse({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => { throw failure; } }) as unknown as Response);
       const outcome = await auth.login().catch(error => error);
       expect(outcome).toBeInstanceOf(BlinkTokenRefreshError);
       expect(outcome.category).toBe(failure instanceof SyntaxError ? 'response' : 'temporary');
@@ -1672,8 +1673,8 @@ describe('BlinkAuth hosted OAuth', () => {
       const { logger } = createLogger();
       const auth = new BlinkAuth(makeConfig(storage, logger));
       let canceled = false;
-      fetchMock.mockResolvedValueOnce({ ok: false, status: 503,
-        body: { cancel: async () => { canceled = true; } } } as unknown as Response);
+      fetchMock.mockResolvedValueOnce(testResponse({ ok: false, status: 503,
+        body: { cancel: async () => { canceled = true; } } }) as unknown as Response);
       fetchMock.mockImplementationOnce(async () => {
         expect(canceled).toBe(true);
         return successfulTokenResponse();
@@ -1690,15 +1691,15 @@ describe('BlinkAuth hosted OAuth', () => {
     const { logger } = createLogger();
     const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
     fetchMock
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders() } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
-        text: async () => '<input name="_token" value="csrf">' } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
-        text: async () => '<input name="_token" value="csrf2">2FA verification code' } as Response);
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders() }) as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf">' }) as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf2">2FA verification code' }) as Response);
     await expect(auth.login()).rejects.toBeInstanceOf(Blink2FARequiredError);
     fetchMock
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location: '/oauth/v2/authorize' }) } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }) } as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders({ location: '/oauth/v2/authorize' }) }) as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }) }) as Response)
       .mockResolvedValueOnce(successfulTokenResponse());
     await Promise.all([auth.complete2FA('123456'), auth.complete2FA('123456'), auth.login()]);
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/2fa/verify'))).toHaveLength(1);
@@ -1721,10 +1722,10 @@ describe('BlinkAuth hosted OAuth', () => {
     const { logger, entries } = createLogger();
     const auth = new BlinkAuth(makeConfig(storage, logger, { email: 'legacy@example.com', password: 'legacy-password' }));
     fetchMock
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders() } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
-        text: async () => '<input name="_token" value="csrf">' } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location }) } as Response);
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders() }) as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf">' }) as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders({ location }) }) as Response);
     await expect(auth.login()).rejects.toThrow('Invalid Blink OAuth callback');
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(storage.save).not.toHaveBeenCalled();
@@ -1738,12 +1739,12 @@ describe('BlinkAuth hosted OAuth', () => {
     const discarded: string[] = [];
     const body = (name: string) => ({ cancel: async () => { discarded.push(name); } });
     fetchMock
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders(), body: body('initial authorize') } as unknown as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, headers: responseHeaders(),
-        text: async () => '<input name="_token" value="csrf">' } as Response)
-      .mockResolvedValueOnce({ ok: true, status: 302, headers: responseHeaders({ location: '/oauth/v2/authorize' }), body: body('signin') } as unknown as Response)
-      .mockResolvedValueOnce({ ok: true, status: 302,
-        headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }), body: body('final authorize') } as unknown as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders(), body: body('initial authorize') }) as unknown as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 200, headers: responseHeaders(),
+        text: async () => '<input name="_token" value="csrf">' }) as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: responseHeaders({ location: '/oauth/v2/authorize' }), body: body('signin') }) as unknown as Response)
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302,
+        headers: responseHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }), body: body('final authorize') }) as unknown as Response)
       .mockResolvedValueOnce(successfulTokenResponse());
     await auth.login();
     expect(discarded).toEqual(['initial authorize', 'signin', 'final authorize']);

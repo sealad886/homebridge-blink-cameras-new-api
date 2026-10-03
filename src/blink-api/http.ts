@@ -1,3 +1,4 @@
+import { readBoundedJson } from './response-body';
 /**
  * Blink HTTP Client
  *
@@ -184,12 +185,12 @@ export class BlinkHttp {
     options: RequestOptions = {},
   ): Promise<T> {
     checkRequestBudget(options);
+    const url = this.buildUrl(path);
     if (runPreflight) {
       await withinRequestBudget(this.auth.ensureValidToken(), options);
       checkRequestBudget(options);
     }
 
-    const url = this.buildUrl(path);
     const safeUrl = redactUrlForLogging(url);
     const safePath = safeUrl.startsWith(this.baseUrl)
       ? safeUrl.slice(this.baseUrl.length)
@@ -280,7 +281,7 @@ export class BlinkHttp {
 
     let responseData: T;
     try {
-      responseData = (await withinRequestBudget(response.json(), options)) as T;
+      responseData = (await readBoundedJson(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: /(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command' })) as T;
     } catch {
       checkRequestBudget(options);
       const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,
@@ -303,6 +304,11 @@ export class BlinkHttp {
    */
   private buildUrl(path: string): string {
     const cleaned = path.startsWith('/') ? path.substring(1) : path;
+    const segments = cleaned.split('?')[0].split('/');
+    for (let index = 0; index < segments.length - 1; index++) {
+      if (['accounts', 'clients', 'networks', 'cameras', 'owls', 'doorbells', 'commands'].includes(segments[index])
+        && (!/^[1-9][0-9]*$/.test(segments[index + 1]) || !Number.isSafeInteger(Number(segments[index + 1])))) throw new Error('Blink API path contains an invalid identifier.');
+    }
     return `${this.baseUrl}${cleaned}`;
   }
 }

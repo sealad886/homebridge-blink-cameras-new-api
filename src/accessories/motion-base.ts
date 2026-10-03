@@ -251,7 +251,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       .updateValue(this.isMotionServiceActive());
   }
 
-  triggerMotion(timeoutMs = 30000): void {
+  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device)): void {
     if (this.motionTimeout) {
       clearTimeout(this.motionTimeout);
     }

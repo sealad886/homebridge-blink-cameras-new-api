@@ -1,3 +1,4 @@
+import { testResponse } from '../helpers/response';
 import { OperationTimeoutError } from '../../src/operation-budget';
 import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
 import {
@@ -25,14 +26,14 @@ describe('BlinkHttp', () => {
     tier: 'prod',
   };
 
-  const response = (status: number, body: unknown = {}) => ({
+  const response = (status: number, body: unknown = {}) => (testResponse({
     status,
     statusText: status >= 400 ? 'Bad Request' : 'OK',
     ok: status >= 200 && status < 300,
     json: async () => body,
     text: async () => JSON.stringify(body),
     headers: new Headers({ 'content-type': 'application/json' }),
-  });
+  }));
 
   beforeEach(() => {
     globalThis.fetch = jest.fn() as unknown as typeof fetch;
@@ -40,6 +41,40 @@ describe('BlinkHttp', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it.each(['accounts/0/homescreen', 'accounts/1/networks/01/state/arm', 'accounts/1/networks/1/cameras/NaN/liveview',
+    'accounts/1/networks/1/commands/-1', 'accounts/9007199254740992/homescreen'])('rejects invalid path %s before any authentication', async path => {
+    const auth = mockAuth();
+    const http = new BlinkHttp(auth, mockConfig);
+    await expect(http.get(path)).rejects.toThrow('invalid identifier');
+    expect(auth.ensureValidToken).not.toHaveBeenCalled();
+    expect(auth.getAuthHeaders).not.toHaveBeenCalled();
+    expect(auth.refreshTokens).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid paths without refreshing a real near-expiry authentication session', async () => {
+    const storage: BlinkAuthStorage = {
+      load: jest.fn(async () => ({ accessToken: 'near-expiry-access', refreshToken: 'near-expiry-refresh',
+        tokenExpiry: new Date(Date.now() + 30_000).toISOString(), oauthClientId: 'android' as const })),
+      save: jest.fn(async () => undefined), clear: jest.fn(async () => undefined),
+    };
+    const auth = new BlinkAuth({ ...mockConfig, email: '', password: '', authStorage: storage });
+    const ensure = jest.spyOn(auth, 'ensureValidToken');
+    const refresh = jest.spyOn(auth, 'refreshTokens');
+    (fetch as jest.Mock).mockImplementation(async (url: string) => url === 'https://api.oauth.blink.com/oauth/token'
+      ? response(200, { access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600, token_type: 'Bearer' })
+      : response(200, { ok: true }));
+    const http = new BlinkHttp(auth, mockConfig);
+    await expect(http.post('accounts/1/networks/1/cameras/0/liveview')).rejects.toThrow('invalid identifier');
+    expect(ensure).not.toHaveBeenCalled(); expect(refresh).not.toHaveBeenCalled();
+    expect(storage.load).not.toHaveBeenCalled(); expect(storage.save).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    // A valid request proves this fixture actually reaches proactive refresh.
+    await expect(http.get('accounts/1/homescreen')).resolves.toEqual({ ok: true });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('does not send an expired operation or replay a POST transport failure', async () => {
@@ -61,7 +96,7 @@ describe('BlinkHttp', () => {
       await jest.advanceTimersByTimeAsync(100);
       await preflight;
       expect(fetch).not.toHaveBeenCalled();
-      (fetch as jest.Mock).mockResolvedValueOnce({ ...response(200), json: () => new Promise(() => {}) });
+      (fetch as jest.Mock).mockResolvedValueOnce(testResponse({ ...response(200), json: () => new Promise(() => {}) }));
       const body = expect(http.get('homescreen', { deadline: Date.now() + 100 })).rejects.toBeInstanceOf(OperationTimeoutError);
       await jest.advanceTimersByTimeAsync(100);
       await body;
@@ -179,8 +214,8 @@ describe('BlinkHttp', () => {
     const rejectedBody = { cancel: jest.fn().mockResolvedValue(undefined) };
     const missingBody = { cancel: jest.fn().mockResolvedValue(undefined) };
     (fetch as jest.Mock)
-      .mockResolvedValueOnce({ ...response(401), body: rejectedBody })
-      .mockResolvedValueOnce({ ...response(404), body: missingBody });
+      .mockResolvedValueOnce(testResponse({ ...response(401), body: rejectedBody }))
+      .mockResolvedValueOnce(testResponse({ ...response(404), body: missingBody }));
     await expect(http.post('commands/1/done', undefined, [404])).rejects.toMatchObject({ status: 404 });
     expect(rejectedBody.cancel).toHaveBeenCalledTimes(1);
     expect(missingBody.cancel).toHaveBeenCalledTimes(1);
@@ -398,7 +433,7 @@ describe('BlinkHttp', () => {
     (fetch as jest.Mock).mockImplementation(async (input: string) => {
       if (input === 'https://api.oauth.blink.com/oauth/token') {
         tokenRequests += 1;
-        return {
+        return testResponse({
           ...response(200, {
             access_token: `short-lived-access-${tokenRequests}`,
             refresh_token: `rotated-refresh-${tokenRequests}`,
@@ -406,7 +441,7 @@ describe('BlinkHttp', () => {
             token_type: 'Bearer',
           }),
           headers: new Headers(),
-        };
+        });
       }
       restRequests += 1;
       return restRequests === 1
@@ -438,11 +473,11 @@ describe('BlinkHttp', () => {
     };
     const auth = mockAuth();
     const http = new BlinkHttp(auth, { ...mockConfig, debugAuth: true, logger });
-    (fetch as jest.Mock).mockResolvedValue({
+    (fetch as jest.Mock).mockResolvedValue(testResponse({
       ...response(400, { message: bodySecret }),
       statusText: statusSecret,
       headers: new Headers({ [headerNameSecret]: headerValueSecret }),
-    });
+    }));
 
     let caught: unknown;
     try {

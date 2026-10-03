@@ -1,3 +1,4 @@
+import { testResponse } from './helpers/response';
 import { HAP, PlatformAccessory, SnapshotRequest } from 'homebridge';
 import { CameraAccessory } from '../src/accessories/camera';
 import { DoorbellAccessory } from '../src/accessories/doorbell';
@@ -23,6 +24,7 @@ jest.mock('node:child_process', () => {
     spawn: jest.fn(() => {
       const process = new MockEventEmitter() as import('node:child_process').ChildProcessWithoutNullStreams;
       process.stderr = new MockEventEmitter() as never;
+      process.stdin = new (jest.requireActual('node:stream').PassThrough)();
       process.kill = jest.fn() as never;
       return process;
     }),
@@ -69,7 +71,7 @@ describe('Accessory handlers', () => {
 
   it('downloads the existing thumbnail only for a typed busy response', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([7]).buffer });
+    globalThis.fetch = jest.fn().mockResolvedValue(testResponse({ ok: true, arrayBuffer: async () => new Uint8Array([7]).buffer }));
     try {
       const source = new BlinkCameraSource({
         requestCameraThumbnail: jest.fn().mockRejectedValue(new BlinkHttpError('Busy', 409, '',
@@ -93,10 +95,10 @@ describe('Accessory handlers', () => {
     });
     const requestCameraThumbnail = jest.fn().mockReturnValue(thumbnailRequest);
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = jest.fn().mockResolvedValue({
+    globalThis.fetch = jest.fn().mockResolvedValue(testResponse({
       ok: true,
       arrayBuffer: async () => new Uint8Array([4, 5, 6]).buffer,
-    }) as unknown as typeof fetch;
+    })) as unknown as typeof fetch;
 
     try {
       const source = new BlinkCameraSource({
@@ -134,10 +136,10 @@ describe('Accessory handlers', () => {
       .mockRejectedValueOnce(failure)
       .mockResolvedValue({ command_id: 11, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' });
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = jest.fn().mockResolvedValue({
+    globalThis.fetch = jest.fn().mockResolvedValue(testResponse({
       ok: true,
       arrayBuffer: async () => new Uint8Array([9]).buffer,
-    }) as unknown as typeof fetch;
+    })) as unknown as typeof fetch;
 
     try {
       const errorLog = jest.fn();
@@ -186,7 +188,7 @@ describe('Accessory handlers', () => {
     let available = true;
     let goOfflineDuringDownload = true;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = jest.fn().mockImplementation(async () => ({
+    globalThis.fetch = jest.fn().mockImplementation(async () => (testResponse({
       ok: true,
       arrayBuffer: async () => {
         if (goOfflineDuringDownload) {
@@ -194,7 +196,7 @@ describe('Accessory handlers', () => {
         }
         return new Uint8Array([1, 2, 3]).buffer;
       },
-    })) as unknown as typeof fetch;
+    }))) as unknown as typeof fetch;
     const source = new BlinkCameraSource({
       requestCameraThumbnail: jest.fn().mockResolvedValue({ command_id: 10, captureOutcome: 'completed', thumbnail: 'https://rest-prod.immedia-semi.com/thumbnail.jpg' }),
       pollCommand: jest.fn().mockResolvedValue({ complete: true }),
@@ -381,7 +383,7 @@ describe('Accessory handlers', () => {
   it('bounds each snapshot caller while allowing a shared capture to populate cache later', async () => {
     jest.useFakeTimers();
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([8]).buffer });
+    globalThis.fetch = jest.fn().mockResolvedValue(testResponse({ ok: true, arrayBuffer: async () => new Uint8Array([8]).buffer }));
     let finish!: (value: unknown) => void;
     const capture = new Promise(resolve => { finish = resolve; });
     const requestCameraThumbnail = jest.fn().mockReturnValue(capture);
@@ -1304,6 +1306,9 @@ describe('Accessory handlers', () => {
         videoSRTP: Buffer.alloc(30, 1),
         videoSSRC: 1234,
       };
+      const owner = { phase: 'PREPARED', preparing: false, ports: new Set<number>(), children: new Set(), abort: new AbortController() };
+      Object.assign(session, { owner });
+      (source as any).sessionOwners.set('session', owner);
       (source as unknown as CameraSourcePrivateAccess).pendingSessions.set('session', session);
 
       const callback = jest.fn();
@@ -1331,6 +1336,7 @@ describe('Accessory handlers', () => {
       };
       const proxyError = new Error('certificate verify failed');
       active.immisProxy?.emit('error', proxyError);
+      (spawnMock.mock.results[0]?.value as {emit: (event: string) => void})?.emit('close');
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(startSpy).toHaveBeenCalled();
@@ -1366,7 +1372,10 @@ describe('Accessory handlers', () => {
       { enabled: true, maxStreams: 1 },
     );
     const privateSource = source as unknown as CameraSourcePrivateAccess;
+    const pendingOwner = { phase: 'PREPARED', preparing: false, ports: new Set<number>(), children: new Set(), abort: new AbortController() };
+    (source as any).sessionOwners.set('new-session', pendingOwner);
     privateSource.pendingSessions.set('new-session', {
+      owner: pendingOwner,
       address: '192.168.1.50',
       addressVersion: 'ipv4',
       sessionId: 'new-session',
@@ -1404,7 +1413,7 @@ describe('Accessory handlers', () => {
     expect(privateSource.pendingSessions.has('new-session')).toBe(false);
   });
 
-  it('does not count stopping streams against maxStreams', async () => {
+  it('retains stopping streams against maxStreams until closure', async () => {
     const hap = createHap();
     const logFn = jest.fn();
     const apiClient = {
@@ -1429,7 +1438,10 @@ describe('Accessory handlers', () => {
     const spawnMock = spawn as unknown as jest.Mock;
     spawnMock.mockClear();
     const privateSource = source as unknown as CameraSourcePrivateAccess;
+    const pendingOwner = { phase: 'PREPARED', preparing: false, ports: new Set<number>(), children: new Set(), abort: new AbortController() };
+    (source as any).sessionOwners.set('new-session', pendingOwner);
     privateSource.pendingSessions.set('new-session', {
+      owner: pendingOwner,
       address: '192.168.1.50',
       addressVersion: 'ipv4',
       sessionId: 'new-session',
@@ -1463,13 +1475,9 @@ describe('Accessory handlers', () => {
       },
     }, callback);
 
-    const ffmpegProcess = spawnMock.mock.results[0]?.value as { emit: (event: string) => boolean };
-    ffmpegProcess.emit('spawn');
-
-    expect(apiClient.startCameraLiveview).toHaveBeenCalledWith(1, 2);
-    expect(callback).toHaveBeenCalledWith();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith(expect.any(Error));
     expect(privateSource.pendingSessions.has('new-session')).toBe(false);
-    expect(privateSource.ongoingSessions.has('new-session')).toBe(true);
   });
 
   it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {
@@ -1619,11 +1627,11 @@ describe('Accessory handlers', () => {
     };
     const freshBuffer = Buffer.from('fresh-image');
     const originalFetch = globalThis.fetch;
-    const fetchMock = jest.fn().mockResolvedValue({
+    const fetchMock = jest.fn().mockResolvedValue(testResponse({
       ok: true,
       arrayBuffer: async () =>
         freshBuffer.buffer.slice(freshBuffer.byteOffset, freshBuffer.byteOffset + freshBuffer.byteLength),
-    });
+    }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     try {

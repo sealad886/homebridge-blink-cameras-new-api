@@ -1,3 +1,4 @@
+import { requireRemoteId, validateHomescreen } from './domain-validation';
 /**
  * Blink API Client
  *
@@ -158,6 +159,7 @@ export class BlinkApi {
   private async completeRemoteCommand(networkId: number, response: BlinkCommandResponse | undefined,
     options: RequestOptions, interval = 1): Promise<void> {
     const id = response?.id ?? response?.command_id;
+    if (id !== undefined && id !== null) requireRemoteId(id);
     if (id) await this.pollCommand(networkId, id, 60, interval, options);
   }
 
@@ -311,7 +313,7 @@ export class BlinkApi {
     const tierInfo = await this.syncTierInfo(options.useProductionBootstrap ?? false);
     let discoveredTier = tierInfo?.tier ? normalizeBlinkTier(tierInfo.tier) : null;
     if (tierInfo?.account_id) {
-      this.accountId = tierInfo.account_id;
+      this.accountId = requireRemoteId(tierInfo.account_id);
     }
 
     this.logDebug('syncAccountInfoAndVerify → fetching account info');
@@ -516,6 +518,9 @@ export class BlinkApi {
   async getAccountInfo(): Promise<BlinkAccountInfo> {
     await this.auth.ensureValidToken();
     const info = await this.http.get<BlinkAccountInfo>('v2/users/info');
+    if (!info || typeof info !== 'object') throw new Error('Blink returned invalid account metadata.');
+    if (info.account_id !== undefined) requireRemoteId(info.account_id);
+    if (info.client_id !== undefined) requireRemoteId(info.client_id);
     if (info?.account_id) {
       this.accountId = info.account_id;
     }
@@ -603,6 +608,7 @@ export class BlinkApi {
         const homescreen = await withinRequestBudget(options
           ? this.sharedHttp.get<BlinkHomescreen>(path, options)
           : this.sharedHttp.get<BlinkHomescreen>(path), options);
+        validateHomescreen(homescreen);
         this.accountId = homescreen.account?.account_id ?? accountId;
         return homescreen;
       } catch (error) {
@@ -620,6 +626,7 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/NetworkApi.smali
    */
   async armNetwork(networkId: number, options?: RequestOptions): Promise<BlinkCommandResponse> {
+    requireRemoteId(networkId);
     return this.queueStateCommand('Network', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/arm`, undefined, [409], execution);
@@ -634,6 +641,7 @@ export class BlinkApi {
    * Evidence: smali_classes9/com/immediasemi/blink/common/device/network/NetworkApi.smali
    */
   async disarmNetwork(networkId: number, options?: RequestOptions): Promise<BlinkCommandResponse> {
+    requireRemoteId(networkId);
     return this.queueStateCommand('Network', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       const response = await this.sharedHttp.post<BlinkCommandResponse>(`v1/accounts/${accountId}/networks/${networkId}/state/disarm`, undefined, [409], execution);
@@ -644,6 +652,8 @@ export class BlinkApi {
 
   private setDeviceMotion(type: 'camera' | 'owl' | 'doorbell', networkId: number, deviceId: number,
     enabled: boolean, options?: RequestOptions): Promise<void> {
+    requireRemoteId(networkId);
+    requireRemoteId(deviceId);
     return this.queueStateCommand('Motion', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       checkRequestBudget(execution);
@@ -753,6 +763,8 @@ export class BlinkApi {
 
   private captureThumbnail(type: 'camera' | 'owl' | 'doorbell', networkId: number, deviceId: number,
     options?: RequestOptions): Promise<BlinkCaptureResult> {
+    requireRemoteId(networkId);
+    requireRemoteId(deviceId);
     return this.queueStateCommand('Capture', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       checkRequestBudget(execution);
@@ -816,6 +828,8 @@ export class BlinkApi {
     intent = 'liveview',
     motionEventStartTime?: string | null,
   ): Promise<BlinkLiveVideoResponse> {
+    requireRemoteId(networkId);
+    requireRemoteId(cameraId);
     const accountId = await this.ensureAccountId();
     const body = {
       intent,
@@ -838,6 +852,8 @@ export class BlinkApi {
     intent = 'liveview',
     motionEventStartTime?: string | null,
   ): Promise<BlinkLiveVideoResponse> {
+    requireRemoteId(networkId);
+    requireRemoteId(owlId);
     const accountId = await this.ensureAccountId();
     const body = {
       intent,
@@ -860,6 +876,8 @@ export class BlinkApi {
     intent = 'liveview',
     motionEventStartTime?: string | null,
   ): Promise<BlinkLiveVideoResponse> {
+    requireRemoteId(networkId);
+    requireRemoteId(doorbellId);
     const accountId = await this.ensureAccountId();
     const body = {
       intent,
@@ -877,6 +895,8 @@ export class BlinkApi {
    * Note: No version prefix - uses root URL (without /api/)
    */
   async getCommandStatus(networkId: number, commandId: number, options?: RequestOptions): Promise<BlinkCommandStatus> {
+    requireRemoteId(networkId);
+    requireRemoteId(commandId);
     const accountId = await this.ensureAccountId();
     return this.sharedRootHttp.get<BlinkCommandStatus>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
@@ -923,6 +943,8 @@ export class BlinkApi {
     * Returns null if the command no longer exists (404).
    */
   async updateCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus | null> {
+    requireRemoteId(networkId);
+    requireRemoteId(commandId);
     const accountId = await this.ensureAccountId();
     try {
       return await this.sharedRootHttp.post<BlinkCommandStatus>(
@@ -947,13 +969,17 @@ export class BlinkApi {
    * @deprecated This endpoint was deprecated by Blink around late 2025. The method now silently
    * ignores 404 errors as the server no longer supports this endpoint.
    */
-  async completeCommand(networkId: number, commandId: number): Promise<BlinkCommandStatus | null> {
-    const accountId = await this.ensureAccountId();
+  async completeCommand(networkId: number, commandId: number, options?: RequestOptions): Promise<BlinkCommandStatus | null> {
+    requireRemoteId(networkId);
+    requireRemoteId(commandId);
+    checkRequestBudget(options);
+    const accountId = await withinRequestBudget(this.ensureAccountId(), options);
     try {
       return await this.sharedRootHttp.post<BlinkCommandStatus>(
         `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
         undefined,
         [404],
+        options,
       );
     } catch (error) {
       // The /done endpoint was deprecated by Blink and now returns 404
@@ -975,6 +1001,7 @@ export class BlinkApi {
       throw new Error('Blink account id is not set');
     }
 
+    requireRemoteId(accountId);
     this.auth.setAccountId(accountId);
     return accountId;
   }
@@ -989,6 +1016,7 @@ export class BlinkApi {
       throw new Error('Blink client id is not set');
     }
 
+    requireRemoteId(clientId);
     this.auth.setClientId(clientId);
     return clientId;
   }
