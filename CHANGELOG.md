@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.3] - 2026-10-03
+
+### Fixed
+
+- Read OAuth, API and thumbnail responses within byte, deadline and concurrency
+  limits; reject malformed resource identifiers before authenticated requests.
+- Own stream preparation, cancellation and retirement across asynchronous startup;
+  retain reservations until child, transport and recording closure is confirmed.
+- Feed IMMIS media through private child stdin rather than a local TCP listener;
+  bound framing, output queues, talkback input and debug recording budgets.
+- Bind OAuth diagnostic traffic to the trusted origin and reproduce evidence with
+  trusted installed normalization code instead of executable bundle contents.
+- Report fixed security counters through outage diagnostics and support npm 12
+  package-verification output without changing the immutable publication workflow.
+
+### Known limitations and acceptance
+
+- F05 remains open: current FFmpeg execution places SRTP parameters in process
+  arguments. F06 remains open: complete upstream media destination enforcement
+  requires revised architecture; the proposed public-libav RTSP hook failed its
+  feasibility gate. This is staged hardening, not comprehensive security closure.
+- Secure native media worker, five-platform native artifacts and configuration
+  migration are not included. Unsupported talkback remains disabled.
+- Physical video/audio parity, provider-valid traffic calibration and resource/
+  latency measurements remain acceptance gates. This runtime change restarts RC
+  observation: at least 48 hours and two natural refreshes before stable promotion.
+
 ## [0.10.0-rc.2] - 2026-10-02
 
 ### Fixed
