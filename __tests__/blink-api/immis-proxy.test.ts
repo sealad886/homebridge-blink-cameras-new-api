@@ -1,11 +1,15 @@
 import { getSecurityBoundaryCounters } from '../../src/blink-api/network-diagnostics';
 import { parseLatmFrames, ImmisProxyServer } from '../../src/blink-api/immis-proxy';
-import { Writable } from 'node:stream';
+import { Writable, PassThrough } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
+import { lookup } from 'node:dns/promises';
+jest.mock('node:dns/promises', () => ({ lookup: jest.fn(async () => [{ address: '8.8.8.8', family: 4 }]) }));
+const flushResolution = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
 import { spawn, ChildProcess } from 'node:child_process';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
 
@@ -22,9 +26,10 @@ jest.mock('node:tls', () => {
       };
       socket.write = jest.fn();
       socket.destroyed = false;
+      Object.defineProperty(socket, "authorized", { value: true, configurable: true });
       socket.destroy = jest.fn();
       if (callback) {
-        setImmediate(callback);
+        void Promise.resolve().then(callback);
       }
       return socket;
     }),
@@ -80,8 +85,9 @@ describe('ImmisProxyServer private consumer', () => {
   let proxy: ImmisProxyServer;
   beforeEach(() => {
     jest.useFakeTimers();
+    (lookup as jest.Mock).mockReset().mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
     (tls.connect as unknown as jest.Mock).mockClear();
-    proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/session?client_id=1', serial: 'TEST' });
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/session?client_id=1', serial: 'TEST' });
   });
   afterEach(() => { proxy.stop(); jest.useRealTimers(); });
 
@@ -89,26 +95,160 @@ describe('ImmisProxyServer private consumer', () => {
     await expect(proxy.start()).resolves.toBe('pipe:0');
     expect(proxy.url).toBe('pipe:0');
     expect(tls.connect).not.toHaveBeenCalled();
-    proxy.attachConsumer(consumer());
+    proxy.attachConsumer(consumer()); await flushResolution();
     expect(tls.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels pending DNS on STOP and prevents duplicate resolution', async () => {
+    let answer!: (value: { address: string; family: number }[]) => void;
+    (lookup as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+    await proxy.start();
+    proxy.attachConsumer(consumer()); await flushResolution();
+    proxy.attachConsumer(consumer()); await flushResolution();
+    expect(lookup).toHaveBeenCalledTimes(1);
+    proxy.stop();
+    await proxy.whenClosed;
+    answer([{ address: '8.8.8.8', family: 4 }]); await flushResolution();
+    expect(tls.connect).not.toHaveBeenCalled();
+  });
+
+  it('resolves each reconnect and refuses a later private DNS answer before TLS', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }])
+      .mockResolvedValueOnce([{ address: '127.0.0.1', family: 4 }]);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    expect(tls.connect).toHaveBeenCalledWith(expect.objectContaining({ host: '8.8.8.8',
+      servername: 'media.immedia-semi.com', rejectUnauthorized: true }), expect.any(Function));
+    latestSocket().emit('close');
+    jest.advanceTimersByTime(2000); await flushResolution();
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(tls.connect).toHaveBeenCalledTimes(1);
+    await proxy.whenClosed;
+  });
+
+  it.each(['immis://evil.test/?client_id=1', 'immis://media.immedia-semi.com:444/?client_id=1',
+    'https://media.immedia-semi.com/?client_id=1'])('rejects invalid upstream before DNS or TLS', raw => {
+    expect(() => new ImmisProxyServer({ immisUrl: raw, serial: 'TEST' })).toThrow();
+    expect(lookup).not.toHaveBeenCalled(); expect(tls.connect).not.toHaveBeenCalled();
+  });
+
+  it('falls back from unreachable admitted IPv6 only after close, preserving TLS identity', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce([
+      { address: '2606:4700:4700::1111', family: 6 },
+      { address: '2606:4700:4700::1001', family: 6 },
+      { address: '8.8.8.8', family: 4 },
+    ]);
+    const first = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => first);
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    expect(tls.connect).toHaveBeenNthCalledWith(1, expect.objectContaining({ host: '2606:4700:4700::1111',
+      servername: 'media.immedia-semi.com', rejectUnauthorized: true }), expect.any(Function));
+    first.emit('error', new Error('ENETUNREACH'));
+    expect(first.destroy).toHaveBeenCalledTimes(1);
+    expect(first.write).not.toHaveBeenCalled();
+    expect(tls.connect).toHaveBeenCalledTimes(1); expect(errors).not.toHaveBeenCalled();
+    first.emit('close'); await flushResolution();
+    expect(tls.connect).toHaveBeenNthCalledWith(2, expect.objectContaining({ host: '8.8.8.8',
+      servername: 'media.immedia-semi.com', rejectUnauthorized: true }), expect.any(Function));
+    expect(latestSocket().write).toHaveBeenCalledTimes(1); expect(errors).not.toHaveBeenCalled();
+  });
+
+  it('sends no authentication through unauthorized TLS and emits terminal error only after closure', async () => {
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: false }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce((_options, callback) => { void Promise.resolve().then(callback); return socket; });
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    expect(socket.destroy).toHaveBeenCalledTimes(1); expect(socket.write).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    socket.emit('close'); await flushResolution();
+    expect(errors).toHaveBeenCalledTimes(1); expect(socket.write).not.toHaveBeenCalled();
+    await proxy.whenClosed;
+  });
+
+  it('bounds a pending handshake and STOP prevents alternate after delayed close', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce([{ address: '2606:4700:4700::1111', family: 6 }, { address: '8.8.8.8', family: 4 }]);
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    jest.advanceTimersByTime(5000);
+    expect(socket.destroy).toHaveBeenCalledTimes(1); expect(tls.connect).toHaveBeenCalledTimes(1);
+    proxy.stop();
+    (tls.connect as jest.Mock).mock.calls[0][1](); // A late secure callback must not authenticate after STOP.
+    socket.emit('close'); await proxy.whenClosed;
+    jest.advanceTimersByTime(10000); await flushResolution();
+    expect(tls.connect).toHaveBeenCalledTimes(1); expect(socket.write).not.toHaveBeenCalled();
+  });
+
+  it('fails after closure grace without starting an alternate and retains unconfirmed closure', async () => {
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    jest.advanceTimersByTime(7000); expect(errors).toHaveBeenCalledTimes(1);
+    let closed = false; const closure = proxy.whenClosed.then(() => { closed = true; });
+    await flushResolution(); expect(closed).toBe(false); expect(tls.connect).toHaveBeenCalledTimes(1);
+    socket.emit('close'); await closure;
+  });
+
+  it('caps failed numeric attempts and subsequent established reconnect chains', async () => {
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    for (let chain = 0; chain < 4; chain++) {
+      latestSocket().emit('close'); jest.advanceTimersByTime(2000); await flushResolution();
+    }
+    expect(lookup).toHaveBeenCalledTimes(4); expect(tls.connect).toHaveBeenCalledTimes(4);
+    expect(errors).toHaveBeenCalledTimes(1); await proxy.whenClosed;
+    jest.advanceTimersByTime(10000); await flushResolution(); expect(tls.connect).toHaveBeenCalledTimes(4);
+  });
+
+  it('attempts at most three distinct admitted candidates before terminal failure', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce(['8.8.8.8', '1.1.1.1', '9.9.9.9', '8.8.4.4'].map(address => ({ address, family: 4 })));
+    const originalConnect = (tls.connect as jest.Mock).getMockImplementation();
+    (tls.connect as jest.Mock).mockImplementation(() => Object.assign(new EventEmitter(), {
+      write: jest.fn(), destroy: jest.fn(), authorized: true,
+    }));
+    try {
+      const errors = jest.fn(); proxy.on('error', errors);
+      await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+      for (let candidate = 0; candidate < 3; candidate++) {
+        const socket = latestSocket(); socket.emit('error', new Error('unreachable')); socket.emit('close');
+      }
+      expect(tls.connect).toHaveBeenCalledTimes(3); expect(errors).toHaveBeenCalledTimes(1);
+      await proxy.whenClosed;
+    } finally { (tls.connect as jest.Mock).mockImplementation(originalConnect); }
+  });
+
+  it('gates control and talkback writes at the shared verified TLS boundary', async () => {
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    proxy.startAudio(); proxy.stopAudio();
+    const audio = new PassThrough(); proxy.attachAudioInput(audio);
+    audio.write(buildLoasFrame(Buffer.from([1, 2])));
+    expect(socket.write).not.toHaveBeenCalled();
+    (tls.connect as jest.Mock).mock.calls[0][1]();
+    expect(socket.write).toHaveBeenCalledTimes(1); // Authentication only after verified TLS.
+    proxy.startAudio(); expect(socket.write).toHaveBeenCalledTimes(2);
+    proxy.stop(); audio.write(buildLoasFrame(Buffer.from([3, 4])));
+    expect(socket.write).toHaveBeenCalledTimes(2); socket.emit('close'); await proxy.whenClosed;
   });
 
   it('waits for command readiness before opening TLS for the attached child', async () => {
     let ready!: () => void;
-    proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST',
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST',
       waitForReady: new Promise<void>(resolve => { ready = resolve; }) });
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     expect(tls.connect).not.toHaveBeenCalled();
-    ready(); await Promise.resolve();
+    ready(); await flushResolution();
     expect(tls.connect).toHaveBeenCalledTimes(1);
   });
 
   it('does not connect when readiness resolves after stop', async () => {
     let ready!: () => void;
-    proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST',
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST',
       waitForReady: new Promise<void>(resolve => { ready = resolve; }) });
-    await proxy.start(); proxy.attachConsumer(consumer());
-    proxy.stop(); ready(); await Promise.resolve();
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    proxy.stop(); ready(); await flushResolution();
     await proxy.whenClosed;
     expect(tls.connect).not.toHaveBeenCalled();
     expect(proxy.isServing).toBe(false);
@@ -116,10 +256,10 @@ describe('ImmisProxyServer private consumer', () => {
 
   it('does not count or emit a worker failure when pending readiness rejects after STOP', async () => {
     let rejectReady!: (reason: Error) => void;
-    proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST',
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST',
       waitForReady: new Promise<void>((_resolve, reject) => { rejectReady = reject; }) });
     const errors = jest.fn(); proxy.on('error', errors);
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     const before = getSecurityBoundaryCounters().worker_failure;
     proxy.stop(); await proxy.whenClosed;
     rejectReady(new Error('Streaming session retired')); await Promise.resolve(); await Promise.resolve();
@@ -132,10 +272,10 @@ describe('ImmisProxyServer private consumer', () => {
 
   it('fails closed when command readiness rejects and contains callback errors', async () => {
     let rejectReady!: (reason: Error) => void;
-    proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST',
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST',
       waitForReady: new Promise<void>((_resolve, reject) => { rejectReady = reject; }) });
     proxy.on('error', () => { throw new Error('listener'); });
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     const before = getSecurityBoundaryCounters().worker_failure;
     rejectReady(new Error('provider secret')); await Promise.resolve(); await Promise.resolve();
     expect(tls.connect).not.toHaveBeenCalled();
@@ -145,7 +285,7 @@ describe('ImmisProxyServer private consumer', () => {
   });
 
   it('keeps transport closure pending after destroy until TLS confirms close', async () => {
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     const socket = latestSocket(); proxy.stop();
     let closed = false;
     const closure = proxy.whenClosed.then(() => { closed = true; });
@@ -157,11 +297,11 @@ describe('ImmisProxyServer private consumer', () => {
   it('keeps upstream alive for encoder replacement, then stops after grace expires', async () => {
     await proxy.start();
     const first = consumer();
-    proxy.attachConsumer(first);
+    proxy.attachConsumer(first); await flushResolution();
     first.emit('close');
     jest.advanceTimersByTime(1000);
     expect(proxy.isServing).toBe(true);
-    proxy.attachConsumer(consumer());
+    proxy.attachConsumer(consumer()); await flushResolution();
     jest.advanceTimersByTime(2000);
     expect(proxy.isServing).toBe(true);
     expect(tls.connect).toHaveBeenCalledTimes(1);
@@ -173,7 +313,7 @@ describe('ImmisProxyServer private consumer', () => {
   it('delivers fragmented and coalesced video frames through child stdin', async () => {
     await proxy.start();
     const chunks: Buffer[] = [];
-    proxy.attachConsumer(new Writable({ write(chunk, _encoding, cb) { chunks.push(Buffer.from(chunk)); cb(); } }));
+    proxy.attachConsumer(new Writable({ write(chunk, _encoding, cb) { chunks.push(Buffer.from(chunk)); cb(); } })); await flushResolution();
     const bytes = Buffer.concat([packet(Buffer.from([0x47, 1])), packet(Buffer.from([0x47, 2]))]);
     latestSocket().emit('data', bytes.subarray(0, 7));
     latestSocket().emit('data', bytes.subarray(7));
@@ -181,17 +321,17 @@ describe('ImmisProxyServer private consumer', () => {
   });
 
   it('rejects oversized declared frames before collecting their payload', async () => {
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     const error = jest.fn(); proxy.on('error', error);
     latestSocket().emit('data', packet(Buffer.alloc(0), 1024 * 1024 + 1));
     expect(error).toHaveBeenCalled(); expect(proxy.isServing).toBe(false);
   });
 
   it('rejects oversized buffered input and incomplete frames after five seconds', async () => {
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     latestSocket().emit('data', Buffer.alloc(2 * 1024 * 1024 + 1));
     expect(proxy.isServing).toBe(false);
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     latestSocket().emit('data', Buffer.from([0]));
     jest.advanceTimersByTime(5000);
     expect(proxy.isServing).toBe(false);
@@ -199,7 +339,7 @@ describe('ImmisProxyServer private consumer', () => {
 
   it('stops stalled child writers after two seconds without drain', async () => {
     await proxy.start();
-    proxy.attachConsumer(new Writable({ highWaterMark: 1, write() { /* stalled */ } }));
+    proxy.attachConsumer(new Writable({ highWaterMark: 1, write() { /* stalled */ } })); await flushResolution();
     latestSocket().emit('data', packet(Buffer.from([0x47, 1])));
     jest.advanceTimersByTime(2000);
     expect(proxy.isServing).toBe(false);
@@ -207,7 +347,7 @@ describe('ImmisProxyServer private consumer', () => {
 
   it('bounds queued child video even when writes keep arriving before the drain deadline', async () => {
     await proxy.start();
-    proxy.attachConsumer(new Writable({ write() { /* stalled */ } }));
+    proxy.attachConsumer(new Writable({ write() { /* stalled */ } })); await flushResolution();
     const payload = Buffer.alloc(600 * 1024, 0x47);
     latestSocket().emit('data', packet(payload));
     latestSocket().emit('data', packet(payload));
@@ -215,7 +355,7 @@ describe('ImmisProxyServer private consumer', () => {
   });
 
   it('bounds stalled upstream control and talkback writes', async () => {
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     const socket = latestSocket();
     (socket.write as jest.Mock).mockReturnValue(false);
     proxy.startAudio();
@@ -227,7 +367,7 @@ describe('ImmisProxyServer private consumer', () => {
     await proxy.start();
     let complete!: () => void;
     const writer = new Writable({ highWaterMark: 1, write(_chunk, _encoding, cb) { complete = cb; } });
-    proxy.attachConsumer(writer);
+    proxy.attachConsumer(writer); await flushResolution();
     latestSocket().emit('data', packet(Buffer.from([0x47])));
     complete(); writer.emit('drain');
     jest.advanceTimersByTime(2000);
@@ -236,13 +376,13 @@ describe('ImmisProxyServer private consumer', () => {
 
   it('contains logger and event callback exceptions', async () => {
     proxy.on('data', () => { throw new Error('callback'); });
-    await proxy.start(); proxy.attachConsumer(consumer());
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     expect(() => latestSocket().emit('data', packet(Buffer.from([0x47])))).not.toThrow();
     expect(proxy.isServing).toBe(true);
   });
 
   it.each(['-1', '1.0', '01', '1x', '4294967296', ''])('rejects noncanonical client_id %s before TLS', (id) => {
-    expect(() => new ImmisProxyServer({ immisUrl: `immis://example.com/?client_id=${id}`, serial: 'TEST' })).toThrow(/uint32/);
+    expect(() => new ImmisProxyServer({ immisUrl: `immis://media.immedia-semi.com/?client_id=${id}`, serial: 'TEST' })).toThrow(/uint32/);
     expect(tls.connect).not.toHaveBeenCalled();
   });
 });
@@ -262,11 +402,11 @@ describe('ImmisProxyServer security controls', () => {
     });
 
     await proxy.start();
-    proxy.attachConsumer(consumer());
+    proxy.attachConsumer(consumer()); await flushResolution();
 
     expect(connectMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        host: 'stream.immedia-semi.com',
+        host: '8.8.8.8',
         port: 443,
         rejectUnauthorized: true,
         servername: 'stream.immedia-semi.com',
@@ -280,7 +420,7 @@ describe('ImmisProxyServer security controls', () => {
     proxy.stop();
   });
 
-  it('allows upstream IMMIS TLS verification to be disabled explicitly', async () => {
+  it('requires upstream IMMIS TLS verification despite obsolete bypass setting', async () => {
     const connectMock = tls.connect as unknown as jest.Mock;
     connectMock.mockClear();
 
@@ -291,13 +431,13 @@ describe('ImmisProxyServer security controls', () => {
     });
 
     await proxy.start();
-    proxy.attachConsumer(consumer());
+    proxy.attachConsumer(consumer()); await flushResolution();
 
     expect(connectMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        host: 'stream.immedia-semi.com',
+        host: '8.8.8.8',
         port: 443,
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
         servername: 'stream.immedia-semi.com',
         minVersion: 'TLSv1.2',
       }),
@@ -583,7 +723,7 @@ describe('ImmisProxyServer security controls', () => {
     const existing = path.join(recordingDir, 'blink-stream-0123456789abcdef-old-0123456789abcdef.ts');
     await fs.writeFile(existing, '');
     await fs.truncate(existing, 256 * 1024 * 1024);
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
     try {
       await proxy.start();
       expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
@@ -595,7 +735,7 @@ describe('ImmisProxyServer security controls', () => {
   it('serializes recorder admission across simultaneous sessions', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-reservation-'));
     const proxies = Array.from({ length: 5 }, () => new ImmisProxyServer({
-      immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir,
+      immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir,
     }));
     try {
       await Promise.all(proxies.map((proxy) => proxy.start()));
@@ -623,7 +763,7 @@ describe('ImmisProxyServer security controls', () => {
     const launch = async (): Promise<ChildProcess> => {
       const child = spawn(process.execPath, ['-e', `
         const { ImmisProxyServer } = require(process.argv[1]);
-        const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: process.argv[2] });
+        const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: process.argv[2] });
         process.on('message', async message => {
           if (message === 'stop') { proxy.stop(); await proxy.whenClosed; process.send('closed'); process.disconnect(); }
         });
@@ -637,7 +777,7 @@ describe('ImmisProxyServer security controls', () => {
     };
     const captures = async () => (await fs.readdir(path.join(tmpDir, 'blink-stream-recordings'))).filter(file => file.endsWith('.ts'));
     try {
-      for (const name of ['immis-proxy', 'network-diagnostics']) {
+      for (const name of ['immis-proxy', 'network-diagnostics', 'media-destination', 'bounded-dns']) {
         const source = await fs.readFile(path.join(__dirname, '../../src/blink-api', `${name}.ts`), 'utf8');
         await fs.writeFile(path.join(runtime, `${name}.js`), transpileModule(source, {
           compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
@@ -666,7 +806,7 @@ describe('ImmisProxyServer security controls', () => {
     const target = path.join(tmpDir, 'lock-target');
     if (kind === 'symlink') { await fs.writeFile(target, 'owner'); await fs.symlink(target, lock); }
     else await fs.writeFile(lock, 'owner');
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
     try {
       await proxy.start();
       expect(await fs.readdir(directory)).toEqual(['.admission.lock']);
@@ -680,7 +820,7 @@ describe('ImmisProxyServer security controls', () => {
     const directory = path.join(tmpDir, 'blink-stream-recordings'); await fs.mkdir(directory);
     const markers = Array.from({ length: 4 }, (_, index) => `blink-stream-0123456789abcdef-old${index}-0123456789abcdef.ts.reserve`);
     for (const marker of markers) await fs.writeFile(path.join(directory, marker), '');
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
     try {
       await proxy.start(); expect((await fs.readdir(directory)).sort()).toEqual(markers.sort());
       expect(proxy.isServing).toBe(true);
@@ -698,7 +838,7 @@ describe('ImmisProxyServer security controls', () => {
       if (String(filePath).endsWith('blink-stream-recordings')) { opened(); await gate; }
       return realOpen(filePath, flags, mode);
     });
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
     try {
       const startup = proxy.start();
       const rejected = expect(startup).rejects.toThrow('stopped during startup');
@@ -714,7 +854,7 @@ describe('ImmisProxyServer security controls', () => {
 
   it('stops recording after five minutes while leaving the media session active', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-duration-'));
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
     jest.useFakeTimers();
     try {
       await proxy.start();

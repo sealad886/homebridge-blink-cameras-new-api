@@ -1,0 +1,42 @@
+{
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "ffmpeg_version": "9.0.2",
+  "installed_bottle_receipt_sha256": "220d184d7561d61bdb53564108875e47bec0c299d91f2c2a048723b941da5334",
+  "installed_header_sha256": {
+    "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
+    "libavformat/avformat.h": "694da025f30497481f4703e06de106bd417a5718f8fdcdf5e09e34f4b5f21114",
+    "libavformat/avio.h": "30312971fc299e65bc69cf1beddb76f50394e044d9c71fe32fec3ae9c13bd1af",
+    "libavutil/avutil.h": "01a511d927eaab20cf57076611ff5649bc6089d2d766c4b20c9d11c3da095efd",
+    "libswscale/swscale.h": "3c3c7c2aec2494f4881e8fed8baf01ef0db8c08e7c01a3300946ea3bb102a162"
+  },
+  "installed_library_sha256": {
+    "libavcodec.63.1.102.dylib": "f3359c960778d4f8469700a051d5e9adbacaeeeb7ffdc68c87a1d5d66cd74680",
+    "libavformat.63.1.102.dylib": "7037cf9835b02aca3ae66b8cb2c2eed380e5083fa432c3f9ef71e3efebb61262",
+    "libavutil.61.1.102.dylib": "d8735f7e878ea9f44d7ec15f0aee0bf473bacb5d44f7a46df1a299462372f664",
+    "libswscale.10.1.102.dylib": "5677ad33d0c49eb31262e3a4a7fe0eec06544756b53e816f19f598cd8a94bd9e"
+  },
+  "installed_prefix_label": "Homebrew ffmpeg/9.0.2",
+  "output_sha256": {
+    "blink-codec-worker": "79aba303bd200e523907a2d897e0d76f52bf72224e0d6cea8214b4aa632e9cc4",
+    "check-output": "83d55a46045a69a26e117bf5488a0cf9bdb0accde907cef7aefd0b71f34f74e6",
+    "fixture": "293dda653f4b65a3e867ab054ab234298cfdf5507aed917c1d7a6b6d5d733f5b"
+  },
+  "prototype_source_sha256": {
+    "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "Makefile": "4e78f268ce786d3e0c8d13f4d22375e509880a3d038f38a3d6a776f8ca878041",
+    "README.md": "cbe56720502c403df0d68f70b8db988db866f7e7ffde26f2364eac25e3abd756",
+    "RTSP-ALTERNATIVES.md": "a02ff4bd64ae25312b0d5e735b3c8551186cc81e4c799a896ebde2d9a80003ea",
+    "tests/check-output.c": "0fcab9751c809d4311c38ebf31dc82e978fba9654a31608c916840731847888f",
+    "tests/fixture.c": "c4f34ae0f3d2d5d8b0463079d777e369d99f6e65715d019af0420ee609decb21",
+    "tests/test_worker.py": "6e9a76f242f548f9cb05b0aacc2f68014d2946a4d3e68b8c97b06c9c0541a3da",
+    "worker.c": "044733ff3fce8bf6c67f2b203f428f640b2270e6284cb01fc149ded6b96c4079"
+  },
+  "scope": "local macOS arm64 development build; not a distribution receipt",
+  "transitive_dependency_closure": "not inventoried; remains distribution gate",
+  "upstream_source_commit": "unverified; no source SHA inferred",
+  "validation": {
+    "command": "make -C native FFMPEG_PREFIX=<actual pinned FFmpeg9.0.2 installation> test",
+    "scope": "macOS arm64 only; no physical runtime/distribution proof",
+    "tests_passed": 9
+  }
+}

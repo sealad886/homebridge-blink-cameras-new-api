@@ -9,7 +9,10 @@ import threading
 import socket
 import subprocess
 import shlex
+import tracemalloc
+import time
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from unittest import mock
 from pathlib import Path
 
@@ -225,17 +228,107 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.BundleError, "capacity"):
             report.export_bundle(self.store, 0, 100, self.store.root / "exports" / "too-large")
 
-    def test_raw_export_growth_is_rejected_before_unreserved_chunk_write(self) -> None:
-        output = self.store.root / "exports" / "growing"
-        initial = list(self.store.read_events())
-        oversized = dict(initial[0])
-        oversized["event_id"] = "oversized"
-        oversized["source_id"] = "oversized"
-        oversized["raw"] = "x" * 128 * 1024
-        with mock.patch.object(self.store, "read_events", side_effect=[iter(initial), iter(initial + [oversized])]):
-            with self.assertRaisesRegex(report.BundleError, "raw export exceeded reserved capacity"):
+    def test_large_refused_export_streams_sizing_with_bounded_memory(self) -> None:
+        for index in range(5000):
+            self.store.append("large", {"payload": "x" * 16384}, source_id=f"large-{index}")
+        self.store.max_bytes = self.store.status()["managed_bytes"]
+        output = self.store.root / "exports" / "refused-large"
+        with mock.patch.object(report.tempfile, "mkdtemp") as staging, \
+                mock.patch.object(self.store, "write_reserved") as materialize:
+            tracemalloc.start()
+            try:
+                with self.assertRaisesRegex(report.BundleError, "capacity reservation failed"):
+                    report.export_bundle(self.store, 0, 100, output)
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+        self.assertLess(peak, 4 * 1024 * 1024, f"sizing retained corpus: peak={peak}")
+        staging.assert_not_called()
+        materialize.assert_not_called()
+        self.assertFalse(output.exists())
+        self.assertEqual(self.store.status()["reserved_bytes"], 0)
+
+    def test_repeatable_reader_pins_membership_before_first_iteration(self) -> None:
+        initial_ids = {event["event_id"] for event in self.store.read_events()}
+        with self.store.read_snapshot() as read:
+            self.store.append("concurrent", {"payload": "later"}, source_id="after-pinning")
+            self.assertEqual({event["event_id"] for event in read()}, initial_ids)
+            self.assertEqual({event["event_id"] for event in read()}, initial_ids)
+        self.assertTrue(any(event["source_id"] == "after-pinning" for event in self.store.read_events()))
+
+    def test_retained_segment_expiry_between_passes_fails_and_cleans_export(self) -> None:
+        original_reserve = self.store.reserve
+        output = self.store.root / "exports" / "expired"
+
+        @contextmanager
+        def expire_after_sizing(size):
+            with original_reserve(size) as reservation:
+                expired = self.store.expire(now=time.time() + self.store.retention_seconds + 1)
+                self.assertEqual(expired["events"], 2)
+                yield reservation
+
+        with mock.patch.object(self.store, "reserve", expire_after_sizing):
+            with self.assertRaises(store.CorruptEventError):
                 report.export_bundle(self.store, 0, 100, output)
         self.assertFalse(output.exists())
+        self.assertEqual(list(output.parent.glob(".expired.tmp-*")), [])
+        self.assertEqual(self.store.status()["reserved_bytes"], 0)
+        self.assertEqual(list(self.store.read_events()), [])
+
+    def test_append_after_sizing_does_not_change_reserved_export_snapshot(self) -> None:
+        output = self.store.root / "exports" / "snapshot"
+        initial_ids = {event["event_id"] for event in self.store.read_events()}
+        start_append = threading.Event()
+        append_finished = threading.Event()
+        errors = []
+        admitted = []
+        writes = []
+        original_reserve = self.store.reserve
+        original_write = self.store.write_reserved
+
+        def writer() -> None:
+            start_append.wait()
+            try:
+                # Much larger than the original raw budget: the old second read
+                # deterministically violates its reservation after this append.
+                self.store.append("concurrent", {"payload": "x" * 128 * 1024}, source_id="after-snapshot")
+            except Exception as error:
+                errors.append(error)
+            finally:
+                append_finished.set()
+
+        @contextmanager
+        def reserve_after_snapshot(size):
+            with original_reserve(size) as reservation:
+                admitted.append(size)
+                start_append.set()
+                self.assertTrue(append_finished.wait(10), "append did not complete at reservation boundary")
+                if errors:
+                    raise errors[0]
+                yield reservation
+
+        def materialize(reservation, fd, data):
+            writes.append(len(data))
+            return original_write(reservation, fd, data)
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        try:
+            with mock.patch.object(self.store, "reserve", side_effect=reserve_after_snapshot), \
+                    mock.patch.object(self.store, "write_reserved", side_effect=materialize):
+                self.assertTrue(report.export_bundle(self.store, 0, 4_102_444_800, output)["valid"])
+        finally:
+            start_append.set()
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        raw = [json.loads(line) for line in (output / "raw" / "events.jsonl").read_text().splitlines()]
+        self.assertEqual({event["event_id"] for event in raw}, initial_ids)
+        self.assertTrue(any(event["source_id"] == "after-snapshot" for event in self.store.read_events()))
+        self.assertEqual(json.loads((output / "report.json").read_text())["event_count"], len(initial_ids))
+        self.assertTrue(report.reproduce(output)["reproduced"])
+        self.assertLessEqual(sum(writes), admitted[0])
+        self.assertEqual(self.store.status()["reserved_bytes"], 0)
 
     def test_csv_formula_values_are_escaped(self) -> None:
         self.assertEqual(report._csv_safe("=cmd()"), "'=cmd()")

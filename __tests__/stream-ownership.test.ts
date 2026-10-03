@@ -76,7 +76,7 @@ describe('generation-owned streaming', () => {
     let finish!: (value: string) => void;
     const starting = jest.spyOn(ImmisProxyServer.prototype, 'start').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     try {
-      const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({ server: 'immis://vendor.example/live?client_id=1' }) });
+      const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({ server: 'immis://media.immedia-semi.com/live?client_id=1' }) });
       await prepare(source); const callback = jest.fn(); source.handleStreamRequest(request, callback);
       await new Promise(resolve => setImmediate(resolve)); await stop(source);
       await expect(prepare(source)).rejects.toThrow('already owned');
@@ -93,7 +93,7 @@ describe('generation-owned streaming', () => {
     const attaching = jest.spyOn(ImmisProxyServer.prototype, 'attachConsumer').mockImplementation(() => undefined);
     const closed = jest.spyOn(ImmisProxyServer.prototype, 'whenClosed', 'get').mockReturnValue(closure);
     try {
-      const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({ server: 'immis://vendor.example/live?client_id=1' }) });
+      const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({ server: 'immis://media.immedia-semi.com/live?client_id=1' }) });
       await prepare(source); const callback = jest.fn(); source.handleStreamRequest(request, callback);
       await new Promise(resolve => setImmediate(resolve));
       const child = (spawn as jest.Mock).mock.results[0].value;

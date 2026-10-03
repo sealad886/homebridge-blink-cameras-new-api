@@ -1,0 +1,210 @@
+{
+  "source_inputs": {
+    "schema_version": 1,
+    "sources": [
+      {
+        "name": "ffmpeg",
+        "version": "9.0.2",
+        "filename": "ffmpeg-9.0.2.tar.xz",
+        "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+        "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+        "root": "ffmpeg-9.0.2",
+        "license": "GPL-3.0-or-later selected configuration"
+      },
+      {
+        "name": "opus",
+        "version": "1.6.1",
+        "filename": "opus-1.6.1.tar.gz",
+        "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+        "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+        "root": "opus-1.6.1",
+        "license": "BSD-3-Clause"
+      },
+      {
+        "name": "libsrtp",
+        "version": "2.8.1",
+        "filename": "libsrtp-2.8.1.tar.gz",
+        "url": "https://codeload.github.com/cisco/libsrtp/tar.gz/6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+        "sha256": "1ef3e6315e0ea3cd05f4980c8b5f7a9df369e3d586f5e0616e6cc4c778401d4c",
+        "root": "libsrtp-6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+        "license": "BSD-3-Clause"
+      },
+      {
+        "name": "x264",
+        "version": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+        "filename": "x264-0480cb05.tar.gz",
+        "url": "https://code.videolan.org/videolan/x264/-/archive/0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz",
+        "sha256": "d0967a1348c85dfde363bb52610403be898171493100561efa0dd05d5fd1ae50",
+        "root": "x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+        "license": "GPL-2.0-or-later"
+      }
+    ],
+    "ffmpeg_signature": {
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc",
+      "key_url": "https://ffmpeg.org/ffmpeg-devel.asc",
+      "fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+    },
+    "libsrtp_tag_commit": "6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+    "x264_commit": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee"
+  },
+  "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "public_api_smoke": "FFmpeg 9.0.2; libSRTP libsrtp2 2.8.1; codecs present; no URL protocols; synthetic SRTP round trip passed",
+  "dynamic_dependencies": "<checkout>/native/build/deps/local-eor2xuvi/check-inputs:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.0.0)\n\t/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5027.0.69)\n\t/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (compatibility version 1.2.0, current version 758.27.0)\n\t/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (compatibility version 1.0.0, current version 3350.77.5)\n",
+  "recipe_sha256": "11b8c2550481cffc5d985c4a43cc2e0d0342f2c88f4a4a80e50d8b5ba1b170d1",
+  "smoke_source_sha256": "40dd3141863f4a435131673a08e40374eeae9055f8b1aef9a29f632cb82a7c1d",
+  "prefix": "<checkout>/native/build/deps/local-eor2xuvi/prefix",
+  "commands": [
+    [
+      "cmake",
+      "-S",
+      "<checkout>/native/build/deps/local-eor2xuvi/sources/opus-1.6.1",
+      "-B",
+      "<checkout>/native/build/deps/local-eor2xuvi/opus",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_INSTALL_PREFIX=<checkout>/native/build/deps/local-eor2xuvi/prefix",
+      "-DBUILD_SHARED_LIBS=OFF",
+      "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
+      "-DOPUS_BUILD_TESTING=OFF",
+      "-DOPUS_BUILD_PROGRAMS=OFF"
+    ],
+    [
+      "cmake",
+      "--build",
+      "<checkout>/native/build/deps/local-eor2xuvi/opus",
+      "--parallel",
+      "3"
+    ],
+    [
+      "cmake",
+      "--install",
+      "<checkout>/native/build/deps/local-eor2xuvi/opus"
+    ],
+    [
+      "cmake",
+      "-S",
+      "<checkout>/native/build/deps/local-eor2xuvi/sources/libsrtp-6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+      "-B",
+      "<checkout>/native/build/deps/local-eor2xuvi/libsrtp",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_INSTALL_PREFIX=<checkout>/native/build/deps/local-eor2xuvi/prefix",
+      "-DBUILD_SHARED_LIBS=OFF",
+      "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
+      "-DLIBSRTP_TEST_APPS=OFF",
+      "-DENABLE_OPENSSL=OFF",
+      "-DENABLE_MBEDTLS=OFF"
+    ],
+    [
+      "cmake",
+      "--build",
+      "<checkout>/native/build/deps/local-eor2xuvi/libsrtp",
+      "--parallel",
+      "3"
+    ],
+    [
+      "cmake",
+      "--install",
+      "<checkout>/native/build/deps/local-eor2xuvi/libsrtp"
+    ],
+    [
+      "<checkout>/native/build/deps/local-eor2xuvi/sources/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee/configure",
+      "--prefix=<checkout>/native/build/deps/local-eor2xuvi/prefix",
+      "--enable-static",
+      "--enable-pic",
+      "--disable-cli",
+      "--disable-opencl",
+      "--disable-asm"
+    ],
+    [
+      "make",
+      "-j3"
+    ],
+    [
+      "make",
+      "install-lib-static"
+    ],
+    [
+      "<checkout>/native/build/deps/local-eor2xuvi/sources/ffmpeg-9.0.2/configure",
+      "--prefix=<checkout>/native/build/deps/local-eor2xuvi/prefix",
+      "--disable-autodetect",
+      "--disable-everything",
+      "--disable-network",
+      "--disable-protocols",
+      "--disable-programs",
+      "--disable-doc",
+      "--disable-debug",
+      "--disable-shared",
+      "--enable-static",
+      "--enable-pic",
+      "--cc=/usr/bin/clang",
+      "--enable-gpl",
+      "--enable-version3",
+      "--enable-libx264",
+      "--enable-libopus",
+      "--enable-avcodec",
+      "--enable-avformat",
+      "--enable-avutil",
+      "--enable-swscale",
+      "--enable-swresample",
+      "--disable-avdevice",
+      "--disable-avfilter",
+      "--enable-demuxer=mpegts",
+      "--enable-muxer=mpegts",
+      "--enable-parser=h264,aac,aac_latm",
+      "--enable-decoder=h264,aac,aac_latm,opus,pcm_alaw,pcm_mulaw",
+      "--enable-encoder=libx264,libopus,pcm_alaw,pcm_mulaw,aac",
+      "--pkg-config-flags=--static",
+      "--disable-asm"
+    ],
+    [
+      "make",
+      "-j3"
+    ],
+    [
+      "make",
+      "install"
+    ],
+    [
+      "/usr/bin/clang",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-I<checkout>/native/build/deps/local-eor2xuvi/prefix/include",
+      "<checkout>/native/dependencies/check-inputs.c",
+      "-o",
+      "<checkout>/native/build/deps/local-eor2xuvi/check-inputs",
+      "-I<checkout>/native/build/deps/local-eor2xuvi/prefix/include",
+      "-L<checkout>/native/build/deps/local-eor2xuvi/prefix/lib",
+      "-lavformat",
+      "-lavcodec",
+      "-lm",
+      "-lopus",
+      "-lx264",
+      "-lpthread",
+      "-lswresample",
+      "-lm",
+      "-lavutil",
+      "-lm",
+      "-framework",
+      "CoreFoundation",
+      "-framework",
+      "CoreVideo",
+      "-framework",
+      "CoreMedia",
+      "-pthread",
+      "<checkout>/native/build/deps/local-eor2xuvi/prefix/lib/libsrtp2.a"
+    ]
+  ],
+  "distribution_ready": false,
+  "prototype_assembly_disabled": true,
+  "limitations": [
+    "Only this native host built; five target baselines unverified",
+    "No worker distribution, RTP/SRTP wire parity, or physical acceptance proved"
+  ],
+  "path_normalization": "Checkout root replaced with <checkout>; raw receipt retained in ignored build directory",
+  "local_validation": "Fresh final prototype no-assembly build; public-API smoke; seven offline fetch tests on Python3.12; prefix-file rejection checks"
+}

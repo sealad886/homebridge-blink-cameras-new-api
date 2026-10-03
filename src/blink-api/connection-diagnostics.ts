@@ -1,4 +1,4 @@
-import { lookup } from 'node:dns/promises';
+import { lookupAddresses } from './bounded-dns';
 import { URL } from 'node:url';
 
 export interface ConnectionDiagnostic {
@@ -26,7 +26,7 @@ export async function sampleBlinkConnection(origin: string): Promise<ConnectionD
   });
   const result: ConnectionDiagnostic = { dns: 'failed', connection: 'skipped', elapsedMs: 0 };
   try {
-    const addresses = await Promise.race([lookup(url.hostname, { all: true }), expired]);
+    const addresses = await Promise.race([lookupAddresses(url.hostname), expired]);
     result.dns = 'ok';
     result.addressCount = addresses.length;
     try {

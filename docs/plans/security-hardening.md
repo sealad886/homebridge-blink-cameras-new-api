@@ -6,7 +6,12 @@ Manifest SHA-256: `0c970d21f83f14912e1e7c6dd343ba3b79419aa3c4b99c0c9b241e8bb033c
 Approved design: scan supplemental `hardening/hardening.md`, artifact
 `a531f35a81c4ac522960f23f6b95f1ecab85e75280fe513c00f5e1968145c363`.
 
-Implementation branch: `codex/security-hardening`, existing checkout. No new worktree.
+Current release branch: `codex/security-hardening-rc4`, existing checkout. No new worktree.
+The original `codex/secure-media-worker` branch and unpushed commit remain intact;
+the release branch starts with an identical signed tree and corrected commit text.
+The preceding staged delivery merged through PR #49 at `2e86a45` and published
+`0.10.0-rc.3` through CI run `37132584266`. Historical local receipts below retain
+their original scope and do not describe current branch or review state.
 Implementation and review assignments remain unassigned for ongoing maintenance.
 Maintainer owns architecture/release decisions; operator owns physical acceptance.
 
@@ -15,8 +20,8 @@ Maintainer owns architecture/release decisions; operator owns physical acceptanc
 - [x] Refresh baseline and preserve unrelated work (WI-01).
 - [x] Implement local bounded-input, session, private-IMMIS and diagnostic candidates (WI-02/03/04/06).
 - [x] Independent local review and verification receipt (WI-09 local slice).
-- [ ] Revised media-network design approved (WI-05 gate failed).
-- [ ] Native worker and five-target distribution (WI-07/08 blocked by WI-05).
+- [x] Revised media-network design approved on 2026-10-03: private worker IPC and owned transport feeding codec-only processing.
+- [ ] Native worker and five-target distribution (WI-05/07/08 implementation and enforcement proof pending).
 - [ ] Exact registry artifact, physical acceptance, observation (WI-09 release slice).
 
 ## Work items and dependencies
@@ -35,7 +40,10 @@ Maintainer owns architecture/release decisions; operator owns physical acceptanc
 
 WI-05 source inspection disproved public I/O interception for stock FFmpeg 9.0.2
 RTSP. See [native feasibility receipt](../audits/security-hardening-native-feasibility.md).
-WI-07 stops as prescribed. No unconstrained worker or hostname-only substitution.
+The original WI-07 callback-based design stopped as prescribed. The approved
+owned-transport continuation now has a codec-only development prototype; it is
+not wired into the plugin or included in npm artifacts. No unconstrained native
+worker or hostname-only substitution is accepted.
 F05 and F06 remain open. Existing FFmpeg execution still contains those exposures.
 
 ## Acceptance and finding disposition
@@ -48,8 +56,8 @@ F05 and F06 remain open. Existing FFmpeg execution still contains those exposure
 | AC-04 | Non-reading child, talkback and disk saturation remain bounded | local implementation under verification |
 | AC-05 | Real streamed bodies at exact limit/+1, compressed/chunked/stalled streams | local implementation under verification |
 | AC-06 | Invalid IDs make no authenticated request; bounded discovery/log traversal | local implementation under verification |
-| AC-07 | Observe every actual destination including redirects/reconnect/secondary RTSP | blocked: revised architecture required |
-| AC-08 | Dummy secrets absent from argv/env/logs/errors/crash output | blocked: secure worker not implemented |
+| AC-07 | Observe every actual destination including redirects/reconnect/secondary RTSP | IMMIS numeric-connect candidate implemented; provider calibration and RTSP proof pending |
+| AC-08 | Dummy secrets absent from argv/env/logs/errors/crash output | private-pipe codec prototype only; crypto/session integration pending |
 | AC-09 | OAuth diagnostic cookies/credentials remain origin-bound | local implementation under verification |
 | AC-10 | Malicious self-consistent bundles cannot execute bundled code | local implementation under verification |
 | AC-11 | Linux arm64/x64, macOS arm64/x64, Windows x64 clean-host launch/codec proof | blocked: no native artifact |
@@ -76,16 +84,17 @@ and confirmed-state semantics. Keep unsupported talkback disabled.
 
 Publication follows `docs/RELEASE.md`: alpha → beta → RC → stable, immutable CI-built
 artifact, exact registry identity. Beta: 24h/one natural refresh. RC: 48h/two refreshes;
-runtime corrections restart RC observation. No commit, publication, installation,
-host mutation, or new issue is authorized by this implementation request.
+runtime corrections restart RC observation. The original planning turn authorized
+no mutations; subsequent delivery authority is recorded below. Live installation
+and host configuration changes remain outside this delivery.
 
 Rollback preserves security guards. Disable affected streaming when migration/media
 fails; never silently restore unauthenticated TCP or known secret exposure.
 
-## Local candidate and finding ledger
+## Historical local candidate and finding ledger
 
-Source identity is the baseline revision plus uncommitted changes; no new revision,
-release or published artifact exists. Production-source digests and exact checks are
+This receipt predates PR #49 and RC.3. Its source identity was the baseline revision
+plus local changes. Production-source digests and exact checks are
 recorded in `../audits/security-hardening-local-verification.json`.
 
 | Finding | Local control | Evidence / independent review | Residual / release disposition |
@@ -94,8 +103,8 @@ recorded in `../audits/security-hardening-local-verification.json`.
 | F02 | bounded child queue/drain deadline | non-reading writer tests, IMMIS review | Candidate only; real encoder stress pending |
 | F03 | generation owner, late cleanup, closure reservations | ownership tests, bounded review | Candidate only; physical startup/stop stress pending |
 | F04 | incremental frame and retained-byte limits | malformed/fragmented frame tests, IMMIS review | Candidate only; legitimate traffic calibration pending |
-| F05 | secure native worker blocked | native feasibility receipt | **Open**, SRTP argv exposure remains |
-| F06 | enforceable media networking design blocked | pinned source proof, native feasibility receipt | **Open**, arbitrary upstream media destination exposure remains |
+| F05 | private-pipe codec prototype; runtime cutover pending | native prototype receipt and feasibility evidence | **Open**, current runtime SRTP argv exposure remains |
+| F06 | owned IMMIS numeric-connect policy; RTSP remains pending | APK provenance, destination regressions and native feasibility evidence | **Open**, complete RTSP destination enforcement unproved |
 | F07 | thumbnail streaming cap before allocation/cache | real streamed snapshot and reader tests | Candidate only; provider calibration pending |
 | F08 | fixed-origin diagnostic OAuth transport | transport tests, bounded review | Candidate only; no live credential run |
 | F09 | canonical uint32 client ID before TLS auth | client-ID cases, IMMIS review | Candidate only |
@@ -177,3 +186,99 @@ regressions cover delayed journal/audit/Homebridge events, original boundaries,
 no backward attribution and identical reproduction. All 46 evidence tests pass;
 TypeScript/package source is unchanged from the 733-test verification.
 Copilot remains the active source for the next review.
+
+## Approved continuation and release readiness — 2026-10-03
+
+The maintainer approved private IPC for native configuration and owned upstream
+transport feeding codec-only media processing. Start with IMMIS. Compare a worker-
+owned RTSP implementation with a maintained connector patch before selecting RTSP
+execution; stock public libav I/O callbacks remain insufficient. This approval
+supersedes the earlier design-approval blocker, not the actual-connection proof
+gate. See ADR-005. F05/F06 remain open until their mapped gates pass.
+
+Development, testing, documentation, scoped commits, pushes, PR review/fix/merge
+and a fresh CI-published RC are authorized. Live-device installation is excluded.
+The operator will install through Homebridge and direct physical acceptance later.
+
+Release readiness also includes reconciliation of PR #19 (network exclusion
+already adapted with attribution in merged PR #22), dependency action updates
+from PRs #32/#33/#36, and the evidence-export concurrency failure observed in
+CI run `37132647161`. Action pins are integrated through the delivering PR and
+verified by Node 20/22/24 CI; superseded dependency PRs close only after that
+merge. The exporter must size and write one retained-event snapshot while
+preserving hard byte reservations, rather than allowing concurrent append to
+change the exported input after reservation admission.
+
+Delivery routing reuses the accepted context, requirements, design and work
+ledger. Scale is large and risk high because secret handling, network authority,
+codec execution and five-target distribution interact. Implementation and quality
+own the current work; security, independent review, documentation and external
+coordination are active release gates. Release execution follows only after an
+exact immutable source/artifact is resolved. Retrospective observations and
+physical acceptance remain future work; passing CI does not establish either.
+
+### Current verified slices
+
+The owned IMMIS path admits the APK-derived `immedia-semi.com` family on TLS port
+443, resolves each connection anew, rejects non-public or mixed DNS answers, and
+connects numerically while preserving original TLS identity. The family is a
+conservative policy inference; real provider media-host completeness is unverified.
+No synthetic host grants production authority. The TLS bypass is removed from
+the UI and ignored in old settings; snapshot/authentication behavior is unchanged.
+
+The shared DNS owner caps actual outstanding lookups at eight without a queue,
+and retains admission after caller retirement until underlying lookup settlement.
+The existing outage probe uses the same owner. Independent review identified and
+verified this correction. Startup ownership fixtures now use admitted synthetic
+hosts so their cancellation tests continue to reach the intended startup boundary.
+
+The isolated C11 prototype is development source under `native/`; it is excluded
+from npm runtime. It uses private framed standard pipes and public codec APIs.
+Its local build receipt establishes measured macOS arm64 scope: signed FFmpeg
+9.0.2 source, immutable source/digest pins for x264/Opus/libSRTP, static libraries,
+zero native URL protocols, H264 plus Opus/PCMA/PCMU processing and published RTP/
+SRTCP protection vectors. Own-process POSIX core limits and dummy-key process
+inspection are verified locally; external crash collectors are not controlled.
+
+The private parent-client prototype bounds framing, queues, writes, requests and
+consumer callbacks. Independent review identified and verified corrections for
+frame coalescence, natural-close data loss and shared control/media writer ownership.
+The [RC.4 milestone review](../audits/security-hardening-rc4-review.md) and
+[local source/check receipt](../audits/security-hardening-rc4-local-verification.json)
+retain exact scope; immutable PR review and hosted CI remain gates. Existing test
+CI now builds source and tests the native/parent boundary on Linux x64 and macOS
+arm64; successful CI runs remain prerequisites, not assumed receipts. Other
+architectures, Windows, clean-host baselines and five-target distribution remain
+gates. No native binary, startup download or native fallback enters npm runtime.
+
+Native AAC-ELD encoding fails closed rather than substituting AAC-LC. Complete
+RTSP transport, codec/runtime integration, validated encoder capabilities,
+configuration migration and physical HomeKit/provider acceptance remain work.
+The planned `0.10.0-rc.4` contains the independently verified runtime IMMIS/DNS
+controls and evidence/CI corrections; native work remains development source.
+No release or F05/F06 closure is claimed before its exact gates. Process separation
+does not establish an OS sandbox.
+
+### PR #50 review corrections
+
+The first immutable PR review found a new memory regression in evidence export:
+freezing every retained event before capacity admission could exhaust Pi memory.
+The existing Store now owns one repeatable SQLite WAL view across streaming sizing
+and raw writing. Each pass retains one serialized event; concurrent appends remain
+possible and cannot change the exported membership. Source expiry fails cleanly
+without extending retention. The existing normalizer runs after this view closes.
+The 5,000-event, 16 KiB-per-event refusal regression enforces less than 4 MiB traced
+sizing memory, no staging writes and no lingering reservation.
+
+Copilot also identified discarded DNS candidates and a stale license hash. IMMIS
+fallback retains the fully validated address set and attempts bounded distinct
+numeric candidates while preserving TLS hostname verification. A socket must
+confirm closure before the next attempt; STOP fences timers and callbacks.
+Reconnects resolve and validate fresh answers. The current native receipt records
+the actual included license bytes; historical receipts remain historical.
+
+Initial hosted Node 20/22/24, commitlint and macOS native checks passed. Linux
+native CI rejected eight misleading-indentation warnings under its strict GCC
+flags. Explicit braces and statement separation correct these without changing
+behavior or weakening compiler checks. Fresh hosted Linux verification and renewed
+review of the corrected immutable head remain mandatory publication gates.

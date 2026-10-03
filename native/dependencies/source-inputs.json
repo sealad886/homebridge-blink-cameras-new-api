@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "name": "ffmpeg",
+      "version": "9.0.2",
+      "filename": "ffmpeg-9.0.2.tar.xz",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+      "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+      "root": "ffmpeg-9.0.2",
+      "license": "GPL-3.0-or-later selected configuration"
+    },
+    {
+      "name": "opus",
+      "version": "1.6.1",
+      "filename": "opus-1.6.1.tar.gz",
+      "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+      "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+      "root": "opus-1.6.1",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "libsrtp",
+      "version": "2.8.1",
+      "filename": "libsrtp-2.8.1.tar.gz",
+      "url": "https://codeload.github.com/cisco/libsrtp/tar.gz/6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+      "sha256": "1ef3e6315e0ea3cd05f4980c8b5f7a9df369e3d586f5e0616e6cc4c778401d4c",
+      "root": "libsrtp-6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "x264",
+      "version": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+      "filename": "x264-0480cb05.tar.gz",
+      "url": "https://code.videolan.org/videolan/x264/-/archive/0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz",
+      "sha256": "d0967a1348c85dfde363bb52610403be898171493100561efa0dd05d5fd1ae50",
+      "root": "x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+      "license": "GPL-2.0-or-later"
+    }
+  ],
+  "ffmpeg_signature": {
+    "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc",
+    "key_url": "https://ffmpeg.org/ffmpeg-devel.asc",
+    "fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+  },
+  "libsrtp_tag_commit": "6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+  "x264_commit": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee"
+}

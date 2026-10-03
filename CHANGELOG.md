@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.4] - 2026-10-03
+
+### Fixed
+
+- Admit IMMIS upstream connections only for the checked Blink hostname family,
+  TLS port 443 and public resolved addresses. Pin the actual connection address
+  while preserving hostname verification, including reconnects and cancellation.
+- Enforce IMMIS certificate verification even when old configuration requests
+  a bypass; remove the bypass control from the settings UI.
+- Bound actual pending DNS work across streams and outage diagnostics, retaining
+  admission until the underlying resolver settles after a timeout or STOP.
+- Export one frozen evidence snapshot so concurrent collector appends cannot
+  exceed its admitted byte reservation or change reproduction inputs.
+- Integrate pinned checkout, setup-node and Codecov action updates, with native
+  source-build and private-IPC prototype checks in the existing test workflow.
+
+### Development and remaining gates
+
+- Add an isolated C11 codec/SRTP worker and private parent-client prototype with
+  signed/pinned source inputs, bounded pipes, audio decoding and published SRTP
+  vector tests. The worker is not enabled or distributed in the npm runtime.
+- **F05 remains open:** current streaming still passes SRTP parameters through
+  FFmpeg process arguments. **F06 remains open:** complete RTSP destination
+  enforcement, provider-host calibration and native runtime cutover remain gates.
+  This RC does not claim comprehensive security closure.
+- AAC-ELD native encoding, five-target clean-host artifacts, configuration
+  migration and physical HomeKit/provider parity remain unverified. Unsupported
+  talkback stays disabled. A refused IMMIS endpoint stops that stream safely.
+- Install through Homebridge only after reviewing these limitations. This runtime
+  change restarts RC observation: at least 48 hours and two natural refreshes
+  before stable promotion. No live-device installation is part of this delivery.
+
 ## [0.10.0-rc.3] - 2026-10-03
 
 ### Fixed

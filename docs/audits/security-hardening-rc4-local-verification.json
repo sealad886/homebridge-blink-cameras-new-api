@@ -1,0 +1,106 @@
+{
+  "recorded_at_utc": "2026-10-03T17:09:02.788311+00:00",
+  "scan_id": "247931cc-e452-4dff-bfec-5054e0481242",
+  "scan_baseline": "fb96b9b33921e39d825f1be8636705e8a9839d20",
+  "integration_base": "2e86a455d2950411ebb17c277d90e2486d2209d1",
+  "branch": "codex/security-hardening-rc4",
+  "planned_version": "0.10.0-rc.4",
+  "source_state": "Pre-commit working-tree snapshot identified by hashes; not an immutable PR or registry artifact",
+  "source_files": {
+    ".github/workflows/test.yml": "219572ab566e477c4100b307682e5a0e7b0cb5223c6722d6fb1c77aa1945bb49",
+    ".github/workflows/publish.yml": "3101509f9a918f3bae5ac2d03b180bdf71ae31742a26ff881005b4efc6f5c640",
+    ".github/workflows/commitlint.yml": "18d3c3a02db5276515919cead2ab703a0546c1326c54d6f9bdaae12172409b54",
+    ".github/workflows/npm-prerelease-cleanup.yml": "ec2c96f1ef952d2b03d9a7e3baf251fcc9bcc2485d1ef8d5ac059457090bc9fc",
+    "package.json": "3c895f033d0688b9eb4577026c133d9be57753fb61ff57bc0f6c57ced4de8b5e",
+    "package-lock.json": "e93cc0e006bab62320c39035b3d6ced3c9d6c1849abfc08dbb3e42bb6ee71a54",
+    "config.schema.json": "d94daeaaa6e6e4e48034a0baaea6ca6c3284d88ddce0b239ec10d4a28a7da203",
+    "src/accessories/camera-source.ts": "16e6f7f06189771aaf38f2d868576209e24be6415e5f43790512daa76749b853",
+    "src/accessories/media-output.ts": "f38857a15a5a970b421ddc945cfa529c3c94f6d6805963a8d2e2737e63033edc",
+    "src/accessories/media-worker.ts": "ad730eb116c138557d6c1a8856cd1d5a5bab5b9c8b7a8a932a4392af72a70909",
+    "src/blink-api/bounded-dns.ts": "cd78fa40ad062683955c518acede4f374dddfa0e11c82c4adc3e60f9ea767004",
+    "src/blink-api/media-destination.ts": "5ba0c2382704f922a364d69dc72ab9ce2fa245dec43d2adba2155a1daf528fd8",
+    "src/blink-api/immis-proxy.ts": "68e644cdfc96fa8812a5b565872cd4546e68644f0a55989c3a868ace097fb3c8",
+    "src/blink-api/connection-diagnostics.ts": "454a6505b988e2431e58279cf2670912583f31f582527e2166a168f2e52865dd",
+    "scripts/pi-evidence/report.py": "47c364064989ef20f64113634e79988c986346e3c0f3fdb3a6f821c49d585dd1",
+    "scripts/pi-evidence/tests/test_report.py": "1b58c3da4a70c538620edadfecef396d385d26913b8295fd212365c299b30d84",
+    "__tests__/blink-api/bounded-dns.test.ts": "7e7843ef859f70c93d6be418624d18c4c32dd3029865b25a92ff0e4327243597",
+    "__tests__/blink-api/media-destination.test.ts": "d749d5720559e235bad4cc45ea95d1776e60659ee8143050c43afc361e56cf5f",
+    "__tests__/blink-api/immis-proxy.test.ts": "778050ec23f03ac3ce647c06a14fb065c2452a067d58c6b5c4ad2d677bfd042d",
+    "__tests__/media-output.test.ts": "6f10570b52f1717cef0169f563116d41fba0b138783ea7fb1245c5c105fdc26d",
+    "__tests__/media-worker.test.ts": "abd2427c7b276466747800b0ce0daa2cd0f4f533cd402b8a4949ef4442ad0e82",
+    "__tests__/stream-ownership.test.ts": "ea7fbecf880e2ce290f906e770cc1da913338249257dad51b40e368cefe98371",
+    "native/worker.c": "48c156c2b1c9511ccbf4e08596a923ab495ff574eda754f09fc8c74bcc59b27c",
+    "native/protocol.h": "e5a0bc85fe2c34c4e6ab3c5466d6fb1e03312180b53fb34e1310fa48a5da1380",
+    "native/audio.inc": "9717c0c39900d4c90e37008da23ba8e67ca5672926319c8dc7ceeb0bd8554488",
+    "native/output.inc": "bd62b142324b9730af57e9ae12ee15276be42ce71b0956fc72a21511f28e893b",
+    "native/protection.inc": "c9b51c395fe831675cc193fff815a5b873c1ef5e3c635c507c010099348e97a9",
+    "native/Makefile": "94cc9c9183aa36cbfe7870d595694e0a5796e4c93d19bf4c1670e5e677fedc61",
+    "native/tests/test_worker.py": "8d66725d699a47e9882321923ac5859add5c90780c215e8d3f9d464746517974",
+    "native/dependencies/prepare.py": "11b8c2550481cffc5d985c4a43cc2e0d0342f2c88f4a4a80e50d8b5ba1b170d1",
+    "native/dependencies/source-inputs.json": "d4ca406e38c487e723a49993e2308aa803b16b6f8fd89499e49823cdce0eeb0b",
+    "native/dependencies/test_prepare.py": "2040271579a4275b232d60d6f880e8a6af1bb2086fc712cac33fed47b6acbfc2",
+    "native/local-build-receipt.json": "c1efd823e0811a4100a7b3b6a40b67cd797c0ca1fdf1060aa058a69b9c803cdf",
+    "native/dependencies/local-build-receipt.json": "0383d5ff3c80a4532f0b282bbe8ee72b3060a3f81d948b593b591f4ab30b8e1f"
+  },
+  "checks": {
+    "jest": {
+      "passed": 834,
+      "suites": 38,
+      "native_vector_enabled": true
+    },
+    "python_evidence": {
+      "passed": 46,
+      "environment": ".venv"
+    },
+    "native_fetch_boundaries": {
+      "passed": 7
+    },
+    "native_worker": {
+      "passed": 19,
+      "scope": "Local macOS arm64 static build; independently verified; process inspection required unsandboxed ps"
+    },
+    "release_safety_node": {
+      "passed": 39
+    },
+    "lint": "passed",
+    "typescript_build": "passed",
+    "oauth_diagnostic_script_typecheck": "passed",
+    "api_contract": {
+      "endpoints": 347,
+      "models": 677,
+      "status": "passed"
+    },
+    "package_loadability": "Local check only; CI must rebuild exact committed source",
+    "graphify_ast_update": "passed; existing shell-module warnings and community-label drift"
+  },
+  "independent_review": {
+    "scope": "Working-tree milestone; no immutable PR/hosted CI approval",
+    "status": "clean",
+    "finding_dispositions": {
+      "R1": "Shared actual DNS admission retained until resolver settlement",
+      "R2": "Incremental frame retention accepts valid boundary coalescence",
+      "R3": "Natural close with undrained accepted output records failure",
+      "R4": "Canonical bounded writer owns reserved control and sequential producer slots"
+    },
+    "focused_parent_tests": 49,
+    "report": "security-hardening-rc4-review.md"
+  },
+  "release_gates_pending": [
+    "Conventional commits and immutable PR review",
+    "Node 20/22/24 and native prototype hosted CI",
+    "Exact CI-built registry artifact identity"
+  ],
+  "findings_remaining_open": [
+    "F05: Existing runtime secret-bearing FFmpeg argv",
+    "F06: Complete RTSP/network authority and provider calibration"
+  ],
+  "not_verified": [
+    "Provider-valid media destination/body calibration",
+    "Native runtime integration and configuration migration",
+    "AAC-ELD native encoding",
+    "Five-target clean-host worker artifacts and license/source distribution",
+    "Matched latency/CPU/RSS measurements and physical 100-cycle resource trend",
+    "Physical HomeKit/provider parity, live installation and RC observation"
+  ],
+  "history_preservation": "Original codex/secure-media-worker and bf92f22 preserved; new signed cf18cbd has identical tree and corrected message"
+}
