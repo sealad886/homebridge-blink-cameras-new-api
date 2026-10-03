@@ -1,8 +1,8 @@
 {
-  "recorded_at_utc": "2026-10-03T14:47:33.035827+00:00",
+  "recorded_at_utc": "2026-10-03T15:02:46.597617+00:00",
   "baseline_revision": "fb96b9b33921e39d825f1be8636705e8a9839d20",
   "branch": "codex/security-hardening",
-  "source_state": "review round 3 corrections on 89f0a1ea62058d347dbbcfe3734a4abca8160479; hashes identify tested source; not a registry artifact",
+  "source_state": "review round 4 corrections on fb8a48b37978a226cc49e4ed2daa14ecea23e675; hashes identify tested source; not a registry artifact",
   "scan_id": "247931cc-e452-4dff-bfec-5054e0481242",
   "source_files": {
     ".github/scripts/verify-package.mjs": "f03caba34a7d514d76b66ea240976fa5031bc8f5f66cc277124100984a6a6709",
@@ -22,11 +22,11 @@
     "scripts/debug-simple-oauth.ts": "ef46a59e36f4c082f103531190c8955cf65b2881bb785cd03d7e8a9aaff6450f",
     "scripts/oauth-diagnostic-transport.ts": "74c6bd319c4f1a312683d0867fac4376a096dd5b0cea456b0c9ddc8adb066ab5",
     "scripts/pi-evidence/README.md": "29dae6debb262f537b91a8a2ec4d2ae311bb13f90ffc1a09355914321ad8271d",
-    "scripts/pi-evidence/normalize.py": "6e1db855445cd5d1449278d70e8b8d7abf87dfb6f44255cf122376e8b8855792",
-    "scripts/pi-evidence/report.py": "a04f12dda07c7ca695f7f76bf3a70299271882e3c8719b33fc16d4b20fc9d99d",
+    "scripts/pi-evidence/normalize.py": "de053a4220880743388ce52badf6aba2f7311d42d6eeb03427ddefb19a49a309",
+    "scripts/pi-evidence/report.py": "a235172c8cbe28b7d3ded00b0fd42b694ba1d4c90f3c069d7f63c9fa9562bbb6",
     "scripts/pi-evidence/store.py": "1b37bf9be84012f5b3e2351d2af536b688889775484498d2bb42b9437d16f77e",
-    "scripts/pi-evidence/tests/test_normalize.py": "d7268737eca3a3824b2d92c111acf3a6b9f16cfb51d2d3615776961a20b4b0d7",
-    "scripts/pi-evidence/tests/test_report.py": "cd9c60cad4e4320ca7a062d2c8658f7958dc8387174da5aa2dc1d4bcf57717c9",
+    "scripts/pi-evidence/tests/test_normalize.py": "ec25c2e1aa855c98f2c898a67edeff393a6bb7af87a0f73f5e6c5b0ca15783a1",
+    "scripts/pi-evidence/tests/test_report.py": "cd9fd4b56dae571f562eadf4135b5f2e668b3a5e50a5870d091a65df7e50fcdc",
     "src/accessories/camera-source.ts": "6837ab80e285bf2f188786b8c4d7a178725d2cefbf684ad72fc2eecb96407428",
     "src/blink-api/auth.ts": "093ba0b9479025c43b6079009d5d35ca37844301c805f3d0731616e8f8038cc2",
     "src/blink-api/client.ts": "bf670b87c28c628b62d6cc3e2884a10ab1c96b74849a5c3c31a9756f0fcda5cc",
@@ -46,7 +46,7 @@
       "runtime": "Node 24.15.0"
     },
     "python_unittest": {
-      "passed": 44,
+      "passed": 46,
       "environment": ".venv"
     },
     "release_safety_node_tests": {
@@ -108,5 +108,10 @@
     "domain": "required entity names bounded before expansion; optional sync-module names retain their contract",
     "http": "path identifiers rejected before authentication, storage access or refresh; valid near-expiry requests still refresh",
     "review_status": "CodeRabbit explicit clean at preceding head and retired; Copilot next review required"
+  },
+  "review_round_4": {
+    "canonical_time": "session fields derive timestamps from original events; export/reproduce use existing canonical sort rather than receipt-order assertions",
+    "verification": "46 evidence tests including real Store/export/reproduce with reversed receipt/source times; TypeScript/package source unchanged from 733-test verification",
+    "review_status": "Copilot next review required; clean sources remain retired"
   }
 }

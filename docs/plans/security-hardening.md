@@ -120,7 +120,7 @@ they do not measure RSS, CPU, first-frame latency or physical resource trends.
 Node 24 runs locally; existing CI Node 20/22/24 coverage is preserved but Node 20/22
 were not executed here. Native platform claims remain withheld.
 
-Final local checks after review round 3: 733 Jest tests / 34 suites, 44 Python tests, 39 release-safety
+Final local checks after review round 4: 733 Jest tests / 34 suites, 46 Python tests, 39 release-safety
 Node tests; lint, build, script typecheck, contract validation and packaged plugin
 loadability passed. Independent receipts found no remaining blocker in reviewed local
 slices. Native feasibility and physical/release gates remain open; this is a staged
@@ -167,3 +167,13 @@ validated before authentication can load or refresh tokens. Near-expiry valid
 requests still refresh normally. Full Jest, evidence tests, lint, build and package
 loadability pass. CodeRabbit returned explicit clean on the preceding revision and
 is retired; Copilot review of these corrections remains required.
+
+## Review round 4 corrections
+
+Evidence session boundaries derive canonical time from the original event, not
+reduced PID fields. Export and reproduction use the existing normalizer sort,
+without treating receipt order as source-time order. Real Store/export/reproduce
+regressions cover delayed journal/audit/Homebridge events, original boundaries,
+no backward attribution and identical reproduction. All 46 evidence tests pass;
+TypeScript/package source is unchanged from the 733-test verification.
+Copilot remains the active source for the next review.
