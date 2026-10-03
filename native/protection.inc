@@ -12,7 +12,8 @@ static void protect_message(uint32_t type,uint8_t *payload,uint32_t length) {
         srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
         policy.ssrc.type=ssrc_specific;policy.ssrc.value=ssrc;policy.key=payload+12;policy.window_size=128;
         srtp_err_status_t result=srtp_create(&sessions[stream-1],&policy);erase_bytes(payload+12,30);
-        if(result!=srtp_err_status_ok)fatal("SRTP_CONFIG");session_ssrc[stream-1]=ssrc;
+        if(result!=srtp_err_status_ok) { fatal("SRTP_CONFIG"); }
+        session_ssrc[stream-1]=ssrc;
         uint8_t ack[4];put32(ack,stream);output(10,ack,4);return;
     }
     if(length<8+(type==BLINK_PROTECT_RTP?12u:8u) || length>8+BLINK_PROTECTION_PLAINTEXT_MAX)fatal("SRTP_FRAMING");

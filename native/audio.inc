@@ -62,7 +62,10 @@ static void audio_open(AVCodecParameters *params,AVRational time_base) {
     if(avcodec_open2(audio_encoder,codec,NULL)<0)fatal("AUDIO_ENCODER");
     if(audio_encoder->extradata_size<0 || audio_encoder->extradata_size>4096)fatal("AUDIO_LIMIT");
     uint8_t info[4116];put32(info,config[6]);put32(info+4,config[7]);put32(info+8,1);put32(info+12,(uint32_t)audio_encoder->initial_padding);put32(info+16,(uint32_t)audio_encoder->extradata_size);
-    if(audio_encoder->extradata_size)memcpy(info+20,audio_encoder->extradata,(size_t)audio_encoder->extradata_size);output(5,info,20+(uint32_t)audio_encoder->extradata_size);
+    if(audio_encoder->extradata_size) {
+        memcpy(info+20,audio_encoder->extradata,(size_t)audio_encoder->extradata_size);
+    }
+    output(5,info,20+(uint32_t)audio_encoder->extradata_size);
     audio_decoded=av_frame_alloc();if(!audio_decoded)fatal("MEMORY");
 }
 static void audio_decode(AVPacket *p,uint64_t *bytes) {
@@ -83,7 +86,8 @@ static void audio_decode(AVPacket *p,uint64_t *bytes) {
 static void audio_finish(uint64_t *bytes) {
     if(!audio_decoder)return;
     audio_decode(NULL,bytes);audio_convert(NULL,1,bytes);
-    if(avcodec_send_frame(audio_encoder,NULL)<0)fatal("AUDIO_ENCODE");audio_emit(bytes);
+    if(avcodec_send_frame(audio_encoder,NULL)<0) { fatal("AUDIO_ENCODE"); }
+    audio_emit(bytes);
     av_frame_free(&audio_decoded);av_audio_fifo_free(audio_fifo);swr_free(&resampler);
     avcodec_free_context(&audio_decoder);avcodec_free_context(&audio_encoder);
 }

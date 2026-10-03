@@ -177,7 +177,8 @@ int main(int argc, char **argv) {
     thread=CreateThread(NULL,0,watchdog,NULL,0,NULL); if(!thread) fatal("THREAD"); CloseHandle(thread);
 #else
     pthread_t thread; if(pthread_create(&thread,NULL,reader,NULL)) fatal("THREAD"); pthread_detach(thread);
-    if(pthread_create(&thread,NULL,watchdog,NULL)) fatal("THREAD"); pthread_detach(thread);
+    if(pthread_create(&thread,NULL,watchdog,NULL)) { fatal("THREAD"); }
+    pthread_detach(thread);
 #endif
     LOCK(&mutex); while(!configured) if(!WAIT(&changed,&mutex)) fatal("CONFIG_TIMEOUT"); UNLOCK(&mutex);
     uint8_t status[8]; put32(status,1); put32(status+4,config[2]); output(1,status,sizeof(status));
@@ -194,14 +195,16 @@ int main(int argc, char **argv) {
     if(av_dict_set(&options,"codec_whitelist","h264,aac,aac_latm",0)<0 ||
        av_dict_set_int(&options,"max_packet_size",256*1024,0)<0 ||
        av_dict_set_int(&options,"resync_size",65536,0)<0) fatal("MEMORY");
-    if(avformat_open_input(&input,NULL,demuxer,&options)<0) fatal("MEDIA"); av_dict_free(&options);
+    if(avformat_open_input(&input,NULL,demuxer,&options)<0) { fatal("MEDIA"); }
+    av_dict_free(&options);
     AVCodecContext *decoder=NULL;
     const AVCodec *codec=avcodec_find_encoder_by_name("libx264"); if(!codec) fatal("ENCODER");
     AVCodecContext *encoder=avcodec_alloc_context3(codec); if(!encoder) fatal("MEMORY");
     encoder->width=(int)config[0]; encoder->height=(int)config[1]; encoder->time_base=AV_TIME_BASE_Q; encoder->framerate=(AVRational){(int)config[2],1};
     encoder->pix_fmt=AV_PIX_FMT_YUV420P; encoder->bit_rate=config[3]; encoder->gop_size=(int)config[2]; encoder->max_b_frames=0; encoder->thread_count=1;
     av_dict_set(&options,"preset","ultrafast",0); av_dict_set(&options,"tune","zerolatency",0);
-    if(avcodec_open2(encoder,codec,&options)<0) fatal("ENCODER"); av_dict_free(&options);
+    if(avcodec_open2(encoder,codec,&options)<0) { fatal("ENCODER"); }
+    av_dict_free(&options);
     AVFrame *decoded=av_frame_alloc(), *scaled=av_frame_alloc(); AVPacket *packet=av_packet_alloc(), *encoded=av_packet_alloc();
     if(!decoded || !scaled || !packet || !encoded) fatal("MEMORY");
     scaled->format=AV_PIX_FMT_YUV420P; scaled->width=encoder->width; scaled->height=encoder->height;
@@ -237,12 +240,14 @@ int main(int argc, char **argv) {
             if(sws_scale(scaler,(const uint8_t *const*)decoded->data,decoded->linesize,0,decoded->height,scaled->data,scaled->linesize)!=encoder->height) fatal("SCALE");
             if(decoded->best_effort_timestamp==AV_NOPTS_VALUE)fatal("VIDEO_TIMESTAMP");
             scaled->pts=av_rescale_q(decoded->best_effort_timestamp,input->streams[video]->time_base,AV_TIME_BASE_Q);
-            if(avcodec_send_frame(encoder,scaled)<0) fatal("ENCODE"); packets(encoder,encoded,&bytes,2); av_frame_unref(decoded);
+            if(avcodec_send_frame(encoder,scaled)<0) { fatal("ENCODE"); }
+            packets(encoder,encoded,&bytes,2); av_frame_unref(decoded);
         }
         if(received!=AVERROR(EAGAIN) && received!=AVERROR_EOF) fatal("DECODE");
         if(result==AVERROR_EOF) break;
     }
-    if(avcodec_send_frame(encoder,NULL)<0) fatal("ENCODE"); packets(encoder,encoded,&bytes,2); audio_finish(&bytes); output(3,NULL,0);
+    if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
+    packets(encoder,encoded,&bytes,2); audio_finish(&bytes); output(3,NULL,0);
     sws_freeContext(scaler); av_frame_free(&decoded); av_frame_free(&scaled); av_packet_free(&packet); av_packet_free(&encoded); avcodec_free_context(&decoder); avcodec_free_context(&encoder);
     avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);
     LOCK(&mutex);while(!reader_closed)if(!WAIT(&changed,&mutex))fatal("FINAL_IDLE_TIMEOUT");UNLOCK(&mutex);

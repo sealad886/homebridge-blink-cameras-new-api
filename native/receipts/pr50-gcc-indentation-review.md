@@ -1,0 +1,11 @@
+# PR 50 native GCC indentation correction
+
+Linux x64 CI reported eight `-Werror=misleading-indentation` errors: one in protection initialization, two in audio output/draining, and five in worker thread startup, input/encoder setup and packet draining. Each failing site now has an explicit guarded block and a separate following statement. Expressions, statement order and protocol behavior are unchanged; comparison after removing whitespace and brace delimiters matches the prior source in all three edited files. No warning suppression, third-party formatting or dependency change was used.
+
+The pattern gate inspected the local failing functions, neighboring runtime/thread/audio/protection code and every repository-owned native C translation unit, included helper and C test helper. GCC 14.4.0 and GCC 16.2.0 both pass `-std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -fsyntax-only` for worker.c, fixture.c, check-output.c and audio-capabilities.c against the actual pinned static prefix; the worker includes audio.inc, output.inc and protection.inc. GCC was used for syntax only, with no library linking or dependency rebuild.
+
+Codanna 0.16.0 confirms the correct repository scope and a healthy index. Its statistics contain C entries, but scoped searches for protect_message, audio_finish and write_output return NOT_FOUND. The relevant included native helper symbols are therefore an index gap; direct source/regex inspection and compiler diagnostics supplied the bounded fallback. This does not claim a complete indexed native call graph.
+
+The actual source-built static prefix is recorded by relative label in local-build-receipt.json. A fresh Apple Clang strict build followed by all 19 behavioral tests passes, including decoded media, published SRTP/SRTCP vectors, post-END protection, blocked-output STOP and dummy-key process-surface checks. The latter requires execution outside the local sandbox because it reads only the owned child's argv/environment through ps. git diff --check passes. Pre-correction measured evidence is preserved in pre-pr50-gcc-format-local-build.json; current source/output hashes are refreshed honestly.
+
+These local checks address the GCC diagnostic pattern. The next Linux CI run remains the direct Linux build/runtime confirmation; five-target runtime and physical acceptance gates remain unchanged.

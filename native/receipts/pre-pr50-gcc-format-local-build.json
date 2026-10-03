@@ -8,8 +8,7 @@
   "ffmpeg_version": "9.0.2",
   "historical_receipts": [
     "receipts/video-only-local-build.json",
-    "receipts/audio-srtp-homebrew-local-build.json",
-    "receipts/pre-pr50-gcc-format-local-build.json"
+    "receipts/audio-srtp-homebrew-local-build.json"
   ],
   "installed_header_sha256": {
     "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
@@ -43,17 +42,16 @@
     "Makefile": "94cc9c9183aa36cbfe7870d595694e0a5796e4c93d19bf4c1670e5e677fedc61",
     "README.md": "6d9330a44582ffbfa2b23ab8245cac3c5e1a082beee236690eea9bd053c63f90",
     "RTSP-ALTERNATIVES.md": "3b85475293c9e3b4fb541fb7bcdafa1e984c4eb4ee38e9558a9e742b909f1df9",
-    "audio.inc": "73c0639264d9e3acdfb25a57593069ffc8c1a112ea41fe8aa744a1f48b9d6660",
-    "dependencies/licenses/libsrtp-LICENSE": "6254b8adcb68109dc150f3b7243c771478360cd64f22860e715e7265b7b3bb78",
+    "audio.inc": "9717c0c39900d4c90e37008da23ba8e67ca5672926319c8dc7ceeb0bd8554488",
+    "dependencies/licenses/libsrtp-LICENSE": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae",
     "output.inc": "bd62b142324b9730af57e9ae12ee15276be42ce71b0956fc72a21511f28e893b",
-    "protection.inc": "79afb10696448af99fe6cf44fda83cd76cfc5bda4daac90be55b116b34bd03d1",
+    "protection.inc": "c9b51c395fe831675cc193fff815a5b873c1ef5e3c635c507c010099348e97a9",
     "protocol.h": "e5a0bc85fe2c34c4e6ab3c5466d6fb1e03312180b53fb34e1310fa48a5da1380",
-    "receipts/pr50-gcc-indentation-review.md": "969cef9c914cd5681f7b349ba2f979cb4657c7b621cb14913e8d2574e4c44bc8",
     "tests/audio-capabilities.c": "2eaa868a8b6f0f268402eb88c3fab2ad289033a0d6edda13f685898a96ce3d29",
     "tests/check-output.c": "d6987e0e62b79ea66ac2bf7e8492867ca2beda0162d6ec7af17e0e7be79105d4",
     "tests/fixture.c": "2675e620e55bb0ab1e7b84a68ca6826280ece63ce9ab077cc2e2940261a5deeb",
     "tests/test_worker.py": "8d66725d699a47e9882321923ac5859add5c90780c215e8d3f9d464746517974",
-    "worker.c": "02db1d217bf5ee4130fda999791d84e684e810d2eeb934a608fed5cefd85ce67"
+    "worker.c": "48c156c2b1c9511ccbf4e08596a923ab495ff574eda754f09fc8c74bcc59b27c"
   },
   "scope": "local macOS arm64 static worker development build; not a distribution receipt",
   "upstream_source_commit": "FFmpeg commit unverified; verified release archive identity recorded below",
@@ -62,11 +60,6 @@
     "checker": "same verified static prefix as worker, fixture and capability probe",
     "command": "make -B -C native FFMPEG_PREFIX=<verified static prefix> SRTP_PREFIX=<verified static prefix> test",
     "crash_limit": "POSIX worker runtime sets/verifies own RLIMIT_CORE soft/hard=0; no secret-bearing crash triggered; Windows error-mode source-only",
-    "gcc_syntax_checks": [
-      "GCC14.4.0 strict syntax-only all owned native translation units/includes/C helpers",
-      "GCC16.2.0 strict syntax-only all owned native translation units/includes/C helpers"
-    ],
-    "pattern_gate": "eight CI diagnostic sites corrected; local/regional/native-wide direct fallback; relevant Codanna included helper symbols not indexed",
     "process_surface_check": "owned synthetic child ps argv/environment, INIT reply, fixed malformed-frame diagnostics; tests run outside sandbox because sandbox blocks ps",
     "scope": "macOS arm64 only; no physical runtime/distribution proof",
     "srtp": "published RTP/SRTCP vectors through IPC, post-codec-END protection, stdout deadline and independent STOP",
