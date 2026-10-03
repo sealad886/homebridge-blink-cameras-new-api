@@ -5,6 +5,8 @@ import type { WriteStream } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
+import { spawn, ChildProcess } from 'node:child_process';
+import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
 
 jest.mock('node:tls', () => {
   const actual = jest.requireActual('node:tls') as typeof import('node:tls');
@@ -579,12 +581,91 @@ describe('ImmisProxyServer security controls', () => {
     try {
       await Promise.all(proxies.map((proxy) => proxy.start()));
       const files = await fs.readdir(path.join(tmpDir, 'blink-stream-recordings'));
-      expect(files).toHaveLength(4);
+      expect(files.filter(file => file.endsWith('.ts'))).toHaveLength(4);
+      expect(files.filter(file => file.endsWith('.reserve'))).toHaveLength(4);
       expect(proxies.filter((proxy) => (proxy as unknown as { streamFile: WriteStream | null }).streamFile)).toHaveLength(4);
     } finally {
       for (const proxy of proxies) proxy.stop();
+      await Promise.all(proxies.map(proxy => proxy.whenClosed));
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('enforces the same directory quota across independent plugin processes', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-process-quota-'));
+    const runtime = path.join(tmpDir, 'runtime');
+    await fs.mkdir(runtime);
+    const children: ChildProcess[] = [];
+    const nextMessage = (child: ChildProcess): Promise<void> => new Promise((resolve, reject) => {
+      child.once('message', () => resolve());
+      child.once('error', reject);
+      child.once('exit', code => { if (code) reject(new Error(`Test recorder exited ${code}`)); });
+    });
+    const launch = async (): Promise<ChildProcess> => {
+      const child = spawn(process.execPath, ['-e', `
+        const { ImmisProxyServer } = require(process.argv[1]);
+        const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: process.argv[2] });
+        process.on('message', async message => {
+          if (message === 'stop') { proxy.stop(); await proxy.whenClosed; process.send('closed'); process.disconnect(); }
+        });
+        proxy.start().then(() => process.send('ready')).catch(() => process.exit(2));
+      `, path.join(runtime, 'immis-proxy.js'), tmpDir], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+      children.push(child); await nextMessage(child); return child;
+    };
+    const finish = async (child: ChildProcess): Promise<void> => {
+      if (!child.connected) return;
+      const stopped = nextMessage(child); child.send('stop'); await stopped;
+    };
+    const captures = async () => (await fs.readdir(path.join(tmpDir, 'blink-stream-recordings'))).filter(file => file.endsWith('.ts'));
+    try {
+      for (const name of ['immis-proxy', 'network-diagnostics']) {
+        const source = await fs.readFile(path.join(__dirname, '../../src/blink-api', `${name}.ts`), 'utf8');
+        await fs.writeFile(path.join(runtime, `${name}.js`), transpileModule(source, {
+          compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
+        }).outputText);
+      }
+      const first = await launch(); await launch(); await launch(); await launch();
+      expect(await captures()).toHaveLength(4);
+      await launch(); expect(await captures()).toHaveLength(4);
+      const entries = await fs.readdir(path.join(tmpDir, 'blink-stream-recordings'));
+      for (const marker of entries.filter(file => file.endsWith('.reserve'))) {
+        expect((await fs.stat(path.join(tmpDir, 'blink-stream-recordings', marker))).mode & 0o777).toBe(0o600);
+      }
+      await finish(first);
+      await launch(); expect(await captures()).toHaveLength(5);
+    } finally {
+      await Promise.all(children.map(child => finish(child)));
+      for (const child of children) if (child.exitCode === null) child.kill();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['file', 'symlink'])('refuses an existing %s admission lock without waiting or deleting it', async kind => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-stale-lock-'));
+    const directory = path.join(tmpDir, 'blink-stream-recordings'); await fs.mkdir(directory);
+    const lock = path.join(directory, '.admission.lock');
+    const target = path.join(tmpDir, 'lock-target');
+    if (kind === 'symlink') { await fs.writeFile(target, 'owner'); await fs.symlink(target, lock); }
+    else await fs.writeFile(lock, 'owner');
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    try {
+      await proxy.start();
+      expect(await fs.readdir(directory)).toEqual(['.admission.lock']);
+      expect(await fs.readFile(lock, 'utf8')).toBe('owner');
+      expect(proxy.isServing).toBe(true);
+    } finally { proxy.stop(); await proxy.whenClosed; await fs.rm(tmpDir, { recursive: true, force: true }); }
+  });
+
+  it('keeps abandoned capture reservations charged without deleting them', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-stale-reserve-'));
+    const directory = path.join(tmpDir, 'blink-stream-recordings'); await fs.mkdir(directory);
+    const markers = Array.from({ length: 4 }, (_, index) => `blink-stream-0123456789abcdef-old${index}-0123456789abcdef.ts.reserve`);
+    for (const marker of markers) await fs.writeFile(path.join(directory, marker), '');
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    try {
+      await proxy.start(); expect((await fs.readdir(directory)).sort()).toEqual(markers.sort());
+      expect(proxy.isServing).toBe(true);
+    } finally { proxy.stop(); await proxy.whenClosed; await fs.rm(tmpDir, { recursive: true, force: true }); }
   });
 
   it('retains closure while recording startup is pending and closes its late file', async () => {
