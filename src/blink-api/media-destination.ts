@@ -9,7 +9,13 @@ export interface MediaDestination {
   readonly port: 443;
 }
 
+export interface MediaAddress {
+  readonly address: string;
+  readonly family: 4 | 6;
+}
+
 export interface ResolvedMediaDestination extends MediaDestination {
+  readonly addresses: readonly MediaAddress[];
   readonly address: string;
   readonly family: 4 | 6;
 }
@@ -57,7 +63,7 @@ export function isPublicMediaAddress(address: string): boolean {
   return family === 6 && globalV6.check(address, 'ipv6') && !forbiddenV6.check(address, 'ipv6');
 }
 
-/** Call anew for EACH actual connect/reconnect, then connect to address numerically.
+/** Resolve anew before each bounded connection chain/reconnect; connect only to admitted numeric candidates.
  * Keep servername for SNI/certificate identity and require rejectUnauthorized: true.
  * No DNS cache: a later private answer must never inherit prior admission.
  * Cancellation stops admission; OS lookup itself cannot be cancelled.
@@ -88,7 +94,10 @@ export async function resolveMediaDestination(
       throw new Error('Media destination address refused');
     }
     const first = addresses[0];
-    return Object.freeze({ ...checked, address: first.address, family: first.family as 4 | 6 });
+    const admitted = Object.freeze(addresses.map(item => Object.freeze({
+      address: item.address, family: item.family as 4 | 6,
+    })));
+    return Object.freeze({ ...checked, address: first.address, family: first.family as 4 | 6, addresses: admitted });
   } finally {
     globalThis.clearTimeout(timer);
     if (abort) signal.removeEventListener('abort', abort);

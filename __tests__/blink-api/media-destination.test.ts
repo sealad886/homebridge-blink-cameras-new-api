@@ -7,8 +7,15 @@ describe('IMMIS destination admission', () => {
     const result = await resolveMediaDestination(destination, new AbortController().signal,
       async () => [{ address: '8.8.8.8', family: 4 }]);
     expect(result).toEqual({ scheme: 'immis:', hostname: 'media.immedia-semi.com',
-      servername: 'media.immedia-semi.com', port: 443, address: '8.8.8.8', family: 4 });
+      servername: 'media.immedia-semi.com', port: 443, address: '8.8.8.8', family: 4, addresses: [{ address: '8.8.8.8', family: 4 }] });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+  test('returns all admitted candidates as immutable values', async () => {
+    const result = await resolveMediaDestination(describeMediaDestination('immis://media.immedia-semi.com'),
+      new AbortController().signal, async () => [{ address: '2606:4700:4700::1111', family: 6 }, { address: '8.8.8.8', family: 4 }]);
+    expect(result.addresses).toHaveLength(2); expect(result.address).toBe(result.addresses[0].address);
+    expect(Object.isFrozen(result.addresses)).toBe(true);
+    expect(result.addresses.every(Object.isFrozen)).toBe(true);
   });
   test.each(['https://media.immedia-semi.com', 'immi://media.immedia-semi.com',
     'immis://media.immedia-semi.com:444', 'immis://immedia-semi.com.evil.test',

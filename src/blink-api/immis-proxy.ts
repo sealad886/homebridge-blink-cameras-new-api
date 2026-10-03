@@ -20,7 +20,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
-import { describeMediaDestination, resolveMediaDestination, MediaDestination } from './media-destination';
+import { describeMediaDestination, resolveMediaDestination, MediaDestination, MediaAddress } from './media-destination';
 import { URL } from 'node:url';
 import { recordSecurityBoundaryEvent } from './network-diagnostics';
 
@@ -166,6 +166,11 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private streamFile: fs.WriteStream | null = null;
   private streamBytesWritten = 0;
   private targetSocket: tls.TLSSocket | null = null;
+  private verifiedSocket: tls.TLSSocket | null = null;
+  private candidates: readonly MediaAddress[] = [];
+  private candidateIndex = 0;
+  private reconnectChains = 0;
+  private cancelHandshake: (() => void) | null = null;
   private readonly destination: MediaDestination;
   private resolving: Promise<void> | null = null;
   private resolutionController: globalThis.AbortController | null = null;
@@ -340,7 +345,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private blockedWriters = new Map<Writable, () => void>();
 
   private writeUpstream(data: Buffer): void {
-    if (this.targetSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
+    if (this.isRunning && this.targetSocket && this.targetSocket === this.verifiedSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
       () => this.fail('IMMIS upstream writer exceeded its budget'));
   }
 
@@ -542,7 +547,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       try {
         const destination = await resolveMediaDestination(this.destination, controller.signal);
         if (controller.signal.aborted || !this.isRunning || !this.consumer) return;
-        this.openImmisSocket(destination.address, destination.servername);
+        const distinct = destination.addresses.filter((item, index, all) =>
+          all.findIndex(other => other.address === item.address) === index);
+        const otherFamily = distinct.find(item => item.family !== distinct[0].family);
+        this.candidates = [distinct[0], ...(otherFamily ? [otherFamily] : []),
+          ...distinct.filter(item => item !== distinct[0] && item !== otherFamily)].slice(0, 3);
+        this.candidateIndex = 0;
+        this.openImmisSocket(this.candidates[0].address, destination.servername);
       } catch {
         if (!controller.signal.aborted && this.isRunning) {
           recordSecurityBoundaryEvent('destination_rejection');
@@ -560,7 +571,28 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   private openImmisSocket(address: string, hostname: string): void {
-    const socket = tls.connect(
+    if (!this.isRunning || !this.consumer) return;
+    let verified = false;
+    let handshakeFailed = false;
+    let socket: tls.TLSSocket;
+    let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const clearHandshake = () => {
+      globalThis.clearTimeout(timer);
+      if (this.cancelHandshake === clearHandshake) this.cancelHandshake = null;
+    };
+    const refuseHandshake = () => {
+      if (handshakeFailed || verified) return;
+      handshakeFailed = true;
+      clearHandshake();
+      this.cancelHandshake = clearHandshake;
+      timer = globalThis.setTimeout(() => {
+        if (this.isRunning && this.targetSocket === socket) {
+          this.fail('IMMIS failed handshake did not close', 'worker_failure');
+        }
+      }, 2000);
+      socket.destroy();
+    };
+    try { socket = tls.connect(
       {
         host: address,
         port: 443,
@@ -569,6 +601,11 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         minVersion: 'TLSv1.2',
       },
       () => {
+        if (!this.isRunning || this.targetSocket !== socket || handshakeFailed) return;
+        if (socket.authorized !== true) { refuseHandshake(); return; }
+        verified = true;
+        this.verifiedSocket = socket;
+        clearHandshake();
         this.log('TLS connection established');
 
         // Send authentication header
@@ -580,15 +617,21 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         // Start keep-alive timer
         if (this.isRunning) this.startKeepAlive();
       },
-    );
-
+    ); } catch {
+      this.fail('IMMIS TLS connection failed', 'worker_failure');
+      return;
+    }
+    this.cancelHandshake = clearHandshake;
+    timer = globalThis.setTimeout(refuseHandshake, 5000);
     this.targetSocket = socket;
     this.trackClosure(socket);
     socket.on('data', (data: Buffer) => {
-      if (this.isRunning && this.targetSocket === socket) this.handleImmisData(data);
+      if (verified && this.isRunning && this.targetSocket === socket) this.handleImmisData(data);
     });
 
     socket.on('error', (error) => {
+      if (!this.isRunning || this.targetSocket !== socket) return;
+      if (!verified) { refuseHandshake(); return; }
       // Ignore APPLICATION_DATA_AFTER_CLOSE_NOTIFY SSL errors
       if (error.message.includes('APPLICATION_DATA_AFTER_CLOSE_NOTIFY')) {
         this.debug('Ignoring SSL close notify error');
@@ -599,6 +642,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     });
 
     socket.on('close', () => {
+      clearHandshake();
+      if (this.verifiedSocket === socket) this.verifiedSocket = null;
       if (this.targetSocket !== socket) return;
       this.blockedWriters.get(socket)?.();
       this.debug('Immis connection closed');
@@ -609,8 +654,21 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       this.incompleteTimer = null;
       // Clear current socket reference
       this.targetSocket = null;
+      if (!verified && this.isRunning && this.consumer) {
+        this.candidateIndex++;
+        if (this.candidateIndex < this.candidates.length) {
+          this.openImmisSocket(this.candidates[this.candidateIndex].address, hostname);
+        } else {
+          this.fail('IMMIS TLS candidates exhausted', 'worker_failure');
+        }
+        return;
+      }
       // If clients are still connected, retry connecting after a short delay
       if (this.isRunning && this.consumer !== null) {
+        if (++this.reconnectChains > 3) {
+          this.fail('IMMIS reconnect budget exhausted', 'worker_failure');
+          return;
+        }
         if (this.reconnectTimeout) {
           globalThis.clearTimeout(this.reconnectTimeout);
         }
@@ -962,6 +1020,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     this.isRunning = false;
     this.resolutionController?.abort();
+    this.cancelHandshake?.();
+    this.candidates = [];
+    this.verifiedSocket = null;
     this.log('Stopping proxy server');
 
     // Stop stream recording

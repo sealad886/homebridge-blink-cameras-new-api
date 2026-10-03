@@ -34,7 +34,8 @@ Parse errors are fixed messages without raw provider input.
 
 `resolveMediaDestination(descriptor, AbortSignal, optional lookup)` resolves anew
 on each invocation, rejects empty/excessive/malformed answer sets and any special-use
-address in the set, and returns `{ ...descriptor, address, family }`. Resolution has
+address in the set, and returns `{ ...descriptor, address, family, addresses }` with
+a frozen array of frozen admitted candidates. Resolution has
 an independent five-second admission deadline. Abort prevents late admission; the
 underlying OS lookup cannot itself be cancelled. The shared bounded DNS helper
 permits at most eight actual pending lookups with no queue, and remains charged
@@ -47,7 +48,7 @@ excludes special 2001::/23, documentation and 6to4 blocks; mapped addresses, NAT
 ULA, link-local, multicast and zone identifiers fail closed. This deliberately
 conservative policy may reject globally reachable special allocations.
 
-IMMIS resolves immediately before each actual connect/reconnect, passes only the
+IMMIS resolves immediately before each bounded connection chain/reconnect, passes only the
 numeric admitted address to TLS, preserves original hostname as `servername`, and
 requires `rejectUnauthorized: true` with TLS >=1.2. Deprecated `verifyTls: false`
 is ignored. STOP aborts pending admission, duplicate attach cannot create duplicate
@@ -57,3 +58,47 @@ transport/file closure ownership remains intact.
 
 Integration still requires independent review and provider acceptance for domain-family
 completeness and certificate chains. No live Pi access or host changes were performed.
+
+## PR50 Copilot R6: bounded numeric fallback
+
+Finding: choosing answer zero repeatedly stranded streams when DNS preferred IPv6
+but host had no working IPv6 route. Camera owner retires its generation upon public
+proxy errors, so reporting first prehandshake error prevented IPv4 fallback.
+
+Before edits, Codanna index identity/health and semantic context were checked;
+resolveMediaDestination (symbol 27016) and connectToImmisServer (symbol 26704)
+caller/callee and depth-2 impact checks succeeded. Local helper, regional proxy/DNS
+and global camera-error ownership searches confirmed the existing proxy as the
+repair boundary. No secondary retry coordinator was added.
+
+Resolver now returns entire fully validated, frozen address set plus initial selected
+address. One connection chain selects at most three distinct numeric candidates,
+with a second-family candidate preferred after first to include IPv6→IPv4 fallback.
+Other candidates receive no connection when any DNS answer violates address policy.
+Numeric TLS sockets keep original servername, port 443 and mandatory verification.
+No media/auth bytes are accepted/sent before authorized secure connection callback.
+Canonical upstream writer additionally requires exact verified-socket identity, covering
+experimental talkback/control writes as well as authentication and keep-alive.
+
+Each attempted handshake has five-second deadline. Failed handshake destroys socket
+and gives two seconds for actual close confirmation. Alternate begins only from that
+socket's confirmed close handler. Missing confirmation emits terminal fixed error and
+STOP; whenClosed remains unresolved until actual close, retaining ownership. Thus
+ordinary confirmed failures consume at most three attempts and at most 21 seconds
+across their deadlines/graces. A missing close ends attempts within seven seconds
+but retains unconfirmed handle ownership; it never authorizes a replacement.
+
+After initial established chain, session permits at most three reconnect chains,
+each after existing two-second reconnect delay and fresh DNS admission. Lifetime
+reconnect count is not reset by successful TLS. Maximum four chains/twelve numeric
+attempts per proxy instance; exhaustion emits fixed terminal error and stops. A
+failed initial candidate chain stops upon exhaustion rather than looping DNS forever.
+Candidate admission has no cross-chain cache authority. STOP clears handshake/grace
+and reconnect timers, aborts DNS, and fences late close/secure callbacks.
+
+Focused observable tests cover unreachable admitted IPv6 then reachable IPv4, close
+confirmation before alternate, mandatory original TLS identity, unauthorized TLS
+without auth writes, timeout/STOP/late secure callback, closure grace with unresolved
+whenClosed, candidate exhaustion, lifetime reconnect exhaustion, and changed private
+DNS on reconnect with zero additional socket attempts. Synthetic DNS/TLS sinks test
+these invariants; they do not establish real provider connectivity or family completeness.

@@ -1,6 +1,7 @@
 import { getSecurityBoundaryCounters } from '../../src/blink-api/network-diagnostics';
 import { parseLatmFrames, ImmisProxyServer } from '../../src/blink-api/immis-proxy';
-import { Writable } from 'node:stream';
+import { Writable, PassThrough } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import * as os from 'node:os';
@@ -8,7 +9,7 @@ import * as path from 'node:path';
 import * as tls from 'node:tls';
 import { lookup } from 'node:dns/promises';
 jest.mock('node:dns/promises', () => ({ lookup: jest.fn(async () => [{ address: '8.8.8.8', family: 4 }]) }));
-const flushResolution = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+const flushResolution = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
 import { spawn, ChildProcess } from 'node:child_process';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
 
@@ -25,9 +26,10 @@ jest.mock('node:tls', () => {
       };
       socket.write = jest.fn();
       socket.destroyed = false;
+      Object.defineProperty(socket, "authorized", { value: true, configurable: true });
       socket.destroy = jest.fn();
       if (callback) {
-        setImmediate(callback);
+        void Promise.resolve().then(callback);
       }
       return socket;
     }),
@@ -127,6 +129,108 @@ describe('ImmisProxyServer private consumer', () => {
     'https://media.immedia-semi.com/?client_id=1'])('rejects invalid upstream before DNS or TLS', raw => {
     expect(() => new ImmisProxyServer({ immisUrl: raw, serial: 'TEST' })).toThrow();
     expect(lookup).not.toHaveBeenCalled(); expect(tls.connect).not.toHaveBeenCalled();
+  });
+
+  it('falls back from unreachable admitted IPv6 only after close, preserving TLS identity', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce([
+      { address: '2606:4700:4700::1111', family: 6 },
+      { address: '2606:4700:4700::1001', family: 6 },
+      { address: '8.8.8.8', family: 4 },
+    ]);
+    const first = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => first);
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    expect(tls.connect).toHaveBeenNthCalledWith(1, expect.objectContaining({ host: '2606:4700:4700::1111',
+      servername: 'media.immedia-semi.com', rejectUnauthorized: true }), expect.any(Function));
+    first.emit('error', new Error('ENETUNREACH'));
+    expect(first.destroy).toHaveBeenCalledTimes(1);
+    expect(first.write).not.toHaveBeenCalled();
+    expect(tls.connect).toHaveBeenCalledTimes(1); expect(errors).not.toHaveBeenCalled();
+    first.emit('close'); await flushResolution();
+    expect(tls.connect).toHaveBeenNthCalledWith(2, expect.objectContaining({ host: '8.8.8.8',
+      servername: 'media.immedia-semi.com', rejectUnauthorized: true }), expect.any(Function));
+    expect(latestSocket().write).toHaveBeenCalledTimes(1); expect(errors).not.toHaveBeenCalled();
+  });
+
+  it('sends no authentication through unauthorized TLS and emits terminal error only after closure', async () => {
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: false }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce((_options, callback) => { void Promise.resolve().then(callback); return socket; });
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    expect(socket.destroy).toHaveBeenCalledTimes(1); expect(socket.write).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    socket.emit('close'); await flushResolution();
+    expect(errors).toHaveBeenCalledTimes(1); expect(socket.write).not.toHaveBeenCalled();
+    await proxy.whenClosed;
+  });
+
+  it('bounds a pending handshake and STOP prevents alternate after delayed close', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce([{ address: '2606:4700:4700::1111', family: 6 }, { address: '8.8.8.8', family: 4 }]);
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    jest.advanceTimersByTime(5000);
+    expect(socket.destroy).toHaveBeenCalledTimes(1); expect(tls.connect).toHaveBeenCalledTimes(1);
+    proxy.stop();
+    (tls.connect as jest.Mock).mock.calls[0][1](); // A late secure callback must not authenticate after STOP.
+    socket.emit('close'); await proxy.whenClosed;
+    jest.advanceTimersByTime(10000); await flushResolution();
+    expect(tls.connect).toHaveBeenCalledTimes(1); expect(socket.write).not.toHaveBeenCalled();
+  });
+
+  it('fails after closure grace without starting an alternate and retains unconfirmed closure', async () => {
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    jest.advanceTimersByTime(7000); expect(errors).toHaveBeenCalledTimes(1);
+    let closed = false; const closure = proxy.whenClosed.then(() => { closed = true; });
+    await flushResolution(); expect(closed).toBe(false); expect(tls.connect).toHaveBeenCalledTimes(1);
+    socket.emit('close'); await closure;
+  });
+
+  it('caps failed numeric attempts and subsequent established reconnect chains', async () => {
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    for (let chain = 0; chain < 4; chain++) {
+      latestSocket().emit('close'); jest.advanceTimersByTime(2000); await flushResolution();
+    }
+    expect(lookup).toHaveBeenCalledTimes(4); expect(tls.connect).toHaveBeenCalledTimes(4);
+    expect(errors).toHaveBeenCalledTimes(1); await proxy.whenClosed;
+    jest.advanceTimersByTime(10000); await flushResolution(); expect(tls.connect).toHaveBeenCalledTimes(4);
+  });
+
+  it('attempts at most three distinct admitted candidates before terminal failure', async () => {
+    (lookup as jest.Mock).mockResolvedValueOnce(['8.8.8.8', '1.1.1.1', '9.9.9.9', '8.8.4.4'].map(address => ({ address, family: 4 })));
+    const originalConnect = (tls.connect as jest.Mock).getMockImplementation();
+    (tls.connect as jest.Mock).mockImplementation(() => Object.assign(new EventEmitter(), {
+      write: jest.fn(), destroy: jest.fn(), authorized: true,
+    }));
+    try {
+      const errors = jest.fn(); proxy.on('error', errors);
+      await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+      for (let candidate = 0; candidate < 3; candidate++) {
+        const socket = latestSocket(); socket.emit('error', new Error('unreachable')); socket.emit('close');
+      }
+      expect(tls.connect).toHaveBeenCalledTimes(3); expect(errors).toHaveBeenCalledTimes(1);
+      await proxy.whenClosed;
+    } finally { (tls.connect as jest.Mock).mockImplementation(originalConnect); }
+  });
+
+  it('gates control and talkback writes at the shared verified TLS boundary', async () => {
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    proxy.startAudio(); proxy.stopAudio();
+    const audio = new PassThrough(); proxy.attachAudioInput(audio);
+    audio.write(buildLoasFrame(Buffer.from([1, 2])));
+    expect(socket.write).not.toHaveBeenCalled();
+    (tls.connect as jest.Mock).mock.calls[0][1]();
+    expect(socket.write).toHaveBeenCalledTimes(1); // Authentication only after verified TLS.
+    proxy.startAudio(); expect(socket.write).toHaveBeenCalledTimes(2);
+    proxy.stop(); audio.write(buildLoasFrame(Buffer.from([3, 4])));
+    expect(socket.write).toHaveBeenCalledTimes(2); socket.emit('close'); await proxy.whenClosed;
   });
 
   it('waits for command readiness before opening TLS for the attached child', async () => {
