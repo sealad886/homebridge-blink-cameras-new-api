@@ -1,3 +1,4 @@
+import { getSecurityBoundaryCounters } from '../../src/blink-api/network-diagnostics';
 import { parseLatmFrames, ImmisProxyServer } from '../../src/blink-api/immis-proxy';
 import { Writable } from 'node:stream';
 import { promises as fs } from 'node:fs';
@@ -113,15 +114,33 @@ describe('ImmisProxyServer private consumer', () => {
     expect(proxy.isServing).toBe(false);
   });
 
+  it('does not count or emit a worker failure when pending readiness rejects after STOP', async () => {
+    let rejectReady!: (reason: Error) => void;
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST',
+      waitForReady: new Promise<void>((_resolve, reject) => { rejectReady = reject; }) });
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer());
+    const before = getSecurityBoundaryCounters().worker_failure;
+    proxy.stop(); await proxy.whenClosed;
+    rejectReady(new Error('Streaming session retired')); await Promise.resolve(); await Promise.resolve();
+    expect(errors).not.toHaveBeenCalled();
+    expect(getSecurityBoundaryCounters().worker_failure).toBe(before);
+    expect(tls.connect).not.toHaveBeenCalled();
+    expect(proxy.isServing).toBe(false);
+    await expect(proxy.start()).rejects.toThrow('readiness failed');
+  });
+
   it('fails closed when command readiness rejects and contains callback errors', async () => {
     let rejectReady!: (reason: Error) => void;
     proxy = new ImmisProxyServer({ immisUrl: 'immis://example.com/?client_id=1', serial: 'TEST',
       waitForReady: new Promise<void>((_resolve, reject) => { rejectReady = reject; }) });
     proxy.on('error', () => { throw new Error('listener'); });
     await proxy.start(); proxy.attachConsumer(consumer());
+    const before = getSecurityBoundaryCounters().worker_failure;
     rejectReady(new Error('provider secret')); await Promise.resolve(); await Promise.resolve();
     expect(tls.connect).not.toHaveBeenCalled();
     expect(proxy.isServing).toBe(false);
+    expect(getSecurityBoundaryCounters().worker_failure).toBe(before + 1);
     await expect(proxy.start()).rejects.toThrow('readiness failed');
   });
 

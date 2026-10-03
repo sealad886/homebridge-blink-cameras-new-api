@@ -213,7 +213,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         if (this.isRunning && this.consumer && !this.targetSocket) this.connectToImmisServer();
       }).catch(() => {
         this.readinessFailed = true;
-        this.fail('Blink command readiness failed', 'worker_failure');
+        if (this.isRunning) this.fail('Blink command readiness failed', 'worker_failure');
       });
     } else {
       // No waitForReady provided, assume ready immediately
