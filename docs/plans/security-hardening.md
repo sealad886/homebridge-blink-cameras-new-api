@@ -258,3 +258,27 @@ The planned `0.10.0-rc.4` contains the independently verified runtime IMMIS/DNS
 controls and evidence/CI corrections; native work remains development source.
 No release or F05/F06 closure is claimed before its exact gates. Process separation
 does not establish an OS sandbox.
+
+### PR #50 review corrections
+
+The first immutable PR review found a new memory regression in evidence export:
+freezing every retained event before capacity admission could exhaust Pi memory.
+The existing Store now owns one repeatable SQLite WAL view across streaming sizing
+and raw writing. Each pass retains one serialized event; concurrent appends remain
+possible and cannot change the exported membership. Source expiry fails cleanly
+without extending retention. The existing normalizer runs after this view closes.
+The 5,000-event, 16 KiB-per-event refusal regression enforces less than 4 MiB traced
+sizing memory, no staging writes and no lingering reservation.
+
+Copilot also identified discarded DNS candidates and a stale license hash. IMMIS
+fallback retains the fully validated address set and attempts bounded distinct
+numeric candidates while preserving TLS hostname verification. A socket must
+confirm closure before the next attempt; STOP fences timers and callbacks.
+Reconnects resolve and validate fresh answers. The current native receipt records
+the actual included license bytes; historical receipts remain historical.
+
+Initial hosted Node 20/22/24, commitlint and macOS native checks passed. Linux
+native CI rejected eight misleading-indentation warnings under its strict GCC
+flags. Explicit braces and statement separation correct these without changing
+behavior or weakening compiler checks. Fresh hosted Linux verification and renewed
+review of the corrected immutable head remain mandatory publication gates.
