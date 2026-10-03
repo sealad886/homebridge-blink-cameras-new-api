@@ -263,7 +263,7 @@ def export_bundle(
             _write(staging / name, source.read_bytes(), reserved_writer)
 
         files = sorted(
-            path for path in staging.rglob("*") if path.is_file() and path.name != "manifest.sha256"
+            path for path in staging.rglob("*") if path.is_file() and path != staging / "manifest.sha256"
         )
         manifest = "".join(
             f"{_hash(path)}  {path.relative_to(staging).as_posix()}\n" for path in files
@@ -322,7 +322,7 @@ def verify_bundle(bundle: os.PathLike[str] | str) -> dict[str, Any]:
     if unsafe:
         raise BundleError(f"bundle contains unsafe entries: {sorted(unsafe)}")
     actual_names = {
-        p.relative_to(root).as_posix() for p in entries if p.is_file() and p.name != "manifest.sha256"
+        p.relative_to(root).as_posix() for p in entries if p.is_file() and p != manifest_path
     }
     if actual_names != set(expected):
         raise BundleError(f"bundle file set differs from manifest: expected={sorted(expected)} actual={sorted(actual_names)}")

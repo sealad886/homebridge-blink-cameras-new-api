@@ -60,7 +60,7 @@ class ReportTests(unittest.TestCase):
         marker = self.base / "executed"
         (output / "normalize.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\nraise RuntimeError('executed')\n")
         manifest = "".join(f"{report._hash(p)}  {p.relative_to(output).as_posix()}\n"
-                           for p in sorted(output.rglob('*')) if p.is_file() and p.name != 'manifest.sha256')
+                           for p in sorted(output.rglob('*')) if p.is_file() and p != output / 'manifest.sha256')
         (output / "manifest.sha256").write_text(manifest)
         self.assertTrue(report.verify_bundle(output)["valid"])
         self.assertTrue(report.reproduce(output)["reproduced"])
@@ -151,6 +151,26 @@ class ReportTests(unittest.TestCase):
             result = subprocess.run(argv, check=True, capture_output=True, text=True, timeout=10)
             self.assertTrue(json.loads(result.stdout)['valid' if field == 'verify_command' else 'reproduced'])
         self.assertIn(commands['reproduce_command'], readme)
+
+    def test_unlisted_nested_manifest_is_rejected(self) -> None:
+        output = self.store.root / 'exports' / 'nested-unlisted'
+        report.export_bundle(self.store, 0, 100, output)
+        (output / 'raw' / 'manifest.sha256').write_text('unlisted arbitrary content')
+        with self.assertRaisesRegex(report.BundleError, 'file set differs'):
+            report.verify_bundle(output)
+
+    def test_listed_nested_manifest_is_hashed_and_tamper_is_rejected(self) -> None:
+        output = self.store.root / 'exports' / 'nested-listed'
+        report.export_bundle(self.store, 0, 100, output)
+        nested = output / 'raw' / 'manifest.sha256'
+        nested.write_text('ordinary listed evidence content')
+        with (output / 'manifest.sha256').open('a') as manifest:
+            manifest.write(f'{report._hash(nested)}  raw/manifest.sha256\n')
+        self.assertTrue(report.verify_bundle(output)['valid'])
+        self.assertTrue(report.reproduce(output)['reproduced'])
+        nested.write_text('tampered content')
+        with self.assertRaisesRegex(report.BundleError, 'hash mismatch: raw/manifest.sha256'):
+            report.verify_bundle(output)
 
     def test_export_must_remain_in_managed_exports_and_respect_budget(self) -> None:
         with self.assertRaisesRegex(report.BundleError, "direct child"):
