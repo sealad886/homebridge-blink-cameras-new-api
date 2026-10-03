@@ -185,12 +185,12 @@ export class BlinkHttp {
     options: RequestOptions = {},
   ): Promise<T> {
     checkRequestBudget(options);
+    const url = this.buildUrl(path);
     if (runPreflight) {
       await withinRequestBudget(this.auth.ensureValidToken(), options);
       checkRequestBudget(options);
     }
 
-    const url = this.buildUrl(path);
     const safeUrl = redactUrlForLogging(url);
     const safePath = safeUrl.startsWith(this.baseUrl)
       ? safeUrl.slice(this.baseUrl.length)

@@ -561,7 +561,7 @@ describe('BlinkApi', () => {
       events,
       async () => ({
         account: { account_id: 42 },
-        networks: [{ id: 1 }, { id: 2 }],
+        networks: [{ id: 1, name: 'Home' }, { id: 2, name: 'Away' }],
         cameras: [{ id: 3, network_id: 1, name: 'Camera' }],
         doorbells: [],
         owls: [],
@@ -1195,7 +1195,7 @@ describe('BlinkApi', () => {
 
   it('holds captures behind pending mutations and holds mutations until capture completes, without blocking reads', async () => {
     const { api, http } = createApi();
-    const screen = { account: { account_id: 10 }, networks: [], cameras: [{ id: 1, network_id: 5, enabled: true, thumbnail: '/new.jpg' }], doorbells: [], owls: [], sync_modules: [] };
+    const screen = { account: { account_id: 10 }, networks: [], cameras: [{ id: 1, network_id: 5, name: 'Camera', enabled: true, thumbnail: '/new.jpg' }], doorbells: [], owls: [], sync_modules: [] };
     let releaseArm!: () => void;
     let releaseCapture!: () => void;
     http.post.mockImplementationOnce(() => new Promise(resolve => { releaseArm = () => resolve({}); }))
@@ -1278,11 +1278,11 @@ describe('BlinkApi', () => {
     const conflict = new BlinkHttpError('Conflict', 409, '', 'https://example.com', 'POST');
     http.post.mockRejectedValue(conflict);
     http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
-      cameras: [{ id: 1, network_id: 5, enabled: true }], doorbells: [], owls: [] });
+      cameras: [{ id: 1, network_id: 5, name: 'Camera', enabled: true }], doorbells: [], owls: [] });
     await expect(api.enableCameraMotion(5, 1)).resolves.toBeUndefined();
     expect(http.post).toHaveBeenCalledTimes(1);
     http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
-      cameras: [{ id: 1, network_id: 6, enabled: true }], doorbells: [{ id: 1, network_id: 5, enabled: true }], owls: [] });
+      cameras: [{ id: 1, network_id: 6, name: 'Other Camera', enabled: true }], doorbells: [{ id: 1, network_id: 5, name: 'Doorbell', enabled: true }], owls: [] });
     await expect(api.enableCameraMotion(5, 1)).rejects.toBe(conflict);
     expect(http.post).toHaveBeenCalledTimes(4);
   });
@@ -1310,7 +1310,7 @@ describe('BlinkApi', () => {
     api.accountId = 10;
     http.post.mockRejectedValue(new BlinkHttpError('Busy', 409, '', 'https://example.com', 'POST'));
     http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
-      cameras: [{ id: 1, network_id: 5, thumbnail: '/current.jpg' }], doorbells: [], owls: [] });
+      cameras: [{ id: 1, network_id: 5, name: 'Camera', thumbnail: '/current.jpg' }], doorbells: [], owls: [] });
     await expect(api.requestCameraThumbnail(5, 1)).resolves.toEqual({ captureOutcome: 'existing-thumbnail', thumbnail: '/current.jpg' });
     expect(http.post).toHaveBeenCalledTimes(1);
   });

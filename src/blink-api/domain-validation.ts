@@ -18,7 +18,7 @@ export function validateHomescreen(value: unknown): BlinkHomescreen {
       if (!device || typeof device !== 'object') throw new Error('Blink returned an invalid homescreen.');
       requireRemoteId(device.id);
       if (key !== 'networks') requireRemoteId(device.network_id);
-      if (device.name !== undefined && (typeof device.name !== 'string' || device.name.length > 256)) throw new Error('Blink returned an invalid homescreen.');
+      if (typeof device.name !== 'string' || device.name.length > 256) throw new Error('Blink returned an invalid homescreen.');
     }
   }
   if (screen.account && typeof screen.account === 'object') {

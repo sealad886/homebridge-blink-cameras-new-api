@@ -43,6 +43,40 @@ describe('BlinkHttp', () => {
     jest.restoreAllMocks();
   });
 
+  it.each(['accounts/0/homescreen', 'accounts/1/networks/01/state/arm', 'accounts/1/networks/1/cameras/NaN/liveview',
+    'accounts/1/networks/1/commands/-1', 'accounts/9007199254740992/homescreen'])('rejects invalid path %s before any authentication', async path => {
+    const auth = mockAuth();
+    const http = new BlinkHttp(auth, mockConfig);
+    await expect(http.get(path)).rejects.toThrow('invalid identifier');
+    expect(auth.ensureValidToken).not.toHaveBeenCalled();
+    expect(auth.getAuthHeaders).not.toHaveBeenCalled();
+    expect(auth.refreshTokens).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid paths without refreshing a real near-expiry authentication session', async () => {
+    const storage: BlinkAuthStorage = {
+      load: jest.fn(async () => ({ accessToken: 'near-expiry-access', refreshToken: 'near-expiry-refresh',
+        tokenExpiry: new Date(Date.now() + 30_000).toISOString(), oauthClientId: 'android' as const })),
+      save: jest.fn(async () => undefined), clear: jest.fn(async () => undefined),
+    };
+    const auth = new BlinkAuth({ ...mockConfig, email: '', password: '', authStorage: storage });
+    const ensure = jest.spyOn(auth, 'ensureValidToken');
+    const refresh = jest.spyOn(auth, 'refreshTokens');
+    (fetch as jest.Mock).mockImplementation(async (url: string) => url === 'https://api.oauth.blink.com/oauth/token'
+      ? response(200, { access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600, token_type: 'Bearer' })
+      : response(200, { ok: true }));
+    const http = new BlinkHttp(auth, mockConfig);
+    await expect(http.post('accounts/1/networks/1/cameras/0/liveview')).rejects.toThrow('invalid identifier');
+    expect(ensure).not.toHaveBeenCalled(); expect(refresh).not.toHaveBeenCalled();
+    expect(storage.load).not.toHaveBeenCalled(); expect(storage.save).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    // A valid request proves this fixture actually reaches proactive refresh.
+    await expect(http.get('accounts/1/homescreen')).resolves.toEqual({ ok: true });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('does not send an expired operation or replay a POST transport failure', async () => {
     const http = new BlinkHttp(mockAuth(), mockConfig);
     await expect(http.post('state/arm', undefined, [], { deadline: Date.now() - 1 })).rejects.toBeInstanceOf(OperationTimeoutError);
