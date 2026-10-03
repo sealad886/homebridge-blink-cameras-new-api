@@ -1,3 +1,5 @@
+import { getSecurityBoundaryCounters } from './blink-api/network-diagnostics';
+import { validateHomescreen } from './blink-api/domain-validation';
 /**
  * Blink Cameras Platform for Homebridge
  *
@@ -574,6 +576,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private async sampleConnectionDiagnostic(): Promise<void> {
+    this.log.warn(`Blink security boundary counters: ${JSON.stringify(getSecurityBoundaryCounters())}`);
     try {
       const sample = await sampleBlinkConnection(this.apiClient.getSharedRestRootUrl());
       this.log.warn(`Blink outage diagnostic: DNS ${sample.dns}, address count ${sample.addressCount ?? 0}, ` +
@@ -742,6 +745,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private registerDevices(homescreen: BlinkHomescreen): void {
+    validateHomescreen(homescreen);
     let excludedCount = 0;
     const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number }>([
       ...homescreen.networks.map(device => [this.api.hap.uuid.generate(`blink-network-${device.id}`), device] as const),

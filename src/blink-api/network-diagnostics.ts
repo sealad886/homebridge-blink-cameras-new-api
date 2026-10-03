@@ -123,3 +123,17 @@ function buildDiagnostic(
   const elapsedMs = Math.min(MAX_ELAPSED_MS, Math.max(0, Math.round(rawElapsed)));
   return code ? { type, code, elapsedMs, hostname } : { type, elapsedMs, hostname };
 }
+
+/** Fixed cardinality counters: no URLs, credentials, media or session identifiers. */
+export type SecurityBoundaryReason = 'overflow' | 'destination_rejection' | 'cancellation'
+  | 'cleanup_timeout' | 'recorder_refusal' | 'worker_failure' | 'migration_failure';
+const boundaryCounters: Record<SecurityBoundaryReason, number> = {
+  overflow: 0, destination_rejection: 0, cancellation: 0, cleanup_timeout: 0,
+  recorder_refusal: 0, worker_failure: 0, migration_failure: 0,
+};
+export function recordSecurityBoundaryEvent(reason: SecurityBoundaryReason): void {
+  boundaryCounters[reason] = Math.min(Number.MAX_SAFE_INTEGER, boundaryCounters[reason] + 1);
+}
+export function getSecurityBoundaryCounters(): Readonly<Record<SecurityBoundaryReason, number>> {
+  return { ...boundaryCounters };
+}

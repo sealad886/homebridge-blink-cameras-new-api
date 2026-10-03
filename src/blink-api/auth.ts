@@ -1,3 +1,4 @@
+import { readBoundedBody, readBoundedJson } from './response-body';
 /**
  * Blink OAuth 2.0 Authentication Module
  *
@@ -474,7 +475,9 @@ export class BlinkAuth {
           if (key === 'json' || key === 'text') {
             return async () => {
               try {
-                return await bounded(() => target[key]());
+                return await bounded(() => key === 'json'
+                  ? readBoundedJson(target, { kind: 'oauth-json', deadline, signal: controller.signal })
+                  : readBoundedBody(target, { kind: /Token|Refresh/i.test(stepLabel) ? 'oauth-json' : 'oauth-html', deadline, signal: controller.signal }).then(body => body.toString('utf8')));
               } catch (error) {
                 if (error instanceof BlinkTokenRefreshError) throw error;
                 throw new BlinkTokenRefreshError(error instanceof SyntaxError ? 'response' : 'temporary');

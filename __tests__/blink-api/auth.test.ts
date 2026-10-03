@@ -1,3 +1,4 @@
+import { testResponse } from '../helpers/response';
 import {
   AuthStateFileSecurityError,
   BlinkAuth,
@@ -146,31 +147,31 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const fetchMock = mockFetch();
 
       // Step 1: GET /oauth/v2/authorize
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders({ 'set-cookie': 'session=abc123' }),
-      });
+      }));
 
       // Step 2: GET /oauth/v2/signin
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         text: async () => '<html><input name="_token" value="csrf_token_123"></html>',
         headers: createMockHeaders({ 'set-cookie': 'csrf=xyz789' }),
-      });
+      }));
 
       // Step 3: POST /oauth/v2/signin (success - redirects with code)
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders({
           location: 'immedia-blink://applinks.blink.com/signin/callback?code=auth_code_456',
         }),
-      });
+      }));
 
       // Step 5: POST /oauth/token
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         json: async () => ({
@@ -182,7 +183,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
           client_id: 100,
         }),
         headers: createMockHeaders({ 'token-auth': 'token-auth-header' }),
-      });
+      }));
 
       const auth = new BlinkAuth(baseConfig);
       await auth.login();
@@ -213,29 +214,29 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const fetchMock = mockFetch();
 
       // Step 1: GET /oauth/v2/authorize
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 2: GET /oauth/v2/signin
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         text: async () => '<input name="_token" value="csrf">',
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 3: POST /oauth/v2/signin
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
-      });
+      }));
 
       // Step 5: POST /oauth/token
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         json: async () => ({
@@ -245,7 +246,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
           token_type: 'Bearer' as const,
         }),
         headers: createMockHeaders(),
-      });
+      }));
 
       const auth = new BlinkAuth(baseConfig);
       await auth.login();
@@ -286,19 +287,19 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       };
 
       fetchMock
-        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: createMockHeaders() }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           text: async () => '<input name="_token" value="csrf">',
           headers: createMockHeaders(),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 302,
           headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           json: async () => ({
@@ -308,7 +309,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
             token_type: 'Bearer' as const,
           }),
           headers: createMockHeaders({ 'token-auth': 'legacy-token-auth' }),
-        });
+        }));
 
       const auth = new BlinkAuth({ ...baseConfig, authStorage });
       let settled = false;
@@ -346,24 +347,24 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       fetchMock
         .mockImplementationOnce(async () => {
           generatedState = auth.getOAuthSession()?.state ?? '';
-          return { ok: true, status: 302, headers: createMockHeaders() };
+          return testResponse({ ok: true, status: 302, headers: createMockHeaders() });
         })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           text: async () => `<input name="_token" value="${csrfToken}">`,
           headers: createMockHeaders(),
-        })
+        }))
         .mockImplementationOnce(async () => {
-          return {
+          return testResponse({
             ok: true,
             status: 302,
             headers: createMockHeaders({
               location: `immedia-blink://applinks.blink.com/signin/callback?code=${authorizationCode}&state=${generatedState}`,
             }),
-          };
+          });
         })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           json: async () => ({
@@ -373,7 +374,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
             token_type: 'Bearer' as const,
           }),
           headers: createMockHeaders({ 'token-auth': tokenAuth }),
-        });
+        }));
 
       auth = new BlinkAuth({
         ...baseConfig,
@@ -406,27 +407,27 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const email = 'legacyTwoFaEmailSecret_4Vn8Qp@example.com';
 
       // Step 1: GET /oauth/v2/authorize
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 2: GET /oauth/v2/signin
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         text: async () => '<input name="_token" value="csrf">',
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 3: POST /oauth/v2/signin - indicates 2FA required
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         text: async () => '<html>Please enter your 2FA verification code</html>',
         headers: createMockHeaders(),
-      });
+      }));
 
       const auth = new BlinkAuth({ ...baseConfig, email });
       let caught: unknown;
@@ -455,44 +456,44 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       };
 
       // Step 1: GET /oauth/v2/authorize
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 2: GET /oauth/v2/signin
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         text: async () => '<input name="_token" value="csrf">',
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 3: POST /oauth/v2/signin - indicates 2FA required
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         text: async () => '<input name="_token" value="csrf2">2FA verification code',
         headers: createMockHeaders(),
-      });
+      }));
 
       // Step 4: POST /oauth/v2/2fa/verify
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders({ location: '/oauth/v2/authorize' }),
-      });
+      }));
 
       // Step 5: GET /oauth/v2/authorize (get code)
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
-      });
+      }));
 
       // Step 6: POST /oauth/token
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         json: async () => ({
@@ -502,7 +503,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
           token_type: 'Bearer' as const,
         }),
         headers: createMockHeaders(),
-      });
+      }));
 
       const auth = new BlinkAuth(configWith2FA);
       await auth.login();
@@ -522,19 +523,19 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       // Setup: Complete initial login first
       // Step 1-4 for initial login...
       fetchMock
-        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: createMockHeaders() }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           text: async () => '<input name="_token" value="csrf">',
           headers: createMockHeaders(),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 302,
           headers: createMockHeaders({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=abc' }),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           json: async () => ({
@@ -544,13 +545,13 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
             token_type: 'Bearer' as const,
           }),
           headers: createMockHeaders(),
-        });
+        }));
 
       const auth = new BlinkAuth(baseConfig);
       await auth.login();
 
       // Now test refresh
-      fetchMock.mockResolvedValueOnce({
+      fetchMock.mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         json: async () => ({
@@ -560,7 +561,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
           token_type: 'Bearer' as const,
         }),
         headers: createMockHeaders({ 'token-auth': 'new-token-auth' }),
-      });
+      }));
 
       await auth.refreshTokens();
 
@@ -584,13 +585,13 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const fetchMock = mockFetch();
 
       fetchMock
-        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: createMockHeaders() }))
+        .mockResolvedValueOnce(testResponse({
           ok: false,
           status: 500,
           statusText: 'Internal Server Error',
           headers: createMockHeaders(),
-        });
+        }));
 
       const auth = new BlinkAuth(baseConfig);
       await expect(auth.login()).rejects.toThrow('Failed to fetch signin page');
@@ -604,18 +605,18 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const headerValueSecret = 'signinPageHeaderValueSecret_2Bu8Wp';
 
       fetchMock
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 302,
           statusText: 'Found',
           headers: createMockHeaders(),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: false,
           status: 500,
           statusText: statusSecret,
           headers: createMockHeaders({ [headerNameSecret]: headerValueSecret }),
-        });
+        }));
 
       const auth = new BlinkAuth({ ...baseConfig, debugAuth: true, logger });
       let caught: unknown;
@@ -649,27 +650,27 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       fetchMock
         .mockImplementationOnce(async () => {
           generatedState = auth.getOAuthSession()?.state ?? '';
-          return {
+          return testResponse({
             ok: true,
             status: 302,
             statusText: 'Found',
             headers: createMockHeaders({ 'set-cookie': `session=${cookie}` }),
-          };
+          });
         })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           statusText: 'OK',
           text: async () => `<input name="_token" value="${csrf}">`,
           headers: createMockHeaders(),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: false,
           status: 401,
           statusText: statusSecret,
           text: async () => body,
           headers: createMockHeaders(),
-        });
+        }));
 
       auth = new BlinkAuth({
         ...baseConfig,
@@ -719,34 +720,34 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       fetchMock
         .mockImplementationOnce(async () => {
           generatedState = auth.getOAuthSession()?.state ?? '';
-          return {
+          return testResponse({
             ok: true,
             status: 302,
             statusText: 'Found',
             headers: createMockHeaders({ 'set-cookie': `session=${cookie}` }),
-          };
+          });
         })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           statusText: 'OK',
           text: async () => `<input name="_token" value="${csrf}">`,
           headers: createMockHeaders(),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           statusText: 'OK',
           text: async () => '<html>2FA verification code required</html>',
           headers: createMockHeaders(),
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(testResponse({
           ok: false,
           status: 401,
           statusText: statusSecret,
           text: async () => body,
           headers: createMockHeaders(),
-        });
+        }));
 
       auth = new BlinkAuth({
         ...baseConfig,
@@ -788,13 +789,13 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       const csrfToken = 'unparsedCsrfSentinel_9Qu3Ns';
 
       fetchMock
-        .mockResolvedValueOnce({ ok: true, status: 302, headers: createMockHeaders() })
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(testResponse({ ok: true, status: 302, headers: createMockHeaders() }))
+        .mockResolvedValueOnce(testResponse({
           ok: true,
           status: 200,
           text: async () => `<html data-diagnostic="${csrfToken}">No token field here</html>`,
           headers: createMockHeaders(),
-        });
+        }));
 
       const auth = new BlinkAuth({ ...baseConfig, debugAuth: true, logger });
       await expect(auth.login()).rejects.toThrow('Could not extract CSRF token');

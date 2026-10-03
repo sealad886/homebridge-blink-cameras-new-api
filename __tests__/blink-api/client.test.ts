@@ -1,3 +1,4 @@
+import { testResponse } from '../helpers/response';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -109,6 +110,22 @@ describe('BlinkApi', () => {
     return { api, auth: api.auth, http: api.http, runtimeConfig };
   };
 
+  it.each(['../commands', '1?other=path', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('rejects invalid IDs before authenticated command requests: %p', async value => {
+    const { api, http } = createApi();
+    const publicApi = api as unknown as BlinkApi;
+    await expect(publicApi.armNetwork(value as number)).rejects.toThrow('invalid remote identifier');
+    await expect(publicApi.startCameraLiveview(1, value as number)).rejects.toThrow('invalid remote identifier');
+    await expect(publicApi.getCommandStatus(1, value as number)).rejects.toThrow('invalid remote identifier');
+    expect(http.post).not.toHaveBeenCalled();
+    expect(http.get).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed account metadata before retaining identifiers', async () => {
+    const { api, http } = createApi();
+    http.get.mockResolvedValue({ account_id: '../networks', client_id: 1 });
+    await expect((api as unknown as BlinkApi).getAccountInfo()).rejects.toThrow('invalid remote identifier');
+  });
+
   const createRoutedHttp = (
     initialBaseUrl: string,
     events: string[],
@@ -214,13 +231,13 @@ describe('BlinkApi', () => {
     return { api, storage };
   };
 
-  const jsonResponse = (body: unknown): Response => ({
+  const jsonResponse = (body: unknown): Response => (testResponse({
     ok: true,
     status: 200,
     statusText: 'OK',
     headers: new Headers(),
     json: async () => body,
-  } as Response);
+  }) as Response);
 
   it('hydrates persisted email before account PIN verification after restart', async () => {
     const originalFetch = globalThis.fetch;
@@ -425,7 +442,7 @@ describe('BlinkApi', () => {
       clear: jest.fn(async () => undefined),
     };
     const fetchMock = jest.fn()
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         statusText: 'OK',
@@ -437,7 +454,7 @@ describe('BlinkApi', () => {
           expires_in: 14_400,
           scope: 'client',
         }),
-      } as Response)
+      }) as Response)
       .mockRejectedValueOnce(new Error(tierFailure))
       .mockRejectedValueOnce(new Error(accountFailure));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -545,7 +562,7 @@ describe('BlinkApi', () => {
       async () => ({
         account: { account_id: 42 },
         networks: [{ id: 1 }, { id: 2 }],
-        cameras: [{ id: 3 }],
+        cameras: [{ id: 3, network_id: 1, name: 'Camera' }],
         doorbells: [],
         owls: [],
         sync_modules: [],
@@ -987,21 +1004,21 @@ describe('BlinkApi', () => {
       return result;
     };
     globalThis.fetch = jest.fn()
-      .mockResolvedValueOnce({ ok: true, status: 302, statusText: 'Found', headers: headers() })
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(testResponse({ ok: true, status: 302, statusText: 'Found', headers: headers() }))
+      .mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         statusText: 'OK',
         text: async () => '<input name="_token" value="replacement-csrf">',
         headers: headers(),
-      })
-      .mockResolvedValueOnce({
+      }))
+      .mockResolvedValueOnce(testResponse({
         ok: true,
         status: 302,
         statusText: 'Found',
         headers: headers({ location: 'immedia-blink://applinks.blink.com/signin/callback?code=replacement-code' }),
-      })
-      .mockResolvedValueOnce({
+      }))
+      .mockResolvedValueOnce(testResponse({
         ok: true,
         status: 200,
         statusText: 'OK',
@@ -1014,7 +1031,7 @@ describe('BlinkApi', () => {
           client_id: 12345,
         }),
         headers: headers({ 'token-auth': 'replacement-token-auth' }),
-      }) as unknown as typeof fetch;
+      })) as unknown as typeof fetch;
     const api = new BlinkApi({
       ...config,
       authStorage: storage,

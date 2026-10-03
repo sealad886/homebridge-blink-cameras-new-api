@@ -1,8 +1,8 @@
 /**
  * IMMIS Protocol Proxy Server
  *
- * Implements a local TCP proxy that translates Blink's proprietary `immis://` protocol
- * to a standard MPEG-TS stream that FFmpeg can consume.
+ * Implements a private child-process stream that translates Blink's proprietary `immis://` protocol
+ * to a standard MPEG-TS stream that FFmpeg consumes through stdin.
  *
  * The IMMIS protocol is a TLS-based proprietary streaming protocol used by modern Blink cameras.
  * It wraps MPEG-TS video data in custom packets with a 9-byte header.
@@ -14,25 +14,20 @@
  */
 
 import { Buffer } from 'node:buffer';
-import { Readable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
-import * as net from 'node:net';
 import * as path from 'node:path';
-import { setInterval, clearInterval, setTimeout, clearTimeout } from 'node:timers';
 import * as tls from 'node:tls';
 import { URL } from 'node:url';
+import { recordSecurityBoundaryEvent } from './network-diagnostics';
 
 export interface ImmisProxyConfig {
   /** The immis:// URL from the liveview API response */
   immisUrl: string;
   /** Camera serial number for authentication */
   serial: string;
-  /** Local host to bind the proxy server to */
-  host?: string;
-  /** Local port to bind the proxy server to (0 = random) */
-  port?: number;
   /** Logger function */
   log?: (message: string) => void;
   errorLog?: (message: string) => void;
@@ -88,6 +83,8 @@ const LOAS_SYNCWORD_VALUE = 0xe0;
 const LOAS_HEADER_LENGTH = 3;
 const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
 const IDLE_SHUTDOWN_GRACE_MS = 2000;
+const recordingReservations = new Map<string, number>();
+let recordingAdmission: Promise<void> = Promise.resolve();
 const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
 const NO_FOLLOW_FLAG = fs.constants.O_NOFOLLOW ?? 0;
 const DIRECTORY_OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0) | NO_FOLLOW_FLAG;
@@ -151,33 +148,36 @@ const TOKEN_FIELD_MAX_LENGTH = 64;
 const CONN_ID_MAX_LENGTH = 16;
 
 /**
- * ImmisProxyServer - Local TCP proxy for Blink's immis:// protocol
- *
- * Creates a local TCP server that FFmpeg can connect to. When a client connects,
- * establishes a TLS connection to Blink's immis server, sends the authentication
- * header, and proxies the decoded MPEG-TS stream to the client.
+ * ImmisProxyServer owns a private MPEG-TS consumer and upstream TLS session.
  */
 export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'waitForReady'>;
   private readonly parsedUrl: URL;
 
-  private server: net.Server | null = null;
-  private clients: net.Socket[] = [];
+  private consumer: Writable | null = null;
+  private consumerCleanup: (() => void) | null = null;
+  private incompleteTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private recordingTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private releaseRecording: (() => void) | null = null;
+  private readonly clientId: number;
   private streamFile: fs.WriteStream | null = null;
   private streamBytesWritten = 0;
   private targetSocket: tls.TLSSocket | null = null;
   private isRunning = false;
-  private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+  private keepAliveInterval: ReturnType<typeof globalThis.setInterval> | null = null;
   private keepAliveSequence = 0;
   private isCommandReady = false;
-  private pendingClients: net.Socket[] = [];
-  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  private idleShutdownTimeout: ReturnType<typeof setTimeout> | null = null;
+  private readinessFailed = false;
+  private recordingStart: Promise<void> | null = null;
+  private readonly closingHandles = new Set<Promise<void>>();
+  private reconnectTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private idleShutdownTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   /** Buffer for accumulating incoming data from the immis server */
   private receiveBuffer = Buffer.alloc(0);
   /** Attached upstream audio source stream (LATM) */
   private audioInput: Readable | null = null;
+  private audioCleanup: (() => void) | null = null;
   /** Buffer for assembling LOAS/LATM frames from audio input */
   private audioBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 
@@ -185,12 +185,15 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     super();
 
     this.parsedUrl = new URL(config.immisUrl.replace('immis://', 'https://'));
+    const clientId = this.parsedUrl.searchParams.get('client_id');
+    if (clientId === null || !/^(0|[1-9][0-9]*)$/.test(clientId) || Number(clientId) > 0xffffffff) {
+      throw new Error('IMMIS client_id must be a canonical uint32');
+    }
+    this.clientId = Number(clientId);
 
     this.config = {
       immisUrl: config.immisUrl,
       serial: config.serial,
-      host: config.host ?? '127.0.0.1',
-      port: config.port ?? 0,
       log: config.log,
       errorLog: config.errorLog,
       saveStreamPath: config.saveStreamPath,
@@ -205,12 +208,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.log('Blink command is ready, enabling immis connections');
         this.isCommandReady = true;
         // Process any pending clients that were waiting
-        this.processPendingClients();
-      }).catch((error) => {
-        this.log(`Blink command ready check failed: ${error}`);
-        // Still allow connections even if ready check fails
-        this.isCommandReady = true;
-        this.processPendingClients();
+        if (this.isRunning && this.consumer && !this.targetSocket) this.connectToImmisServer();
+      }).catch(() => {
+        this.readinessFailed = true;
+        this.fail('Blink command readiness failed', 'worker_failure');
       });
     } else {
       // No waitForReady provided, assume ready immediately
@@ -222,14 +223,14 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Log a message if logging is enabled
    */
   private log(message: string): void {
-    this.config.log?.(`[ImmisProxy] ${message}`);
+    try { this.config.log?.(`[ImmisProxy] ${message}`); } catch { /* Logging must not crash streaming. */ }
   }
 
   /**
    * Log a debug message if debug logging is enabled
    */
   private logError(message: string): void {
-    (this.config.errorLog ?? this.config.log)?.(`[ImmisProxy] ${message}`);
+    try { (this.config.errorLog ?? this.config.log)?.(`[ImmisProxy] ${message}`); } catch { /* Ignore logger failure. */ }
   }
 
   private debug(message: string): void {
@@ -240,45 +241,95 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
   /**
    * Start the proxy server
-   * @returns Promise that resolves with the local TCP URL when ready
+   * @returns The child process stdin URL when ready
    */
   async start(): Promise<string> {
-    if (this.isRunning) {
-      throw new Error('Proxy server is already running');
+    if (this.isRunning) throw new Error('Proxy server is already running');
+    if (this.readinessFailed) throw new Error('Blink command readiness failed');
+    this.isRunning = true;
+    if (this.config.saveStreamPath) {
+      this.recordingStart = this.startStreamRecording();
+      try { await this.recordingStart; } finally { this.recordingStart = null; }
     }
+    if (!this.isRunning) { this.stopStreamRecording(); throw new Error('Proxy stopped during startup'); }
+    this.safeEmit('ready', 'pipe:0');
+    return 'pipe:0';
+  }
 
-    return new Promise((resolve, reject) => {
-      this.server = net.createServer((clientSocket) => {
-        this.handleClient(clientSocket);
-      });
+  /** Attach only the child process stdin owned by this session. No socket is exposed. */
+  attachConsumer(consumer: Writable): void {
+    if (!this.isRunning) throw new Error('Proxy is not running');
+    if (consumer.destroyed || consumer.writableEnded) throw new Error('Consumer is closed');
+    if (this.consumer) this.blockedWriters.get(this.consumer)?.();
+    this.detachConsumer();
+    this.cancelIdleShutdown();
+    this.consumer = consumer;
+    const detach = () => { if (this.consumer === consumer) this.detachConsumer(); };
+    consumer.on('close', detach);
+    consumer.on('error', detach);
+    this.consumerCleanup = () => { consumer.off('close', detach); consumer.off('error', detach); };
+    if (this.isCommandReady && !this.targetSocket) this.connectToImmisServer();
+  }
 
-      this.server.on('error', (error) => {
-        this.log(`Server error: ${error.message}`);
-        reject(error);
-      });
+  /** After stop(), resolves only after startup and owned transport/file handles close. */
+  get whenClosed(): Promise<void> {
+    return (async () => {
+      while (this.recordingStart || this.closingHandles.size) {
+        if (this.recordingStart) await this.recordingStart.catch(() => undefined);
+        await Promise.all([...this.closingHandles]);
+      }
+    })();
+  }
 
-      this.server.listen(this.config.port, this.config.host, () => {
-        void (async () => {
-          const address = this.server!.address();
-          if (!address || typeof address === 'string') {
-            reject(new Error('Failed to get server address'));
-            return;
-          }
-
-          this.isRunning = true;
-          const url = `tcp://${address.address}:${address.port}`;
-          this.log(`Proxy server listening on ${url}`);
-
-          // Create stream recording file if saveStreamPath is configured
-          if (this.config.saveStreamPath) {
-            await this.startStreamRecording();
-          }
-
-          this.emit('ready', url);
-          resolve(url);
-        })().catch(reject);
-      });
+  private trackClosure(handle: EventEmitter): void {
+    let closed!: Promise<void>;
+    closed = new Promise<void>((resolve) => {
+      handle.once('close', () => { this.closingHandles.delete(closed); resolve(); });
     });
+    this.closingHandles.add(closed);
+  }
+
+  detachConsumer(): void {
+    if (this.consumer) this.blockedWriters.get(this.consumer)?.();
+    this.consumerCleanup?.();
+    this.consumerCleanup = null;
+    this.consumer = null;
+    if (this.isRunning) this.scheduleIdleShutdown();
+  }
+
+  private safeEmit(event: keyof ImmisProxyEvents, ...args: unknown[]): void {
+    try { (this.emit as (...values: unknown[]) => boolean)(event, ...args); }
+    catch { this.logError('IMMIS callback failed.'); }
+  }
+
+  private fail(message: string, reason: 'overflow' | 'worker_failure' = 'overflow'): void {
+    recordSecurityBoundaryEvent(reason);
+    this.safeEmit('error', new Error(message));
+    this.stop();
+  }
+
+  /** Node Writable owns its queue; enforce its bound before each write. */
+  private boundedWrite(writer: Writable, data: Buffer, limit: number, failure: () => void): void {
+    if (writer.destroyed || writer.writableEnded || (writer.writableLength || 0) + data.length > limit) {
+      failure(); return;
+    }
+    try {
+      if (writer.write(data) === false && !this.blockedWriters.has(writer)) {
+        const timer = globalThis.setTimeout(() => { cleanup(); failure(); }, 2000);
+        const cleanup = () => {
+          globalThis.clearTimeout(timer); writer.off('drain', cleanup); writer.off('close', cleanup);
+          this.blockedWriters.delete(writer);
+        };
+        this.blockedWriters.set(writer, cleanup);
+        writer.once('drain', cleanup); writer.once('close', cleanup);
+      }
+    } catch { failure(); }
+  }
+  private blockedWriters = new Map<Writable, () => void>();
+
+  private writeUpstream(data: Buffer): void {
+    if (this.targetSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
+      () => this.fail('IMMIS upstream writer exceeded its budget'));
   }
 
   /**
@@ -289,6 +340,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       return;
     }
 
+    const previousAdmission = recordingAdmission;
+    let releaseAdmission!: () => void;
+    recordingAdmission = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    await previousAdmission;
     let recordingDirHandle: FileHandle | null = null;
     try {
       const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
@@ -308,6 +363,27 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.logError('Failed to set debug recording directory permissions.');
       }
 
+      const recordingKey = await fs.promises.realpath(recordingDir);
+      let existingBytes = 0;
+      for (const entry of await fs.promises.readdir(recordingDir)) {
+        if (!/^blink-stream-[a-f0-9]{16}-.+-[a-f0-9]{16}\.ts$/.test(entry)) continue;
+        const stats = await fs.promises.lstat(path.join(recordingDir, entry));
+        if (stats.isFile() && !stats.isSymbolicLink()) existingBytes += stats.size;
+      }
+      const reserved = recordingReservations.get(recordingKey) ?? 0;
+      if (existingBytes + reserved + 64 * 1024 * 1024 > 256 * 1024 * 1024) {
+        throw new Error('Debug recording aggregate budget exhausted');
+      }
+      recordingReservations.set(recordingKey, reserved + 64 * 1024 * 1024);
+      let released = false;
+      const releaseRecording = () => {
+        if (released) return;
+        released = true;
+        const remaining = (recordingReservations.get(recordingKey) ?? 0) - 64 * 1024 * 1024;
+        if (remaining > 0) recordingReservations.set(recordingKey, remaining);
+        else recordingReservations.delete(recordingKey);
+      };
+      this.releaseRecording = releaseRecording;
       // Create timestamped filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const serialHash = createHash('sha256').update(this.config.serial).digest('hex').slice(0, 16);
@@ -315,7 +391,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}-${randomSuffix}.ts`);
 
       let recordingFd: number | null = null;
-      let recordingFileCreated = false;
       try {
         recordingFd = await new Promise<number>((resolve, reject) => {
           fs.open(
@@ -331,7 +406,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
             },
           );
         });
-        recordingFileCreated = true;
         const currentRecordingDirStats = await fs.promises.lstat(recordingDir);
         if (
           currentRecordingDirStats.isSymbolicLink() ||
@@ -343,6 +417,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         }
 
         this.streamFile = fs.createWriteStream(filename, { fd: recordingFd, autoClose: true });
+        this.trackClosure(this.streamFile);
         Object.defineProperty(this.streamFile, 'path', { value: filename });
         recordingFd = null;
       } catch (error) {
@@ -350,12 +425,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         if (fdToClose !== null) {
           await new Promise<void>((resolve) => fs.close(fdToClose, () => resolve()));
         }
-        if (recordingFileCreated) {
-          await fs.promises.unlink(filename).catch(() => undefined);
-        }
+
         throw error;
       }
       this.streamBytesWritten = 0;
+      this.streamFile.once('close', releaseRecording);
+      this.recordingTimer = globalThis.setTimeout(() => this.stopStreamRecording(), 5 * 60 * 1000);
+      this.recordingTimer.unref();
 
       this.log(`Recording stream to: ${filename}`);
 
@@ -364,9 +440,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.stopStreamRecording();
       });
     } catch {
+      this.releaseRecording?.();
+      this.releaseRecording = null;
+      recordSecurityBoundaryEvent('recorder_refusal');
       this.logError('Failed to start stream recording.');
     } finally {
       await recordingDirHandle?.close().catch(() => undefined);
+      releaseAdmission();
     }
   }
 
@@ -374,8 +454,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Stop recording the stream
    */
   private stopStreamRecording(): void {
+    if (this.recordingTimer) globalThis.clearTimeout(this.recordingTimer);
+    this.recordingTimer = null;
     if (this.streamFile) {
-      this.streamFile.end();
+      const stream = this.streamFile;
+      this.releaseRecording = null;
+      this.blockedWriters.get(stream)?.();
+      stream.destroy();
       this.log(`Stream recording stopped. Total bytes written: ${this.streamBytesWritten}`);
       this.streamFile = null;
     }
@@ -384,73 +469,21 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   /**
    * Get the local URL of the proxy server
    */
-  get url(): string | null {
-    if (!this.server || !this.isRunning) {
-      return null;
-    }
-
-    const address = this.server.address();
-    if (!address || typeof address === 'string') {
-      return null;
-    }
-
-    return `tcp://${address.address}:${address.port}`;
-  }
-
-  /**
-   * Check if the proxy server is running
-   */
-  get isServing(): boolean {
-    return this.isRunning && this.server !== null;
-  }
-
-  /**
-   * Handle a new client connection
-   */
-  private handleClient(clientSocket: net.Socket): void {
-    this.cancelIdleShutdown();
-    this.log('Client connected');
-    this.clients.push(clientSocket);
-
-    clientSocket.on('close', () => {
-      this.debug('Client disconnected');
-      this.clients = this.clients.filter((c) => c !== clientSocket);
-      this.pendingClients = this.pendingClients.filter((c) => c !== clientSocket);
-
-      if (this.clients.length === 0) {
-        this.log(`Last client disconnected, keeping proxy alive for ${IDLE_SHUTDOWN_GRACE_MS}ms in case FFmpeg reconnects`);
-        this.scheduleIdleShutdown();
-      }
-    });
-
-    clientSocket.on('error', (error) => {
-      this.debug(`Client error: ${error.message}`);
-    });
-
-    // If the Blink command isn't ready yet, still attempt the immis connection.
-    // The immis server may close early; we'll retry until the command is ready.
-    if (!this.isCommandReady) {
-      this.debug('Blink command not ready yet; attempting immis connection and will retry until ready');
-    }
-
-    // Start the connection to the immis server if not already connected
-    if (!this.targetSocket) {
-      this.connectToImmisServer();
-    }
-  }
+  get url(): string | null { return this.isRunning ? 'pipe:0' : null; }
+  get isServing(): boolean { return this.isRunning; }
 
   private cancelIdleShutdown(): void {
     if (this.idleShutdownTimeout) {
-      clearTimeout(this.idleShutdownTimeout);
+      globalThis.clearTimeout(this.idleShutdownTimeout);
       this.idleShutdownTimeout = null;
     }
   }
 
   private scheduleIdleShutdown(): void {
     this.cancelIdleShutdown();
-    this.idleShutdownTimeout = setTimeout(() => {
+    this.idleShutdownTimeout = globalThis.setTimeout(() => {
       this.idleShutdownTimeout = null;
-      if (this.clients.length === 0 && this.isRunning) {
+      if (!this.consumer && this.isRunning) {
         this.log('Idle reconnect grace expired, stopping proxy');
         this.stop();
       }
@@ -458,34 +491,16 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   /**
-   * Process pending clients once the Blink command is ready
-   */
-  private processPendingClients(): void {
-    if (this.pendingClients.length === 0) {
-      return;
-    }
-
-    this.debug(`Processing ${this.pendingClients.length} pending clients`);
-
-    // Start the connection to the immis server if not already connected
-    if (!this.targetSocket) {
-      this.connectToImmisServer();
-    }
-
-    // Clear the pending queue
-    this.pendingClients = [];
-  }
-
-  /**
    * Connect to the Blink immis server via TLS
    */
   private connectToImmisServer(): void {
+    if (!this.isRunning || !this.isCommandReady || !this.consumer) return;
     const hostname = this.parsedUrl.hostname;
     const port = parseInt(this.parsedUrl.port, 10) || 443;
 
     this.log(`Connecting to immis server: ${hostname}:${port}`);
 
-    this.targetSocket = tls.connect(
+    const socket = tls.connect(
       {
         host: hostname,
         port: port,
@@ -499,39 +514,49 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         // Send authentication header
         const authHeader = this.buildAuthHeader();
         this.debug(`Sending auth header (${authHeader.length} bytes)`);
-        this.targetSocket!.write(authHeader);
+        if (!this.isRunning || this.targetSocket !== socket) return;
+        this.writeUpstream(authHeader);
 
         // Start keep-alive timer
-        this.startKeepAlive();
+        if (this.isRunning) this.startKeepAlive();
       },
     );
 
-    this.targetSocket.on('data', (data: Buffer) => {
-      this.handleImmisData(data);
+    this.targetSocket = socket;
+    this.trackClosure(socket);
+    socket.on('data', (data: Buffer) => {
+      if (this.isRunning && this.targetSocket === socket) this.handleImmisData(data);
     });
 
-    this.targetSocket.on('error', (error) => {
+    socket.on('error', (error) => {
       // Ignore APPLICATION_DATA_AFTER_CLOSE_NOTIFY SSL errors
       if (error.message.includes('APPLICATION_DATA_AFTER_CLOSE_NOTIFY')) {
         this.debug('Ignoring SSL close notify error');
         return;
       }
       this.log(`Immis connection error: ${error.message}`);
-      this.emit('error', error);
+      this.safeEmit('error', error);
     });
 
-    this.targetSocket.on('close', () => {
+    socket.on('close', () => {
+      if (this.targetSocket !== socket) return;
+      this.blockedWriters.get(socket)?.();
       this.debug('Immis connection closed');
+      if (this.keepAliveInterval) globalThis.clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+      this.receiveBuffer = Buffer.alloc(0);
+      if (this.incompleteTimer) globalThis.clearTimeout(this.incompleteTimer);
+      this.incompleteTimer = null;
       // Clear current socket reference
       this.targetSocket = null;
       // If clients are still connected, retry connecting after a short delay
-      if (this.isRunning && this.clients.length > 0) {
+      if (this.isRunning && this.consumer !== null) {
         if (this.reconnectTimeout) {
-          clearTimeout(this.reconnectTimeout);
+          globalThis.clearTimeout(this.reconnectTimeout);
         }
-        this.reconnectTimeout = setTimeout(() => {
+        this.reconnectTimeout = globalThis.setTimeout(() => {
           // Avoid multiple retries if a connection was established in the meantime
-          if (!this.targetSocket && this.isRunning && this.clients.length > 0) {
+          if (!this.targetSocket && this.isRunning && this.consumer !== null) {
             this.log('Retrying immis connection...');
             this.connectToImmisServer();
           }
@@ -563,8 +588,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     offset += SERIAL_MAX_LENGTH;
 
     // Client ID field (4 bytes, big-endian)
-    const clientIdStr = this.parsedUrl.searchParams.get('client_id') ?? '0';
-    const clientId = parseInt(clientIdStr, 10);
+    const clientId = this.clientId;
     this.debug('Client ID: <redacted>');
     header.writeUInt32BE(clientId, offset);
     offset += 4;
@@ -603,6 +627,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Handle incoming data from the immis server
    */
   private handleImmisData(data: Buffer): void {
+    if (this.receiveBuffer.length + data.length > 2 * 1024 * 1024) {
+      this.fail('IMMIS receive buffer exceeded its budget'); return;
+    }
     // Append to receive buffer
     this.receiveBuffer = Buffer.concat([this.receiveBuffer, data]);
 
@@ -615,6 +642,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
       this.debug(`Packet: msgtype=${msgtype}, sequence=${sequence}, payloadLength=${payloadLength}`);
 
+      if (payloadLength > 1024 * 1024) {
+        this.fail('IMMIS frame exceeded its budget'); return;
+      }
       // Check if we have the complete packet
       if (this.receiveBuffer.length < 9 + payloadLength) {
         // Wait for more data
@@ -627,6 +657,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       // Remove processed packet from buffer
       this.receiveBuffer = this.receiveBuffer.subarray(9 + payloadLength);
 
+      if (this.incompleteTimer) globalThis.clearTimeout(this.incompleteTimer);
+      this.incompleteTimer = null;
       // Handle different message types
       if (msgtype === ImmisMessageType.VIDEO) {
         // Skip packets without valid MPEG-TS sync byte
@@ -639,7 +671,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         // Session messages are control-plane updates/ACKs.
         // We don't parse the payload yet; log for telemetry.
         this.debug(`Received SESSION_MESSAGE (sequence=${sequence}, len=${payloadLength})`);
-        this.emit('sessionMessage', payload);
+        this.safeEmit('sessionMessage', Buffer.from(payload));
       } else if (msgtype === ImmisMessageType.SESSION_COMMAND) {
         // Rare: server-originated session commands (mirror or multi-client scenarios)
         this.debug(`Received SESSION_COMMAND (sequence=${sequence}, len=${payloadLength})`);
@@ -651,25 +683,31 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.debug(`Skipping non-video msgtype: ${msgtype}`);
       }
     }
+    if (this.receiveBuffer.length && !this.incompleteTimer) {
+      this.incompleteTimer = globalThis.setTimeout(() => this.fail('IMMIS incomplete frame timed out'), 5000);
+    }
   }
 
   /**
-   * Forward MPEG-TS data to all connected clients
+   * Forward MPEG-TS data to the private child and optional bounded recorder
    */
   private forwardToClients(data: Buffer): void {
-    this.emit('data', data);
-
-    // Write to recording file if active
+    this.safeEmit('data', data);
     if (this.streamFile && !this.streamFile.destroyed) {
-      this.streamFile.write(data);
-      this.streamBytesWritten += data.length;
-    }
-
-    for (const client of this.clients) {
-      if (!client.destroyed) {
-        client.write(data);
+      if (this.streamBytesWritten + data.length > 64 * 1024 * 1024) {
+        recordSecurityBoundaryEvent('recorder_refusal');
+        this.stopStreamRecording();
+      }
+      else {
+        this.boundedWrite(this.streamFile, data, 256 * 1024, () => {
+          recordSecurityBoundaryEvent('recorder_refusal');
+          this.stopStreamRecording();
+        });
+        this.streamBytesWritten += data.length;
       }
     }
+    if (this.consumer) this.boundedWrite(this.consumer, data, 1024 * 1024,
+      () => this.fail('IMMIS consumer exceeded its budget'));
   }
 
   /**
@@ -678,7 +716,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private startKeepAlive(): void {
     // Send latency stats every second and keep-alive every 10 seconds
     let secondCounter = 0;
-    this.keepAliveInterval = setInterval(() => {
+    this.keepAliveInterval = globalThis.setInterval(() => {
       secondCounter++;
       if (secondCounter % 10 === 0) {
         this.keepAliveSequence++;
@@ -702,7 +740,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     packet.writeUInt32BE(0, 5); // No payload
 
     this.debug(`Sending keep-alive (sequence=${this.keepAliveSequence})`);
-    this.targetSocket.write(packet);
+    this.writeUpstream(packet);
   }
 
   /**
@@ -721,7 +759,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     // Payload is all zeros (stats we don't track)
 
     this.debug('Sending latency stats');
-    this.targetSocket.write(packet);
+    this.writeUpstream(packet);
   }
 
   /**
@@ -750,7 +788,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     }
 
     this.debug(`Sending SESSION_COMMAND (id=${commandId}, len=${fullPayload.length})`);
-    this.targetSocket.write(packet);
+    this.writeUpstream(packet);
   }
 
   /** Request to start two-way audio (scaffold). */
@@ -779,12 +817,18 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     if (this.audioInput === stream) {
       return;
     }
+    this.audioCleanup?.();
+    this.audioBuffer = Buffer.alloc(0);
     this.audioInput = stream;
     this.debug('Attached upstream audio input stream (LATM)');
 
     let totalBytes = 0;
-    stream.on('data', (chunk: Buffer) => {
+    const onData = (chunk: Buffer) => {
+      if (!this.isRunning || this.audioInput !== stream) return;
       totalBytes += chunk.length;
+      if (chunk.length + this.audioBuffer.length > MAX_AUDIO_BUFFER_BYTES) {
+        this.audioBuffer = Buffer.alloc(0); return;
+      }
       this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
       if (this.audioBuffer.length > MAX_AUDIO_BUFFER_BYTES) {
         this.debug(`Audio buffer exceeded ${MAX_AUDIO_BUFFER_BYTES} bytes; dropping buffered audio`);
@@ -804,13 +848,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
           this.debug(`Failed to send LATM frame: ${(error as Error).message}`);
         }
       }
-    });
+    };
 
-    stream.on('error', (error) => {
+    const onError = (error: Error) => {
       this.debug(`Audio input stream error: ${error.message}`);
-    });
+    };
 
-    stream.on('close', () => {
+    const onClose = () => {
       this.debug(`Audio input stream closed after ${totalBytes} bytes`);
       if (this.audioInput === stream) {
         this.audioInput = null;
@@ -819,7 +863,15 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.debug(`Dropping ${this.audioBuffer.length} buffered bytes after stream close`);
         this.audioBuffer = Buffer.alloc(0);
       }
-    });
+      this.audioCleanup?.();
+    };
+    stream.on('data', onData);
+    stream.on('error', onError);
+    stream.on('close', onClose);
+    this.audioCleanup = () => {
+      stream.off('data', onData); stream.off('error', onError); stream.off('close', onClose);
+      this.audioCleanup = null;
+    };
   }
 
   /**
@@ -836,7 +888,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     header.writeUInt32BE(++this.keepAliveSequence, 1);
     header.writeUInt32BE(latm.length, 5);
     const packet = Buffer.concat([header, latm]);
-    this.targetSocket.write(packet);
+    this.writeUpstream(packet);
     this.debug(`Sent LATM frame (${latm.length} bytes)`);
   }
 
@@ -856,40 +908,33 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     // Stop keep-alive timer
     if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
+      globalThis.clearInterval(this.keepAliveInterval);
       this.keepAliveInterval = null;
     }
 
     // Cancel any pending reconnect
     if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
+      globalThis.clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
 
     this.cancelIdleShutdown();
 
     // Close target connection
-    if (this.targetSocket && !this.targetSocket.destroyed) {
-      this.targetSocket.destroy();
-      this.targetSocket = null;
-    }
+    const socket = this.targetSocket;
+    this.targetSocket = null;
+    if (socket && !socket.destroyed) socket.destroy();
 
-    // Close all client connections
-    for (const client of this.clients) {
-      if (!client.destroyed) {
-        client.destroy();
-      }
-    }
-    this.clients = [];
-
-    // Close server
-    if (this.server) {
-      this.server.close();
-      this.server = null;
-    }
+    this.detachConsumer();
+    for (const cleanup of this.blockedWriters.values()) cleanup();
+    if (this.incompleteTimer) globalThis.clearTimeout(this.incompleteTimer);
+    this.incompleteTimer = null;
+    this.audioCleanup?.();
+    this.audioInput = null;
+    this.audioBuffer = Buffer.alloc(0);
 
     this.receiveBuffer = Buffer.alloc(0);
-    this.emit('close');
+    this.safeEmit('close');
     this.log('Proxy server stopped');
   }
 }

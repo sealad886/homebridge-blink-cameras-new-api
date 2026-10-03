@@ -1,3 +1,4 @@
+import { testResponse } from '../helpers/response';
 import { OperationTimeoutError } from '../../src/operation-budget';
 import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
 import {
@@ -25,14 +26,14 @@ describe('BlinkHttp', () => {
     tier: 'prod',
   };
 
-  const response = (status: number, body: unknown = {}) => ({
+  const response = (status: number, body: unknown = {}) => (testResponse({
     status,
     statusText: status >= 400 ? 'Bad Request' : 'OK',
     ok: status >= 200 && status < 300,
     json: async () => body,
     text: async () => JSON.stringify(body),
     headers: new Headers({ 'content-type': 'application/json' }),
-  });
+  }));
 
   beforeEach(() => {
     globalThis.fetch = jest.fn() as unknown as typeof fetch;
@@ -61,7 +62,7 @@ describe('BlinkHttp', () => {
       await jest.advanceTimersByTimeAsync(100);
       await preflight;
       expect(fetch).not.toHaveBeenCalled();
-      (fetch as jest.Mock).mockResolvedValueOnce({ ...response(200), json: () => new Promise(() => {}) });
+      (fetch as jest.Mock).mockResolvedValueOnce(testResponse({ ...response(200), json: () => new Promise(() => {}) }));
       const body = expect(http.get('homescreen', { deadline: Date.now() + 100 })).rejects.toBeInstanceOf(OperationTimeoutError);
       await jest.advanceTimersByTimeAsync(100);
       await body;
@@ -179,8 +180,8 @@ describe('BlinkHttp', () => {
     const rejectedBody = { cancel: jest.fn().mockResolvedValue(undefined) };
     const missingBody = { cancel: jest.fn().mockResolvedValue(undefined) };
     (fetch as jest.Mock)
-      .mockResolvedValueOnce({ ...response(401), body: rejectedBody })
-      .mockResolvedValueOnce({ ...response(404), body: missingBody });
+      .mockResolvedValueOnce(testResponse({ ...response(401), body: rejectedBody }))
+      .mockResolvedValueOnce(testResponse({ ...response(404), body: missingBody }));
     await expect(http.post('commands/1/done', undefined, [404])).rejects.toMatchObject({ status: 404 });
     expect(rejectedBody.cancel).toHaveBeenCalledTimes(1);
     expect(missingBody.cancel).toHaveBeenCalledTimes(1);
@@ -398,7 +399,7 @@ describe('BlinkHttp', () => {
     (fetch as jest.Mock).mockImplementation(async (input: string) => {
       if (input === 'https://api.oauth.blink.com/oauth/token') {
         tokenRequests += 1;
-        return {
+        return testResponse({
           ...response(200, {
             access_token: `short-lived-access-${tokenRequests}`,
             refresh_token: `rotated-refresh-${tokenRequests}`,
@@ -406,7 +407,7 @@ describe('BlinkHttp', () => {
             token_type: 'Bearer',
           }),
           headers: new Headers(),
-        };
+        });
       }
       restRequests += 1;
       return restRequests === 1
@@ -438,11 +439,11 @@ describe('BlinkHttp', () => {
     };
     const auth = mockAuth();
     const http = new BlinkHttp(auth, { ...mockConfig, debugAuth: true, logger });
-    (fetch as jest.Mock).mockResolvedValue({
+    (fetch as jest.Mock).mockResolvedValue(testResponse({
       ...response(400, { message: bodySecret }),
       statusText: statusSecret,
       headers: new Headers({ [headerNameSecret]: headerValueSecret }),
-    });
+    }));
 
     let caught: unknown;
     try {
