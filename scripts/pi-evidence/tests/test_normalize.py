@@ -67,6 +67,20 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(s['remote_port'], '1234')
         self.assertEqual(s['auth_method'], 'publickey')
 
+    def test_ssh_boundaries_use_original_journal_time_when_receipt_is_delayed(self):
+        rows = []
+        for received, at, monotonic, message in (
+            (500, 100, 10_000_000, 'Accepted publickey for a from 1.2.3.4 port 2 ssh2'),
+            (600, 150, 60_000_000, 'Disconnected from user a 1.2.3.4 port 2'),
+        ):
+            rows.append(event(received, 'journal', {'MESSAGE':message, '_PID':'10',
+                '__REALTIME_TIMESTAMP':str(at * 1_000_000), '__MONOTONIC_TIMESTAMP':str(monotonic)}))
+        session = build_report(rows, 90, 160)['sessions'][0]
+        self.assertEqual(session['start'], '1970-01-01T00:01:40+00:00')
+        self.assertEqual(session['end'], '1970-01-01T00:02:30+00:00')
+        self.assertEqual(session['duration_seconds'], 50)
+        self.assertEqual(session['boundary_state'], 'paired')
+
     def test_pid_reuse_separates_connections_and_channels(self):
         messages = ['Accepted publickey for a from 1.2.3.4 port 2 ssh2',
                     'Starting session: shell on pts/0 for a from 1.2.3.4 port 2 id 0',

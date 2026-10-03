@@ -9,6 +9,7 @@ import threading
 import socket
 import subprocess
 import shlex
+from datetime import datetime, timezone
 from unittest import mock
 from pathlib import Path
 
@@ -53,6 +54,51 @@ class ReportTests(unittest.TestCase):
         for name in ("activity.jsonl", "timeline.jsonl"):
             for line in (output / name).read_text().splitlines():
                 self.assertIsInstance(json.loads(line), dict)
+
+    def test_export_reproduce_orders_original_times_without_source_time(self) -> None:
+        base = datetime(2026, 1, 1, 12, tzinfo=timezone.utc).timestamp()
+        # Store ordering follows receipts when source_time is absent. Deliberately
+        # receive end/close before start/channel, and later audit before earlier audit.
+        received_order = [
+            ('journal', 'delayed-end', {'MESSAGE':'Disconnected from user a 1.2.3.4 port 2', '_PID':'11',
+                '__REALTIME_TIMESTAMP':str(int((base + 150) * 1_000_000)), '__MONOTONIC_TIMESTAMP':'60000000'}),
+            ('journal', 'delayed-channel-close', {'MESSAGE':'Close session: user a from 1.2.3.4 port 2 id 0', '_PID':'11',
+                '__REALTIME_TIMESTAMP':str(int((base + 140) * 1_000_000)), '__MONOTONIC_TIMESTAMP':'50000000'}),
+            ('audit', 'delayed-audit-later', f'type=SYSCALL msg=audit({base + 120}:2): pid=21 ppid=11 uid=1000 ses=7'),
+            ('homebridge', 'delayed-homebridge', {'message':'[1/1/2026, 12:02:05] [Blink] request timed out token=SECRET'}),
+            ('journal', 'delayed-channel-start', {'MESSAGE':'Starting session: shell on pts/0 for a from 1.2.3.4 port 2 id 0', '_PID':'11',
+                '__REALTIME_TIMESTAMP':str(int((base + 110) * 1_000_000)), '__MONOTONIC_TIMESTAMP':'20000000'}),
+            ('journal', 'delayed-start', {'MESSAGE':'Accepted publickey for a from 1.2.3.4 port 2 ssh2', '_PID':'10',
+                '__REALTIME_TIMESTAMP':str(int((base + 100) * 1_000_000)), '__MONOTONIC_TIMESTAMP':'10000000'}),
+            ('audit', 'delayed-audit-earlier', f'type=SYSCALL msg=audit({base + 105}:1): pid=20 ppid=11 uid=1000 ses=7'),
+        ]
+        for source, source_id, raw in received_order:
+            self.store.append(source, raw, source_id=source_id, boot_id='boot')
+        retained = [row for row in self.store.read_events() if str(row['source_id']).startswith('delayed-')]
+        self.assertEqual([row['source_id'] for row in retained], [source_id for _, source_id, _ in received_order])
+        self.assertTrue(all(row['source_time'] is None for row in retained))
+        output = self.store.root / 'exports' / 'delayed-original-times'
+        report.export_bundle(self.store, base + 90, base + 160, output)
+        stored = json.loads((output / 'report.json').read_text())
+        replayed = report.reproduce(output)
+        self.assertTrue(replayed['reproduced'])
+        self.assertEqual(stored['coverage']['state'], 'capture_observed')
+        connection = next(row for row in stored['sessions'] if row['kind'] == 'ssh_connection')
+        channel = next(row for row in stored['sessions'] if row['kind'] == 'ssh_channel')
+        self.assertEqual(connection['start'], '2026-01-01T12:01:40+00:00')
+        self.assertEqual(connection['end'], '2026-01-01T12:02:30+00:00')
+        self.assertEqual(connection['duration_seconds'], 50)
+        self.assertEqual(channel['duration_seconds'], 30)
+        self.assertTrue(all(row['boundary_state'] == 'paired' for row in stored['sessions']))
+        activity = stored['activity']
+        self.assertEqual(activity[0]['audit_serial'], '1')
+        self.assertEqual(activity[0]['attribution'], 'unproven')
+        self.assertEqual(activity[1]['audit_serial'], '2')
+        self.assertEqual(activity[1]['attribution'], 'direct_child_of_observed_ssh_process')
+        homebridge = next(row for row in stored['timeline'] if row['source'] == 'homebridge')
+        self.assertEqual(homebridge['at'], '2026-01-01T12:02:05+00:00')
+        self.assertEqual(homebridge['category'], 'timeout')
+        self.assertNotIn('SECRET', json.dumps(replayed['report']))
 
     def test_manifest_valid_malicious_normalizer_is_data_only(self) -> None:
         output = self.store.root / "exports" / "malicious"

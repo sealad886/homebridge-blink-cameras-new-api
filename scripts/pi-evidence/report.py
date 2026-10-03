@@ -14,7 +14,6 @@ import time
 import csv
 import io
 import platform
-import inspect
 import stat
 from pathlib import Path
 from typing import Any
@@ -182,8 +181,7 @@ def export_bundle(
                     if line.strip():
                         yield json.loads(line)
 
-        build_kwargs = {"already_ordered": True} if "already_ordered" in inspect.signature(normalizer.build_report).parameters else {}
-        derived = normalizer.build_report(raw_events(), start, end, **build_kwargs)
+        derived = normalizer.build_report(raw_events(), start, end)
         if not isinstance(derived, dict) or not {"sessions", "activity", "timeline", "coverage"}.issubset(derived):
             raise BundleError("normalizer returned an incomplete report")
         generated_at = time.time()
@@ -356,8 +354,7 @@ def reproduce(bundle: os.PathLike[str] | str) -> dict[str, Any]:
             for line in handle:
                 if line.strip():
                     yield json.loads(line)
-    build_kwargs = {"already_ordered": True} if "already_ordered" in inspect.signature(normalizer.build_report).parameters else {}
-    rebuilt = normalizer.build_report(events(), float(window["start"]), float(window["end"]), **build_kwargs)
+    rebuilt = normalizer.build_report(events(), float(window["start"]), float(window["end"]))
     comparable = {key: stored[key] for key in ("sessions", "activity", "timeline", "coverage")}
     if rebuilt != comparable:
         raise BundleError("reproduced normalized report differs from stored report")

@@ -154,7 +154,7 @@ def build_report(events, start, end, already_ordered=False):
     health_intervals = {}
 
     def observe(key, kind, event, raw, boundary=None):
-        t = timestamp(event, raw)
+        t = timestamp(event)
         s = active.get(key)
         if s is None and boundary == 'end' and key in completed:
             completed[key]['evidence_ids'].append(event.get('event_id'))
