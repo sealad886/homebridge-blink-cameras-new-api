@@ -1,8 +1,8 @@
 {
-  "recorded_at_utc": "2026-10-03T10:58:01.062441+00:00",
+  "recorded_at_utc": "2026-10-03T14:07:30.034844+00:00",
   "baseline_revision": "fb96b9b33921e39d825f1be8636705e8a9839d20",
   "branch": "codex/security-hardening",
-  "source_state": "uncommitted working tree; not a release artifact",
+  "source_state": "review round 1 corrections on bde79d33a6a07705d0160a5ceea15d4556c039d0; hashes identify tested source; not a registry artifact",
   "scan_id": "247931cc-e452-4dff-bfec-5054e0481242",
   "source_files": {
     ".github/scripts/verify-package.mjs": "f03caba34a7d514d76b66ea240976fa5031bc8f5f66cc277124100984a6a6709",
@@ -12,39 +12,40 @@
     "__tests__/blink-api/auth.test.ts": "3d2f2ffc675b01e53729df1f3f32932877668de6b4939aa9076c3c5bed7972e8",
     "__tests__/blink-api/client.test.ts": "fbf0d9dcdda477f31775e5797c2a85205024b48db827587d46c9ec39a3e3a027",
     "__tests__/blink-api/http.test.ts": "3a899cbf606e2921dab9ccff5db4cb0d4323a29edc902059ef25b8115c85c348",
-    "__tests__/blink-api/immis-proxy.test.ts": "f36d2deab900ab0393426d71040286bb7a83a9c951ac4e13bc44241a60899847",
+    "__tests__/blink-api/immis-proxy.test.ts": "6a588d071b7f4487a224f48e2bb538f379e737c54e8f7e9ac243e9e4996ae376",
     "__tests__/blink-api/response-body.test.ts": "13c08d4306297bf0c11784178d73438e11259077578372aad46b782e428a0bdc",
     "__tests__/helpers/response.ts": "d5b879a89e57b52d3d634761a53ea98e813b6613926af24b00303cd1054b4dc5",
-    "__tests__/oauth-diagnostic-transport.test.ts": "8ced87131dd46f8c9703417888bc9b4e7cae5943cb51969eee330fb337cc1153",
+    "__tests__/oauth-diagnostic-transport.test.ts": "1f1b16f1cbdb04c976f22cfc1d170d0b77a72a16ffd86cc2d8896a9be9d92339",
     "__tests__/security-diagnostics.test.ts": "90bb5019e0d3d71266a9660b1bbd20443711e96330044748f46278388b57bd27",
     "__tests__/stream-ownership.test.ts": "53c071fbe328f2290c45a5011ed50a8914db47489fefc9f1077f02f2a8d47068",
-    "scripts/debug-full-oauth.ts": "b1eb308410d0d4ba276e9c7e2c76c5ddb2f6e62fe60267f872e68ead30203997",
-    "scripts/debug-simple-oauth.ts": "4a86ff8109de7984c8ca5a50c1570375cf52de1bef652233bf1d21df13919b96",
+    "scripts/debug-full-oauth.ts": "3469ac1d545391b0cb8b5213fb1f756a91cd84277a0db69f7d5a6bfe77d025b9",
+    "scripts/debug-simple-oauth.ts": "05ec68bdc49ec2cd2be9b26c1284b5e85df6be89f6354d69ce1e81ed935c6ad3",
     "scripts/oauth-diagnostic-transport.ts": "74c6bd319c4f1a312683d0867fac4376a096dd5b0cea456b0c9ddc8adb066ab5",
     "scripts/pi-evidence/README.md": "29dae6debb262f537b91a8a2ec4d2ae311bb13f90ffc1a09355914321ad8271d",
-    "scripts/pi-evidence/normalize.py": "e06bbe60afd09f43e3d7ab15d5e7a34830267118e3fdd11d12993eb358815e8c",
-    "scripts/pi-evidence/report.py": "450e5f15c452efcb42736df95dd12513e7f80a1f7855d61b59bee993cf85c09b",
+    "scripts/pi-evidence/normalize.py": "3f7c538d4ac33a862c7aeb190b13b7db590f89047fe74cd4aee1df84fe6342bd",
+    "scripts/pi-evidence/report.py": "b50b578bdaae21191721c4f444589fcb1e79893113598ab2e5a56d8415ddf8bb",
     "scripts/pi-evidence/store.py": "1b37bf9be84012f5b3e2351d2af536b688889775484498d2bb42b9437d16f77e",
-    "scripts/pi-evidence/tests/test_normalize.py": "9e31967f2719a1f3a18de5ad738508d501962e4b25838f24ec0c34b85f1f5e06",
-    "scripts/pi-evidence/tests/test_report.py": "7d85502bc5313357b2257776122cfe9da589c02341b58197779ab20f6f17a2cf",
+    "scripts/pi-evidence/tests/test_normalize.py": "1c35419c4684f000c17089785e40b5aea9f8be003714ce2ce6b9999852b908ce",
+    "scripts/pi-evidence/tests/test_report.py": "3b483e0a5f82ea837eddf29153745287e86bca49366feeb66af8ec8dbdd5f180",
     "src/accessories/camera-source.ts": "6837ab80e285bf2f188786b8c4d7a178725d2cefbf684ad72fc2eecb96407428",
     "src/blink-api/auth.ts": "093ba0b9479025c43b6079009d5d35ca37844301c805f3d0731616e8f8038cc2",
     "src/blink-api/client.ts": "bf670b87c28c628b62d6cc3e2884a10ab1c96b74849a5c3c31a9756f0fcda5cc",
     "src/blink-api/domain-validation.ts": "a93f2ad41de12ef4d86238060b97a675222936702e0be4f63e393d50db48c07e",
     "src/blink-api/http.ts": "91aa115d87f8b4f686673fd80fe40fc5bddae5a229c0814a2906611e5dabc1a4",
-    "src/blink-api/immis-proxy.ts": "d0066d2f9595dc2f2206bcd829375ab965ea54608a3a3fc1c9a8469886841832",
+    "src/blink-api/immis-proxy.ts": "f95fec1c7a6b2d5a7534bc6cee4b5dc1412fe8d252459b7b59d37a380831428a",
     "src/blink-api/network-diagnostics.ts": "3cbc4c534ece15d49e7230c2e7fd55d61fa953ee7884958a83f54da8c8fa6d81",
     "src/blink-api/response-body.ts": "4285e4325105ca13017432eace225eb9193d926aef6e13c4e03bb12625a3a11f",
-    "src/platform.ts": "afe3a660c08efc90b7cdda73346c48a779a123070197066cd0b7db3aef541e6d"
+    "src/platform.ts": "afe3a660c08efc90b7cdda73346c48a779a123070197066cd0b7db3aef541e6d",
+    ".github/workflows/test.yml": "e8c36944404eaaefa9a7b24c4dff91d401ae0cf66f7cbece419613be0241112e"
   },
   "checks": {
     "jest": {
-      "passed": 716,
+      "passed": 721,
       "suites": 33,
       "runtime": "Node 24.15.0"
     },
     "python_unittest": {
-      "passed": 31,
+      "passed": 40,
       "environment": ".venv"
     },
     "release_safety_node_tests": {
@@ -67,7 +68,7 @@
     "git_diff_check": "passed"
   },
   "not_verified": [
-    "Node20/22 execution",
+    "Node20/22 execution of round 1 corrections (preceding PR head passed CI20/22/24)",
     "provider-valid traffic calibration",
     "CPU/RSS/latency baselines",
     "100-cycle physical resource trend",
@@ -83,11 +84,16 @@
     "F06": "open: media connection enforcement incomplete"
   },
   "git_actions": {
-    "commit": false,
-    "push": false,
-    "pull_request": false,
+    "commit": true,
+    "push": true,
+    "pull_request": true,
     "publication": false,
     "installation": false,
     "new_worktree": false
+  },
+  "review_round_1": {
+    "recording": "filesystem-coordinated quota and cross-process regression; abandoned metadata conservatively refuses recording until deliberate operator recovery",
+    "diagnostics": "relative redirects use response request URL; window coverage and attribution respect observation time; special bundle nodes rejected; trusted paths corrected",
+    "review_status": "corrections verified locally; next active review round pending; Codex clean source retired at prior head"
   }
 }

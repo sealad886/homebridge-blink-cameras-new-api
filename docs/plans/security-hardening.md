@@ -120,7 +120,7 @@ they do not measure RSS, CPU, first-frame latency or physical resource trends.
 Node 24 runs locally; existing CI Node 20/22/24 coverage is preserved but Node 20/22
 were not executed here. Native platform claims remain withheld.
 
-Final local checks: 716 Jest tests / 33 suites, 31 Python tests, 39 release-safety
+Final local checks after review round 1: 721 Jest tests / 33 suites, 40 Python tests, 39 release-safety
 Node tests; lint, build, script typecheck, contract validation and packaged plugin
 loadability passed. Independent receipts found no remaining blocker in reviewed local
 slices. Native feasibility and physical/release gates remain open; this is a staged
@@ -132,3 +132,19 @@ On 2026-10-03 the maintainer authorized scoped commits, origin push, PR review/f
 rounds and fresh RC publication through existing CI when ready. This supersedes
 the implementation-turn Git-action restrictions above. Host installation remains
 unrequested. F05/F06 and physical/runtime acceptance remain open.
+
+## Review round 1 corrections
+
+Recording admission now uses a filesystem lock and per-capture reservations across
+processes sharing the recording directory. Abandoned locks refuse recording and
+abandoned reservations remain charged; recovery requires deliberate operator
+inspection. Live media continues without recording. Cross-process tests verify
+the 256 MiB admission ceiling and release after confirmed file closure.
+
+Diagnostic redirects resolve against the actual response request URL. Evidence
+coverage requires observations within the requested window; PID and kernel origin
+proof cannot attribute earlier activity retroactively. Bundle verification rejects
+special filesystem entries and generated commands use the trusted installed path.
+CI now typechecks maintained OAuth scripts and runs trusted evidence tests.
+The refreshed local receipt records tested source hashes. Further bot review and
+CI remain required before merge or publication. F05/F06 remain open.
