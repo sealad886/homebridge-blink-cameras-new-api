@@ -262,3 +262,5 @@ vite.config.ts.timestamp-*
 !/scripts/pi-evidence/tests/test_report.py
 !/scripts/pi-evidence/tests/test_normalize.py
 !/scripts/pi-evidence/README.md
+
+**/.DS_Store
