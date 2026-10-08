@@ -1,7 +1,43 @@
 import { describeMediaDestination, isPublicMediaAddress, resolveMediaDestination } from '../../src/blink-api/media-destination';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 
 // Synthetic adversarial cases test policy; they do not establish provider host contracts.
 describe('IMMIS destination admission', () => {
+  test('connects directly to admitted IPv4 with official vendor TLS identity and no DNS', async () => {
+    const lookup = jest.fn();
+    const destination = describeMediaDestination('immis://8.8.8.8:443/session?client_id=1&token=secret');
+    const result = await resolveMediaDestination(destination, new AbortController().signal, lookup);
+    expect(result).toEqual({ scheme: 'immis:', hostname: '8.8.8.8', servername: '*.immedia-semi.com',
+      port: 443, address: '8.8.8.8', family: 4, addresses: [{ address: '8.8.8.8', family: 4 }] });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(Object.isFrozen(result.addresses)).toBe(true);
+    expect(result.addresses.every(Object.isFrozen)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('secret');
+    expect(checkServerIdentity(result.servername,
+      { subjectaltname: 'DNS:*.immedia-semi.com' } as PeerCertificate)).toBeUndefined();
+    for (const subjectaltname of ['DNS:*.evil.test', 'DNS:evil.immedia-semi.com', 'IP Address:8.8.8.8']) {
+      expect(checkServerIdentity(result.servername, { subjectaltname } as PeerCertificate))
+        .toHaveProperty('code', 'ERR_TLS_CERT_ALTNAME_INVALID');
+    }
+  });
+  test('readmits literal destinations and fences cancellation or forged TLS identity without DNS', async () => {
+    const lookup = jest.fn();
+    const destination = describeMediaDestination('immis://8.8.8.8');
+    const signal = new AbortController().signal;
+    await resolveMediaDestination(destination, signal, lookup);
+    await expect(resolveMediaDestination({ ...destination, hostname: '127.0.0.1' }, signal, lookup)).rejects.toThrow();
+    await expect(resolveMediaDestination({ ...destination, servername: '8.8.8.8' }, signal, lookup)).rejects.toThrow('TLS identity');
+    const cancelled = new AbortController(); cancelled.abort();
+    await expect(resolveMediaDestination(destination, cancelled.signal, lookup)).rejects.toThrow();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+  test.each(['immis://8.8.8.8:444', 'immis://10.0.0.1:443', 'immis://169.254.169.254',
+    'immis://8.008.8.8', 'immis://010.0.0.1', 'immis://0x08080808', 'immis://134744072',
+    'immis://8.8.8', 'immis://8.8.8.8.', 'immis://[::ffff:8.8.8.8]',
+    'immis://[2606:4700:4700::1111]', 'immis://user@8.8.8.8', 'immis://8.8.8.8/#fragment'])
+  ('refuses unsupported literal authority %s', raw => {
+    expect(() => describeMediaDestination(raw)).toThrow('Unsupported media destination');
+  });
   test('retains original TLS identity without session credentials', async () => {
     const destination = describeMediaDestination('immis://media.immedia-semi.com:443/session?token=secret');
     const result = await resolveMediaDestination(destination, new AbortController().signal,

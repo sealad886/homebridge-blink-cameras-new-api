@@ -24,6 +24,36 @@ const make = (api: object) => new BlinkCameraSource(api as any, createHap() as a
 
 describe('generation-owned streaming', () => {
   beforeEach(() => (spawn as jest.Mock).mockClear());
+  it('bounds repeated failed START requests without replaying liveview POSTs', async () => {
+    const liveview = jest.fn().mockRejectedValue(new Error('provider refusal'));
+    const source = make({ startCameraLiveview: liveview });
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(100_000);
+    try {
+      const start = () => new Promise<Error | undefined>(resolve => source.handleStreamRequest(request, resolve));
+      await prepare(source); expect(await start()).toBeInstanceOf(Error); await stop(source);
+      for (let i = 0; i < 5; i++) {
+        await prepare(source); expect(await start()).toBeInstanceOf(Error); await stop(source);
+      }
+      expect(liveview).toHaveBeenCalledTimes(1);
+      clock.mockReturnValue(130_000);
+      await prepare(source); expect(await start()).toBeInstanceOf(Error);
+      expect(liveview).toHaveBeenCalledTimes(2);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); await stop(source); }
+  });
+  it('bounds retries after an asynchronous child spawn failure', async () => {
+    const liveview = jest.fn().mockResolvedValue({ server: 'rtsps://vendor.example/live' });
+    const source = make({ startCameraLiveview: liveview });
+    await prepare(source); const callback = jest.fn(); source.handleStreamRequest(request, callback);
+    await new Promise(resolve => setImmediate(resolve));
+    const child = (spawn as jest.Mock).mock.results[0].value;
+    child.emit('error', new Error('spawn failed')); child.emit('close', 1, null);
+    await stop(source);
+    await prepare(source);
+    await new Promise<void>(resolve => source.handleStreamRequest(request, () => resolve()));
+    await stop(source);
+    expect(liveview).toHaveBeenCalledTimes(1);
+  });
   it('rejects duplicate preparations; STOP permits fresh generation', async () => {
     const source = make({}); await prepare(source);
     await expect(prepare(source)).rejects.toThrow('already owned');

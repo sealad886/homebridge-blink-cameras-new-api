@@ -22,8 +22,12 @@ export interface ResolvedMediaDestination extends MediaDestination {
 
 export type MediaAddressLookup = AddressLookup;
 
-/** APK 59.2 RestApiKt Blink-domain constant; libwalnut IMMISDefaultPort = uint16 443.
- * This is a deliberately restricted IMMIS policy, not evidence of all provider media hosts.
+// Android libwalnut uses this certificate identity for IPv4-literal IMMIS servers.
+export const IMMIS_IPV4_TLS_IDENTITY = '*.immedia-semi.com';
+
+/** APK 59.2 Blink-domain constant; libwalnut IMMISDefaultPort = uint16 443.
+ * Public IPv4 literals use libwalnut's explicit vendor TLS identity; DNS uses original hostname.
+ * This is a restricted IMMIS policy, not evidence of all provider media hosts.
  * URL paths/query are session credentials and are never retained in this descriptor.
  */
 export function describeMediaDestination(raw: string): MediaDestination {
@@ -35,10 +39,12 @@ export function describeMediaDestination(raw: string): MediaDestination {
   const hostname = url.hostname;
   if (url.protocol !== 'immis:' || url.username || url.password || url.hash ||
       (url.port && url.port !== '443') || hostname.length > 253 ||
-      !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*immedia-semi\.com$/.test(hostname)) {
+      (!(isIP(hostname) === 4 && isPublicMediaAddress(hostname)) &&
+      !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*immedia-semi\.com$/.test(hostname))) {
     throw new Error('Unsupported media destination');
   }
-  return Object.freeze({ scheme: 'immis:', hostname, servername: hostname, port: 443 });
+  return Object.freeze({ scheme: 'immis:', hostname,
+    servername: isIP(hostname) === 4 ? IMMIS_IPV4_TLS_IDENTITY : hostname, port: 443 });
 }
 
 const forbiddenV4 = new BlockList();
@@ -74,8 +80,12 @@ export async function resolveMediaDestination(
   resolve?: MediaAddressLookup,
 ): Promise<ResolvedMediaDestination> {
   const checked = describeMediaDestination(`${destination.scheme}//${destination.hostname}:${destination.port}`);
-  if (destination.servername !== checked.hostname) throw new Error('Unsupported media TLS identity');
+  if (destination.servername !== checked.servername) throw new Error('Unsupported media TLS identity');
   signal.throwIfAborted();
+  if (isIP(checked.hostname) === 4) {
+    const address = Object.freeze({ address: checked.hostname, family: 4 as const });
+    return Object.freeze({ ...checked, ...address, addresses: Object.freeze([address]) });
+  }
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let abort: (() => void) | undefined;
   const interrupted = new Promise<never>((_, reject) => {

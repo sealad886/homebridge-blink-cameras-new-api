@@ -102,3 +102,40 @@ without auth writes, timeout/STOP/late secure callback, closure grace with unres
 whenClosed, candidate exhaustion, lifetime reconnect exhaustion, and changed private
 DNS on reconnect with zero additional socket attempts. Synthetic DNS/TLS sinks test
 these invariants; they do not establish real provider connectivity or family completeness.
+
+## RC.5: provider IPv4 transport authority and vendor TLS identity
+
+The 8 October Home test exposed 59 synchronous `Unsupported media destination`
+refusals before DNS/TLS, followed by 287 liveview HTTP 409 responses during client
+retries. Local private evidence: `logs/rc4-2026-10-08-acceptance/home-ui-test.md`.
+Images in Home were insufficient evidence of live video. Andrew confirmed the
+7 October reboot was intentional and manually triggered.
+
+Historical actual provider responses on 19 August at 14:41:53, 14:41:57 and
+14:42:28 Dublin use public canonical IPv4 authorities, port 443, no userinfo or
+fragment, and a client_id. Evidence is retained owner-only in the first collection's
+full homebridge.log, lines 2090358, 2090557 and 2091680. Addresses and session
+credentials are intentionally omitted here. These are historical observations;
+October's sanitized logs do not contain the original response URL.
+
+The same retained official APK libwalnut binary, digest recorded above, provides
+an independent identity contract. `walnut::mbedTLSSocket::connect` checks IPv4 at
+0x17add0. Its IPv4 branch loads `*.immedia-semi.com` from rodata 0x77642 and calls
+mbedtls_ssl_set_hostname at 0x17ae0c. Authentication mode 2 (required) is set at
+0x17a454; CA-chain configuration occurs at 0x17aa44. The non-IPv4 path supplies
+original hostname at 0x17b2d0. Transport IP and certificate identity are distinct.
+IPv6 literal authority has no corresponding proof and remains refused.
+
+RC.5 admits only canonical public IPv4 literals on 443 in addition to the existing
+DNS family. Literals resolve to one immutable numeric candidate without DNS;
+private/special/noncanonical literals fail closed. Their derived TLS identity is
+exactly the official constant. Mandatory chain verification, original DNS identity,
+verified-socket auth gates, connection deadlines and reconnect budgets remain.
+Actual Node certificate matching tests require the vendor wildcard and reject a
+foreign wildcard, a specific unrelated vendor subdomain and an IP-only certificate.
+Synthetic certificates test identity matching, not real endpoint trust or media.
+
+One bounded unauthenticated strict-TLS probe to a historical address timed out.
+It proves neither current reachability nor current certificate acceptance. Real
+provider/TLS/HomeKit acceptance requires installation of the reviewed new RC by
+Andrew and subsequent testing. F05/F06 remain open.

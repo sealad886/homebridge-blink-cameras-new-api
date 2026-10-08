@@ -282,3 +282,26 @@ native CI rejected eight misleading-indentation warnings under its strict GCC
 flags. Explicit braces and statement separation correct these without changing
 behavior or weakening compiler checks. Fresh hosted Linux verification and renewed
 review of the corrected immutable head remain mandatory publication gates.
+
+## RC.5 corrective slice — 8 October 2026
+
+WI-05/09 re-enter after real Home tests failed: hostname-only IMMIS admission
+rejected a provider contract using public IPv4 transport and separately verified
+vendor TLS identity. See the updated media-destination evidence receipt. The
+correction preserves mandatory certificate verification and public-address policy;
+no TLS bypass, additional coordinator or native-runtime claim is introduced.
+
+Camera lifecycle owns a 30-second failed-start backoff to bound Home retry-driven
+liveview POST conflicts. Cancellation through STOP does not begin this backoff;
+retirement ownership and remote cleanup deadlines remain unchanged. The auth owner
+logs one fixed, secret-free completion event after successful token capture/storage,
+with a finite trigger reason, so expiry/proactive natural refreshes can be observed
+without debug provider bodies. Storage failures emit no completion receipt.
+
+Delivery: focused regressions -> lint/build/full Jest/API/release/package gates ->
+independent review/PR/CI -> CI-published unused RC.5. No installation authority is
+added. New runtime observation starts after Andrew installs the exact registry RC;
+physical live video/audio, STOP/reopen, manual refresh and two natural refreshes
+remain required. Intentional reboot confirmed by Andrew; F05/F06 remain open and
+stable-specific residual-risk disposition is still absent. Rollback must retain
+security guards or disable affected live streaming, never restore TLS bypass.

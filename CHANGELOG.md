@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.5] - 2026-10-08
+
+### Fixed
+
+- Support provider IMMIS public IPv4 destinations on port 443 with the official
+  vendor TLS identity. Certificate verification and private-address refusal remain
+  mandatory; IPv6 literal destinations remain unavailable pending contract proof.
+- Bound repeated failed streaming starts with a 30-second per-camera backoff,
+  preventing immediate Home retries from flooding liveview requests.
+- Log secret-free token-refresh completion after successful token capture and
+  storage, distinguishing expiry/proactive refresh from requested refresh.
+- Use `raspberrypi` in the Homebridge HTTP example.
+
+### Acceptance and remaining gates
+
+- Corrects the destination-admission failure reproduced during RC.4 Home tests.
+  Current provider TLS, live video/audio, STOP/reopen and manual refresh require
+  verification after installation; local tests do not establish physical parity.
+- F05/F06 remain open. No native worker runtime cutover or complete RTSP authority
+  claim is made. A fresh RC observation requires at least 48 hours and two natural
+  refreshes; stable promotion remains gated by physical acceptance and security
+  disposition. Installation remains operator-owned.
+
 ## [0.10.0-rc.4] - 2026-10-03
 
 ### Fixed

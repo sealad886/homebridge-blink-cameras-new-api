@@ -332,6 +332,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private freshSnapshotPromise: Promise<Buffer> | null = null;
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
+  private streamFailureCooldownUntil = 0;
 
   constructor(
     private readonly api: BlinkApi,
@@ -688,6 +689,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
+    if (Date.now() < this.streamFailureCooldownUntil) {
+      await this.stopStream(sessionId, pending.owner);
+      callback(new Error('Streaming startup is temporarily unavailable'));
+      return;
+    }
+
     const activeStreamCount = Array.from(this.ongoingSessions.values())
       .filter((session) => session.owner?.phase !== 'CLOSED')
       .length;
@@ -762,6 +769,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           }
 
           this.logError(`IMMIS proxy error for session ${sessionId}: ${error.message}`);
+          this.markStreamFailure(sessionId, active);
           if (!active.readyNotified) {
             active.readyNotified = true;
             callback(error);
@@ -813,6 +821,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         }
       }
     } catch (error) {
+      // Home may immediately resubmit START after a refusal. Keep remote POSTs bounded
+      // while the previous vendor command retires; STOP cancellation is not a failure.
+      this.markStreamFailure(sessionId, active);
       this.logError(`Failed to start stream ${sessionId}: ${error}`);
       await this.stopStream(sessionId, owner);
       callback(error as Error);
@@ -822,6 +833,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private ownsSession(sessionId: string, active: ActiveStreamSession): boolean {
     return this.ongoingSessions.get(sessionId) === active && !active.stopped
       && !active.owner?.abort.signal.aborted;
+  }
+
+  private markStreamFailure(sessionId: string, active: ActiveStreamSession): void {
+    if (this.ownsSession(sessionId, active)) this.streamFailureCooldownUntil = Date.now() + 30_000;
   }
 
   private async completeLiveview(commandId: number): Promise<void> {
@@ -1172,7 +1187,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
-    ffmpeg.stdin.on('error', () => { if (active.ffmpeg === ffmpeg && this.ownsSession(sessionId, active)) void this.stopStream(sessionId, active.owner); });
+    ffmpeg.stdin.on('error', () => {
+      if (active.ffmpeg === ffmpeg && this.ownsSession(sessionId, active)) {
+        this.markStreamFailure(sessionId, active);
+        void this.stopStream(sessionId, active.owner);
+      }
+    });
     active.ffmpeg = ffmpeg;
     active.owner?.children.add(ffmpeg);
     ffmpeg.once('close', () => active.owner?.children.delete(ffmpeg));
@@ -1211,6 +1231,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         return;
       }
 
+      this.markStreamFailure(sessionId, active);
       if (!active.readyNotified) {
         callback(error);
       }
@@ -1240,6 +1261,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       if (!active.stopped && (code !== 0 || signal)) {
+        this.markStreamFailure(sessionId, active);
         this.logError(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
       }
       void this.stopStream(sessionId, active.owner);
