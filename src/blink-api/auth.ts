@@ -1356,13 +1356,13 @@ export class BlinkAuth {
    * Refresh tokens using refresh_token grant.
    * Retries transient network errors up to REFRESH_MAX_RETRIES times.
    */
-  async refreshTokens(): Promise<void> {
+  async refreshTokens(reason: 'requested' | 'missing-token' | 'expired' | 'proactive' = 'requested'): Promise<void> {
     if (this.refreshInFlight) {
       await this.refreshInFlight;
       return;
     }
 
-    const refresh = this.enqueueTokenTransition(() => this.refreshTokensUnlocked());
+    const refresh = this.enqueueTokenTransition(() => this.refreshTokensUnlocked(reason));
     this.refreshInFlight = refresh;
     try {
       await refresh;
@@ -1373,7 +1373,7 @@ export class BlinkAuth {
     }
   }
 
-  private async refreshTokensUnlocked(): Promise<void> {
+  private async refreshTokensUnlocked(reason: 'requested' | 'missing-token' | 'expired' | 'proactive'): Promise<void> {
     await this.ensureStateLoaded();
     if (!this.refreshToken) {
       this.logDebug('Cannot refresh: no refresh token available');
@@ -1473,6 +1473,7 @@ export class BlinkAuth {
         }
         throw error;
       }
+      this.log.info(`[Auth] Token refresh completed (reason=${reason}).`);
       return;
     }
   }
@@ -1553,7 +1554,7 @@ export class BlinkAuth {
     if (!this.accessToken) {
       if (this.oauthClientId === 'android') {
         this.logDebug('ensureValidToken → hosted access token missing → refreshing');
-        await this.refreshTokens();
+        await this.refreshTokens('missing-token');
         return;
       }
       if (!this.canUseLegacyCredentialLogin()) {
@@ -1567,7 +1568,7 @@ export class BlinkAuth {
     if (this.isTokenExpired()) {
       this.logDebug('ensureValidToken → access token expired → refreshing');
       try {
-        await this.refreshTokens();
+        await this.refreshTokens('expired');
       } catch (error) {
         if (error instanceof AuthStateChangedError || error instanceof BlinkTokenRefreshError) throw error;
         if (this.oauthClientId === 'android') {
@@ -1583,7 +1584,7 @@ export class BlinkAuth {
     } else if (this.isTokenExpiringSoon()) {
       this.logDebug(`ensureValidToken → token expiring soon (expires ${this.tokenExpiry?.toISOString()}) → proactive refresh`);
       try {
-        await this.refreshTokens();
+        await this.refreshTokens('proactive');
       } catch (error) {
         if (error instanceof AuthStateChangedError) throw error;
         if (error instanceof BlinkTokenRefreshError && error.category === 'temporary' && !this.isTokenExpired()) {

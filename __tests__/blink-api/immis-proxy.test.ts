@@ -125,6 +125,31 @@ describe('ImmisProxyServer private consumer', () => {
     await proxy.whenClosed;
   });
 
+  it.each([true, false])('uses vendor TLS identity for public literal and gates auth on authorization=%s', async authorized => {
+    proxy.stop();
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://8.8.8.8:443/session?client_id=1', serial: 'TEST' });
+    const socket = Object.assign(new EventEmitter(), {
+      write: jest.fn(), destroy: jest.fn(), authorized,
+    }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce((_options, callback) => {
+      void Promise.resolve().then(callback); return socket;
+    });
+    const errors = jest.fn(); proxy.on('error', errors);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(tls.connect).toHaveBeenCalledWith(expect.objectContaining({ host: '8.8.8.8', port: 443,
+      servername: '*.immedia-semi.com', rejectUnauthorized: true, minVersion: 'TLSv1.2' }), expect.any(Function));
+    if (authorized) {
+      expect(socket.write).toHaveBeenCalledTimes(1);
+    } else {
+      expect(socket.write).not.toHaveBeenCalled();
+      expect(socket.destroy).toHaveBeenCalledTimes(1);
+      socket.emit('close'); await flushResolution();
+      expect(errors).toHaveBeenCalledTimes(1);
+      await proxy.whenClosed;
+    }
+  });
+
   it.each(['immis://evil.test/?client_id=1', 'immis://media.immedia-semi.com:444/?client_id=1',
     'https://media.immedia-semi.com/?client_id=1'])('rejects invalid upstream before DNS or TLS', raw => {
     expect(() => new ImmisProxyServer({ immisUrl: raw, serial: 'TEST' })).toThrow();

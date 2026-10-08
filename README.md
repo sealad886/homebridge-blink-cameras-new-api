@@ -77,7 +77,7 @@ Restart Homebridge after installing.
 ### Via Homebridge UI
 
 The plugin provides a full configuration UI. Open the remote Homebridge UI in
-Brave (for example, `http://raspberrypi.local:8581`), then navigate to `Plugins`
+Brave (for example, `http://raspberrypi:8581`), then navigate to `Plugins`
 → `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
 
 The supported authentication path uses Blink's hosted sign-in. Homebridge

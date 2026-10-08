@@ -1228,14 +1228,27 @@ describe('BlinkAuth hosted OAuth', () => {
       tokenExpiry: '2026-01-01T00:00:00.000Z',
       oauthClientId: 'android',
     });
-    const { logger } = createLogger();
-    const auth = new BlinkAuth(makeConfig(storage, logger));
+    const { logger, entries } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { debugAuth: false }));
     fetchMock.mockResolvedValue(tokenResponse(validTokenBody()));
 
     await Promise.all([auth.refreshTokens(), auth.refreshTokens(), auth.refreshTokens()]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(storage.save).toHaveBeenCalledTimes(1);
+    expect(entries.filter(entry => entry.includes('Token refresh completed'))).toHaveLength(1);
+    expect(entries.join('\n')).not.toContain('oldHostedRefresh_9Ee0Ub');
+  });
+
+  it('does not report refresh completion when persistence fails', async () => {
+    const storage = createStorage({ accessToken: 'old-access', refreshToken: 'old-refresh',
+      tokenExpiry: '2026-01-01T00:00:00.000Z', oauthClientId: 'android' });
+    storage.save.mockRejectedValue(new Error('disk unavailable'));
+    const { logger, entries } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger, { debugAuth: false }));
+    fetchMock.mockResolvedValue(tokenResponse(validTokenBody()));
+    await expect(auth.refreshTokens()).rejects.toBeInstanceOf(BlinkTokenRefreshError);
+    expect(entries.some(entry => entry.includes('Token refresh completed'))).toBe(false);
   });
 
   it('serializes public persistence behind token capture without deadlocking', async () => {

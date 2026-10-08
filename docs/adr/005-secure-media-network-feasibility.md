@@ -39,3 +39,15 @@ F05 and F06 remain open until secret-handling and actual-connection gates pass.
 Process separation is not an OS sandbox. Privileged process-memory inspection
 is outside the process-metadata secrecy claim. Live-device installation and
 physical acceptance belong to the operator after CI publication.
+
+## 8 October 2026: IMMIS IPv4 transport and TLS identity
+
+Real provider evidence and the retained official libwalnut client distinguish
+public IPv4 transport authority from certificate identity. For canonical public
+IPv4 IMMIS endpoints on 443, use the official constant `*.immedia-semi.com` for
+TLS identity/SNI and enforce ordinary CA-chain verification. DNS authorities retain
+their original validated hostname. Never infer a certificate identity from reverse
+DNS, disable validation or admit IPv6 literal authorities without contract evidence.
+See the canonical media-destination evidence receipt for binary offsets, digest,
+provider provenance and tests. This narrow repair does not close F06's RTSP or
+complete media-authority gates, nor F05's argv exposure.
