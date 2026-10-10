@@ -1,5 +1,7 @@
 import { execFile, type ExecFileException } from 'node:child_process';
 import process from 'node:process';
+import { createSocket } from 'node:dgram';
+import { clearTimeout, setTimeout } from 'node:timers';
 
 import type { VideoEncoderPreference } from './camera-source';
 
@@ -182,4 +184,58 @@ async function doProbe(
     compiledEncoders: [...compiled],
     testedEncoders: tested,
   };
+}
+
+/** Prove AAC-ELD encoding and RTP muxing using dummy audio, never live media. */
+export async function probeAacEldEncoder(ffmpegPath: string): Promise<boolean> {
+  for (const rate of [16000, 24000]) {
+    const sink = createSocket('udp4');
+    let receivedRtp = false;
+    let socketFailed = false;
+    let bindTimer: ReturnType<typeof setTimeout> | undefined;
+    let packetTimer: ReturnType<typeof setTimeout> | undefined;
+    let packetReceived: (() => void) | undefined;
+    sink.on('error', () => { socketFailed = true; });
+    sink.on('message', (packet, remote) => {
+      if (remote.address === '127.0.0.1' && packet.length > 12 &&
+          (packet[0] >> 6) === 2 && (packet[1] & 0x7f) === 110) {
+        receivedRtp = true;
+        packetReceived?.();
+      }
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        bindTimer = setTimeout(() => reject(new Error('Audio probe bind deadline')), PROBE_TIMEOUT_MS);
+        sink.once('error', reject);
+        sink.bind(0, '127.0.0.1', () => {
+          clearTimeout(bindTimer);
+          sink.removeListener('error', reject);
+          resolve();
+        });
+      });
+      const address = sink.address();
+      if (typeof address === 'string' || socketFailed) return false;
+      const result = await execFilePromise(ffmpegPath, [
+        '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `anullsrc=r=${rate}:cl=mono`,
+        '-t', '0.1', '-c:a', 'libfdk_aac', '-profile:a', 'aac_eld',
+        '-f', 'rtp', '-payload_type', '110', `rtp://127.0.0.1:${address.port}?pkt_size=1200`,
+      ], PROBE_TIMEOUT_MS);
+      if (result.exitCode !== 0 || socketFailed) return false;
+      if (!receivedRtp) {
+        // Process exit can precede delivery of the last loopback datagram.
+        await new Promise<void>(resolve => {
+          packetReceived = resolve;
+          packetTimer = setTimeout(resolve, 250);
+        });
+      }
+      if (!receivedRtp || socketFailed) return false;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(bindTimer);
+      clearTimeout(packetTimer);
+      try { sink.close(); } catch { /* Bind failure can leave the socket already closed. */ }
+    }
+  }
+  return true;
 }

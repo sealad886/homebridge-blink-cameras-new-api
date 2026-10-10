@@ -34,6 +34,11 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --runInBand --coverage
+      - name: Verify synthetic video/audio stream packaging
+        if: matrix.node-version == 24
+        run: |
+          ffmpeg -version
+          node scripts/media-pipeline-smoke.cjs
       - name: Check maintained OAuth diagnostic scripts
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck scripts/debug-full-oauth.ts scripts/debug-simple-oauth.ts scripts/oauth-diagnostic-transport.ts
       - name: Test trusted evidence reporting

@@ -2,6 +2,8 @@ import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
+import * as tls from 'node:tls';
+jest.mock('node:tls', () => ({ connect: jest.fn() }));
 import { BlinkCameraSource } from '../src/accessories/camera-source';
 import { createHap } from './helpers/homebridge';
 
@@ -54,6 +56,38 @@ describe('generation-owned streaming', () => {
     await stop(source);
     expect(liveview).toHaveBeenCalledTimes(1);
   });
+  it('opens verified IMMIS media while command monitoring is pending and fences late polling after STOP', async () => {
+    const socket = new EventEmitter() as any;
+    socket.authorized = true; socket.write = jest.fn(() => true);
+    socket.destroy = jest.fn(() => { socket.emit('close'); return socket; });
+    const connecting = (tls.connect as jest.Mock).mockImplementation(((_options: any, callback: () => void) => {
+      void Promise.resolve().then(callback); return socket;
+    }) as any);
+    let finishPoll!: (value: any) => void;
+    const getCommandStatus = jest.fn(() => new Promise(resolve => { finishPoll = resolve; }));
+    const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({
+      server: 'immis://8.8.8.8:443/?client_id=1', command_id: 7, continue_interval: 7,
+    }), getCommandStatus, completeCommand: jest.fn().mockResolvedValue(null) });
+    try {
+      await prepare(source); source.handleStreamRequest(request, jest.fn());
+      await new Promise(resolve => setImmediate(resolve));
+      const child = (spawn as jest.Mock).mock.results[0].value;
+      expect(connecting).toHaveBeenCalledWith(expect.objectContaining({ rejectUnauthorized: true }), expect.any(Function));
+      expect(socket.write).toHaveBeenCalled();
+      const payload = Buffer.alloc(188, 0); payload[0] = 0x47;
+      const header = Buffer.alloc(9); header.writeUInt32BE(payload.length, 5);
+      socket.emit('data', Buffer.concat([header, payload]));
+      expect(child.stdin.read()).toEqual(payload);
+      // Advance the already scheduled polling timer without overlapping requests.
+      await new Promise(resolve => setTimeout(resolve, 5100));
+      expect(getCommandStatus).toHaveBeenCalledTimes(1);
+      const stopping = stop(source); child.emit('close', 0, null); await stopping;
+      finishPoll({ complete: false }); await new Promise(resolve => setImmediate(resolve));
+      expect(getCommandStatus).toHaveBeenCalledTimes(1);
+      expect(connecting).toHaveBeenCalledTimes(1);
+    } finally { connecting.mockReset(); await stop(source); }
+  }, 10_000);
+
   it('rejects duplicate preparations; STOP permits fresh generation', async () => {
     const source = make({}); await prepare(source);
     await expect(prepare(source)).rejects.toThrow('already owned');

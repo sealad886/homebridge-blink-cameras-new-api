@@ -62,10 +62,12 @@ export interface BlinkCameraStreamingConfig {
     twoWay: boolean;
     codec: AudioCodecPreference;
     bitrate: number;
+    aacEldEncoder?: 'libfdk_aac';
   };
   video: {
     maxBitrate?: number;
     encoder: VideoEncoderPreference;
+    softwarePreset?: 'veryfast' | 'ultrafast';
   };
   verifyImmisTls: boolean;
   /** Path to save debug stream recordings (MPEG-TS files) */
@@ -101,6 +103,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   },
   video: {
     encoder: 'auto',
+    softwarePreset: 'veryfast',
   },
   verifyImmisTls: true,
   snapshotCacheTTL: 60,
@@ -130,10 +133,12 @@ export const resolveStreamingConfig = (
       twoWay,
       codec: audio.codec ?? DEFAULT_STREAMING_CONFIG.audio.codec,
       bitrate: audio.bitrate ?? DEFAULT_STREAMING_CONFIG.audio.bitrate,
+      aacEldEncoder: audio.aacEldEncoder,
     },
     video: {
       maxBitrate: video.maxBitrate ?? DEFAULT_STREAMING_CONFIG.video.maxBitrate,
       encoder: video.encoder ?? DEFAULT_STREAMING_CONFIG.video.encoder,
+      softwarePreset: video.softwarePreset === 'ultrafast' ? 'ultrafast' : 'veryfast',
     },
   };
 };
@@ -223,6 +228,11 @@ const redactFfmpegArgs = (args: string[]): string[] => {
 };
 
 const redactFfmpegOutput = (value: string): string => {
+  // FFmpeg debug option dumps separate the option name from its argument.
+  // Suppress the whole record instead of guessing where a secret ends.
+  if (/\bsrtp_(?:out|in)_params\b/i.test(value) && /\b(?:Reading|Applying) option\b/i.test(value)) {
+    return '<SRTP parameter diagnostic omitted>';
+  }
   return value
     .replace(/\b(?:immis|rtsps?):\/\/[^\s'"]+/gi, (url) => redactStreamUrl(url))
     .replace(/(-srtp_(?:out|in)_params\s+)(\S+)/gi, '$1<redacted>')
@@ -738,19 +748,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.liveviewUrl = originalUrl;
 
       let ffmpegInputUrl: string;
-      const readiness = commandId ? this.waitForLiveViewReady(commandId, originalUrl.startsWith('immis://') ? 2 : liveview.polling_interval ?? 5, originalUrl.startsWith('immis://') ? 30 : 6, owner) : Promise.resolve();
+      // IMMIS playback starts from the liveview response; command completion is
+      // terminal monitoring state, not permission to open the media connection.
+      const readiness = commandId && !originalUrl.startsWith('immis://')
+        ? this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5, 6, owner)
+        : Promise.resolve();
       readiness.catch(() => undefined);
 
       // Handle immis:// protocol using our proxy server
       if (originalUrl.startsWith('immis://')) {
         this.log(`Starting IMMIS proxy for proprietary stream protocol`);
-
-        // Create a promise that resolves when the Blink command is ready.
-        // This prevents the proxy from connecting to the immis server before
-        // the camera has finished initializing, which would cause immediate disconnect.
-        // For IMMIS streams, use aggressive polling (2s intervals, 30 attempts = 60s max)
-        // because HomeKit has a ~10s timeout expectation for initial stream data.
-        const readyPromise = readiness;
 
         const immisProxy = new ImmisProxyServer({
           immisUrl: originalUrl,
@@ -760,7 +767,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           debug: this.streamingConfig.ffmpegDebug,
           saveStreamPath: this.streamingConfig.debugStreamPath,
           verifyTls: this.streamingConfig.verifyImmisTls,
-          waitForReady: readyPromise,
         });
 
         immisProxy.on('error', (error) => {
@@ -801,10 +807,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       // This must happen AFTER FFmpeg is spawned to avoid HomeKit timeout
       const isImmisStream = originalUrl.startsWith('immis://');
       if (commandId) {
-        // For IMMIS streams, waitForLiveViewReady is already handled via the proxy's waitForReady promise
-        // For non-IMMIS streams, poll for readiness in background
-        // Start keep-alive immediately
-        // Readiness owns status polling until complete; keepalive starts afterward.
+        // IMMIS command monitoring is independent of media startup.
+        // Other inputs retain their existing readiness polling owner.
         void readiness
           .then(() => { if (this.ownsSession(sessionId, active)) this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval); })
           .catch(() => undefined);
@@ -1399,7 +1403,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           '-pix_fmt', 'yuv420p',
           '-profile:v', profileName,
           '-level:v', levelName,
-          '-preset', 'veryfast',
+          '-preset', this.streamingConfig.video.softwarePreset ?? 'veryfast',
           '-tune', 'zerolatency',
         ];
     }
@@ -1429,7 +1433,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     // Configure input based on URL type
     if (liveviewUrl === 'pipe:0') {
       args.push(
-        '-fflags', 'nobuffer',
+        // Retain demuxer probe packets: dropping the first IDR can leave
+        // short IMMIS sessions with audio but no decodable video.
         '-flags', 'low_delay',
         '-f', 'mpegts',
         '-i', liveviewUrl,
@@ -1449,6 +1454,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       '-r', `${video.fps}`,
       '-s', `${video.width}x${video.height}`,
       '-b:v', `${bitrate}k`,
+      '-maxrate', `${bitrate}k`,
       '-bufsize', `${bitrate}k`,
       '-payload_type', `${video.pt}`,
       '-ssrc', `${ssrcToSigned(session.videoSSRC)}`,
@@ -1500,7 +1506,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     return args;
   }
 
-  private buildAudioEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; }): string[] {
+  private buildAudioEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; packet_time?: number; }): string[] {
     const codec = typeof audio.codec === 'string'
       ? audio.codec.toUpperCase()
       : audio.codec;
@@ -1511,8 +1517,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     switch (codec) {
       case 'AAC-ELD':
       case this.hap.AudioStreamingCodecType.AAC_ELD:
+        if (!this.streamingConfig.audio.aacEldEncoder) throw new Error('AAC-ELD encoder is unavailable');
         return [
-          '-acodec', 'aac',
+          '-acodec', this.streamingConfig.audio.aacEldEncoder,
           '-profile:a', 'aac_eld',
           '-ar', `${sampleRate}k`,
           '-ac', `${channels}`,
@@ -1536,13 +1543,18 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         ];
       case 'OPUS':
       case this.hap.AudioStreamingCodecType.OPUS:
-      default:
+      default: {
+        const duration = audio.packet_time ?? 20;
+        if (![10, 20, 40, 60].includes(duration)) throw new Error('Unsupported Opus packet duration');
         return [
           '-acodec', 'libopus',
+          '-frame_duration', `${duration}`,
+          ...(this.streamingConfig.video.softwarePreset === 'ultrafast' ? ['-compression_level', '3'] : []),
           '-ar', `${sampleRate * 1000}`,
           '-ac', `${channels}`,
           '-b:a', `${bitrate}k`,
         ];
+      }
     }
   }
 
@@ -1623,7 +1635,7 @@ export function createCameraControllerOptions(
   const audioEnabled = streamingEnabled && resolved.audio.enabled;
 
   const audioCodecs = audioEnabled ? [
-    resolved.audio.codec === 'aac-eld'
+    resolved.audio.codec === 'aac-eld' && resolved.audio.aacEldEncoder
       ? { type: hap.AudioStreamingCodecType.AAC_ELD, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] }
       : resolved.audio.codec === 'pcma'
         ? { type: hap.AudioStreamingCodecType.PCMA, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }

@@ -305,3 +305,59 @@ physical live video/audio, STOP/reopen, manual refresh and two natural refreshes
 remain required. Intentional reboot confirmed by Andrew; F05/F06 remain open and
 stable-specific residual-risk disposition is still absent. Rollback must retain
 security guards or disable affected live streaming, never restore TLS bypass.
+
+## RC.6 playback and diagnostic corrections — 10 October 2026
+
+Issues #52 and #53 are separate correction units. Retained APK59.2
+BlinkWalnutLiveViewSessionManager.java396–417 configures URI/serial and invokes
+native playback immediately; display readiness arrives later at612–631.
+WalnutSignalling.smali1602 starts command monitoring independently of playback
+at1741. SupervisorKommand.java models numeric status and boolean completion.
+Current provider status bodies were not retained; do not claim their values.
+
+The old IMMIS startup gate waited on command completion for up to60 seconds.
+Observed RC.5 attempts ended after roughly29 and18 seconds with no TLS progress.
+RC.6 starts the verified, bounded private transport after consumer attachment,
+with command monitoring separately serialized. Existing destination/TLS,
+cancellation, framing/backpressure and retirement controls remain enforced.
+Regression coverage proves transport/auth/media progress before monitoring
+completion and prevents late monitoring from reviving a stopped generation.
+
+The diagnostic boundary suppresses Reading/Applying option records naming SRTP
+key parameters; ordinary progress remains redacted and bounded. Tests use dummy
+keys only, including fragmented records and final-buffer flush. Raw diagnostic
+receipts remain private. This does not close broader F05 process-argv exposure.
+
+Physical acceptance cannot be established before Andrew installs the successor
+registry artifact. Keep #52 open until runtime video/audio/STOP/reopen acceptance;
+close #53 only after independently reviewed regression delivery is verified.
+Do not claim full media/security acceptance from synthetic or native-prototype
+checks. Rollback retains security controls or disables live streaming.
+
+Pi5 performance investigation: host identity is verified Pi5 ModelB. Its H.264
+encoding is software; compiled encoder names do not establish working hardware.
+Potential video streamcopy requires verified H.264 profile/level, dimensions,
+frame rate and bitrate compatibility with HomeKit negotiation; do not enable it
+blindly. A faster software preset is a bounded optional tradeoff, whereas source
+inspection/adaptive copy requires further media evidence. No host settings changed.
+
+### RC.6 complete stream compatibility slice
+
+The same canonical FFmpeg builder owns MPEG-TS demux, H.264 conversion and
+separate video/audio RTP/SRTP outputs. A real local synthetic MPEG-TS input
+(H.264 plus AAC-LC) reproduced zero video packets with the old IMMIS `nobuffer`
+input flag. Removing that flag only from the private pipe preserves the initial
+keyframe. Matched video maximum bitrate/VBV limits constrain encoder output.
+Negotiated Opus packet duration is honored; Low CPU also selects Opus complexity
+3. AAC-ELD advertisement requires successful libfdk_aac encoding/RTP probes at
+both advertised sample rates; absent capability advertises Opus instead.
+
+The unpublished option is `softwareEncodingPreset`: balanced veryfast remains
+default, ultrafast is opt-in. Hardware video encoder settings stay unchanged.
+Synthetic loopback tests cover dummy-key video/audio RTP headers and timing;
+they do not establish provider media compatibility, decoded Home audio, Pi CPU
+savings, physical parity, or F05/F06 closure. Blind video/audio stream copying
+remains withheld until actual source parameters match controller negotiation.
+Existing queue, recording, failure-backoff and generation-owned shutdown bounds
+remain the stream's resource controls. Unsupported source variants require
+bounded failure and further evidence; no unconditional stream compatibility claim.
