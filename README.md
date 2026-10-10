@@ -525,3 +525,27 @@ The native worker is not enabled or distributed in the current npm runtime.
 - EU/Ireland hosted, Android-refresh, REST-bootstrap, and restart evidence;
   non-EU accounts are not live-validated and remain APK-derived plus
   mocked/parameterized pending authorized validation
+
+### Software encoding on smaller hosts
+
+`softwareEncodingPreset` defaults to `veryfast` (Balanced), preserving existing
+quality behavior. The optional `ultrafast` (Low CPU) setting uses ultrafast for
+libx264 and software fallback, plus Opus compression level 3. It reduces encoding
+work at the cost of compression efficiency: at the same bitrate, video/audio
+quality may decrease. Hardware video encoders retain their own settings; Opus
+still uses the selected audio complexity. Select it through the existing Streaming settings after
+installation and compare actual Home playback; no Pi configuration is changed
+by publication. Pi5 uses software H.264 encoding. A compiled hardware encoder
+name alone does not prove usable acceleration.
+
+This option still transcodes video. Automatic H.264 passthrough is not enabled:
+source codec/profile/level, dimensions, frame rate and bitrate must first be
+verified against HomeKit negotiation. Audio conversion may remain necessary.
+
+Audio is decoded from the source container and converted to the negotiated
+HomeKit codec, sample rate, channels, bitrate and packet duration. Opus supports
+10/20/40/60 ms packets. AAC-ELD is advertised only after a bounded local encoding
+and RTP capability probe; unavailable AAC-ELD falls back to advertised Opus.
+Video and audio use separate negotiated RTP/SRTP outputs. IMMIS retains the
+initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
+private-pipe backpressure and bounded session cleanup still apply.

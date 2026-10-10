@@ -37,7 +37,7 @@ import {
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
-import { probeVideoEncoder } from './accessories/encoder-probe';
+import { probeAacEldEncoder, probeVideoEncoder } from './accessories/encoder-probe';
 import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { withResponseBudget } from './operation-budget';
@@ -104,6 +104,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioBitrate?: number;
   videoBitrate?: number;
   videoEncoder?: VideoEncoderPreference;
+  softwareEncodingPreset?: 'veryfast' | 'ultrafast';
   verifyImmisTls?: boolean;
   debugAuth?: boolean;
   authLocked?: boolean;
@@ -184,6 +185,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       video: {
         maxBitrate: this.config.videoBitrate,
         encoder: this.config.videoEncoder,
+        softwarePreset: this.config.softwareEncodingPreset,
       },
     });
 
@@ -412,6 +414,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         );
         (this.streamingConfig.video as { encoder: VideoEncoderPreference }).encoder = probe.selected;
         this.log.info(`Video encoder resolved to: ${probe.selected}`);
+      }
+
+      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.codec === 'aac-eld') {
+        if (await probeAacEldEncoder(this.streamingConfig.ffmpegPath)) {
+          this.streamingConfig.audio.aacEldEncoder = 'libfdk_aac';
+        } else {
+          this.streamingConfig.audio.codec = 'opus';
+          this.log.warn('AAC-ELD encoding is unavailable; advertising Opus audio instead.');
+        }
       }
 
       await this.apiClient.login(this.config.twoFactorCode);

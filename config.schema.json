@@ -177,6 +177,16 @@
         "minimum": 300,
         "maximum": 8000
       },
+      "softwareEncodingPreset": {
+        "title": "Software Stream Encoding",
+        "description": "Low CPU uses ultrafast for libx264 (including software fallback) and lower Opus encoding complexity. It may reduce video/audio quality at the same bitrate. Hardware video encoders keep their own settings.",
+        "type": "string",
+        "default": "veryfast",
+        "oneOf": [
+          { "title": "Balanced (current default)", "enum": ["veryfast"] },
+          { "title": "Low CPU", "enum": ["ultrafast"] }
+        ]
+      },
       "videoEncoder": {
         "title": "Video Encoder",
         "description": "Preferred FFmpeg video encoder. Auto probes available hardware encoders at startup (dry-run test) and selects the first working one; falls back to software libx264 if none found.",
@@ -303,6 +313,7 @@
         "audioBitrate",
         "videoBitrate",
         "videoEncoder",
+        "softwareEncodingPreset",
         "rtspTransport",
         "ffmpegDebug",
         "debugStreamPath"

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.6] - 2026-10-10
+
+### Added
+
+- Optional Low CPU software encoding preset (`softwareEncodingPreset: ultrafast`); retain the existing balanced `veryfast` default. The tradeoff is lower compression efficiency and potentially reduced picture quality at the same bitrate.
+
+### Fixed
+
+- Start IMMIS media from the liveview response rather than waiting for terminal command completion; keep command monitoring serialized and independent of media connection startup.
+- Preserve the initial MPEG-TS video keyframe instead of discarding probed frames; enforce video VBV maximum bitrate.
+- Honor negotiated Opus packet duration and use lower Opus complexity with Low CPU. Advertise AAC-ELD only after successful encoding/RTP capability checks; otherwise advertise Opus.
+- Suppress FFmpeg option-parsing diagnostics that contain SRTP key parameters, including fragmented and final-buffer records.
+
+### Acceptance
+
+- The known startup gate and diagnostic exposure have regression coverage. Physical live video/audio, STOP/reopen and manual snapshot acceptance remain required on the installed candidate.
+- F05/F06 remain open. This release does not remove secret-bearing FFmpeg argv or establish complete RTSP destination enforcement. Operator installation starts a fresh observation window.
+
 ## [0.10.0-rc.5] - 2026-10-08
 
 ### Fixed

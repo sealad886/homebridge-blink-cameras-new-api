@@ -52,6 +52,10 @@ type CameraSourcePrivateAccess = CameraSourceFfmpegAccess & {
 };
 
 describe('Accessory handlers', () => {
+  it('keeps the balanced software preset for absent or invalid settings', () => {
+    expect(resolveStreamingConfig().video.softwarePreset).toBe('veryfast');
+    expect(resolveStreamingConfig({ video: { softwarePreset: 'invalid' as any } }).video.softwarePreset).toBe('veryfast');
+  });
   it.each([
     new BlinkTokenRefreshError('temporary'),
     new BlinkTokenRefreshError('storage'),
@@ -840,6 +844,7 @@ describe('Accessory handlers', () => {
         codec: hap.AudioStreamingCodecType.OPUS,
         channel: 1,
         sample_rate: hap.AudioStreamingSamplerate.KHZ_24,
+        packet_time: 40,
         max_bit_rate: 24,
         pt: 110,
       },
@@ -849,6 +854,10 @@ describe('Accessory handlers', () => {
     const args = ffmpegSource.buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
     const argString = args.join(' ');
 
+    expect(argString).toContain('-frame_duration 40');
+    expect(argString).toContain('-ar 24000');
+    expect(argString).toContain('-ac 1');
+    expect(argString).toContain('-maxrate 300k');
     expect(argString).toContain('localrtpport=5100');
     expect(argString).toContain('localrtcpport=5102');
     expect(argString).toContain('localrtpport=5101');
@@ -917,7 +926,7 @@ describe('Accessory handlers', () => {
     expect(argString).not.toContain('-level:v 4.0');
   });
 
-  it('redacts live stream URLs from stream start and FFmpeg debug logs', () => {
+  it.each(['veryfast', 'ultrafast'] as const)('redacts live stream diagnostics with software preset %s', (softwarePreset) => {
     const hap = createHap();
     const logFn = jest.fn();
     const apiClient = {
@@ -940,7 +949,7 @@ describe('Accessory handlers', () => {
         jest.fn(),
         () => true,
         logFn,
-        { enabled: true, ffmpegDebug: true },
+        { enabled: true, ffmpegDebug: true, video: { softwarePreset } },
       );
 
       const session = {
@@ -1009,6 +1018,15 @@ describe('Accessory handlers', () => {
       expect(logs).not.toContain('video-srtp-secret');
       expect(logs).not.toContain('audio-srtp-secret');
 
+      ffmpegProcess.stderr.emit('data', Buffer.from("Reading option '-srtp_out_params' ... matched as AVOption 'srtp_out_params' with argument 'dummy-"));
+      ffmpegProcess.stderr.emit('data', Buffer.from("quoted-key'.\nframe=3 ready\n"));
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain('dummy-quoted-key');
+      ffmpegProcess.stderr.emit('data', Buffer.from("Applying option srtp_in_params with argument 'dummy-input-key'.\n"));
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain('dummy-input-key');
+      expect(logs).toContain('frame=3 ready');
+
       ffmpegProcess.stderr.emit(
         'data',
         Buffer.from(
@@ -1022,7 +1040,12 @@ describe('Accessory handlers', () => {
       expect(logs).not.toContain('client-secret');
       expect(logs).not.toContain('stream-secret');
       expect(logs).not.toContain('conn-secret');
+      ffmpegProcess.stderr.emit('data', Buffer.from("Reading option '-srtp_in_params' with argument 'dummy-flush-key'."));
+      (spawnMock.mock.results[0].value as { emit: (event: string, code: number) => void }).emit('close', 0);
+      logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain('dummy-flush-key');
       expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.arrayContaining(['-i', sensitiveUrl]));
+      expect(spawnMock.mock.calls[0][1]).toEqual(expect.arrayContaining(['-preset', softwarePreset]));
     } finally {
       spawnMock.mockClear();
     }
@@ -1478,6 +1501,17 @@ describe('Accessory handlers', () => {
     expect(spawnMock).not.toHaveBeenCalled();
     expect(callback).toHaveBeenCalledWith(expect.any(Error));
     expect(privateSource.pendingSessions.has('new-session')).toBe(false);
+  });
+
+  it.each([false, true])('advertises AAC-ELD only with proven encoder capability (%s)', (available) => {
+    const hap = createHap();
+    const options = createCameraControllerOptions(hap as unknown as HAP, {} as never, {
+      enabled: true,
+      audio: { enabled: true, codec: 'aac-eld', ...(available ? { aacEldEncoder: 'libfdk_aac' as const } : {}) },
+    });
+    expect(options.streamingOptions?.audio?.codecs?.[0].type).toBe(
+      available ? 'AAC-eld' : 'OPUS',
+    );
   });
 
   it('advertises 30fps HomeKit streaming profiles for smoother playback', () => {
