@@ -37,6 +37,8 @@ jobs:
       - name: Verify synthetic video/audio stream packaging
         if: matrix.node-version == 24
         run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
           ffmpeg -version
           node scripts/media-pipeline-smoke.cjs
       - name: Check maintained OAuth diagnostic scripts
