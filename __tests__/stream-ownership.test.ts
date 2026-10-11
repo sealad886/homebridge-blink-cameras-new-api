@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import * as tls from 'node:tls';
-jest.mock('node:tls', () => ({ connect: jest.fn() }));
+jest.mock('node:tls', () => ({ ...jest.requireActual('node:tls'), connect: jest.fn() }));
 import { BlinkCameraSource } from '../src/accessories/camera-source';
 import { createHap } from './helpers/homebridge';
 

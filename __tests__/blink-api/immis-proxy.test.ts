@@ -7,6 +7,7 @@ import type { WriteStream } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
+import { IMMIS_VENDOR_CA } from '../../src/blink-api/immis-trust';
 import { lookup } from 'node:dns/promises';
 jest.mock('node:dns/promises', () => ({ lookup: jest.fn(async () => [{ address: '8.8.8.8', family: 4 }]) }));
 const flushResolution = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
@@ -138,7 +139,8 @@ describe('ImmisProxyServer private consumer', () => {
     await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     expect(lookup).not.toHaveBeenCalled();
     expect(tls.connect).toHaveBeenCalledWith(expect.objectContaining({ host: '8.8.8.8', port: 443,
-      servername: '*.immedia-semi.com', rejectUnauthorized: true, minVersion: 'TLSv1.2' }), expect.any(Function));
+      servername: '*.immedia-semi.com', rejectUnauthorized: true, minVersion: 'TLSv1.2',
+      ca: expect.arrayContaining([...tls.rootCertificates, ...IMMIS_VENDOR_CA]) }), expect.any(Function));
     if (authorized) {
       expect(socket.write).toHaveBeenCalledTimes(1);
     } else {
@@ -148,6 +150,28 @@ describe('ImmisProxyServer private consumer', () => {
       expect(errors).toHaveBeenCalledTimes(1);
       await proxy.whenClosed;
     }
+  });
+
+  it.each([
+    ['DEPTH_ZERO_SELF_SIGNED_CERT', 'certificate_trust'],
+    ['ERR_TLS_CERT_ALTNAME_INVALID', 'certificate_identity'],
+    ['ECONNREFUSED', 'connection_refused'],
+    ['ECONNRESET', 'connection_reset'],
+    ['ENETUNREACH', 'network_unreachable'],
+    ['ETIMEDOUT', 'handshake_timeout'],
+    ['UNKNOWN_SECRET_CODE', 'handshake_error'],
+  ])('reports bounded %s rejection without authenticating or leaking details', async (code, reason) => {
+    const log = jest.fn();
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://8.8.8.8/?client_id=1', serial: 'TEST', log });
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn() }) as unknown as tls.TLSSocket;
+    (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    socket.emit('error', Object.assign(new Error('SECRET session https://private.example/token'), { code }));
+    expect(socket.write).not.toHaveBeenCalled();
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.flat().join(' ')).toContain(`reason=${reason}`);
+    expect(log.mock.calls.flat().join(' ')).not.toMatch(/SECRET|private\.example|UNKNOWN_SECRET_CODE/);
+    socket.emit('close'); await proxy.whenClosed;
   });
 
   it.each(['immis://evil.test/?client_id=1', 'immis://media.immedia-semi.com:444/?client_id=1',
@@ -802,7 +826,7 @@ describe('ImmisProxyServer security controls', () => {
     };
     const captures = async () => (await fs.readdir(path.join(tmpDir, 'blink-stream-recordings'))).filter(file => file.endsWith('.ts'));
     try {
-      for (const name of ['immis-proxy', 'network-diagnostics', 'media-destination', 'bounded-dns']) {
+      for (const name of ['immis-proxy', 'immis-trust', 'network-diagnostics', 'media-destination', 'bounded-dns']) {
         const source = await fs.readFile(path.join(__dirname, '../../src/blink-api', `${name}.ts`), 'utf8');
         await fs.writeFile(path.join(runtime, `${name}.js`), transpileModule(source, {
           compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },

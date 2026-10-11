@@ -307,9 +307,10 @@ to `libx264` if the hardware encoder cannot be started.
 > [!NOTE]
 > The automatic encoder selection has been tested on a limited set of hardware (macOS with VideoToolbox and Raspberry Pi with V4L2). If you run into choppy streams, encoding errors, or unexpected fallback to software encoding on your platform, please [open an issue](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/new) with your hardware details and FFmpeg debug logs (`ffmpegDebug: true`).
 
-IMMIS live streams always verify the upstream TLS certificate and hostname. The former
+IMMIS live streams always verify the upstream TLS certificate and hostname, using
+Node bundled public roots plus the official Blink vendor anchors only for IMMIS. The former
 `verifyImmisTls` bypass is removed from the UI and ignored in existing configuration. IMMIS
-admits only `immedia-semi.com` hosts on port 443 and public DNS addresses; a refused
+admits only `immedia-semi.com` hosts or canonical public IPv4 authorities on port 443; a refused
 endpoint disables that stream. This conservative restriction still requires real
 provider acceptance. Full RTSP destination control and secret-free FFmpeg execution
 remain open security work. When

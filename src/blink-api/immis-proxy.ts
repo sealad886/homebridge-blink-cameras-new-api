@@ -20,9 +20,24 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as tls from 'node:tls';
+import { IMMIS_VENDOR_CA } from './immis-trust';
 import { describeMediaDestination, resolveMediaDestination, MediaDestination, MediaAddress } from './media-destination';
 import { URL } from 'node:url';
 import { recordSecurityBoundaryEvent } from './network-diagnostics';
+
+/** Fixed diagnostic categories; never retain a raw TLS error or endpoint. */
+function tlsFailureReason(error: Error): string {
+  const code = (error as Error & { code?: string }).code;
+  if (code === 'ERR_TLS_CERT_ALTNAME_INVALID') return 'certificate_identity';
+  if (['DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED',
+    'CERT_NOT_YET_VALID', 'CERT_REVOKED', 'CERT_UNTRUSTED', 'CERT_REJECTED'].includes(code ?? '')) return 'certificate_trust';
+  if (code === 'ECONNREFUSED') return 'connection_refused';
+  if (code === 'ECONNRESET') return 'connection_reset';
+  if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') return 'network_unreachable';
+  if (code === 'ETIMEDOUT') return 'handshake_timeout';
+  return 'handshake_error';
+}
 
 export interface ImmisProxyConfig {
   /** The immis:// URL from the liveview API response */
@@ -580,9 +595,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       globalThis.clearTimeout(timer);
       if (this.cancelHandshake === clearHandshake) this.cancelHandshake = null;
     };
-    const refuseHandshake = () => {
+    const logRejection = (reason: string) => {
+      this.log(`IMMIS TLS candidate rejected (reason=${reason}, family=${this.candidates[this.candidateIndex].family}, attempt=${this.candidateIndex + 1}/${this.candidates.length})`);
+    };
+    const refuseHandshake = (reason: string) => {
       if (handshakeFailed || verified) return;
       handshakeFailed = true;
+      logRejection(reason);
       clearHandshake();
       this.cancelHandshake = clearHandshake;
       timer = globalThis.setTimeout(() => {
@@ -597,12 +616,15 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         host: address,
         port: 443,
         rejectUnauthorized: true,
+        // Explicit CA replaces Node defaults: preserve bundled public roots and
+        // add the official vendor roots only for this admitted IMMIS socket.
+        ca: [...tls.rootCertificates, ...IMMIS_VENDOR_CA],
         servername: hostname,
         minVersion: 'TLSv1.2',
       },
       () => {
         if (!this.isRunning || this.targetSocket !== socket || handshakeFailed) return;
-        if (socket.authorized !== true) { refuseHandshake(); return; }
+        if (socket.authorized !== true) { refuseHandshake('certificate_trust'); return; }
         verified = true;
         this.verifiedSocket = socket;
         clearHandshake();
@@ -622,7 +644,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       return;
     }
     this.cancelHandshake = clearHandshake;
-    timer = globalThis.setTimeout(refuseHandshake, 5000);
+    timer = globalThis.setTimeout(() => refuseHandshake('handshake_timeout'), 5000);
     this.targetSocket = socket;
     this.trackClosure(socket);
     socket.on('data', (data: Buffer) => {
@@ -631,7 +653,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     socket.on('error', (error) => {
       if (!this.isRunning || this.targetSocket !== socket) return;
-      if (!verified) { refuseHandshake(); return; }
+      if (!verified) { refuseHandshake(tlsFailureReason(error)); return; }
       // Ignore APPLICATION_DATA_AFTER_CLOSE_NOTIFY SSL errors
       if (error.message.includes('APPLICATION_DATA_AFTER_CLOSE_NOTIFY')) {
         this.debug('Ignoring SSL close notify error');
@@ -646,6 +668,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       if (this.verifiedSocket === socket) this.verifiedSocket = null;
       if (this.targetSocket !== socket) return;
       this.blockedWriters.get(socket)?.();
+      if (!verified && !handshakeFailed && this.isRunning) logRejection('closed_before_handshake');
       this.debug('Immis connection closed');
       if (this.keepAliveInterval) globalThis.clearInterval(this.keepAliveInterval);
       this.keepAliveInterval = null;

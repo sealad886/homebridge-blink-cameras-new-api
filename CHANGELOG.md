@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.8] - 2026-10-11
+
+### Fixed
+
+- Authenticate IMMIS servers using the official Blink app's vendor certificate anchors, scoped to IMMIS alongside Node bundled public roots. The provider's self-signed certificate was rejected by default trust. Certificate/hostname verification, public destination admission and bounded connection/cleanup controls remain mandatory.
+- Report bounded TLS rejection reasons without exposing endpoint addresses, raw errors or session credentials.
+
+### Acceptance
+
+- A current strict provider handshake verifies the peer with the source-backed anchors. This proves TLS authentication, not Home video/audio playback. Fresh installed Home video/audio, STOP/reopen, manual snapshots and 48-hour/two-natural-refresh observation remain required.
+- No Pi installation, restart, configuration or global trust changes. F05/F06 remain open; no comprehensive security-resolution claim.
+
 ## [0.10.0-rc.7] - 2026-10-11
 
 ### Fixed
