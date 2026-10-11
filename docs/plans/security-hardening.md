@@ -361,3 +361,36 @@ remains withheld until actual source parameters match controller negotiation.
 Existing queue, recording, failure-backoff and generation-owned shutdown bounds
 remain the stream's resource controls. Unsupported source variants require
 bounded failure and further evidence; no unconditional stream compatibility claim.
+
+### RC.7 audio negotiation correction
+
+RC.6 physical acceptance failed before encoder launch: Home selected AAC-ELD
+while actual live HAP readback advertised only Opus on four camera services.
+Client caching is a hypothesis, not an established cause. The Pi's existing
+system FFmpeg lacked FDK AAC. Source inspection also found that the AAC-ELD
+probe and streaming arguments omitted required global codec headers; a short
+silence probe did not reliably flush RTP packets.
+
+Readback of the actual explicit Pi ffmpegPath showed an existing FDK AAC,
+Opus and H.264-capable executable. Its identity differs from system FFmpeg;
+the system encoder inventory cannot establish configured runtime capability.
+RC.7 retains the operator-managed executable and configuration. The pinned
+Homebridge FFmpeg package (2.1.7, Node 20-compatible) is development/CI tooling
+only, enabling real AAC-ELD pipeline tests without distributing a binary in the
+plugin or installing anything on the Pi. No runtime download, new media
+coordinator or host-setting migration is introduced. This is not WI-07 secure
+worker delivery and does not close F05/F06 or establish five-target acceptance.
+
+AAC-ELD uses global headers and a bounded one-second dummy-tone RTP probe at
+16/24 kHz. Validated capability permits both AAC-ELD and Opus advertisement,
+with configured preference first. Selected codec is encoded as negotiated;
+unknown or unavailable selections fail before vendor allocation. Real HAP tests
+cover advertised TLV values and restored-service replacement, correcting the
+old numeric audio-enum mock. Existing generation retirement, private pipes,
+backoff, queue and diagnostic controls remain owned by their current modules.
+
+Release evidence belongs in logs/rc7-release-2026-10-11. Issue #52 remains open
+until installed Home video/audio, STOP/reopen and manual refresh are verified.
+Operator owns installation and a new exact-runtime observation window. A failed
+AAC-ELD probe must not silently advertise unsupported capability or relabel
+Opus payloads as AAC-ELD; retain the guard and investigate installation evidence.

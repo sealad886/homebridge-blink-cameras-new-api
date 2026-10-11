@@ -416,12 +416,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         this.log.info(`Video encoder resolved to: ${probe.selected}`);
       }
 
-      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.codec === 'aac-eld') {
+      if (this.streamingConfig.enabled && this.streamingConfig.audio.enabled) {
         if (await probeAacEldEncoder(this.streamingConfig.ffmpegPath)) {
           this.streamingConfig.audio.aacEldEncoder = 'libfdk_aac';
         } else {
-          this.streamingConfig.audio.codec = 'opus';
-          this.log.warn('AAC-ELD encoding is unavailable; advertising Opus audio instead.');
+          if (this.streamingConfig.audio.codec === 'aac-eld') {
+            this.streamingConfig.audio.codec = 'opus';
+            this.log.warn('AAC-ELD encoding is unavailable; advertising Opus audio instead.');
+          }
         }
       }
 
