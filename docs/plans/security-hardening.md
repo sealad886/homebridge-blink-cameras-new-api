@@ -394,3 +394,17 @@ until installed Home video/audio, STOP/reopen and manual refresh are verified.
 Operator owns installation and a new exact-runtime observation window. A failed
 AAC-ELD probe must not silently advertise unsupported capability or relabel
 Opus payloads as AAC-ELD; retain the guard and investigate installation evidence.
+
+## RC.8 IMMIS vendor trust correction — 11 October 2026
+
+RC.7 physical acceptance failed upstream TLS despite corrected AAC-ELD/Opus
+advertisement. A current strict handshake establishes missing vendor trust anchors:
+Node defaults reject the self-signed Blink peer; official APK anchors authenticate
+the identical peer with mandatory hostname/chain verification. Scoped repair and
+source provenance are recorded in
+[the trust audit](../audits/2026-10-11-immis-tls-trust.md).
+
+This extends WI-05 IMMIS provider feasibility, preserves destination/lifecycle
+guards and adds bounded reason diagnostics. It does not close F05/F06, satisfy
+native-worker/five-target gates or close #52 without installed physical acceptance.
+A fresh reviewed RC and operator installation restart observation.
