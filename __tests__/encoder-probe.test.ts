@@ -206,7 +206,7 @@ describe('AAC-ELD capability', () => {
 
   it.each([0, 1])('requires successful encoding and RTP muxing (exit %s)', async (code) => {
     mockExecFile.mockImplementation((_cmd, args, opts, callback) => {
-      expect(args).toEqual(expect.arrayContaining(['libfdk_aac', 'aac_eld', 'rtp']));
+      expect(args).toEqual(expect.arrayContaining(['libfdk_aac', 'aac_eld', '-flags:a', '+global_header', 'rtp']));
       expect(args.at(-1)).toBe('rtp://127.0.0.1:40000?pkt_size=1200');
       expect(opts.timeout).toBe(5000);
       const packet = Buffer.alloc(20);
@@ -219,8 +219,8 @@ describe('AAC-ELD capability', () => {
     expect(mockExecFile).toHaveBeenCalledTimes(code === 0 ? 2 : 1);
     if (!code) {
       expect(mockExecFile.mock.calls.map(call => call[1])).toEqual([
-        expect.arrayContaining(['anullsrc=r=16000:cl=mono']),
-        expect.arrayContaining(['anullsrc=r=24000:cl=mono']),
+        expect.arrayContaining(['sine=frequency=440:sample_rate=16000']),
+        expect.arrayContaining(['sine=frequency=440:sample_rate=24000']),
       ]);
     }
     expect(sockets.every(socket => socket.close.mock.calls.length === 1)).toBe(true);

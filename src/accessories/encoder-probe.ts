@@ -216,8 +216,10 @@ export async function probeAacEldEncoder(ffmpegPath: string): Promise<boolean> {
       const address = sink.address();
       if (typeof address === 'string' || socketFailed) return false;
       const result = await execFilePromise(ffmpegPath, [
-        '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `anullsrc=r=${rate}:cl=mono`,
-        '-t', '0.1', '-c:a', 'libfdk_aac', '-profile:a', 'aac_eld',
+        '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=${rate}`,
+        '-t', '1', '-c:a', 'libfdk_aac', '-profile:a', 'aac_eld', '-flags:a', '+global_header',
+        '-ac', '1', '-b:a', '32k',
+        '-max_delay', '0',
         '-f', 'rtp', '-payload_type', '110', `rtp://127.0.0.1:${address.port}?pkt_size=1200`,
       ], PROBE_TIMEOUT_MS);
       if (result.exitCode !== 0 || socketFailed) return false;

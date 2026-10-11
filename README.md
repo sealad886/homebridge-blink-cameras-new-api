@@ -43,7 +43,9 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 - **Node.js** 20, 22, or 24 LTS
 - A Blink account
 
-For the core HomeKit features (arm/disarm, motion, doorbell events, snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it (for example if Homebridge is running as a service user on Debian/Ubuntu).
+For the core HomeKit features (arm/disarm, motion, doorbell events, snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it. Set `ffmpegPath` to the executable when it is outside PATH.
+
+Home can select AAC-ELD even when an accessory advertises Opus. AAC-ELD requires verified `libfdk_aac` RTP output. The plugin probes a bounded dummy tone at 16/24 kHz with global codec headers before advertising AAC-ELD alongside Opus. It uses the negotiated codec and flushes each AAC access unit to avoid long packet batches. An executable without FDK AAC may refuse Home's AAC-ELD selection before requesting vendor media; inspect encoder capabilities rather than resetting pairing or disabling security checks. Runtime executables are operator-managed; the plugin does not download or install FFmpeg at startup.
 
 > [!NOTE]
 > If Homebrew installs FFmpeg as keg-only, set `ffmpegPath` in the plugin config to the full binary path.
@@ -142,7 +144,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required only for streaming) |
-| `ffmpegPath` | No | `ffmpeg` | Path to the FFmpeg binary |
+| `ffmpegPath` | No | `ffmpeg` | Executable path; AAC-ELD requires verified FDK AAC support |
 | `ffmpegDebug` | No | `false` | Log FFmpeg debug output |
 | `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |

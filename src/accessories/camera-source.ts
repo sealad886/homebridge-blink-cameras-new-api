@@ -732,6 +732,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     this.ongoingSessions.set(sessionId, active);
 
     try {
+      // Validate the selected codec before allocating a remote liveview. Home
+      // may retain a previously advertised codec across an accessory update.
+      if (this.streamingConfig.audio.enabled && request.audio) this.buildAudioEncoderArgs(request.audio);
       const liveview = await this.requestLiveView();
       active.commandId = liveview.command_id ?? liveview.id;
       if (!this.ownsSession(sessionId, active)) {
@@ -1521,6 +1524,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         return [
           '-acodec', this.streamingConfig.audio.aacEldEncoder,
           '-profile:a', 'aac_eld',
+          '-flags:a', '+global_header',
+          // Flush each AAC access unit instead of batching until the RTP MTU.
+          '-max_delay', '0',
           '-ar', `${sampleRate}k`,
           '-ac', `${channels}`,
           '-b:a', `${bitrate}k`,
@@ -1542,8 +1548,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           '-b:a', `${bitrate}k`,
         ];
       case 'OPUS':
-      case this.hap.AudioStreamingCodecType.OPUS:
-      default: {
+      case this.hap.AudioStreamingCodecType.OPUS: {
         const duration = audio.packet_time ?? 20;
         if (![10, 20, 40, 60].includes(duration)) throw new Error('Unsupported Opus packet duration');
         return [
@@ -1555,6 +1560,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           '-b:a', `${bitrate}k`,
         ];
       }
+      default:
+        throw new Error('Unsupported selected audio codec');
     }
   }
 
@@ -1643,6 +1650,16 @@ export function createCameraControllerOptions(
           ? { type: hap.AudioStreamingCodecType.PCMU, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
           : { type: hap.AudioStreamingCodecType.OPUS, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] },
   ] : [];
+
+  // Offer both HomeKit codecs only when the AAC-ELD encoder passed its RTP
+  // probe. Keep the configured preference first, without substituting payloads.
+  if (audioEnabled && resolved.audio.aacEldEncoder &&
+      (resolved.audio.codec === 'aac-eld' || resolved.audio.codec === 'opus')) {
+    audioCodecs.push({
+      type: resolved.audio.codec === 'aac-eld' ? hap.AudioStreamingCodecType.OPUS : hap.AudioStreamingCodecType.AAC_ELD,
+      samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24],
+    });
+  }
 
   return {
     cameraStreamCount: streamingEnabled ? resolved.maxStreams : 0,

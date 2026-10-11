@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.7] - 2026-10-11
+
+### Fixed
+
+- Set AAC-ELD global codec headers in both capability probes and live RTP output. Probe a bounded dummy tone at 16/24 kHz; short silence did not reliably flush RTP packets.
+- Offer AAC-ELD and Opus together only after verified AAC-ELD RTP output, preserving configured preference. Reject unsupported audio selections before remote liveview allocation, without substituting another codec into the negotiated payload.
+
+### Installation and acceptance
+
+- Retain the operator-managed FFmpeg executable and configuration. The pinned Homebridge FFmpeg package is development/CI test tooling only; this plugin does not install a runtime encoder or change host settings.
+- Flush AAC access units individually rather than batching about 384 ms of audio. Synthetic tests authenticate/decrypt dummy SRTP and verify single-AU framing at both advertised sample rates.
+- Actual Pi video/audio, STOP/reopen, manual snapshots and a fresh 48-hour/two-natural-refresh observation remain required. Synthetic AAC-ELD/Opus RTP tests do not establish physical playback or Pi CPU savings. F05/F06 remain open; no comprehensive security-resolution claim.
+
 ## [0.10.0-rc.6] - 2026-10-10
 
 ### Added
