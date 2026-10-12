@@ -552,3 +552,5 @@ and RTP capability probe; unavailable AAC-ELD falls back to advertised Opus.
 Video and audio use separate negotiated RTP/SRTP outputs. IMMIS retains the
 initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
 private-pipe backpressure and bounded session cleanup still apply.
+
+IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Physical video/audio acceptance remains required for each installed RC.

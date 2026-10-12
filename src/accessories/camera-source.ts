@@ -813,7 +813,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         // IMMIS command monitoring is independent of media startup.
         // Other inputs retain their existing readiness polling owner.
         void readiness
-          .then(() => { if (this.ownsSession(sessionId, active)) this.startKeepAlive(sessionId, commandId, liveview.continue_interval ?? liveview.polling_interval); })
+          .then(() => { if (this.ownsSession(sessionId, active)) this.startKeepAlive(sessionId, commandId, liveview.polling_interval); })
           .catch(() => undefined);
       }
 
@@ -944,16 +944,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private startKeepAlive(sessionId: string, commandId: number, intervalSeconds?: number): void {
-    if (!intervalSeconds || intervalSeconds <= 0) {
-      return;
-    }
-
     const active = this.ongoingSessions.get(sessionId);
     if (!active) {
       return;
     }
 
-    const intervalMs = Math.max(5, Math.min(60, intervalSeconds - 2)) * 1000;
+    // continue_interval belongs to the vendor's Continue button. Command
+    // liveness uses polling_interval and an immediate first GET, like the app.
+    const intervalMs = Math.max(1, Math.min(60,
+      typeof intervalSeconds === 'number' && Number.isFinite(intervalSeconds) && intervalSeconds > 0 ? intervalSeconds : 5)) * 1000;
     const poll = async (): Promise<void> => {
       if (!this.ownsSession(sessionId, active)) return;
       try {
@@ -962,7 +961,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       } catch { if (!this.ownsSession(sessionId, active)) return; this.logError('Live view polling failed'); }
       active.keepAliveTimer = setTimeout(() => { void poll(); }, intervalMs);
     };
-    active.keepAliveTimer = setTimeout(() => { void poll(); }, intervalMs);
+    void poll();
   }
 
   private buildTalkbackSdp(
