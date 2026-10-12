@@ -103,6 +103,29 @@ describe('BlinkCamerasPlatform', () => {
     jest.useRealTimers();
   });
 
+  it('keeps output quality global and input quality isolated by camera', () => {
+    hapApi = createApi() as unknown as MockAPI;
+    (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
+      ...config, outputQuality: '720p15',
+      deviceSettingOverrides: [{ deviceIdentifier: 'source-camera', inputQuality: 'saver' }],
+    }, hapApi);
+    expect(platform.streamingConfig.video.outputQuality).toBe('720p15');
+    expect(platform.getDeviceInputQuality({ id: 1, serial: 'source-camera' })).toBe('saver');
+    expect(platform.getDeviceInputQuality({ id: 2, serial: 'other-camera' })).toBe('auto');
+  });
+
+  it('rejects unknown quality configuration rather than applying vendor settings', () => {
+    hapApi = createApi() as unknown as MockAPI;
+    (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());
+    expect(() => new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
+      ...config, deviceSettingOverrides: [{ deviceIdentifier: '1', inputQuality: '2k' as never }],
+    }, hapApi!)).toThrow('Invalid per-camera input quality');
+    expect(() => new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
+      ...config, outputQuality: 'unbounded' as never,
+    }, hapApi!)).toThrow('Invalid output quality profile');
+  });
+
   it('registers new accessories from homescreen data', async () => {
     hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;

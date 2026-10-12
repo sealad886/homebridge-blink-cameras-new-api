@@ -42,6 +42,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   private pendingMotionOperations = 0;
   private motionIntentRevision = 0;
   private failedMotionTarget?: boolean;
+  private inputQualityObservationPending = false;
 
   private isDeviceAvailable(): boolean {
     const status = this.device.status?.trim().toLowerCase();
@@ -131,6 +132,36 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       this.platform.streamingConfig,
       (msg) => this.platform.log.error(`[${device.name}] ${msg}`),
+      async (options) => {
+        const quality = this.platform.getDeviceInputQuality(this.device);
+        const remember = (state: { quality?: string }) => {
+          if (!options.signal?.aborted && state.quality && !this.accessory.context.initialInputQuality) {
+            this.accessory.context.initialInputQuality = state.quality;
+            this.platform.api.updatePlatformAccessories([this.accessory]);
+          }
+        };
+        if (quality === 'auto') {
+          // Observation must not delay default startup. The request retains the
+          // generation's cancellation/deadline and only one read may be pending.
+          if (!this.accessory.context.initialInputQuality && !this.inputQualityObservationPending) {
+            this.inputQualityObservationPending = true;
+            void this.platform.apiClient.getDeviceVideoQuality(cameraSourceType, this.device.network_id, this.device.id, options)
+              .then(remember)
+              .catch(() => this.platform.log.debug(`[${device.name}] Input quality metadata unavailable`))
+              .finally(() => { this.inputQualityObservationPending = false; });
+          }
+          return;
+        }
+        const state = await this.platform.apiClient.setDeviceVideoQuality(cameraSourceType, this.device.network_id, this.device.id, quality, options);
+        remember(state);
+      },
+      (observation) => {
+        if (!this.accessory.context.initialInputVideo) {
+          this.accessory.context.initialInputVideo = observation;
+          this.platform.api.updatePlatformAccessories([this.accessory]);
+          this.platform.log.info(`[${device.name}] Initial input video: ${observation.width}x${observation.height}${observation.fps ? ` at ${observation.fps} fps` : ''}`);
+        }
+      },
     );
 
     this.cameraController = new this.platform.api.hap.CameraController(

@@ -1,4 +1,38 @@
-import { BlinkHomescreen } from '../types';
+import { BlinkCameraKind, BlinkHomescreen, BlinkVideoQuality, BlinkVideoQualityState } from '../types';
+
+export function isBlinkVideoQuality(value: unknown): value is BlinkVideoQuality {
+  return value === 'saver' || value === 'standard' || value === 'best';
+}
+
+/** Decode only the documented config owner, never traverse arbitrary provider data. */
+export function validateVideoQualityState(value: unknown, kind: BlinkCameraKind): BlinkVideoQualityState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Blink returned invalid video quality metadata.');
+  }
+  const response = value as Record<string, unknown>;
+  const config = kind === 'camera' ? response.camera : response;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('Blink returned invalid video quality metadata.');
+  }
+  const fields = config as Record<string, unknown>;
+  const quality = fields.video_quality;
+  if (quality !== undefined && quality !== null && !isBlinkVideoQuality(quality)) {
+    throw new Error('Blink returned unsupported video quality metadata.');
+  }
+  const decodeList = (key: string): BlinkVideoQuality[] | undefined => {
+    const list = fields[key];
+    if (list === undefined || list === null) return undefined;
+    if (!Array.isArray(list) || list.length > 16 || list.some(item => !isBlinkVideoQuality(item))) {
+      throw new Error('Blink returned invalid video quality capabilities.');
+    }
+    return [...new Set(list)] as BlinkVideoQuality[];
+  };
+  return {
+    quality: isBlinkVideoQuality(quality) ? quality : undefined,
+    supported: decodeList('video_quality_support'),
+    restricted: decodeList('video_quality_restricted'),
+  };
+}
 
 export function requireRemoteId(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {

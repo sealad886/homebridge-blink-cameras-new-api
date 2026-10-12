@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.11] - 2026-10-12
+
+### Added
+- System-wide optional 720p/15, 640×360/15 and 1080p/30 HomeKit output profiles; preserve current quality by default. Retain mandatory low-resolution fallback and honor negotiated format exactly.
+- Per-camera Automatic/Saver/Standard/Best input quality. Automatic preserves current Blink settings and remembers first observed source quality and actual dimensions/frame rate in accessory cache. Explicit changes are confirmed before streaming and also affect Blink recordings.
+- Conventional and square 2K input conversion with aspect-preserving scaling/padding; audio conversion and negotiated RTP/SRTP packaging remain independent of video quality.
+
+### Acceptance and limitations
+- Actual FFmpeg tests cover both 2K input shapes through all three output profiles with Opus/AAC-ELD. Configuration, no-replay, cancellation, cache persistence and HAP advertisement regressions pass. Synthetic evidence does not prove Pi CPU savings or physical 2K-camera/provider acceptance.
+- Installed RC.10 video/audio works but the operator reports stutter. This release requires operator installation, fresh physical quality testing and a new observation window. No live host configuration is changed by publication. Issue #52 and F05/F06 remain open.
+
 ## [0.10.0-rc.10] - 2026-10-12
 
 ### Fixed

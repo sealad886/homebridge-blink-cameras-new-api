@@ -86,6 +86,14 @@ describe('BlinkHttp', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('does not replay an ambiguous server rejection when a stateful POST opts out', async () => {
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    (fetch as jest.Mock).mockResolvedValueOnce(response(500));
+    await expect(http.post('v2/accounts/1/networks/2/cameras/3/config', { video_quality: 'best' }, [],
+      { retryServerErrors: false })).rejects.toMatchObject({ status: 500 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('includes authentication preflight and JSON parsing in the absolute deadline', async () => {
     jest.useFakeTimers();
     try {

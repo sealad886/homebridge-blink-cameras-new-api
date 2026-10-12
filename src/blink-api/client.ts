@@ -1,4 +1,4 @@
-import { requireRemoteId, validateHomescreen } from './domain-validation';
+import { isBlinkVideoQuality, requireRemoteId, validateHomescreen, validateVideoQualityState } from './domain-validation';
 /**
  * Blink API Client
  *
@@ -23,6 +23,9 @@ import {
   BlinkCommandResponse,
   BlinkCommandStatus,
   BlinkConfig,
+  BlinkCameraKind,
+  BlinkInputQuality,
+  BlinkVideoQualityState,
   BlinkGeneratePinResponse,
   BlinkHostedLoginResult,
   BlinkHostedOAuthStart,
@@ -84,7 +87,7 @@ export class BlinkApi {
 
   /** Serialize remote capture and mutations, including command completion. */
   private queueStateCommand<T>(
-    label: 'Motion' | 'Network' | 'Capture',
+    label: 'Motion' | 'Network' | 'Capture' | 'Quality',
     send: (options: RequestOptions) => Promise<T>,
     retryDelays: number[],
     conflictResolution?: (options: RequestOptions) => Promise<ConflictResolution<T>>,
@@ -648,6 +651,57 @@ export class BlinkApi {
       await this.completeRemoteCommand(networkId, response, execution);
       return response;
     }, [1000, 2000, 4000], async execution => ({ resolved: await this.networkReachedState(networkId, false, execution), value: {} }), options);
+  }
+
+  /** Config endpoints and quality wire values recovered from Blink Android 59.2. */
+  private videoQualityPath(type: BlinkCameraKind, accountId: number, networkId: number, deviceId: number): string {
+    if (type !== 'camera' && type !== 'owl' && type !== 'doorbell') throw new Error('Invalid Blink camera kind.');
+    const kind = type === 'camera' ? 'cameras' : type === 'owl' ? 'owls' : 'doorbells';
+    return `v${type === 'camera' ? 2 : 1}/accounts/${accountId}/networks/${networkId}/${kind}/${deviceId}/config`;
+  }
+
+  async getDeviceVideoQuality(type: BlinkCameraKind, networkId: number, deviceId: number,
+    options: RequestOptions = {}): Promise<BlinkVideoQualityState> {
+    requireRemoteId(networkId);
+    requireRemoteId(deviceId);
+    // Validate the kind before authentication, alongside the path identifiers.
+    this.videoQualityPath(type, 1, networkId, deviceId);
+    const accountId = await withinRequestBudget(this.ensureAccountId(), options);
+    checkRequestBudget(options);
+    const response = await this.sharedHttp.get<unknown>(this.videoQualityPath(type, accountId, networkId, deviceId), options);
+    return validateVideoQualityState(response, type);
+  }
+
+  /** Auto preserves vendor state. Explicit capture quality changes also affect Blink recordings. */
+  async setDeviceVideoQuality(type: BlinkCameraKind, networkId: number, deviceId: number,
+    quality: BlinkInputQuality, options: RequestOptions = {}): Promise<BlinkVideoQualityState> {
+    requireRemoteId(networkId);
+    requireRemoteId(deviceId);
+    this.videoQualityPath(type, 1, networkId, deviceId);
+    if (quality !== 'auto' && !isBlinkVideoQuality(quality)) throw new Error('Invalid Blink input quality.');
+    if (quality === 'auto') return this.getDeviceVideoQuality(type, networkId, deviceId, options);
+    return this.queueStateCommand('Quality', async execution => {
+      const current = await this.getDeviceVideoQuality(type, networkId, deviceId, execution);
+      if (current.supported && !current.supported.includes(quality)) throw new Error('Blink camera does not support the requested input quality.');
+      if (current.restricted?.includes(quality)) throw new Error('Blink camera restricts the requested input quality.');
+      if (current.quality === quality) return current;
+      const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      checkRequestBudget(execution);
+      const response = await this.sharedHttp.post<BlinkCommandResponse>(
+        this.videoQualityPath(type, accountId, networkId, deviceId), { video_quality: quality }, [409],
+        { ...execution, retryServerErrors: false },
+      );
+      await this.completeRemoteCommand(networkId, response, execution);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const observed = await this.getDeviceVideoQuality(type, networkId, deviceId, execution);
+        if (observed.quality === quality) return observed;
+        if (attempt < 4) await budgetedDelay(500, execution);
+      }
+      throw new Error('Blink input quality was not confirmed after the command.');
+    }, [], async execution => {
+      const observed = await this.getDeviceVideoQuality(type, networkId, deviceId, execution);
+      return { resolved: observed.quality === quality, value: observed };
+    }, options);
   }
 
   private setDeviceMotion(type: 'camera' | 'owl' | 'doorbell', networkId: number, deviceId: number,

@@ -110,6 +110,137 @@ describe('BlinkApi', () => {
     return { api, auth: api.auth, http: api.http, runtimeConfig };
   };
 
+  describe('vendor input quality', () => {
+    const createQualityApi = () => {
+      const result = createApi();
+      result.api.accountId = 10;
+      return result;
+    };
+    it.each([
+      ['camera', 'v2/accounts/10/networks/5/cameras/7/config', { camera: { video_quality: 'standard' } }],
+      ['owl', 'v1/accounts/10/networks/5/owls/7/config', { video_quality: 'standard' }],
+      ['doorbell', 'v1/accounts/10/networks/5/doorbells/7/config', { video_quality: 'standard' }],
+    ] as const)('reads %s config with auto preserving vendor state', async (kind, endpoint, body) => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValue(body);
+      const client = api as unknown as BlinkApi;
+      await expect(client.setDeviceVideoQuality(kind, 5, 7, 'auto')).resolves.toMatchObject({ quality: 'standard' });
+      expect(http.get).toHaveBeenCalledWith(endpoint, {});
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('writes only requested vendor quality and confirms config after command completion', async () => {
+      const { api, http } = createQualityApi();
+      const client = api as unknown as BlinkApi;
+      http.get.mockResolvedValueOnce({ camera: { video_quality: 'standard', video_quality_support: ['best', 'standard'] } })
+        .mockResolvedValueOnce({ camera: { video_quality: 'best' } });
+      http.post.mockResolvedValue({ id: 42 });
+      api.pollCommand = jest.fn().mockResolvedValue({ complete: true });
+      await expect(client.setDeviceVideoQuality('camera', 5, 7, 'best')).resolves.toMatchObject({ quality: 'best' });
+      expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.post).toHaveBeenCalledWith('v2/accounts/10/networks/5/cameras/7/config', { video_quality: 'best' },
+        [409], expect.objectContaining({ deadline: expect.any(Number) }));
+      expect(api.pollCommand).toHaveBeenCalledWith(5, 42, 60, 1, expect.objectContaining({ deadline: expect.any(Number) }));
+    });
+
+    it.each([
+      { video_quality: 'standard', video_quality_support: ['standard'] },
+      { video_quality: 'standard', video_quality_restricted: ['best'] },
+    ])('refuses unsupported or restricted settings before mutation', async metadata => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValue({ camera: metadata });
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow(/support|restrict/);
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('skips an already confirmed quality', async () => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValue({ video_quality: 'saver' });
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('owl', 5, 7, 'saver')).resolves.toMatchObject({ quality: 'saver' });
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('does not replay a POST after an ambiguous transport failure', async () => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValue({ camera: { video_quality: 'standard' } });
+      http.post.mockRejectedValue(new Error('Connection closed'));
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow('Connection closed');
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconciles a conflict using config readback without replay', async () => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValueOnce({ video_quality: 'standard' }).mockResolvedValueOnce({ video_quality: 'best' });
+      http.post.mockRejectedValue(new BlinkHttpError('Conflict', 409, '', 'https://example.com', 'POST'));
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('owl', 5, 7, 'best')).resolves.toMatchObject({ quality: 'best' });
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not replay an unresolved conflict', async () => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValue({ video_quality: 'standard' });
+      const conflict = new BlinkHttpError('Conflict', 409, '', 'https://example.com', 'POST');
+      http.post.mockRejectedValue(conflict);
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('owl', 5, 7, 'best')).rejects.toBe(conflict);
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it('expires confirmation without replaying an accepted command', async () => {
+      jest.useFakeTimers();
+      try {
+        const { api, http } = createQualityApi();
+        http.get.mockResolvedValue({ video_quality: 'standard' });
+        http.post.mockResolvedValue({});
+        const outcome = (api as unknown as BlinkApi).setDeviceVideoQuality('owl', 5, 7, 'best');
+        const check = expect(outcome).rejects.toThrow('not confirmed');
+        await jest.runAllTimersAsync();
+        await check;
+        expect(http.post).toHaveBeenCalledTimes(1);
+        expect(http.get).toHaveBeenCalledTimes(6);
+      } finally { jest.useRealTimers(); }
+    });
+
+    it('shares the existing queue with motion commands', async () => {
+      jest.useFakeTimers();
+      try {
+        const { api, http } = createQualityApi();
+        let release: (() => void) | undefined;
+        http.get.mockResolvedValueOnce({ video_quality: 'standard' }).mockResolvedValue({ video_quality: 'best' });
+        http.post.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({}); })).mockResolvedValue({});
+        const quality = (api as unknown as BlinkApi).setDeviceVideoQuality('owl', 5, 7, 'best');
+        const motion = api.enableCameraMotion(5, 8);
+        await jest.advanceTimersByTimeAsync(0);
+        expect(http.post).toHaveBeenCalledTimes(1);
+        release!();
+        await jest.runAllTimersAsync();
+        await Promise.all([quality, motion]);
+        expect(http.post).toHaveBeenCalledTimes(2);
+      } finally { jest.useRealTimers(); }
+    });
+
+    it.each([
+      {}, { camera: [] }, { camera: { video_quality: 'unknown' } },
+      { camera: { video_quality_support: Array(17).fill('best') } },
+      { camera: { video_quality_restricted: ['best', '../bad'] } },
+    ])('rejects malformed or oversized metadata without mutation', async body => {
+      const { api, http } = createQualityApi();
+      http.get.mockResolvedValue(body);
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow('video quality');
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid quality and IDs before authentication', async () => {
+      const { api, http, auth } = createQualityApi();
+      const client = api as unknown as BlinkApi;
+      await expect(client.setDeviceVideoQuality('camera', 5, 7, '../bad' as 'best')).rejects.toThrow('input quality');
+      await expect(client.getDeviceVideoQuality('camera', 5, -1)).rejects.toThrow('identifier');
+      await expect(client.getDeviceVideoQuality('../bad' as 'camera', 5, 7)).rejects.toThrow('kind');
+      expect(auth.ensureValidToken).not.toHaveBeenCalled();
+      expect(http.get).not.toHaveBeenCalled();
+      expect(http.post).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(['../commands', '1?other=path', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('rejects invalid IDs before authenticated command requests: %p', async value => {
     const { api, http } = createApi();
     const publicApi = api as unknown as BlinkApi;

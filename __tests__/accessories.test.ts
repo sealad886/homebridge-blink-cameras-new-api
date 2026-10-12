@@ -34,7 +34,7 @@ jest.mock('node:child_process', () => {
 });
 
 type PlatformStub = Pick<BlinkCamerasPlatform,
-  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational'>;
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality'>;
 type CameraSourceFfmpegAccess = {
   buildFfmpegArgs: (input: string, request: unknown, session: unknown) => string[];
 };
@@ -362,6 +362,9 @@ describe('Accessory handlers', () => {
       armNetwork: jest.fn().mockResolvedValue({ command_id: 123 }),
       disarmNetwork: jest.fn().mockResolvedValue({ command_id: 124 }),
       pollCommand: jest.fn().mockResolvedValue({ complete: true }),
+      getDeviceVideoQuality: jest.fn().mockResolvedValue({ quality: 'standard' }),
+      setDeviceVideoQuality: jest.fn().mockResolvedValue({ quality: 'best' }),
+      startCameraLiveview: jest.fn().mockResolvedValue({}),
       enableCameraMotion: jest.fn(),
       disableCameraMotion: jest.fn(),
       enableDoorbellMotion: jest.fn(),
@@ -378,13 +381,110 @@ describe('Accessory handlers', () => {
       Characteristic: hap.Characteristic as unknown as BlinkCamerasPlatform['Characteristic'],
       apiClient: apiClient as unknown as BlinkCamerasPlatform['apiClient'],
       log: log as unknown as BlinkCamerasPlatform['log'],
-      api: { hap } as unknown as BlinkCamerasPlatform['api'],
+      api: { hap, updatePlatformAccessories: jest.fn() } as unknown as BlinkCamerasPlatform['api'],
       streamingConfig: resolveStreamingConfig({ enabled: false, ...streamingConfigOverrides }),
       isOperational: () => true,
+      getDeviceInputQuality: jest.fn().mockReturnValue('auto'),
     };
 
     return { hap, apiClient, platform, log };
   };
+
+  it.each(['metadata', 'unavailable'])('auto input quality uses observation only when settings are %s', async (outcome) => {
+    const { hap, apiClient, platform } = buildPlatform({ enabled: true });
+    if (outcome === 'unavailable') apiClient.getDeviceVideoQuality.mockRejectedValue(new Error('settings unavailable'));
+    const accessory = new MockAccessory('Camera', 'quality-camera', hap);
+    const handler = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, { id: 2, network_id: 1, name: 'Camera', enabled: true });
+    const source = (handler as unknown as { cameraSource: BlinkCameraSource }).cameraSource;
+    const privateSource = source as unknown as CameraSourcePrivateAccess;
+    const owner = { phase: 'PREPARED', preparing: false, ports: new Set<number>(), children: new Set(), abort: new AbortController() };
+    (source as any).sessionOwners.set('quality-session', owner);
+    privateSource.pendingSessions.set('quality-session', { owner, sessionId: 'quality-session' });
+    const callback = jest.fn();
+    await privateSource.startStream('quality-session', { video: { width: 640, height: 360, fps: 15 } }, callback);
+    expect(apiClient.getDeviceVideoQuality).toHaveBeenCalledWith('camera', 1, 2,
+      expect.objectContaining({ signal: expect.any(AbortSignal), deadline: expect.any(Number) }));
+    expect(apiClient.setDeviceVideoQuality).not.toHaveBeenCalled();
+    // The mock liveview lacks a media URL, but reaching it proves a metadata
+    // failure did not prevent allocation of the actual streaming command.
+    expect(apiClient.startCameraLiveview).toHaveBeenCalledTimes(1);
+    expect(accessory.context.initialInputQuality).toBe(outcome === 'metadata' ? 'standard' : undefined);
+  });
+
+  it('starts liveview while auto metadata hangs, coalesces reads and ignores an aborted late result', async () => {
+    const { hap, apiClient, platform } = buildPlatform({ enabled: true });
+    let finishMetadata!: (state: { quality: string }) => void;
+    apiClient.getDeviceVideoQuality.mockReturnValue(new Promise(resolve => { finishMetadata = resolve; }));
+    const accessory = new MockAccessory('Camera', 'quality-camera', hap);
+    const handler = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, { id: 2, network_id: 1, name: 'Camera', enabled: true });
+    const source = (handler as unknown as { cameraSource: BlinkCameraSource }).cameraSource;
+    const privateSource = source as unknown as CameraSourcePrivateAccess;
+    const owner = { phase: 'PREPARED', preparing: false, ports: new Set<number>(), children: new Set(), abort: new AbortController() };
+    (source as any).sessionOwners.set('quality-session', owner);
+    privateSource.pendingSessions.set('quality-session', { owner, sessionId: 'quality-session' });
+    await privateSource.startStream('quality-session', { video: { width: 640, height: 360, fps: 15 } }, jest.fn());
+    expect(apiClient.startCameraLiveview).toHaveBeenCalledTimes(1);
+    // A new generation cannot start another observation until the old read
+    // finishes; its late result remains owned by the cancelled generation.
+    const hooks = source as unknown as { beforeLiveview: (options: object) => Promise<void> };
+    await hooks.beforeLiveview({ signal: new AbortController().signal });
+    expect(apiClient.getDeviceVideoQuality).toHaveBeenCalledTimes(1);
+    expect(owner.abort.signal.aborted).toBe(true);
+    finishMetadata({ quality: 'best' });
+    await nextTurn();
+    expect(accessory.context.initialInputQuality).toBeUndefined();
+    expect(platform.api.updatePlatformAccessories).not.toHaveBeenCalled();
+    expect(apiClient.setDeviceVideoQuality).not.toHaveBeenCalled();
+  });
+
+  it('blocks liveview allocation when an explicit input quality is not confirmed', async () => {
+    const { hap, apiClient, platform } = buildPlatform({ enabled: true });
+    (platform.getDeviceInputQuality as jest.Mock).mockReturnValue('best');
+    const failure = new Error('requested quality was not confirmed');
+    apiClient.setDeviceVideoQuality.mockRejectedValue(failure);
+    const accessory = new MockAccessory('Camera', 'quality-camera', hap);
+    const handler = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, { id: 2, network_id: 1, name: 'Camera', enabled: true });
+    const source = (handler as unknown as { cameraSource: BlinkCameraSource }).cameraSource;
+    const privateSource = source as unknown as CameraSourcePrivateAccess;
+    const owner = { phase: 'PREPARED', preparing: false, ports: new Set<number>(), children: new Set(), abort: new AbortController() };
+    (source as any).sessionOwners.set('quality-session', owner);
+    privateSource.pendingSessions.set('quality-session', { owner, sessionId: 'quality-session' });
+    const callback = jest.fn();
+    await privateSource.startStream('quality-session', { video: { width: 640, height: 360, fps: 15 } }, callback);
+    expect(apiClient.setDeviceVideoQuality).toHaveBeenCalledWith('camera', 1, 2, 'best', expect.any(Object));
+    expect(apiClient.startCameraLiveview).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledWith(expect.any(Error));
+    expect(accessory.context.initialInputQuality).toBeUndefined();
+  });
+
+  it('retains first vendor quality and input geometry across accessory reconstruction', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'quality-camera', hap);
+    const device: BlinkCamera = { id: 2, network_id: 1, name: 'Camera', enabled: true };
+    type ObservationHooks = { beforeLiveview: (options: object) => Promise<void>;
+      onInputObservation: (observation: { width: number; height: number; fps: number }) => void };
+    const create = () => {
+      const handler = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+        accessory as unknown as PlatformAccessory, device);
+      return (handler as unknown as { cameraSource: ObservationHooks }).cameraSource;
+    };
+    const first = create();
+    await first.beforeLiveview({});
+    first.onInputObservation({ width: 2560, height: 1440, fps: 30 });
+    apiClient.getDeviceVideoQuality.mockResolvedValue({ quality: 'best' });
+    const restarted = create();
+    await restarted.beforeLiveview({});
+    restarted.onInputObservation({ width: 1920, height: 1080, fps: 15 });
+    expect(accessory.context.initialInputQuality).toBe('standard');
+    expect(accessory.context.initialInputVideo).toEqual({ width: 2560, height: 1440, fps: 30 });
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledTimes(2);
+    expect(apiClient.getDeviceVideoQuality).toHaveBeenCalledTimes(1);
+    expect(apiClient.setDeviceVideoQuality).not.toHaveBeenCalled();
+  });
 
   it('bounds each snapshot caller while allowing a shared capture to populate cache later', async () => {
     jest.useFakeTimers();

@@ -11,7 +11,7 @@ const ffmpegPath = require("ffmpeg-for-homebridge");
 // Test-only AES-CM/HMAC-SHA1-80 receiver for known dummy keys. RFC3711
 // sections4.1.1/4.2/4.3, and RFC3640 AAC-hbr AU headers (13-bit size/3-bit index).
 // Loopback sender uses a fixed 12-byte RTP header; no CSRC/extension/padding.
-function aacReceiver(master) {
+function srtpReceiver(master) {
     const derive = (label, length) => {
         const iv = Buffer.alloc(16);
         master.copy(iv, 0, 16, 30);
@@ -23,11 +23,11 @@ function aacReceiver(master) {
     let previousSequence, rollover = 0;
     return (packet) => {
         if (packet.length < 26 || packet[0] !== 0x80)
-            throw Error("unexpected AAC SRTP packet layout");
+            throw Error("unexpected SRTP packet layout");
         const sequence = packet.readUInt16BE(2);
         if (previousSequence !== undefined) {
             if (((sequence - previousSequence) & 0xffff) !== 1)
-                throw Error("AAC SRTP packet sequence gap");
+                throw Error("SRTP packet sequence gap");
             if (sequence < previousSequence) rollover++;
         }
         previousSequence = sequence;
@@ -36,7 +36,7 @@ function aacReceiver(master) {
         const authenticated = packet.subarray(0, -10);
         const tag = createHmac("sha1", authenticationKey).update(authenticated).update(roc).digest().subarray(0, 10);
         if (!timingSafeEqual(tag, packet.subarray(-10)))
-            throw Error("AAC SRTP authentication failed");
+            throw Error("SRTP authentication failed");
         const iv = Buffer.alloc(16), index = Buffer.alloc(16);
         salt.copy(iv);
         packet.copy(index, 4, 8, 12); // SSRC * 2^64
@@ -44,6 +44,14 @@ function aacReceiver(master) {
         index.writeUInt16BE(sequence, 12); // packet index * 2^16
         for (let i = 0; i < 16; i++) iv[i] ^= index[i];
         const payload = createCipheriv("aes-128-ctr", encryptionKey, iv).update(authenticated.subarray(12));
+        return payload;
+    };
+}
+
+function aacReceiver(master) {
+    const decrypt = srtpReceiver(master);
+    return packet => {
+        const payload = decrypt(packet);
         // Exactly one complete AU per packet, with no AAC codec decode claim.
         if (payload.length < 5 || payload.readUInt16BE(0) !== 16 ||
             (payload.readUInt16BE(2) & 7) !== 0 ||
@@ -52,7 +60,7 @@ function aacReceiver(master) {
     };
 }
 
-function generateInput(audioEnabled, seconds = 8, secondAudio = false) {
+function generateInput(audioEnabled, seconds = 8, secondAudio = false, geometry = { width: 640, height: 360, fps: 15 }) {
     const args = [
         "-hide_banner",
         "-loglevel",
@@ -60,7 +68,7 @@ function generateInput(audioEnabled, seconds = 8, secondAudio = false) {
         "-f",
         "lavfi",
         "-i",
-        "testsrc2=size=640x360:rate=15",
+        `testsrc2=size=${geometry.width}x${geometry.height}:rate=${geometry.fps}`,
     ];
     if (audioEnabled)
         args.push("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000");
@@ -77,7 +85,7 @@ function generateInput(audioEnabled, seconds = 8, secondAudio = false) {
     return input.stdout;
 }
 
-async function runCase(input, preset, duration, audioEnabled, codec = "opus", sampleRate = 24, openPipe = false, fragmented = false) {
+async function runCase(input, preset, duration, audioEnabled, codec = "opus", sampleRate = 24, openPipe = false, fragmented = false, qualityCase = null) {
     const sinks = [dgram.createSocket("udp4"), dgram.createSocket("udp4")];
     const counts = [0, 0],
         times = [[], []],
@@ -85,6 +93,8 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
     let packetError;
     const receiveAac = codec === "aac-eld" ? aacReceiver(Buffer.alloc(30, 2)) : null;
     let authenticatedAacPackets = 0;
+    const receiveVideo = qualityCase?.profile === "1080p30" ? srtpReceiver(Buffer.alloc(30, 1)) : null;
+    const videoSpsLevels = new Set();
     let child;
     let timer;
     try {
@@ -115,6 +125,26 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
                         authenticatedAacPackets++;
                     } catch (error) { packetError = error.message; }
                 }
+                if (i === 0 && receiveVideo) {
+                    try {
+                        const payload = receiveVideo(b);
+                        const inspectNal = nal => {
+                            if (nal.length >= 4 && (nal[0] & 31) === 7) videoSpsLevels.add(nal[3]);
+                        };
+                        if ((payload[0] & 31) === 24) {
+                            // RFC6184 STAP-A aggregation: each NAL has a 16-bit size.
+                            let offset = 1;
+                            while (offset + 2 <= payload.length) {
+                                const length = payload.readUInt16BE(offset);
+                                offset += 2;
+                                if (!length || offset + length > payload.length) throw Error("invalid H264 RTP aggregation");
+                                inspectNal(payload.subarray(offset, offset + length));
+                                offset += length;
+                            }
+                            if (offset !== payload.length) throw Error("invalid H264 RTP aggregation");
+                        } else inspectNal(payload);
+                    } catch (error) { packetError = error.message; }
+                }
                 counts[i]++;
                 maxBytes[i] = Math.max(maxBytes[i], b.length);
                 times[i].push(b.readUInt32BE(4));
@@ -131,7 +161,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             () => true,
             () => {},
             {
-                video: { encoder: "libx264", softwarePreset: preset },
+                video: { encoder: "libx264", softwarePreset: preset, outputQuality: qualityCase?.profile ?? "auto" },
                 audio: { enabled: audioEnabled, codec,
                     ...(codec === "aac-eld" ? { aacEldEncoder: "libfdk_aac" } : {}) },
             },
@@ -154,12 +184,12 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
         };
         const request = {
             video: {
-                fps: 15,
-                width: 640,
-                height: 360,
+                fps: qualityCase?.output.fps ?? 15,
+                width: qualityCase?.output.width ?? 640,
+                height: qualityCase?.output.height ?? 360,
                 max_bit_rate: 300,
                 profile: 0,
-                level: 0,
+                level: qualityCase?.profile === "1080p30" ? 2 : 0,
                 pt: 99,
                 mtu: 1378,
             },
@@ -181,7 +211,30 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             { stdio: ["pipe", "ignore", "pipe"] },
         );
         // Avoid printing dummy argv or codec diagnostics; report bounded reason codes only.
-        child.stderr.resume();
+        // Retain only parsed numerical descriptors. Never retain/print raw stderr,
+        // which includes the dummy SRTP URL and would be unsafe for real keys.
+        let stderrLine = "", descriptorSection = null;
+        const descriptors = { input: null, output: null };
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", chunk => {
+            for (const character of chunk) {
+                if (character !== "\n" && character !== "\r") {
+                    if (stderrLine.length < 4096) stderrLine += character;
+                    continue;
+                }
+                if (/^Input #0,/.test(stderrLine)) descriptorSection = "input";
+                else if (/^Output #0,/.test(stderrLine)) descriptorSection = "output";
+                else if (/^Output #/.test(stderrLine)) descriptorSection = null;
+                if (descriptorSection && /Stream #\d+:\d+.*Video:/.test(stderrLine)) {
+                    const geometry = stderrLine.match(/\b(\d{2,4})x(\d{2,4})\b/);
+                    const fps = stderrLine.match(/\b([\d.]+) fps\b/);
+                    if (geometry && fps) descriptors[descriptorSection] = {
+                        width: Number(geometry[1]), height: Number(geometry[2]), fps: Number(fps[1]),
+                    };
+                }
+                stderrLine = "";
+            }
+        });
         child.stdin.on("error", () => {
             inputError = true;
         });
@@ -233,8 +286,23 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
         if (audioEnabled && codec === "aac-eld" &&
             (!steps.length || steps.some((step) => step !== 512)))
             throw Error("AAC-ELD RTP must flush each 512-sample frame without aggregation delay");
+        const videoFrames = times[0].filter((timestamp, index, all) => index === 0 || timestamp !== all[index - 1]);
+        const videoSteps = videoFrames.slice(1).map((timestamp, index) => (timestamp - videoFrames[index]) >>> 0);
+        if (qualityCase) {
+            for (const kind of ["input", "output"]) {
+                const expected = qualityCase[kind], observed = descriptors[kind];
+                if (!observed || observed.width !== expected.width || observed.height !== expected.height || observed.fps !== expected.fps)
+                    throw Error(`actual FFmpeg ${kind} geometry/cadence mismatch`);
+            }
+            if (receiveVideo && (videoSpsLevels.size !== 1 || !videoSpsLevels.has(40)))
+                throw Error("1080p30 H264 SPS must advertise negotiated level 4.0");
+            if (videoFrames.length < 2 || videoSteps.some(step => step !== 90000 / qualityCase.output.fps))
+                throw Error("video RTP timestamp cadence mismatch");
+        }
         return {
             preset,
+            ...(qualityCase ? { output_profile: qualityCase.profile, observed_descriptors: descriptors,
+                video_frames: videoFrames.length, video_timestamp_step: videoSteps[0], h264_sps_levels: [...videoSpsLevels] } : {}),
             open_pipe_startup: openPipe,
             fragmented,
             codec: audioEnabled ? codec : null,
@@ -277,6 +345,20 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
     for (const fragmented of [false, true])
         results.push(await runCase(generateInput(true, 2, true), "veryfast", 20, true, "opus", 24, true, fragmented));
     results.push(await runCase(generateInput(false, 2), "veryfast", 20, false, "opus", 24, true));
+    // Real decoder ingestion of both current 2K camera shapes. Each profile
+    // covers independent Opus and AAC-ELD encoding/packaging, including 30fps.
+    for (const geometry of [{ width: 2560, height: 1440, fps: 30 }, { width: 1920, height: 1920, fps: 30 }]) {
+        const input = generateInput(true, 2, false, geometry);
+        for (const [profile, output] of [
+            ["720p15", { width: 1280, height: 720, fps: 15 }],
+            ["360p15", { width: 640, height: 360, fps: 15 }],
+            ["1080p30", { width: 1920, height: 1080, fps: 30 }],
+        ]) {
+            for (const codec of ["opus", "aac-eld"])
+                results.push(await runCase(input, "ultrafast", 20, true, codec, 24, false, false,
+                    { profile, input: geometry, output }));
+        }
+    }
     console.log(JSON.stringify(results, null, 2));
 })().catch((error) => {
     console.error(error.message);
