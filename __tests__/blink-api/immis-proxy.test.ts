@@ -94,6 +94,46 @@ describe('ImmisProxyServer private consumer', () => {
   });
   afterEach(() => { proxy.stop(); jest.useRealTimers(); });
 
+  it('delivers media during a debug flood with bounded diagnostics and visible failures', async () => {
+    const log = jest.fn(); const errors = jest.fn(); let delivered = 0;
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/session?client_id=1', serial: 'TEST', debug: true, log, errorLog: errors });
+    await proxy.start();
+    proxy.attachConsumer(new Writable({ write(chunk, _encoding, callback) { delivered += chunk.length; callback(); } }));
+    await flushResolution();
+    const socket = latestSocket();
+    const noisy = packet(Buffer.from([1])); noisy[0] = 0x18;
+    for (let i = 0; i < 10_000; i++) {
+      socket.emit('data', noisy);
+      socket.emit('data', packet(Buffer.from([0x47, 1])));
+    }
+    expect(delivered).toBe(20_000);
+    expect(log.mock.calls.length).toBeLessThan(80);
+    socket.emit('data', packet(Buffer.alloc(0), 1024 * 1024 + 1));
+    expect(errors).toHaveBeenCalled();
+    expect(log.mock.calls.some(([message]) => String(message).includes('Suppressed'))).toBe(true);
+  });
+
+  it('bounds repeated LATM failures without hiding fatal transport events', async () => {
+    const log = jest.fn(); const errors = jest.fn(); const fatal = jest.fn();
+    proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/session?client_id=1', serial: 'TEST', log, errorLog: errors });
+    proxy.on('error', fatal);
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    const audio = new PassThrough(); proxy.attachAudioInput(audio);
+    const sender = jest.spyOn(proxy as unknown as { sendLatmFrame(frame: Buffer): void }, 'sendLatmFrame')
+      .mockImplementation(() => { throw new Error('token=private-audio-token ' + 'x'.repeat(2000)); });
+    try {
+      for (let i = 0; i < 1000; i++) audio.write(buildLoasFrame(Buffer.from([1])));
+      expect(sender).toHaveBeenCalledTimes(1000);
+      expect(errors).toHaveBeenCalledTimes(8);
+      expect(JSON.stringify(errors.mock.calls)).not.toContain('private-audio-token');
+      expect(errors.mock.calls.every(([message]) => String(message).length <= 1040)).toBe(true);
+      latestSocket().emit('data', packet(Buffer.alloc(0), 1024 * 1024 + 1));
+      expect(fatal).toHaveBeenCalledWith(expect.any(Error));
+      expect(proxy.isServing).toBe(false);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Suppressed 992'));
+    } finally { sender.mockRestore(); audio.destroy(); }
+  });
+
   it('starts without a listener or upstream connection and connects only for an attached child', async () => {
     await expect(proxy.start()).resolves.toBe('pipe:0');
     expect(proxy.url).toBe('pipe:0');
@@ -885,7 +925,7 @@ describe('ImmisProxyServer security controls', () => {
     };
     const captures = async () => (await fs.readdir(path.join(tmpDir, 'blink-stream-recordings'))).filter(file => file.endsWith('.ts'));
     try {
-      for (const name of ['immis-proxy', 'immis-trust', 'network-diagnostics', 'media-destination', 'bounded-dns']) {
+      for (const name of ['immis-proxy', 'immis-trust', 'network-diagnostics', 'media-destination', 'bounded-dns', 'stream-diagnostics', 'redaction']) {
         const source = await fs.readFile(path.join(__dirname, '../../src/blink-api', `${name}.ts`), 'utf8');
         await fs.writeFile(path.join(runtime, `${name}.js`), transpileModule(source, {
           compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },

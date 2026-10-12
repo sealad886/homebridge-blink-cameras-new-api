@@ -331,7 +331,7 @@
 
         <div class="mt-4">
           <p class="text-muted small">
-            Blink tokens are stored in Homebridge's protected authentication file. You can now configure camera settings.
+            Blink tokens are stored in Homebridge's protected authentication file. Configure camera settings below, then click Homebridge's Save button to write them to disk. Restart the child bridge yourself to apply streaming changes.
           </p>
           <button type="button" class="btn btn-outline-secondary mb-2" id="testConnectionButton">
             Test Connection
@@ -480,6 +480,21 @@
     return;
   }
 
+  let schemaConfigRevision = 0;
+  homebridge.addEventListener('configChanged', event => {
+    if (!Array.isArray(event.data)) return;
+    pluginConfig = event.data;
+    schemaConfigRevision += 1;
+  });
+
+  // A schema edit can arrive while the host answers a config request. Keep
+  // that newer draft instead of replacing it with the request's snapshot.
+  async function getLatestPluginConfig() {
+    const revision = schemaConfigRevision;
+    const latest = await homebridge.getPluginConfig();
+    return revision === schemaConfigRevision ? latest : pluginConfig;
+  }
+
   deviceIdValue = typeof pluginConfig[0]?.deviceId === 'string'
     ? pluginConfig[0].deviceId.trim()
     : '';
@@ -576,7 +591,7 @@
   }
 
   async function saveTokenOnlyConfig(data) {
-    const latestConfig = await homebridge.getPluginConfig();
+    const latestConfig = await getLatestPluginConfig();
     const config = { ...(latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' }) };
     config.deviceId = deviceIdValue || config.deviceId || 'homebridge-blink';
     config.tier = data.tier || config.tier || 'prod';
@@ -698,7 +713,7 @@
     const button = document.getElementById('saveNetworks');
     button.disabled = true;
     try {
-      const latestConfig = await homebridge.getPluginConfig();
+      const latestConfig = await getLatestPluginConfig();
       const previous = latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
       // Keep exclusions for networks absent from this response.
       const retained = (previous.excludedNetworks || []).filter(value =>
@@ -986,7 +1001,7 @@
     homebridge.showSpinner();
 
     try {
-      const latestConfig = await homebridge.getPluginConfig();
+      const latestConfig = await getLatestPluginConfig();
       const data = await homebridge.request('/verify', {
         code,
         type: verifyType,
@@ -1047,7 +1062,7 @@
   lockAuthBtn.addEventListener('click', async () => {
     try {
       await homebridge.request('/lock');
-      const latestConfig = await homebridge.getPluginConfig();
+      const latestConfig = await getLatestPluginConfig();
       const config = { ...(latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' }) };
       config.authLocked = true;
       delete config.twoFactorCode;
@@ -1066,7 +1081,7 @@
   async function restartAuthentication() {
     try {
       await homebridge.request('/unlock');
-      const latestConfig = await homebridge.getPluginConfig();
+      const latestConfig = await getLatestPluginConfig();
       const config = { ...(latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' }) };
       config.authLocked = false;
       delete config.username;

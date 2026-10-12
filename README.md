@@ -145,7 +145,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `enableMotionPolling` | No | `true` | Poll for motion events |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required only for streaming) |
 | `ffmpegPath` | No | `ffmpeg` | Executable path; AAC-ELD requires verified FDK AAC support |
-| `ffmpegDebug` | No | `false` | Log FFmpeg debug output |
+| `ffmpegDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
 | `enableAudio` | No | `true` | Enable audio streaming from camera |
@@ -305,7 +305,7 @@ Set `videoEncoder` to `auto` for the safest default across mixed installations. 
 to `libx264` if the hardware encoder cannot be started.
 
 > [!NOTE]
-> The automatic encoder selection has been tested on a limited set of hardware (macOS with VideoToolbox and Raspberry Pi with V4L2). If you run into choppy streams, encoding errors, or unexpected fallback to software encoding on your platform, please [open an issue](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/new) with your hardware details and FFmpeg debug logs (`ffmpegDebug: true`).
+> The automatic encoder selection has been tested on a limited set of hardware (macOS with VideoToolbox and Raspberry Pi with V4L2). If you run into choppy streams, encoding errors, or unexpected fallback to software encoding on your platform, please [open an issue](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/new) with your hardware details and bounded streaming diagnostics (`ffmpegDebug: true`).
 
 IMMIS live streams always verify the upstream TLS certificate and hostname, using
 Node bundled public roots plus the official Blink vendor anchors only for IMMIS. The former
@@ -557,6 +557,8 @@ IMMIS streaming pauses vendor input while the private encoder pipe is backpressu
 
 ### Input and output quality
 
+After changing quality in the plugin settings form, click Homebridge's **Save** button. Selecting a value updates the form draft; it does not write the configuration to disk. Apply streaming changes through your normal child-bridge restart workflow, then check the output-profile and negotiated-format receipt in the logs. Publication never changes a running host's settings.
+
 `outputQuality` applies to every camera's HomeKit video output. Default `auto`
 preserves the current capabilities and lets Home choose. Optional `720p15`
 (1280×720/15), `360p15` (640×360/15), and `1080p30` (1920×1080/30) advertise
@@ -601,3 +603,5 @@ converts to negotiated output while preserving aspect ratio with padding.
 No universal 2K override or unsupported resolution request is sent. Camera model,
 firmware and subscription may restrict upstream quality. Synthetic 2K conversion
 and mocked config contracts do not establish physical 2K-camera acceptance.
+
+Streaming diagnostics use FFmpeg info-level output, omit per-packet IMMIS and per-NAL traces, and cap detailed records per media child/proxy. A separate error allowance and a final suppressed-record count preserve troubleshooting evidence without unlimited log growth. Input-video observation continues even after the diagnostic allowance is exhausted. TLS, destination, worker and lifecycle failures retain their operational receipts. These controls reduce diagnostic work; Pi smoothness gains still require physical testing.

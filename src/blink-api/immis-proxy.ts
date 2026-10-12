@@ -13,6 +13,8 @@
  * - https://github.com/amattu2/blink-liveview-middleware
  */
 
+import { StreamDiagnosticBudget } from './stream-diagnostics';
+import { redactDiagnosticText } from './redaction';
 import { Buffer } from 'node:buffer';
 import { Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
@@ -251,19 +253,22 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * Log a message if logging is enabled
    */
   private log(message: string): void {
-    try { this.config.log?.(`[ImmisProxy] ${message}`); } catch { /* Logging must not crash streaming. */ }
+    try { this.config.log?.(`[ImmisProxy] ${redactDiagnosticText(message).slice(0, 1024)}`); } catch { /* Logging must not crash streaming. */ }
   }
 
   /**
    * Log a debug message if debug logging is enabled
    */
   private logError(message: string): void {
-    try { (this.config.errorLog ?? this.config.log)?.(`[ImmisProxy] ${message}`); } catch { /* Ignore logger failure. */ }
+    if (!this.diagnosticBudget.admit(true)) return;
+    try { (this.config.errorLog ?? this.config.log)?.(`[ImmisProxy] ${redactDiagnosticText(message).slice(0, 1024)}`); } catch { /* Ignore logger failure. */ }
   }
 
+  private readonly diagnosticBudget = new StreamDiagnosticBudget();
+
   private debug(message: string): void {
-    if (this.config.debug) {
-      this.log(`[DEBUG] ${message}`);
+    if (this.config.debug && this.diagnosticBudget.admit()) {
+      this.log(`[DEBUG] ${redactDiagnosticText(message).slice(0, 1024)}`);
     }
   }
 
@@ -799,7 +804,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       const sequence = this.receiveBuffer.readUInt32BE(1);
       const payloadLength = this.receiveBuffer.readUInt32BE(5);
 
-      this.debug(`Packet: msgtype=${msgtype}, sequence=${sequence}, payloadLength=${payloadLength}`);
 
       if (payloadLength > 1024 * 1024) {
         this.fail('IMMIS frame exceeded its budget'); return;
@@ -903,7 +907,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     packet.writeUInt32BE(this.keepAliveSequence, 1);
     packet.writeUInt32BE(0, 5); // No payload
 
-    this.debug(`Sending keep-alive (sequence=${this.keepAliveSequence})`);
     this.writeUpstream(packet);
   }
 
@@ -989,14 +992,14 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       for (const frame of frames) {
         try {
           this.sendLatmFrame(frame);
-        } catch (error) {
-          this.debug(`Failed to send LATM frame: ${(error as Error).message}`);
+        } catch {
+          this.logError('Failed to send LATM frame.');
         }
       }
     };
 
-    const onError = (error: Error) => {
-      this.debug(`Audio input stream error: ${error.message}`);
+    const onError = () => {
+      this.logError('Audio input stream error.');
     };
 
     const onClose = () => {
@@ -1034,7 +1037,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     header.writeUInt32BE(latm.length, 5);
     const packet = Buffer.concat([header, latm]);
     this.writeUpstream(packet);
-    this.debug(`Sent LATM frame (${latm.length} bytes)`);
   }
 
   /**
@@ -1084,6 +1086,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     this.receiveBuffer = Buffer.alloc(0);
     this.safeEmit('close');
+    const suppressed = this.diagnosticBudget.takeSuppressed();
+    if (suppressed) this.log(`Suppressed ${suppressed} diagnostic messages`);
     this.log('Proxy server stopped');
   }
 }

@@ -1137,7 +1137,7 @@ describe('Accessory handlers', () => {
       );
 
       logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
-      expect(logs).toContain('FFmpeg(session): frame=1');
+      expect(logs).toContain('FFmpeg: frame=1');
       expect(logs).not.toContain('progress-secret');
       expect(logs).not.toContain('client-secret');
       expect(logs).not.toContain('stream-secret');
@@ -1296,7 +1296,7 @@ describe('Accessory handlers', () => {
       talkbackProcess.stderr.emit('data', Buffer.from('srtp-secret\n'));
 
       logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
-      expect(logs).toContain('FFmpeg-immis-talkback(session)');
+      expect(logs).toContain('FFmpeg-immis-talkback');
       expect(logs).toContain('inline:<redacted>');
       expect(logs).not.toContain('immis-srtp-secret');
       expect(immisProxy.attachAudioInput).toHaveBeenCalledTimes(1);
@@ -1381,7 +1381,7 @@ describe('Accessory handlers', () => {
 
       logs = logFn.mock.calls.map((call) => String(call[0])).join('\n');
       expect(logs).toContain('stderr line omitted because it exceeded 65536 characters');
-      expect(logs).toContain('FFmpeg(session): frame=2 done');
+      expect(logs).toContain('FFmpeg: frame=2 done');
       expect(logs).not.toContain('very-secret-token');
     } finally {
       spawnMock.mockClear();
