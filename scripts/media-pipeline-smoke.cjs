@@ -52,7 +52,7 @@ function aacReceiver(master) {
     };
 }
 
-function generateInput(audioEnabled) {
+function generateInput(audioEnabled, seconds = 8, secondAudio = false) {
     const args = [
         "-hide_banner",
         "-loglevel",
@@ -64,7 +64,8 @@ function generateInput(audioEnabled) {
     ];
     if (audioEnabled)
         args.push("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000");
-    args.push("-t", "8", "-c:v", "libx264", "-preset", "ultrafast");
+    if (secondAudio) args.push("-f", "lavfi", "-i", "sine=frequency=880:sample_rate=16000", "-map", "0:v", "-map", "1:a", "-map", "2:a");
+    args.push("-t", String(seconds), "-c:v", "libx264", "-preset", "ultrafast");
     if (audioEnabled) args.push("-c:a", "aac");
     args.push("-f", "mpegts", "pipe:1");
     const input = spawnSync(ffmpegPath, args, {
@@ -76,7 +77,7 @@ function generateInput(audioEnabled) {
     return input.stdout;
 }
 
-async function runCase(input, preset, duration, audioEnabled, codec = "opus", sampleRate = 24) {
+async function runCase(input, preset, duration, audioEnabled, codec = "opus", sampleRate = 24, openPipe = false, fragmented = false) {
     const sinks = [dgram.createSocket("udp4"), dgram.createSocket("udp4")];
     const counts = [0, 0],
         times = [[], []],
@@ -194,7 +195,22 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             timedOut = true;
             child.kill("SIGKILL");
         }, 15000);
-        child.stdin.end(input);
+        if (openPipe) {
+            // Short live bursts must produce media while the producer stays open.
+            // EOF would hide the default multi-stream analysis stall.
+            if (fragmented) {
+                for (let offset = 0; offset < input.length; offset += 188 * 7) {
+                    child.stdin.write(input.subarray(offset, offset + 188 * 7));
+                    await new Promise(resolve => setTimeout(resolve, 2));
+                }
+            } else child.stdin.write(input);
+            const deadline = Date.now() + 4000;
+            while ((!counts[0] || (audioEnabled && !counts[1])) && Date.now() < deadline)
+                await new Promise(resolve => setTimeout(resolve, 20));
+            if (!counts[0] || (audioEnabled && !counts[1]))
+                throw Error("live input failed to produce RTP before EOF");
+            child.stdin.end();
+        } else child.stdin.end(input);
         const { code, signal } = await completion;
         clearTimeout(timer);
         // Allow already queued loopback datagrams to reach receiver callbacks.
@@ -219,6 +235,8 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             throw Error("AAC-ELD RTP must flush each 512-sample frame without aggregation delay");
         return {
             preset,
+            open_pipe_startup: openPipe,
+            fragmented,
             codec: audioEnabled ? codec : null,
             sample_rate_khz: audioEnabled ? sampleRate : null,
             duration: audioEnabled && codec === "opus" ? duration : null,
@@ -256,6 +274,9 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             results.push(await runCase(audioInput, preset, 20, true, "aac-eld", sampleRate));
     }
     results.push(await runCase(generateInput(false), "veryfast", 20, false));
+    for (const fragmented of [false, true])
+        results.push(await runCase(generateInput(true, 2, true), "veryfast", 20, true, "opus", 24, true, fragmented));
+    results.push(await runCase(generateInput(false, 2), "veryfast", 20, false, "opus", 24, true));
     console.log(JSON.stringify(results, null, 2));
 })().catch((error) => {
     console.error(error.message);

@@ -420,3 +420,31 @@ Official Android startup sends an immediate keep-alive. Its presentation statist
 Metadata-only, in-memory diagnostics on the installed RC.8 demonstrated Corner source media through its unchanged parser: native-style startup with provider15-second polling sustained9.27MiB over49.6seconds. A final immediate-GET probe validates the combined scheduling contract. These probes use normal bounded vendor liveview/cleanup commands, no host installation/configuration changes, no credential storage writes, and no media retention. They do not identify a single exclusively causal Corner divergence or establish physical Home playback.
 
 Focused regressions cover coalesced-frame pacing, unchanged overflow/drain bounds, consumer replacement, stale drain after STOP, immediate authenticated keep-alive without fabricated stats, immediate/serialized polling and actual polling interval selection. Full project and CI gates plus independent review precede publication. F05/F06 and issue52 remain open. Rollback uses a verified artifact or disables streaming; TLS/private transport/resource guards stay enabled.
+
+## RC.10 startup analysis and momentary snapshot repair — 12 October 2026
+
+Installed RC.9 authenticated Corner and decoded H.264 SPS/PPS/IDR, but never
+completed FFmpeg input analysis before Home stopped the attempts. Front door
+produced sustained video/audio confirmed by the operator, and reopened video.
+Corner manual refresh succeeded, but Home retained On until explicitly reset.
+Evidence remains in `logs/rc9-2026-10-12-acceptance/analysis.md`.
+
+Pinned Homebridge FFmpeg 7.0.2 defaults to five seconds of media analysis, with
+additional MPEG-TS heuristics when information is incomplete. A short H.264 plus
+two-AAC burst reproduced the stall with stdin kept open. A one-second analysis
+budget completed on identical bytes; RC.10 applies it only to IMMIS input while
+preserving the normal byte probe budget, retained initial keyframe, transport
+limits and generation-owned shutdown. This is a media-timestamp budget, not a
+wall-clock startup deadline. Sparse-source timestamp contributions remain unknown.
+
+HAP commits the submitted switch value after its asynchronous setter resolves.
+The previous Off notification preceded that commit and was overwritten. The
+existing snapshot owner now sends Off on the next event-loop turn, after the
+commit; no UI delay, parallel capture owner or polling coordinator is introduced.
+Actual installed HAP write-path tests cover success, failure and Off writes.
+
+Open-pipe RTP regressions cover short three-stream bursts, fragmentation and
+video-only input alongside existing codec/packaging cases. Physical Corner
+video/audio and automatic Home reset require operator installation. A runtime
+correction resets RC observation; F05/F06 and #52 remain open. Rollback preserves
+TLS, private transport and resource guards or disables the affected mode.

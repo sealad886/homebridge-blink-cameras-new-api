@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.10] - 2026-10-12
+
+### Fixed
+- Bound IMMIS MPEG-TS input analysis to one second of media timestamps so short multi-audio bursts can start video/audio before the producer closes. Preserve retained keyframes and existing byte/drain limits.
+- Reset the manual snapshot switch after HomeKit commits its write, preventing successful refreshes from leaving the switch On. Capture deadlines, coalescing and failure reporting remain unchanged.
+
+### Acceptance and limitations
+- Open-pipe synthetic startup tests exercise short three-stream bursts and fragmented delivery; installed HAP tests exercise the actual write commit. These do not establish Corner physical playback.
+- Operator installation, fresh Home video/audio, STOP/reopen, automatic snapshot reset and a new 48-hour/two-natural-refresh observation remain required. Issue #52 and F05/F06 remain open.
+
 ## [0.10.0-rc.9] - 2026-10-12
 
 ### Fixed

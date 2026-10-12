@@ -15,6 +15,8 @@ import { BlinkTokenRefreshError } from '../src/blink-api/auth';
 import { BlinkHttpError } from '../src/blink-api/http';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
+import { Characteristic as HapCharacteristic } from 'hap-nodejs';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 
 jest.mock('node:child_process', () => {
   const actual = jest.requireActual('node:child_process') as typeof import('node:child_process');
@@ -1645,6 +1647,46 @@ describe('Accessory handlers', () => {
       expect(characteristic?.value).toBe(false);
     } finally {
       refreshSpy.mockRestore();
+    }
+  });
+
+  it.each(['success', 'failure'])('resets the refresh switch after the actual HAP %s write commits', async (outcome) => {
+    const refresh = jest.spyOn(BlinkCameraSource.prototype, 'refreshSnapshotCache');
+    if (outcome === 'success') {
+      refresh.mockResolvedValue();
+    } else {
+      refresh.mockRejectedValue(new Error('snapshot unavailable'));
+    }
+    try {
+      const { hap, platform } = buildPlatform({ persistSnapshotCache: true });
+      const accessory = new MockAccessory('Camera', 'uuid-camera', hap);
+      new CameraAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+        { id: 2, network_id: 1, name: 'Camera', enabled: true });
+      const service = accessory.getServiceById(hap.Service.Switch, 'snapshot-refresh')!;
+      const handler = service.getCharacteristic(hap.Characteristic.On).onSetHandler!;
+      // Exercise installed HAP's public write path, including its post-handler
+      // value commit; invoking the handler alone cannot expose this regression.
+      const characteristic = new HapCharacteristic.On();
+      characteristic.onSet(handler as Parameters<typeof characteristic.onSet>[0]);
+      jest.spyOn(service, 'getCharacteristic').mockReturnValue(characteristic as never);
+      const changes: unknown[] = [];
+      characteristic.on('change', change => changes.push(change.newValue));
+      const writeError = await new Promise<unknown>(resolve => {
+        characteristic.setValue(true, error => resolve(error ?? undefined));
+      });
+      await nextTurn();
+      expect(Boolean(writeError)).toBe(outcome === 'failure');
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(characteristic.value).toBe(false);
+      if (outcome === 'success') {
+        expect(changes.slice(-2)).toEqual([true, false]);
+      }
+      characteristic.setValue(false);
+      await nextTurn();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(characteristic.value).toBe(false);
+    } finally {
+      refresh.mockRestore();
     }
   });
 
