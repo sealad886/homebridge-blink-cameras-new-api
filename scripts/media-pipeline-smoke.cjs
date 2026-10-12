@@ -184,7 +184,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
         };
         const request = {
             video: {
-                fps: qualityCase?.output.fps ?? 15,
+                fps: qualityCase?.requestedFps ?? qualityCase?.output.fps ?? 15,
                 width: qualityCase?.output.width ?? 640,
                 height: qualityCase?.output.height ?? 360,
                 max_bit_rate: 300,
@@ -301,7 +301,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
         }
         return {
             preset,
-            ...(qualityCase ? { output_profile: qualityCase.profile, observed_descriptors: descriptors,
+            ...(qualityCase ? { output_profile: qualityCase.profile, requested_fps: qualityCase.requestedFps ?? qualityCase.output.fps, observed_descriptors: descriptors,
                 video_frames: videoFrames.length, video_timestamp_step: videoSteps[0], h264_sps_levels: [...videoSpsLevels] } : {}),
             open_pipe_startup: openPipe,
             fragmented,
@@ -359,6 +359,13 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
                     { profile, input: geometry, output }));
         }
     }
+    // A retained 720p/30 selection must package actual 15fps video and audio.
+    const retainedInput = generateInput(true, 2, false, { width: 1280, height: 720, fps: 30 });
+    for (const codec of ["opus", "aac-eld"])
+        results.push(await runCase(retainedInput, "ultrafast", 20, true, codec, 24, false, false,
+            { profile: "720p15", requestedFps: 30,
+                input: { width: 1280, height: 720, fps: 30 },
+                output: { width: 1280, height: 720, fps: 15 } }));
     console.log(JSON.stringify(results, null, 2));
 })().catch((error) => {
     console.error(error.message);

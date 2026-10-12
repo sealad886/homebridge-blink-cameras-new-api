@@ -24,7 +24,11 @@ export function resolveOutputQuality(value: unknown): OutputQualityProfile {
 export function outputResolutions(profile: OutputQualityProfile): VideoResolution[] {
   const resolutions = profile === 'auto'
     ? DEFAULT_RESOLUTIONS
-    : [FIXED_RESOLUTIONS[profile], [320, 240, 15] as VideoResolution];
+    : profile === '1080p30'
+      ? [FIXED_RESOLUTIONS[profile], [320, 240, 15] as VideoResolution]
+      : [FIXED_RESOLUTIONS[profile],
+        [FIXED_RESOLUTIONS[profile][0], FIXED_RESOLUTIONS[profile][1], 30] as VideoResolution,
+        [320, 240, 15] as VideoResolution, [320, 240, 30] as VideoResolution];
   // Each controller owns its capability arrays; HAP must not mutate another camera.
   return resolutions.map(([width, height, fps]) => [width, height, fps]);
 }
@@ -41,4 +45,9 @@ export function isSupportedOutputVideo(
   if (profile === '1080p30' && video.level !== 2) return false;
   return outputResolutions(profile).some(([width, height, fps]) =>
     width === video.width && height === video.height && fps === video.fps);
+}
+
+/** Controllers may select 30fps while the configured output imposes a lower cap. */
+export function effectiveOutputFps(profile: OutputQualityProfile, requestedFps: number): number {
+  return profile === '720p15' || profile === '360p15' ? Math.min(requestedFps, 15) : requestedFps;
 }

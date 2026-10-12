@@ -34,7 +34,7 @@ import {
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { StreamDiagnosticBudget } from '../blink-api/stream-diagnostics';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
-import { isSupportedOutputVideo, outputH264Levels, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
+import { effectiveOutputFps, isSupportedOutputVideo, outputH264Levels, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
 import { InputVideoObservation, InputVideoObserver } from './input-video-observation';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
@@ -349,6 +349,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
   private streamFailureCooldownUntil = 0;
+  private readonly negotiationDiagnostics = new StreamDiagnosticBudget(32, 8);
+
+  private logNegotiation(message: string, error = false): void {
+    if (this.negotiationDiagnostics.admit(error)) this.log(message);
+  }
   private inputVideoObserved = false;
 
   constructor(
@@ -652,13 +657,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         };
       }
 
-      const audioDetails = this.streamingConfig.audio.enabled && session.audioPort && session.localAudioPort
-        ? ` audio target=${session.audioPort} local=${session.localAudioPort}/${session.localAudioRtcpPort ?? 'n/a'}`
-        : '';
-      this.log(
-        `Prepared stream session ${sessionId} target=${request.targetAddress} (${request.addressVersion}) ` +
-        `video target=${request.video.port} local=${localVideoPort}/${session.localVideoRtcpPort ?? 'n/a'}${audioDetails}`,
-      );
+      this.logNegotiation('Stream prepared');
       callback(undefined, response);
     } catch (error) {
       owner.preparing = false;
@@ -709,20 +708,22 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
 
     // Restored clients can retain old capabilities after a profile change.
-    // Reject their selection rather than send differently sized/fps payloads.
+    // Keep geometry strict; a selected frame rate is capped by the output profile.
     if (!isSupportedOutputVideo(this.streamingConfig.video.outputQuality, request.video)) {
+      const numeric = (value: number): string => Number.isSafeInteger(value) && value >= 0 && value <= 65535 ? String(value) : 'invalid';
+      this.logNegotiation(`Stream selection rejected: profile=${this.streamingConfig.video.outputQuality}, width=${numeric(request.video.width)}, height=${numeric(request.video.height)}, requestedFps=${numeric(request.video.fps)}, level=${numeric(request.video.level)}`, true);
       await this.stopStream(sessionId, pending.owner);
       callback(new Error('Selected video quality is not supported by the output profile'));
       return;
     }
-
-    this.log(`Stream output: profile=${this.streamingConfig.video.outputQuality}, width=${request.video.width}, height=${request.video.height}, fps=${request.video.fps}`);
 
     if (Date.now() < this.streamFailureCooldownUntil) {
       await this.stopStream(sessionId, pending.owner);
       callback(new Error('Streaming startup is temporarily unavailable'));
       return;
     }
+
+    this.logNegotiation(`Stream output: profile=${this.streamingConfig.video.outputQuality}, width=${request.video.width}, height=${request.video.height}, requestedFps=${request.video.fps}, effectiveFps=${effectiveOutputFps(this.streamingConfig.video.outputQuality, request.video.fps)}`);
 
     const activeStreamCount = Array.from(this.ongoingSessions.values())
       .filter((session) => session.owner?.phase !== 'CLOSED')
@@ -1498,7 +1499,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       '-map', '0:v:0',
       ...videoEncoderArgs,
       '-vf', videoFilter,
-      '-r', `${video.fps}`,
+      '-r', `${effectiveOutputFps(this.streamingConfig.video.outputQuality, video.fps)}`,
       '-b:v', `${bitrate}k`,
       '-maxrate', `${bitrate}k`,
       '-bufsize', `${bitrate}k`,
