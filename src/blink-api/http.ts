@@ -20,6 +20,11 @@ import {
   NetworkFailureDiagnostic,
 } from './network-diagnostics';
 
+export interface BlinkPostRequestOptions extends RequestOptions {
+  /** Disable replay after an ambiguous server response for stateful commands. */
+  retryServerErrors?: boolean;
+}
+
 /**
  * Standard headers for all Blink API requests
  * Source: API Dossier Section 2.3 - Added by HeadersInterceptor.smali
@@ -155,7 +160,7 @@ export class BlinkHttp {
     return this.request<T>('GET', path, undefined, 0, true, [], options);
   }
 
-  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = [], options?: RequestOptions): Promise<T> {
+  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = [], options?: BlinkPostRequestOptions): Promise<T> {
     return this.request<T>('POST', path, body, 0, true, expectedErrorStatuses, options);
   }
 
@@ -182,7 +187,7 @@ export class BlinkHttp {
     attempt = 0,
     runPreflight = true,
     expectedErrorStatuses: readonly number[] = [],
-    options: RequestOptions = {},
+    options: BlinkPostRequestOptions = {},
   ): Promise<T> {
     checkRequestBudget(options);
     const url = this.buildUrl(path);
@@ -255,7 +260,7 @@ export class BlinkHttp {
     }
 
     // Server error - linear backoff
-    if (response.status >= 500 && attempt < 2) {
+    if (response.status >= 500 && attempt < 2 && (method !== 'POST' || options.retryServerErrors !== false)) {
       const delay = 500 * (attempt + 1);
       this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);

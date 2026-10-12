@@ -448,3 +448,35 @@ video-only input alongside existing codec/packaging cases. Physical Corner
 video/audio and automatic Home reset require operator installation. A runtime
 correction resets RC observation; F05/F06 and #52 remain open. Rollback preserves
 TLS, private transport and resource guards or disables the affected mode.
+
+## RC.11 quality profiles — 12 October 2026
+
+Authorized scope: global output auto/720p15/360p15/1080p30, camera-only input
+policy preserving first observed source by default, and actual 2K conversion.
+Context is RC.10 physical video/audio with operator-reported stutter; CPU samples
+are not proof of the stutter cause. ADR-006 records source/output authority,
+persistent vendor-setting consequences, observation and rollback.
+
+Delivery uses medium-feature-change (medium operational risk): context and
+acceptance → design → compact plan → implementation → testing → documentation
+and independent review → release-change. Security/operations covers bounded
+source metadata, authenticated settings and cancellation; coordination covers
+GitHub/CI/npm receipts. Retrospective is deferred until installed quality outcome.
+
+Acceptance: default output capability unchanged; fixed profiles are advertised
+and negotiated exactly; input settings remain camera-only; auto never writes;
+first vendor/input observations survive cache reuse; explicit writes respect
+restrictions and confirmed-state/no-replay semantics; STOP during configuration
+cannot start media; both conventional/square 2K decode and selected outputs retain
+audio/RTP/SRTP framing. Physical smoothness and real 2K-device behavior remain
+operator acceptance, not synthetic claims.
+
+Verification: implemented contracts and focused regressions pass. Full local
+suite passed 939 tests (one existing skip) before review's final auto-read repair;
+71 accessory regressions then pass, including hanging metadata/STOP cancellation.
+24 real FFmpeg cases cover 2K/profile/audio conversion; lint/build, API contract,
+49 evidence tests, 39 release-safety tests, OAuth diagnostic typing, package
+loadability and zero production advisories pass. Independent review and clean CI
+must accept the final release source before publication. Exact registry artifact
+verification follows publication. Installation remains operator-owned.
+Issue #52 and F05/F06 remain open; a fresh RC resets runtime observation.

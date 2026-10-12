@@ -20,7 +20,7 @@ import {
   StreamRequestCallback,
   StreamingRequest,
 } from 'homebridge';
-import { withResponseBudget, RequestOptions, checkRequestBudget, budgetedDelay } from '../operation-budget';
+import { withResponseBudget, withinRequestBudget, RequestOptions, checkRequestBudget, budgetedDelay } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkApi } from '../blink-api/client';
 import { readBoundedBody } from '../blink-api/response-body';
@@ -33,6 +33,8 @@ import {
 } from '../blink-api/network-diagnostics';
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
+import { isSupportedOutputVideo, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
+import { InputVideoObservation, InputVideoObserver } from './input-video-observation';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -65,6 +67,7 @@ export interface BlinkCameraStreamingConfig {
     aacEldEncoder?: 'libfdk_aac';
   };
   video: {
+    outputQuality: OutputQualityProfile;
     maxBitrate?: number;
     encoder: VideoEncoderPreference;
     softwarePreset?: 'veryfast' | 'ultrafast';
@@ -102,6 +105,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
     bitrate: 32,
   },
   video: {
+    outputQuality: 'auto',
     encoder: 'auto',
     softwarePreset: 'veryfast',
   },
@@ -136,6 +140,7 @@ export const resolveStreamingConfig = (
       aacEldEncoder: audio.aacEldEncoder,
     },
     video: {
+      outputQuality: resolveOutputQuality(video.outputQuality),
       maxBitrate: video.maxBitrate ?? DEFAULT_STREAMING_CONFIG.video.maxBitrate,
       encoder: video.encoder ?? DEFAULT_STREAMING_CONFIG.video.encoder,
       softwarePreset: video.softwarePreset === 'ultrafast' ? 'ultrafast' : 'veryfast',
@@ -178,6 +183,7 @@ interface PendingStreamSession {
 }
 
 interface ActiveStreamSession extends PendingStreamSession {
+  inputVideoObserver?: InputVideoObserver;
   ffmpeg?: ChildProcessWithoutNullStreams;
   talkback?: ChildProcess;
   commandId?: number;
@@ -193,6 +199,7 @@ interface ActiveStreamSession extends PendingStreamSession {
 }
 
 interface FfmpegStderrState {
+  inputVideoObserver?: InputVideoObserver;
   ffmpegStderrBuffer?: string;
   ffmpegStderrBufferTruncated?: boolean;
 }
@@ -343,6 +350,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
   private streamFailureCooldownUntil = 0;
+  private inputVideoObserved = false;
 
   constructor(
     private readonly api: BlinkApi,
@@ -356,6 +364,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly log: (message: string) => void,
     streamingConfig?: BlinkCameraStreamingConfigInput,
     private readonly errorLog: (message: string) => void = log,
+    private readonly beforeLiveview?: (options: RequestOptions) => Promise<void>,
+    private readonly onInputObservation?: (observation: InputVideoObservation) => void,
   ) {
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
   }
@@ -699,6 +709,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
+    // Restored clients can retain old capabilities after a profile change.
+    // Reject their selection rather than send differently sized/fps payloads.
+    if (!isSupportedOutputVideo(this.streamingConfig.video.outputQuality, request.video)) {
+      await this.stopStream(sessionId, pending.owner);
+      callback(new Error('Selected video quality is not supported by the output profile'));
+      return;
+    }
+
     if (Date.now() < this.streamFailureCooldownUntil) {
       await this.stopStream(sessionId, pending.owner);
       callback(new Error('Streaming startup is temporarily unavailable'));
@@ -735,6 +753,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       // Validate the selected codec before allocating a remote liveview. Home
       // may retain a previously advertised codec across an accessory update.
       if (this.streamingConfig.audio.enabled && request.audio) this.buildAudioEncoderArgs(request.audio);
+      if (this.beforeLiveview) {
+        const options = { signal: owner.abort.signal, deadline: Date.now() + 12_000 };
+        await withinRequestBudget(this.beforeLiveview(options), options);
+        if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
+      }
       const liveview = await this.requestLiveView();
       active.commandId = liveview.command_id ?? liveview.id;
       if (!this.ownsSession(sessionId, active)) {
@@ -1200,6 +1223,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
     });
     active.ffmpeg = ffmpeg;
+    active.inputVideoObserver = new InputVideoObserver();
+    active.ffmpegStderrBuffer = '';
+    active.ffmpegStderrBufferTruncated = false;
     active.owner?.children.add(ffmpeg);
     ffmpeg.once('close', () => active.owner?.children.delete(ffmpeg));
     if (liveviewUrl === 'pipe:0') active.immisProxy?.attachConsumer(ffmpeg.stdin);
@@ -1217,7 +1243,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      if (active.stopped || active.ffmpeg !== ffmpeg) return;
+      if (active.stopped || active.ffmpeg !== ffmpeg || (active.owner && !this.ownsSession(sessionId, active))) return;
       this.handleFfmpegStderr(sessionId, active, data);
     });
 
@@ -1280,7 +1306,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     data: Buffer,
     label = 'FFmpeg',
   ): void {
-    if (!this.streamingConfig.ffmpegDebug) {
+    if (!this.streamingConfig.ffmpegDebug && !state.inputVideoObserver) {
       return;
     }
 
@@ -1306,7 +1332,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private flushFfmpegStderr(sessionId: string, state: FfmpegStderrState, label = 'FFmpeg'): void {
-    if (!this.streamingConfig.ffmpegDebug) {
+    if (!this.streamingConfig.ffmpegDebug && !state.inputVideoObserver) {
       return;
     }
 
@@ -1330,7 +1356,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
   private flushFfmpegStderrLine(sessionId: string, state: FfmpegStderrState, label: string): void {
     if (state.ffmpegStderrBufferTruncated) {
-      this.log(
+      if (this.streamingConfig.ffmpegDebug) this.log(
         `${label}(${sessionId}): <stderr line omitted because it exceeded ${MAX_FFMPEG_STDERR_BUFFER_CHARS} characters>`,
       );
       state.ffmpegStderrBuffer = '';
@@ -1342,7 +1368,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       return;
     }
 
-    this.logRedactedFfmpegLine(sessionId, state.ffmpegStderrBuffer, label);
+    const observation = state.inputVideoObserver?.observe(state.ffmpegStderrBuffer);
+    if (observation && !this.inputVideoObserved) {
+      this.inputVideoObserved = true;
+      try { this.onInputObservation?.(observation); }
+      catch { this.logError('Input video observation could not be persisted'); }
+    }
+    if (this.streamingConfig.ffmpegDebug) this.logRedactedFfmpegLine(sessionId, state.ffmpegStderrBuffer, label);
     state.ffmpegStderrBuffer = '';
   }
 
@@ -1379,7 +1411,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         ];
       case 'h264_vaapi':
         return [
-          '-vf', 'format=nv12,hwupload',
           '-vcodec', videoEncoder,
           '-profile:v', profileName,
           '-level:v', levelName,
@@ -1426,6 +1457,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const profileName = this.getH264ProfileName(video.profile);
     const levelName = this.getH264LevelName(video.level);
     const videoEncoderArgs = this.buildVideoEncoderArgs(videoEncoder, profileName, levelName);
+    // Preserve square doorbell and other source aspect ratios within the exact
+    // HomeKit-negotiated frame. Hardware upload follows CPU scale/padding.
+    const videoFilter = [
+      `scale=${video.width}:${video.height}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
+      `pad=${video.width}:${video.height}:(ow-iw)/2:(oh-ih)/2`,
+      'setsar=1',
+      ...(videoEncoder === 'h264_vaapi' ? ['format=nv12', 'hwupload'] : []),
+    ].join(',');
 
     const args = [
       '-hide_banner',
@@ -1456,8 +1495,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     args.push(
       '-map', '0:v:0',
       ...videoEncoderArgs,
+      '-vf', videoFilter,
       '-r', `${video.fps}`,
-      '-s', `${video.width}x${video.height}`,
       '-b:v', `${bitrate}k`,
       '-maxrate', `${bitrate}k`,
       '-bufsize', `${bitrate}k`,
@@ -1669,24 +1708,7 @@ export function createCameraControllerOptions(
     streamingOptions: {
       supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
       video: {
-        resolutions: [
-          [320, 180, 30],
-          [320, 240, 30],
-          [480, 270, 30],
-          [480, 360, 30],
-          [640, 360, 30],
-          [640, 480, 30],
-          [1280, 720, 30],
-          [1920, 1080, 30],
-          [320, 180, 15],
-          [320, 240, 15],
-          [480, 270, 15],
-          [480, 360, 15],
-          [640, 360, 15],
-          [640, 480, 15],
-          [1280, 720, 15],
-          [1920, 1080, 15],
-        ],
+        resolutions: outputResolutions(resolved.video.outputQuality),
         codec: {
           profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
           levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0],

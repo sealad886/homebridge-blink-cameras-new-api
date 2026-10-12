@@ -170,6 +170,24 @@
         "minimum": 8,
         "maximum": 128
       },
+      "outputQuality": {
+        "title": "HomeKit Output Quality",
+        "type": "string",
+        "default": "auto",
+        "enum": [
+          "auto",
+          "720p15",
+          "360p15",
+          "1080p30"
+        ],
+        "enumNames": [
+          "Current quality (Home chooses)",
+          "1280 \u00d7 720 at 15 fps",
+          "640 \u00d7 360 at 15 fps",
+          "1920 \u00d7 1080 at 30 fps"
+        ],
+        "description": "System-wide HomeKit output capability profile. Lower profiles reduce encoding work; default preserves current behavior. Home may choose its mandatory small-resolution fallback. Audio conversion remains negotiated separately."
+      },
       "videoBitrate": {
         "title": "Max Video Bitrate (kbps)",
         "description": "Cap the video bitrate (leave empty to use HomeKit defaults).",
@@ -256,6 +274,24 @@
               "description": "The device serial number or numeric ID to configure",
               "type": "string"
             },
+            "inputQuality": {
+              "title": "Camera Input Quality",
+              "type": "string",
+              "default": "auto",
+              "enum": [
+                "auto",
+                "saver",
+                "standard",
+                "best"
+              ],
+              "enumNames": [
+                "Automatic (preserve camera setting)",
+                "Saver",
+                "Standard",
+                "Best (including supported 2K)"
+              ],
+              "description": "Per-camera Blink source quality. Automatic preserves existing quality and remembers first observed input. Explicit selection changes Blink camera configuration and recordings too; dimensions depend on camera model and subscription."
+            },
             "motionTimeout": {
               "title": "Motion Timeout (seconds)",
               "type": "integer",
@@ -311,6 +347,7 @@
         "enableAudio",
         "audioCodec",
         "audioBitrate",
+        "outputQuality",
         "videoBitrate",
         "videoEncoder",
         "softwareEncodingPreset",

@@ -545,3 +545,13 @@ export interface Blink2FAVerifyResponse {
   /** Error code if failed */
   code?: number;
 }
+/** Persistent vendor capture quality; dimensions depend on the camera model. */
+export type BlinkVideoQuality = 'saver' | 'standard' | 'best';
+export type BlinkInputQuality = 'auto' | BlinkVideoQuality;
+export type BlinkCameraKind = 'camera' | 'owl' | 'doorbell';
+
+export interface BlinkVideoQualityState {
+  quality?: BlinkVideoQuality;
+  supported?: BlinkVideoQuality[];
+  restricted?: BlinkVideoQuality[];
+}

@@ -37,6 +37,8 @@ import {
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
+import { OutputQualityProfile } from './accessories/stream-quality';
+import { BlinkInputQuality } from './types';
 import { probeAacEldEncoder, probeVideoEncoder } from './accessories/encoder-probe';
 import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
@@ -67,6 +69,7 @@ interface DeviceNameOverride {
 
 interface DeviceSettingOverride {
   deviceIdentifier: string;
+  inputQuality?: BlinkInputQuality;
   motionTimeout?: number;
 }
 
@@ -103,6 +106,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
   audioBitrate?: number;
   videoBitrate?: number;
+  outputQuality?: OutputQualityProfile;
   videoEncoder?: VideoEncoderPreference;
   softwareEncodingPreset?: 'veryfast' | 'ultrafast';
   verifyImmisTls?: boolean;
@@ -184,6 +188,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       },
       video: {
         maxBitrate: this.config.videoBitrate,
+        outputQuality: this.config.outputQuality,
         encoder: this.config.videoEncoder,
         softwarePreset: this.config.softwareEncodingPreset,
       },
@@ -245,6 +250,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private validateConfig(): void {
+    for (const override of this.config.deviceSettingOverrides ?? []) {
+      if (override.inputQuality !== undefined && !['auto', 'saver', 'standard', 'best'].includes(override.inputQuality)) {
+        throw new Error('Invalid per-camera input quality');
+      }
+    }
     const hasUsername = Boolean(this.config.username?.trim());
     const hasPassword = Boolean(this.config.password?.trim());
 
@@ -324,6 +334,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       return customNames[`${device.id}`];
     }
     return device.name;
+  }
+
+  public getDeviceInputQuality(device: { id: number; name?: string; serial?: string }): BlinkInputQuality {
+    const override = this.config.deviceSettingOverrides?.find(entry =>
+      entry.deviceIdentifier === `${device.id}` ||
+      (device.serial !== undefined && entry.deviceIdentifier === device.serial) ||
+      (device.name !== undefined && entry.deviceIdentifier === device.name));
+    return override?.inputQuality ?? 'auto';
   }
 
   public getDeviceMotionTimeout(device: { id: number; name?: string; serial?: string }): number {

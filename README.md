@@ -554,3 +554,50 @@ initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
 private-pipe backpressure and bounded session cleanup still apply.
 
 IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Physical video/audio acceptance remains required for each installed RC.
+
+### Input and output quality
+
+`outputQuality` applies to every camera's HomeKit video output. Default `auto`
+preserves the current capabilities and lets Home choose. Optional `720p15`
+(1280×720/15), `360p15` (640×360/15), and `1080p30` (1920×1080/30) advertise
+that format plus HomeKit's mandatory 320×240/15 fallback. Home chooses among
+advertised formats; the plugin never substitutes another format after negotiation.
+Lower resolution/frame rate reduces encoding work, but improved Pi playback is
+not established until measured on the installed release. 1080p/30 increases work.
+Audio remains independently negotiated and transcoded, including Opus/AAC-ELD
+packet duration, sample rate and separate RTP/SRTP packaging. Software encoding
+preset and bitrate remain separate controls.
+
+Input quality is **per camera only**, under `deviceSettingOverrides`:
+
+```json
+{
+  "outputQuality": "720p15",
+  "deviceSettingOverrides": [
+    { "deviceIdentifier": "CAMERA_SERIAL", "inputQuality": "auto" }
+  ]
+}
+```
+
+`inputQuality: auto` preserves the camera's current Blink quality; it sends no
+settings write. On first live startup, the plugin remembers the first parseable
+vendor quality and actual input video dimensions/frame rate in Homebridge's
+accessory cache. These observations are separate from configured policy and
+model maximum capability. Missing metadata does not invent an input resolution
+or prevent automatic streaming. Compressed input is demuxed at its real format.
+
+Explicit `saver`, `standard` or `best` selects Blink's persistent camera setting
+before liveview, with supported/restricted values checked and confirmed readback.
+**This also changes recording quality in the Blink app.** Existing settings are
+not restored when returning to `auto`; restore the desired quality explicitly in
+the plugin or Blink app. Failed/unconfirmed changes prevent that stream start;
+ambiguous writes are not replayed. Save settings and restart through Homebridge's
+normal operator workflow; publication does not change the live host.
+
+2K is model-dependent. [Mini 2K+](https://support.blinkforhome.com/en_US/faq-mini-2k/mini-2k-faq)
+Best is 2560×1440/24; the [newer doorbells](https://support.blinkforhome.com/en_US/wired-doorbell-2k-plus-faq/blink-wired-doorbell-2k-faq)
+use square video. The pipeline accepts actual 2560×1440 and 1920×1920 input and
+converts to negotiated output while preserving aspect ratio with padding.
+No universal 2K override or unsupported resolution request is sent. Camera model,
+firmware and subscription may restrict upstream quality. Synthetic 2K conversion
+and mocked config contracts do not establish physical 2K-camera acceptance.
