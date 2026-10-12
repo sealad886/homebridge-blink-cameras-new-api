@@ -59,6 +59,7 @@ describe('generation-owned streaming', () => {
   it('opens verified IMMIS media while command monitoring is pending and fences late polling after STOP', async () => {
     const socket = new EventEmitter() as any;
     socket.authorized = true; socket.write = jest.fn(() => true);
+    socket.pause = jest.fn(); socket.resume = jest.fn();
     socket.destroy = jest.fn(() => { socket.emit('close'); return socket; });
     const connecting = (tls.connect as jest.Mock).mockImplementation(((_options: any, callback: () => void) => {
       void Promise.resolve().then(callback); return socket;
@@ -66,7 +67,7 @@ describe('generation-owned streaming', () => {
     let finishPoll!: (value: any) => void;
     const getCommandStatus = jest.fn(() => new Promise(resolve => { finishPoll = resolve; }));
     const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({
-      server: 'immis://8.8.8.8:443/?client_id=1', command_id: 7, continue_interval: 7,
+      server: 'immis://8.8.8.8:443/?client_id=1', command_id: 7, polling_interval: 1, continue_interval: 30,
     }), getCommandStatus, completeCommand: jest.fn().mockResolvedValue(null) });
     try {
       await prepare(source); source.handleStreamRequest(request, jest.fn());
@@ -78,8 +79,10 @@ describe('generation-owned streaming', () => {
       const header = Buffer.alloc(9); header.writeUInt32BE(payload.length, 5);
       socket.emit('data', Buffer.concat([header, payload]));
       expect(child.stdin.read()).toEqual(payload);
-      // Advance the already scheduled polling timer without overlapping requests.
-      await new Promise(resolve => setTimeout(resolve, 5100));
+      // First GET is immediate, independent of the Continue-button interval.
+      expect(getCommandStatus).toHaveBeenCalledTimes(1);
+      // A pending GET cannot overlap the next polling interval.
+      await new Promise(resolve => setTimeout(resolve, 1100));
       expect(getCommandStatus).toHaveBeenCalledTimes(1);
       const stopping = stop(source); child.emit('close', 0, null); await stopping;
       finishPoll({ complete: false }); await new Promise(resolve => setImmediate(resolve));
@@ -92,6 +95,32 @@ describe('generation-owned streaming', () => {
     const source = make({}); await prepare(source);
     await expect(prepare(source)).rejects.toThrow('already owned');
     await stop(source); await prepare(source); await stop(source);
+  });
+
+  it('uses polling_interval after the immediate GET rather than the Continue-button timer', async () => {
+    const socket = new EventEmitter() as any;
+    socket.authorized = true; socket.write = jest.fn(() => true);
+    socket.pause = jest.fn(); socket.resume = jest.fn();
+    socket.destroy = jest.fn(() => { socket.emit('close'); return socket; });
+    (tls.connect as jest.Mock).mockImplementation((_options, callback) => {
+      void Promise.resolve().then(callback); return socket;
+    });
+    const getCommandStatus = jest.fn().mockResolvedValue({ complete: false });
+    const source = make({ startCameraLiveview: jest.fn().mockResolvedValue({
+      server: 'immis://8.8.8.8:443/?client_id=1', command_id: 7, polling_interval: 1, continue_interval: 30,
+    }), getCommandStatus, completeCommand: jest.fn().mockResolvedValue(null) });
+    try {
+      await prepare(source); source.handleStreamRequest(request, jest.fn());
+      await new Promise(resolve => setImmediate(resolve));
+      expect(getCommandStatus).toHaveBeenCalledTimes(1);
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      expect(getCommandStatus).toHaveBeenCalledTimes(2);
+      const stopping = stop(source);
+      (spawn as jest.Mock).mock.results[0].value.emit('close', 0, null);
+      await stopping;
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      expect(getCommandStatus).toHaveBeenCalledTimes(2);
+    } finally { (tls.connect as jest.Mock).mockReset(); await stop(source); }
   });
   it('expires unused preparation after 30 seconds', async () => {
     const source = make({}); await prepare(source); jest.useFakeTimers();

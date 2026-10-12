@@ -75,10 +75,9 @@ export interface ImmisProxyEvents {
 const enum ImmisMessageType {
   /** Video stream data (MPEG-TS) */
   VIDEO = 0x00,
+  AUTH_ACCEPTED = 0x06,
   /** Keep-alive packet */
   KEEPALIVE = 0x0a,
-  /** Latency statistics */
-  LATENCY_STATS = 0x12,
   /** Inline command (device control) */
   INLINE_COMMAND = 0x14,
   /** Accessory message */
@@ -201,6 +200,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
   /** Buffer for accumulating incoming data from the immis server */
   private receiveBuffer = Buffer.alloc(0);
+  private receivedMedia = false;
+  private authAccepted = false;
   /** Attached upstream audio source stream (LATM) */
   private audioInput: Readable | null = null;
   private audioCleanup: (() => void) | null = null;
@@ -296,6 +297,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     consumer.on('error', detach);
     this.consumerCleanup = () => { consumer.off('close', detach); consumer.off('error', detach); };
     if (this.isCommandReady && !this.targetSocket) this.connectToImmisServer();
+    this.resumeConsumerInput();
   }
 
   /** After stop(), resolves only after startup and owned transport/file handles close. */
@@ -326,6 +328,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.consumerCleanup?.();
     this.consumerCleanup = null;
     this.consumer = null;
+    this.targetSocket?.pause();
     if (this.isRunning) this.scheduleIdleShutdown();
   }
 
@@ -341,7 +344,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   /** Node Writable owns its queue; enforce its bound before each write. */
-  private boundedWrite(writer: Writable, data: Buffer, limit: number, failure: () => void): void {
+  private boundedWrite(writer: Writable, data: Buffer, limit: number, failure: () => void, drained?: () => void): void {
     if (writer.destroyed || writer.writableEnded || (writer.writableLength || 0) + data.length > limit) {
       failure(); return;
     }
@@ -349,15 +352,27 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       if (writer.write(data) === false && !this.blockedWriters.has(writer)) {
         const timer = globalThis.setTimeout(() => { cleanup(); failure(); }, 2000);
         const cleanup = () => {
-          globalThis.clearTimeout(timer); writer.off('drain', cleanup); writer.off('close', cleanup);
+          globalThis.clearTimeout(timer); writer.off('drain', onDrain); writer.off('close', cleanup);
           this.blockedWriters.delete(writer);
         };
+        const onDrain = () => { cleanup(); drained?.(); };
         this.blockedWriters.set(writer, cleanup);
-        writer.once('drain', cleanup); writer.once('close', cleanup);
+        writer.once('drain', onDrain); writer.once('close', cleanup);
       }
     } catch { failure(); }
   }
   private blockedWriters = new Map<Writable, () => void>();
+
+  /** Drain retained frames before requesting more bytes from the current upstream. */
+  private resumeConsumerInput(): void {
+    if (!this.isRunning || !this.consumer || this.blockedWriters.has(this.consumer)) return;
+    const socket = this.targetSocket;
+    if (!socket || socket !== this.verifiedSocket) return;
+    this.handleImmisData(Buffer.alloc(0));
+    if (this.isRunning && this.targetSocket === socket && this.consumer && !this.blockedWriters.has(this.consumer)) {
+      socket.resume();
+    }
+  }
 
   private writeUpstream(data: Buffer): void {
     if (this.isRunning && this.targetSocket && this.targetSocket === this.verifiedSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
@@ -629,6 +644,9 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.verifiedSocket = socket;
         clearHandshake();
         this.log('TLS connection established');
+        this.receivedMedia = false;
+        this.authAccepted = false;
+        if (this.consumer && this.blockedWriters.has(this.consumer)) socket.pause();
 
         // Send authentication header
         const authHeader = this.buildAuthHeader();
@@ -775,7 +793,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.receiveBuffer = Buffer.concat([this.receiveBuffer, data]);
 
     // Process complete packets
-    while (this.receiveBuffer.length >= 9) {
+    while (this.isRunning && this.consumer && !this.blockedWriters.has(this.consumer) && this.receiveBuffer.length >= 9) {
       // Read 9-byte header
       const msgtype = this.receiveBuffer.readUInt8(0);
       const sequence = this.receiveBuffer.readUInt32BE(1);
@@ -804,10 +822,13 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       if (msgtype === ImmisMessageType.VIDEO) {
         // Skip packets without valid MPEG-TS sync byte
         if (payloadLength > 0 && payload[0] === MPEGTS_SYNC_BYTE) {
+          if (!this.receivedMedia) { this.receivedMedia = true; this.log('IMMIS first media received'); }
           this.forwardToClients(payload);
         } else if (payloadLength > 0) {
           this.debug(`Skipping video payload missing MPEG-TS sync byte`);
         }
+      } else if (msgtype === ImmisMessageType.AUTH_ACCEPTED && payloadLength === 0) {
+        if (!this.authAccepted) { this.authAccepted = true; this.log('IMMIS authentication accepted'); }
       } else if (msgtype === ImmisMessageType.SESSION_MESSAGE) {
         // Session messages are control-plane updates/ACKs.
         // We don't parse the payload yet; log for telemetry.
@@ -824,7 +845,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.debug(`Skipping non-video msgtype: ${msgtype}`);
       }
     }
-    if (this.receiveBuffer.length && !this.incompleteTimer) {
+    if (this.receiveBuffer.length && this.consumer && !this.blockedWriters.has(this.consumer) && !this.incompleteTimer) {
       this.incompleteTimer = globalThis.setTimeout(() => this.fail('IMMIS incomplete frame timed out'), 5000);
     }
   }
@@ -847,24 +868,26 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
         this.streamBytesWritten += data.length;
       }
     }
-    if (this.consumer) this.boundedWrite(this.consumer, data, 1024 * 1024,
-      () => this.fail('IMMIS consumer exceeded its budget'));
+    const consumer = this.consumer;
+    if (consumer) {
+      this.boundedWrite(consumer, data, 1024 * 1024,
+        () => this.fail('IMMIS consumer exceeded its budget'),
+        () => { if (this.consumer === consumer) this.resumeConsumerInput(); });
+      if (this.isRunning && this.consumer === consumer && this.blockedWriters.has(consumer)) this.targetSocket?.pause();
+    }
   }
 
   /**
    * Start the keep-alive timer
    */
   private startKeepAlive(): void {
-    // Send latency stats every second and keep-alive every 10 seconds
-    let secondCounter = 0;
+    // The native client sends its first keep-alive immediately after auth.
+    // We have no decoded/presented frame statistics, so never fabricate them.
+    this.sendKeepAlive();
     this.keepAliveInterval = globalThis.setInterval(() => {
-      secondCounter++;
-      if (secondCounter % 10 === 0) {
-        this.keepAliveSequence++;
-        this.sendKeepAlive();
-      }
-      this.sendLatencyStats();
-    }, 1000);
+      this.keepAliveSequence++;
+      this.sendKeepAlive();
+    }, 10_000);
   }
 
   /**
@@ -881,25 +904,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     packet.writeUInt32BE(0, 5); // No payload
 
     this.debug(`Sending keep-alive (sequence=${this.keepAliveSequence})`);
-    this.writeUpstream(packet);
-  }
-
-  /**
-   * Send latency statistics packet to the immis server
-   */
-  private sendLatencyStats(): void {
-    if (!this.targetSocket || this.targetSocket.destroyed) {
-      return;
-    }
-
-    // 9-byte header + 24-byte payload
-    const packet = Buffer.alloc(33);
-    packet.writeUInt8(ImmisMessageType.LATENCY_STATS, 0);
-    packet.writeUInt32BE(1000, 1); // Static sequence
-    packet.writeUInt32BE(24, 5); // Payload length
-    // Payload is all zeros (stats we don't track)
-
-    this.debug('Sending latency stats');
     this.writeUpstream(packet);
   }
 

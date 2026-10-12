@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.9] - 2026-10-12
+
+### Fixed
+- Pause IMMIS input when the private FFmpeg child applies backpressure, then drain retained frames in order before resuming. Existing byte ceilings and the two-second stalled-consumer deadline remain enforced.
+- Send the initial vendor keep-alive immediately after verified authentication, and stop sending fabricated zero presentation statistics.
+- Poll liveview command status immediately, then use the provider polling interval rather than its Continue-button timer. Polling remains serialized and generation-owned.
+- Add bounded authentication-accepted and first-media receipts to distinguish transport startup from actual source media.
+
+### Acceptance and limitations
+- Real-provider metadata probes demonstrate sustained Corner source media; local regressions cover pacing, stalled children, replacement and STOP. These do not establish Home video/audio or Pi CPU savings.
+- Installation remains operator-owned. A fresh RC observation window and physical Home acceptance are required. Issue #52 and security findings F05/F06 remain open.
+
 ## [0.10.0-rc.8] - 2026-10-11
 
 ### Fixed

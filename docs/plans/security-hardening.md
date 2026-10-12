@@ -408,3 +408,15 @@ This extends WI-05 IMMIS provider feasibility, preserves destination/lifecycle
 guards and adds bounded reason diagnostics. It does not close F05/F06, satisfy
 native-worker/five-target gates or close #52 without installed physical acceptance.
 A fresh reviewed RC and operator installation restart observation.
+
+## RC.9 media liveness repair — 12 October 2026
+
+RC.8 physical acceptance failed: Corner authenticated without useful media during Home tests; Front door briefly rendered then hit the consumer budget. Both failures were confirmed by the operator. Findings and unchanged-runtime timing remain in `logs/rc8-2026-10-12-acceptance/analysis.md`.
+
+The consumer boundary continued writing after `Writable.write` returned false, so normal bursts could consume the entire child queue. RC.9 pauses the upstream readable and frame parser, retains already delivered frames under the existing 2 MiB input cap, and resumes only after actual drain. The 1 MiB child cap, two-second drain deadline, frame deadline, independent recorder quotas and STOP/replacement ownership remain in force.
+
+Official Android startup sends an immediate keep-alive. Its presentation statistics are omitted when no rendered counts exist; the plugin previously sent fabricated zero statistics. RC.9 follows the immediate keep-alive and omits unsupported presentation reporting. Official command polling begins with an immediate GET and uses `polling_interval`; `continue_interval` is the Continue-button interval. The existing single-request, generation-fenced polling owner is corrected without treating command completion as proof that media ended.
+
+Metadata-only, in-memory diagnostics on the installed RC.8 demonstrated Corner source media through its unchanged parser: native-style startup with provider15-second polling sustained9.27MiB over49.6seconds. A final immediate-GET probe validates the combined scheduling contract. These probes use normal bounded vendor liveview/cleanup commands, no host installation/configuration changes, no credential storage writes, and no media retention. They do not identify a single exclusively causal Corner divergence or establish physical Home playback.
+
+Focused regressions cover coalesced-frame pacing, unchanged overflow/drain bounds, consumer replacement, stale drain after STOP, immediate authenticated keep-alive without fabricated stats, immediate/serialized polling and actual polling interval selection. Full project and CI gates plus independent review precede publication. F05/F06 and issue52 remain open. Rollback uses a verified artifact or disables streaming; TLS/private transport/resource guards stay enabled.

@@ -29,6 +29,8 @@ jest.mock('node:tls', () => {
       socket.destroyed = false;
       Object.defineProperty(socket, "authorized", { value: true, configurable: true });
       socket.destroy = jest.fn();
+      socket.pause = jest.fn();
+      socket.resume = jest.fn();
       if (callback) {
         void Promise.resolve().then(callback);
       }
@@ -100,6 +102,20 @@ describe('ImmisProxyServer private consumer', () => {
     expect(tls.connect).toHaveBeenCalledTimes(1);
   });
 
+  it('sends immediate authenticated keep-alive without fabricated presentation statistics', async () => {
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
+    const socket = latestSocket();
+    const writes = () => (socket.write as jest.Mock).mock.calls.map(([bytes]) => bytes as Buffer);
+    expect(writes()[0]).toHaveLength(122);
+    expect(writes().slice(1).map(bytes => bytes[0])).toEqual([0x0a]);
+    jest.advanceTimersByTime(10_000);
+    expect(writes().slice(1).map(bytes => bytes[0])).toEqual([0x0a, 0x0a]);
+    proxy.stop();
+    const count = writes().length;
+    jest.advanceTimersByTime(20_000);
+    expect(writes()).toHaveLength(count);
+  });
+
   it('cancels pending DNS on STOP and prevents duplicate resolution', async () => {
     let answer!: (value: { address: string; family: number }[]) => void;
     (lookup as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
@@ -142,7 +158,8 @@ describe('ImmisProxyServer private consumer', () => {
       servername: '*.immedia-semi.com', rejectUnauthorized: true, minVersion: 'TLSv1.2',
       ca: expect.arrayContaining([...tls.rootCertificates, ...IMMIS_VENDOR_CA]) }), expect.any(Function));
     if (authorized) {
-      expect(socket.write).toHaveBeenCalledTimes(1);
+      expect((socket.write as jest.Mock).mock.calls[0][0]).toHaveLength(122);
+      expect((socket.write as jest.Mock).mock.calls[1][0][0]).toBe(0x0a);
     } else {
       expect(socket.write).not.toHaveBeenCalled();
       expect(socket.destroy).toHaveBeenCalledTimes(1);
@@ -199,7 +216,7 @@ describe('ImmisProxyServer private consumer', () => {
     first.emit('close'); await flushResolution();
     expect(tls.connect).toHaveBeenNthCalledWith(2, expect.objectContaining({ host: '8.8.8.8',
       servername: 'media.immedia-semi.com', rejectUnauthorized: true }), expect.any(Function));
-    expect(latestSocket().write).toHaveBeenCalledTimes(1); expect(errors).not.toHaveBeenCalled();
+    expect((latestSocket().write as jest.Mock).mock.calls[0][0]).toHaveLength(122); expect(errors).not.toHaveBeenCalled();
   });
 
   it('sends no authentication through unauthorized TLS and emits terminal error only after closure', async () => {
@@ -276,10 +293,10 @@ describe('ImmisProxyServer private consumer', () => {
     audio.write(buildLoasFrame(Buffer.from([1, 2])));
     expect(socket.write).not.toHaveBeenCalled();
     (tls.connect as jest.Mock).mock.calls[0][1]();
-    expect(socket.write).toHaveBeenCalledTimes(1); // Authentication only after verified TLS.
-    proxy.startAudio(); expect(socket.write).toHaveBeenCalledTimes(2);
+    expect(socket.write).toHaveBeenCalledTimes(2); // Auth and initial keep-alive only after verified TLS.
+    proxy.startAudio(); expect(socket.write).toHaveBeenCalledTimes(3);
     proxy.stop(); audio.write(buildLoasFrame(Buffer.from([3, 4])));
-    expect(socket.write).toHaveBeenCalledTimes(2); socket.emit('close'); await proxy.whenClosed;
+    expect(socket.write).toHaveBeenCalledTimes(3); socket.emit('close'); await proxy.whenClosed;
   });
 
   it('waits for command readiness before opening TLS for the attached child', async () => {
@@ -394,12 +411,54 @@ describe('ImmisProxyServer private consumer', () => {
     expect(proxy.isServing).toBe(false);
   });
 
-  it('bounds queued child video even when writes keep arriving before the drain deadline', async () => {
+  it('pauses upstream and bounds retained video while the child is blocked', async () => {
     await proxy.start();
     proxy.attachConsumer(new Writable({ write() { /* stalled */ } })); await flushResolution();
     const payload = Buffer.alloc(600 * 1024, 0x47);
     latestSocket().emit('data', packet(payload));
     latestSocket().emit('data', packet(payload));
+    expect(latestSocket().pause).toHaveBeenCalled();
+    expect(proxy.isServing).toBe(true);
+    // Events already queued before pause still cannot exceed retained-input capacity.
+    latestSocket().emit('data', Buffer.alloc(2 * 1024 * 1024));
+    expect(proxy.isServing).toBe(false);
+  });
+
+  it('drains coalesced frames in order before resuming upstream', async () => {
+    await proxy.start();
+    const chunks: Buffer[] = [];
+    const callbacks: Array<() => void> = [];
+    const writer = new Writable({ highWaterMark: 1, write(chunk, _encoding, callback) {
+      chunks.push(Buffer.from(chunk)); callbacks.push(callback);
+    } });
+    proxy.attachConsumer(writer); await flushResolution();
+    const socket = latestSocket();
+    socket.emit('data', Buffer.concat([packet(Buffer.from([0x47, 1])), packet(Buffer.from([0x47, 2]))]));
+    expect(chunks).toEqual([Buffer.from([0x47, 1])]);
+    expect(writer.writableLength).toBe(2);
+    callbacks.shift()?.();
+    expect(chunks).toEqual([Buffer.from([0x47, 1]), Buffer.from([0x47, 2])]);
+    expect(socket.resume).not.toHaveBeenCalled();
+    callbacks.shift()?.();
+    expect(socket.resume).toHaveBeenCalled();
+    jest.advanceTimersByTime(2000);
+    expect(proxy.isServing).toBe(true);
+  });
+
+  it('gives retained frames to a replacement consumer without stale drain revival', async () => {
+    await proxy.start();
+    const stalled = new Writable({ highWaterMark: 1, write() { /* stalled */ } });
+    proxy.attachConsumer(stalled); await flushResolution();
+    const socket = latestSocket();
+    socket.emit('data', Buffer.concat([packet(Buffer.from([0x47, 1])), packet(Buffer.from([0x47, 2]))]));
+    const chunks: Buffer[] = [];
+    proxy.attachConsumer(new Writable({ write(chunk, _encoding, cb) { chunks.push(Buffer.from(chunk)); cb(); } }));
+    expect(chunks).toEqual([Buffer.from([0x47, 2])]);
+    proxy.stop();
+    (socket.resume as jest.Mock).mockClear();
+    stalled.emit('drain');
+    jest.advanceTimersByTime(2000);
+    expect(socket.resume).not.toHaveBeenCalled();
     expect(proxy.isServing).toBe(false);
   });
 
