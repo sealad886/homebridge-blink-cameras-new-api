@@ -1435,6 +1435,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     // Configure input based on URL type
     if (liveviewUrl === 'pipe:0') {
       args.push(
+        // Bound live MPEG-TS analysis to one second of media timestamps; sparse
+        // multi-audio sources otherwise wait for FFmpeg's five-second default.
+        '-analyzeduration', '1000000',
         // Retain demuxer probe packets: dropping the first IDR can leave
         // short IMMIS sessions with audio but no decodable video.
         '-flags', 'low_delay',

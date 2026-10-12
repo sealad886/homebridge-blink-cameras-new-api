@@ -15,7 +15,7 @@ import { withResponseBudget, RequestOptions } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkCamerasPlatform } from '../platform';
 import { setHapServiceName, toHapName } from '../hap-name';
-import { setTimeout, clearTimeout } from 'timers';
+import { setTimeout, clearTimeout, setImmediate } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, DeviceType } from './camera-source';
 
 export interface MotionDevice {
@@ -149,7 +149,17 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.refreshSnapshotService
         .getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => false)
-        .onSet(async (value) => this.refreshSnapshot(value));
+        .onSet(async (value) => {
+          try {
+            await this.refreshSnapshot(value);
+          } finally {
+            // HAP commits the submitted value after onSet resolves. Reset on the
+            // next event-loop turn so the momentary Off notification follows it.
+            setImmediate(() => this.refreshSnapshotService
+              ?.getCharacteristic(this.platform.Characteristic.On)
+              .updateValue(false));
+          }
+        });
       setHapServiceName(
         this.refreshSnapshotService,
         this.platform.Characteristic.Name,
