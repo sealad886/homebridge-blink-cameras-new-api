@@ -186,7 +186,7 @@
           "640 \u00d7 360 at 15 fps",
           "1920 \u00d7 1080 at 30 fps"
         ],
-        "description": "System-wide HomeKit output capability profile. Lower profiles reduce encoding work; default preserves current behavior. Home may choose its mandatory small-resolution fallback. Audio conversion remains negotiated separately."
+        "description": "System-wide HomeKit output profile. Low-frame-rate profiles cap encoding at 15 fps even when Home selects 30 fps at the same supported dimensions. Default preserves current behavior. Home may choose the small-resolution fallback. Audio remains negotiated separately."
       },
       "videoBitrate": {
         "title": "Max Video Bitrate (kbps)",

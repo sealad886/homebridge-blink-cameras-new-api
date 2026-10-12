@@ -561,9 +561,13 @@ After changing quality in the plugin settings form, click Homebridge's **Save** 
 
 `outputQuality` applies to every camera's HomeKit video output. Default `auto`
 preserves the current capabilities and lets Home choose. Optional `720p15`
-(1280×720/15), `360p15` (640×360/15), and `1080p30` (1920×1080/30) advertise
-that format plus HomeKit's mandatory 320×240/15 fallback. Home chooses among
-advertised formats; the plugin never substitutes another format after negotiation.
+(1280×720 with a 15-fps encoding ceiling), `360p15` (640×360 with a 15-fps
+ceiling), and `1080p30` (1920×1080/30) retain the 320×240/15 fallback.
+The low-frame-rate profiles also accept a 30-fps selection at their advertised
+dimensions, while encoding at no more than 15 fps. This follows the maintained
+[Homebridge camera-ffmpeg frame-rate limiting approach](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/blob/latest/src/streamingDelegate.ts).
+Dimensions remain exactly selected; unsupported dimensions still fail before
+vendor media work. Output receipts distinguish requested and effective FPS.
 Lower resolution/frame rate reduces encoding work, but improved Pi playback is
 not established until measured on the installed release. 1080p/30 increases work.
 Audio remains independently negotiated and transcoded, including Opus/AAC-ELD

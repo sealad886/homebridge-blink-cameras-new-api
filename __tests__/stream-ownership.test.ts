@@ -37,7 +37,7 @@ describe('generation-owned streaming', () => {
     const child = (spawn as jest.Mock).mock.results[0].value;
     const args = (spawn as jest.Mock).mock.calls[0][1];
     expect(args[args.indexOf('-loglevel') + 1]).toBe('info');
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('profile=auto, width=640, height=480, fps=15'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('profile=auto, width=640, height=480, requestedFps=15, effectiveFps=15'));
     log.mockClear();
     child.stderr.emit('data', Buffer.from('frame=1 speed=1x\n'.repeat(10_000)));
     child.stderr.emit('data', Buffer.from("Input #0, mpegts, from 'pipe:0':\n  Stream #0:0: Video: h264, yuv420p, 1920x1080, 30 fps\n"));

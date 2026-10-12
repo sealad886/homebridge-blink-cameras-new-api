@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.13] - 2026-10-12
+
+### Fixed
+- Accept same-resolution 30-fps selections for the optional 720p/15 and 360p/15 profiles, while keeping their actual encoding ceiling at 15 fps. Preserve selected dimensions and reject unknown formats before vendor media work.
+- Distinguish requested and effective frame rates and bound repeated preparation/rejection diagnostics. Retain existing session ownership, audio packaging, TLS and transport limits.
+
+### Acceptance and limitations
+- RC.12's saved 720p/15 setting and exact installed artifact were verified, but live playback failed with repeated PREPARE receipts and no accepted output/encoder evidence. Strict frame-rate rejection is reproduced locally; the original selected request is absent from historical logs, so that historical cause remains qualified.
+- Both RC.12 manual snapshots and automatic switch resets passed. RC.13 still requires operator installation, live video/audio and smoothness, STOP/reopen, snapshots and a fresh observation window. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are performed.
+
 ## [0.10.0-rc.12] - 2026-10-12
 
 ### Fixed

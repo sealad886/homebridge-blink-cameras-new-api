@@ -489,3 +489,12 @@ RC.11 read-only acceptance evidence is in `logs/rc11-2026-10-12-acceptance/analy
 FFmpeg info-level diagnostics replace codec debug traces. Detailed child/proxy records and error records have separate finite budgets, with a suppressed-record receipt at retirement; media processing, source observation, destination controls and cleanup bounds remain independent. Runtime receipts identify selected output profile and negotiated dimensions/frame rate. Local regressions and independent review must verify these controls before CI publication.
 
 The operator owns installation, saved settings and restarts. Physical smoothness is unverified; no known issue or security finding is closed by reduced logging or synthetic tests. F05/F06 remain open and issue #52 requires physical acceptance. Rollback uses the last verified secure artifact or disables affected streaming; no TLS/queue/secret-handling guard is weakened.
+
+
+## RC.13 frame-rate negotiation repair
+
+RC.12's installed identity and saved 720p15 were verified, but both cameras repeatedly prepared sessions without accepted-output or encoder receipts. The strict video tuple validator rejects a same-resolution 30-fps selection before any diagnostic, vendor request or encoder launch. This path is reproduced; original Home selection is not retained, so historical attribution remains unproven. Local Home daemon logs contained no matching events.
+
+The correction accepts known same-resolution 30-fps selections for low-frame-rate profiles and derives an actual 15-fps ceiling, following maintained Homebridge camera-ffmpeg practice. Unknown dimensions, malformed selections and unsafe media destinations remain rejected. Default quality, audio negotiation, generation ownership, resource/TLS controls and disabled talkback remain unchanged. Requested/effective FPS and finite rejection/preparation receipts provide the missing diagnosis. No host migration is necessary: settings keys and saved values retain their meaning.
+
+Verification must cover real HAP capability TLVs, previous 30-fps selection reaching startup, actual 15-fps encoding/packaging, rejection-before-vendor and released ownership, focused/full regressions and independent review. Publication follows existing CI; operator owns installation and settings. Physical acceptance and fresh 48 hours/two natural refreshes required after installation. Issue #52 and F05/F06 remain open. Rollback uses a verified secure artifact or disables streaming; do not weaken TLS or transport bounds to recover playback.
