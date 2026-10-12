@@ -33,7 +33,7 @@ import {
 } from '../blink-api/network-diagnostics';
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
-import { isSupportedOutputVideo, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
+import { isSupportedOutputVideo, outputH264Levels, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
 import { InputVideoObservation, InputVideoObserver } from './input-video-observation';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
@@ -1711,7 +1711,7 @@ export function createCameraControllerOptions(
         resolutions: outputResolutions(resolved.video.outputQuality),
         codec: {
           profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
-          levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0],
+          levels: outputH264Levels(resolved.video.outputQuality),
         },
       },
       audio: audioEnabled ? {

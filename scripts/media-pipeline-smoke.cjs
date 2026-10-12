@@ -11,7 +11,7 @@ const ffmpegPath = require("ffmpeg-for-homebridge");
 // Test-only AES-CM/HMAC-SHA1-80 receiver for known dummy keys. RFC3711
 // sections4.1.1/4.2/4.3, and RFC3640 AAC-hbr AU headers (13-bit size/3-bit index).
 // Loopback sender uses a fixed 12-byte RTP header; no CSRC/extension/padding.
-function aacReceiver(master) {
+function srtpReceiver(master) {
     const derive = (label, length) => {
         const iv = Buffer.alloc(16);
         master.copy(iv, 0, 16, 30);
@@ -23,11 +23,11 @@ function aacReceiver(master) {
     let previousSequence, rollover = 0;
     return (packet) => {
         if (packet.length < 26 || packet[0] !== 0x80)
-            throw Error("unexpected AAC SRTP packet layout");
+            throw Error("unexpected SRTP packet layout");
         const sequence = packet.readUInt16BE(2);
         if (previousSequence !== undefined) {
             if (((sequence - previousSequence) & 0xffff) !== 1)
-                throw Error("AAC SRTP packet sequence gap");
+                throw Error("SRTP packet sequence gap");
             if (sequence < previousSequence) rollover++;
         }
         previousSequence = sequence;
@@ -36,7 +36,7 @@ function aacReceiver(master) {
         const authenticated = packet.subarray(0, -10);
         const tag = createHmac("sha1", authenticationKey).update(authenticated).update(roc).digest().subarray(0, 10);
         if (!timingSafeEqual(tag, packet.subarray(-10)))
-            throw Error("AAC SRTP authentication failed");
+            throw Error("SRTP authentication failed");
         const iv = Buffer.alloc(16), index = Buffer.alloc(16);
         salt.copy(iv);
         packet.copy(index, 4, 8, 12); // SSRC * 2^64
@@ -44,6 +44,14 @@ function aacReceiver(master) {
         index.writeUInt16BE(sequence, 12); // packet index * 2^16
         for (let i = 0; i < 16; i++) iv[i] ^= index[i];
         const payload = createCipheriv("aes-128-ctr", encryptionKey, iv).update(authenticated.subarray(12));
+        return payload;
+    };
+}
+
+function aacReceiver(master) {
+    const decrypt = srtpReceiver(master);
+    return packet => {
+        const payload = decrypt(packet);
         // Exactly one complete AU per packet, with no AAC codec decode claim.
         if (payload.length < 5 || payload.readUInt16BE(0) !== 16 ||
             (payload.readUInt16BE(2) & 7) !== 0 ||
@@ -85,6 +93,8 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
     let packetError;
     const receiveAac = codec === "aac-eld" ? aacReceiver(Buffer.alloc(30, 2)) : null;
     let authenticatedAacPackets = 0;
+    const receiveVideo = qualityCase?.profile === "1080p30" ? srtpReceiver(Buffer.alloc(30, 1)) : null;
+    const videoSpsLevels = new Set();
     let child;
     let timer;
     try {
@@ -113,6 +123,26 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
                     try {
                         receiveAac(b);
                         authenticatedAacPackets++;
+                    } catch (error) { packetError = error.message; }
+                }
+                if (i === 0 && receiveVideo) {
+                    try {
+                        const payload = receiveVideo(b);
+                        const inspectNal = nal => {
+                            if (nal.length >= 4 && (nal[0] & 31) === 7) videoSpsLevels.add(nal[3]);
+                        };
+                        if ((payload[0] & 31) === 24) {
+                            // RFC6184 STAP-A aggregation: each NAL has a 16-bit size.
+                            let offset = 1;
+                            while (offset + 2 <= payload.length) {
+                                const length = payload.readUInt16BE(offset);
+                                offset += 2;
+                                if (!length || offset + length > payload.length) throw Error("invalid H264 RTP aggregation");
+                                inspectNal(payload.subarray(offset, offset + length));
+                                offset += length;
+                            }
+                            if (offset !== payload.length) throw Error("invalid H264 RTP aggregation");
+                        } else inspectNal(payload);
                     } catch (error) { packetError = error.message; }
                 }
                 counts[i]++;
@@ -159,7 +189,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
                 height: qualityCase?.output.height ?? 360,
                 max_bit_rate: 300,
                 profile: 0,
-                level: 0,
+                level: qualityCase?.profile === "1080p30" ? 2 : 0,
                 pt: 99,
                 mtu: 1378,
             },
@@ -264,13 +294,15 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
                 if (!observed || observed.width !== expected.width || observed.height !== expected.height || observed.fps !== expected.fps)
                     throw Error(`actual FFmpeg ${kind} geometry/cadence mismatch`);
             }
+            if (receiveVideo && (videoSpsLevels.size !== 1 || !videoSpsLevels.has(40)))
+                throw Error("1080p30 H264 SPS must advertise negotiated level 4.0");
             if (videoFrames.length < 2 || videoSteps.some(step => step !== 90000 / qualityCase.output.fps))
                 throw Error("video RTP timestamp cadence mismatch");
         }
         return {
             preset,
             ...(qualityCase ? { output_profile: qualityCase.profile, observed_descriptors: descriptors,
-                video_frames: videoFrames.length, video_timestamp_step: videoSteps[0] } : {}),
+                video_frames: videoFrames.length, video_timestamp_step: videoSteps[0], h264_sps_levels: [...videoSpsLevels] } : {}),
             open_pipe_startup: openPipe,
             fragmented,
             codec: audioEnabled ? codec : null,

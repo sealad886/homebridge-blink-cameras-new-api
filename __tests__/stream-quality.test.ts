@@ -34,13 +34,38 @@ describe('System-wide output quality profiles', () => {
       .getCharacteristic(realHap.Characteristic.SupportedVideoStreamConfiguration).value;
     const configuration = decodeWithLists(decode(Buffer.from(String(value), 'base64'))[1]);
     const attributes = Array.isArray(configuration[3]) ? configuration[3] : [configuration[3]];
+    const parameters = decodeWithLists(configuration[2] as Buffer);
+    const levels = Array.isArray(parameters[2]) ? parameters[2] : [parameters[2]];
+    expect(levels.map(level => level.readUInt8())).toEqual(profile === '1080p30' ? [2] : [0, 1, 2]);
     expect(attributes.map((attribute) => {
       const fields = decode(attribute);
       return [fields[1].readUInt16LE(), fields[2].readUInt16LE(), fields[3].readUInt8()];
     })).toEqual([selected, [320, 240, 15]]);
-    expect(isSupportedOutputVideo(profile, { width: selected[0], height: selected[1], fps: selected[2] })).toBe(true);
-    expect(isSupportedOutputVideo(profile, { width: 320, height: 240, fps: 15 })).toBe(true);
+    expect(isSupportedOutputVideo(profile, { width: selected[0], height: selected[1], fps: selected[2], level: 2 })).toBe(true);
+    expect(isSupportedOutputVideo(profile, { width: 320, height: 240, fps: 15, level: 2 })).toBe(true);
     expect(isSupportedOutputVideo(profile, { width: selected[0], height: selected[1], fps: 60 })).toBe(false);
+  });
+
+  it.each([0, 1])('rejects lower H.264 level %s for the fixed 1080p/30 profile', async (level) => {
+    const startCameraLiveview = jest.fn();
+    const source = new BlinkCameraSource({ startCameraLiveview } as unknown as BlinkApi,
+      hap, 1, 2, 'camera', 'test-serial', () => undefined, () => true, jest.fn(),
+      { audio: { enabled: false }, video: { outputQuality: '1080p30' } });
+    const sessionID = `00000000-0000-4000-8000-00000000001${level}`;
+    const endpoint = { port: 5000, srtpCryptoSuite: realHap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
+      srtp_key: Buffer.alloc(16), srtp_salt: Buffer.alloc(14) };
+    const prepare = { sessionID, targetAddress: '127.0.0.1', addressVersion: 'ipv4', video: endpoint } as PrepareStreamRequest;
+    const prepared = () => new Promise<void>((resolve, reject) => source.prepareStream(prepare,
+      error => error ? reject(error) : resolve()));
+    await prepared();
+    const error = await new Promise<Error | undefined>(resolve => source.handleStreamRequest({ sessionID, type: 'start',
+      video: { width: 1920, height: 1080, fps: 30, level, profile: 0, max_bit_rate: 300, pt: 99, mtu: 1378 },
+    } as StreamingRequest, resolve));
+    expect(error?.message).toContain('output profile');
+    expect(startCameraLiveview).not.toHaveBeenCalled();
+    await prepared();
+    await new Promise<void>(resolve => source.handleStreamRequest({ sessionID, type: 'stop' } as StreamingRequest,
+      () => resolve()));
   });
 
   it('fails invalid quality settings rather than silently enabling expensive output', () => {

@@ -29,10 +29,16 @@ export function outputResolutions(profile: OutputQualityProfile): VideoResolutio
   return resolutions.map(([width, height, fps]) => [width, height, fps]);
 }
 
+/** HAP level IDs: 0=3.1, 1=3.2, 2=4.0. 1080p/30 exceeds level 3.2. */
+export function outputH264Levels(profile: OutputQualityProfile): Array<0 | 1 | 2> {
+  return profile === '1080p30' ? [2] : [0, 1, 2];
+}
+
 export function isSupportedOutputVideo(
   profile: OutputQualityProfile,
-  video: { width: number; height: number; fps: number },
+  video: { width: number; height: number; fps: number; level?: number },
 ): boolean {
+  if (profile === '1080p30' && video.level !== 2) return false;
   return outputResolutions(profile).some(([width, height, fps]) =>
     width === video.width && height === video.height && fps === video.fps);
 }

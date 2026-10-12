@@ -14,7 +14,8 @@ resolution arguments. New 2K models include 2560×1440 and square 1920×1920 inp
 
 Extend existing global streaming configuration with outputQuality auto,720p15,
 360p15,1080p30. Auto preserves existing capabilities. Fixed profiles advertise
-chosen dimensions/fps and mandatory 320×240/15 fallback. Reject stale unsupported
+chosen dimensions/fps and mandatory 320×240/15 fallback. The 1080p/30 profile
+requires H.264 level 4.0; lower levels cannot carry its macroblock rate. Reject stale unsupported
 START requests before vendor allocation; honor the negotiated format exactly.
 Preserve source aspect ratio while scaling/padding. Audio negotiation, bitrate,
 private pipes, resource ceilings, SRTP packaging and disabled talkback remain.
