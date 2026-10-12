@@ -33,7 +33,7 @@ it('saves stable network IDs, preserves unrelated config and unavailable exclusi
   };
   const html = readFileSync(join(__dirname, '../..', 'src/homebridge-ui/public/index.html'), 'utf8');
   const script = html.slice(html.indexOf('  let discoveredNetworks ='), html.indexOf('  function addLog('));
-  runInNewContext(script, { document, homebridge, pluginConfig: original, showError });
+  runInNewContext(script, { document, homebridge, getLatestPluginConfig: homebridge.getPluginConfig, pluginConfig: original, showError });
   await elements.get('loadNetworks')!.handlers.click();
   const inputs = elements.get('blinkNetworkList')!.children.map(row => row.children[0]);
   expect(inputs.map(input => input.checked)).toEqual([false, true]);

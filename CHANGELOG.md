@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.12] - 2026-10-12
+
+### Fixed
+- Preserve newer schema-form quality edits when an asynchronous authentication or settings action receives an older configuration snapshot. Keep other settings and configuration blocks intact, and expose per-camera input quality in the form layout.
+- Clarify that Homebridge's Save button persists form edits. The exact cause of RC.11's missing saved output setting cannot be established from logs; a delayed-read overwrite is now reproduced and guarded.
+- Bound FFmpeg/IMMIS diagnostics, omit packet/NAL traces, retain reserved error reporting and suppression receipts, and continue source-video observation independently of log limits.
+
+### Acceptance and limitations
+- RC.11's captured output was 30 fps, not the reported 720p/15 profile. Front door's initial interruption overlapped a host reboot; Corner's manual snapshot failed a provider network request. These observations do not establish a new codec or Wi-Fi root cause.
+- Operator installation and configuration, physical video/audio/smoothness, snapshots, STOP/reopen and a fresh 48-hour/two-natural-refresh observation remain required. Issue #52 and F05/F06 remain open. No live Pi configuration or installation is performed by this release.
+
 ## [0.10.0-rc.11] - 2026-10-12
 
 ### Added

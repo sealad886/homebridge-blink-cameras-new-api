@@ -26,6 +26,31 @@ const make = (api: object) => new BlinkCameraSource(api as any, createHap() as a
 
 describe('generation-owned streaming', () => {
   beforeEach(() => (spawn as jest.Mock).mockClear());
+  it('bounds debug floods while observing input and preserving error diagnostics', async () => {
+    const log = jest.fn(); const errorLog = jest.fn(); const observation = jest.fn();
+    const source = new BlinkCameraSource({ startCameraLiveview: jest.fn().mockResolvedValue({ server: 'rtsps://vendor.example/live' }) } as any,
+      createHap() as any, 1, 2, 'camera', 'serial', jest.fn(), () => true, log,
+      { ffmpegDebug: true, audio: { enabled: false }, video: { encoder: 'libx264' } }, errorLog, undefined, observation);
+    await prepare(source);
+    source.handleStreamRequest(request, jest.fn());
+    await new Promise(resolve => setImmediate(resolve));
+    const child = (spawn as jest.Mock).mock.results[0].value;
+    const args = (spawn as jest.Mock).mock.calls[0][1];
+    expect(args[args.indexOf('-loglevel') + 1]).toBe('info');
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('profile=auto, width=640, height=480, fps=15'));
+    log.mockClear();
+    child.stderr.emit('data', Buffer.from('frame=1 speed=1x\n'.repeat(10_000)));
+    child.stderr.emit('data', Buffer.from("Input #0, mpegts, from 'pipe:0':\n  Stream #0:0: Video: h264, yuv420p, 1920x1080, 30 fps\n"));
+    child.stderr.emit('data', Buffer.from('Error: encoder failed srtp_out_params=secret-key\n'.repeat(100)));
+    expect(observation).toHaveBeenCalledWith(expect.objectContaining({ width: 1920, height: 1080, fps: 30 }));
+    expect(log.mock.calls.length).toBeLessThanOrEqual(64);
+    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('encoder failed'));
+    expect(errorLog.mock.calls.length).toBe(8);
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain('secret-key');
+    const stopped = stop(source); child.emit('close', 0, null); await stopped;
+    expect(log.mock.calls.some(([message]) => String(message).includes('suppressed'))).toBe(true);
+  });
+
   it('bounds repeated failed START requests without replaying liveview POSTs', async () => {
     const liveview = jest.fn().mockRejectedValue(new Error('provider refusal'));
     const source = make({ startCameraLiveview: liveview });

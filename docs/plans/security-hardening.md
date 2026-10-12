@@ -480,3 +480,12 @@ loadability and zero production advisories pass. Independent review and clean CI
 must accept the final release source before publication. Exact registry artifact
 verification follows publication. Installation remains operator-owned.
 Issue #52 and F05/F06 remain open; a fresh RC resets runtime observation.
+
+
+### RC.12 configuration and diagnostic correction
+
+RC.11 read-only acceptance evidence is in `logs/rc11-2026-10-12-acceptance/analysis.md`. All 45 runtime JavaScript files matched CI, but saved `outputQuality` was absent and observed output was 30 fps. The historical save action is unknown. A reproduced delayed-config-read race can overwrite newer schema edits; RC.12 synchronizes schema changes and guards configuration reads across auth/network/lock save paths. Native Homebridge Save remains the persistence owner. Per-camera input quality is now included in the explicit form layout.
+
+FFmpeg info-level diagnostics replace codec debug traces. Detailed child/proxy records and error records have separate finite budgets, with a suppressed-record receipt at retirement; media processing, source observation, destination controls and cleanup bounds remain independent. Runtime receipts identify selected output profile and negotiated dimensions/frame rate. Local regressions and independent review must verify these controls before CI publication.
+
+The operator owns installation, saved settings and restarts. Physical smoothness is unverified; no known issue or security finding is closed by reduced logging or synthetic tests. F05/F06 remain open and issue #52 requires physical acceptance. Rollback uses the last verified secure artifact or disables affected streaming; no TLS/queue/secret-handling guard is weakened.

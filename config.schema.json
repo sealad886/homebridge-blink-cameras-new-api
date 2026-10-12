@@ -110,7 +110,7 @@
       },
       "ffmpegDebug": {
         "title": "FFmpeg Debug Logging",
-        "description": "Log FFmpeg output for troubleshooting.",
+        "description": "Enable bounded, redacted streaming diagnostics. Per-packet and NAL traces are omitted.",
         "type": "boolean",
         "default": false
       },
@@ -391,7 +391,8 @@
           "buttonText": "Add Device Setting",
           "items": [
             "deviceSettingOverrides[].deviceIdentifier",
-            "deviceSettingOverrides[].motionTimeout"
+            "deviceSettingOverrides[].motionTimeout",
+            "deviceSettingOverrides[].inputQuality"
           ]
         }
       ]
