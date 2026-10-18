@@ -609,3 +609,25 @@ firmware and subscription may restrict upstream quality. Synthetic 2K conversion
 and mocked config contracts do not establish physical 2K-camera acceptance.
 
 Streaming diagnostics use FFmpeg info-level output, omit per-packet IMMIS and per-NAL traces, and cap detailed records per media child/proxy. A separate error allowance and a final suppressed-record count preserve troubleshooting evidence without unlimited log growth. Input-video observation continues even after the diagnostic allowance is exhausted. TLS, destination, worker and lifecycle failures retain their operational receipts. These controls reduce diagnostic work; Pi smoothness gains still require physical testing.
+
+### Identifying controls in Apple Home
+
+Each camera, doorbell and Mini/Owl control starts with the device name assigned
+in the plugin (including a configured device-name override):
+
+| Home service | Example |
+| --- | --- |
+| Enable or disable motion detection | Front door Motion Detection |
+| Read-only motion sensor | Front door Motion Sensor |
+| Request a snapshot, then automatically return Off | Front door Refresh Snapshot |
+| Doorbell ring event | Front door Doorbell |
+| Network arm/disarm | Home Security |
+
+The camera tile retains its assigned device name. Long names reserve space for
+the control's purpose within HomeKit's name limit. Existing service identities
+remain unchanged, preserving pairings and automations. The plugin updates both
+Name and Configured Name on its controls when loading existing accessories;
+Home may retain a separate user-assigned name or cached tile label. Those labels
+can be edited in Home without removing or pairing the accessory again. A name
+chosen only in Home is not available to the plugin as a prefix for other services;
+set a device-name override in the plugin for a consistent prefix throughout.

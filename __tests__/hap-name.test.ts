@@ -27,3 +27,24 @@ describe('toHapName', () => {
     expect(toHapName(`${'A'.repeat(63)}𐐀`, 'Blink Camera')).toBe('A'.repeat(63));
   });
 });
+
+describe('device service names', () => {
+  it('keeps the assigned camera name and purpose for long Unicode labels', () => {
+    const { deviceServiceName } = require('../src/hap-name');
+    const name = deviceServiceName('𐐀'.repeat(40), 'Refresh Snapshot');
+    expect(name.length).toBeLessThanOrEqual(64);
+    expect(name.endsWith(' Refresh Snapshot')).toBe(true);
+    expect(name.startsWith('𐐀')).toBe(true);
+  });
+
+  it('publishes the same descriptive name in the real HAP service and configured label', () => {
+    const { Service, Characteristic } = require('hap-nodejs');
+    const { setHapServiceName, deviceServiceName } = require('../src/hap-name');
+    const service = new Service.Switch('SwitchCorner', 'motion-switch');
+    const name = deviceServiceName('Corner', 'Motion Detection');
+    setHapServiceName(service, Characteristic.Name, name, 'Blink Motion', Characteristic.ConfiguredName);
+    expect(service.getCharacteristic(Characteristic.Name).value).toBe('Corner Motion Detection');
+    expect(service.getCharacteristic(Characteristic.ConfiguredName).value).toBe('Corner Motion Detection');
+    expect(service.subtype).toBe('motion-switch');
+  });
+});

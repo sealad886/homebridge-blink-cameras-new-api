@@ -659,6 +659,28 @@ describe('Accessory handlers', () => {
     } finally { refresh.mockRestore(); }
   });
 
+  it.each([
+    [CameraAccessory, 'Camera'],
+    [DoorbellAccessory, 'Doorbell'],
+    [OwlAccessory, 'Mini'],
+  ])('names new and restored %p services with the assigned camera prefix', (Handler, _kind) => {
+    const { hap, platform } = buildPlatform({ persistSnapshotCache: true });
+    const accessory = new MockAccessory('Front door', 'uuid-naming', hap);
+    const device = { id: 2, network_id: 1, name: 'Vendor label', enabled: true };
+    const original = accessory.addService(hap.Service.Switch, 'SwitchCorner', 'motion-switch');
+    new Handler(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory, device);
+    expect(accessory.getServiceById(hap.Service.Switch, 'motion-switch')).toBe(original);
+    for (const [type, subtype, name] of [
+      [hap.Service.Switch, 'motion-switch', 'Front door Motion Detection'],
+      [hap.Service.MotionSensor, 'motion-sensor', 'Front door Motion Sensor'],
+      [hap.Service.Switch, 'snapshot-refresh', 'Front door Refresh Snapshot'],
+    ]) {
+      const service = accessory.getServiceById(type, subtype)!;
+      expect(service.setCharacteristic).toHaveBeenCalledWith(hap.Characteristic.Name, name);
+      expect(service.setCharacteristic).toHaveBeenCalledWith(hap.Characteristic.ConfiguredName, name);
+    }
+  });
+
   it('toggles network arm state via SecuritySystem', async () => {
     const { hap, apiClient, platform } = buildPlatform();
     const accessory = new MockAccessory('Network', 'uuid-network', hap);

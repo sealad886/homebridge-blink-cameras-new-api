@@ -14,7 +14,7 @@ import { RequestOptions } from '../operation-budget';
 
 import { PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
-import { setHapServiceName, toHapName } from '../hap-name';
+import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { BlinkDoorbell } from '../types';
 import { MotionDeviceBase } from './motion-base';
 
@@ -26,20 +26,22 @@ export class DoorbellAccessory extends MotionDeviceBase<BlinkDoorbell> {
     accessory: PlatformAccessory,
     device: BlinkDoorbell,
   ) {
-    super(platform, accessory, device, 'Doorbell', 'doorbell', 'doorbell', `${device.name} Motion`);
+    super(platform, accessory, device, 'Doorbell', 'doorbell', 'doorbell');
 
+    const ringName = deviceServiceName(accessory.displayName || device.name, 'Doorbell');
     this.doorbellService =
       this.accessory.getService(this.platform.Service.Doorbell) ||
       this.accessory.addService(
         this.platform.Service.Doorbell,
-        toHapName(device.name, 'Blink Doorbell'),
+        ringName,
         'doorbell',
       );
     setHapServiceName(
       this.doorbellService,
       this.platform.Characteristic.Name,
-      device.name,
+      ringName,
       'Blink Doorbell',
+      this.platform.Characteristic.ConfiguredName,
     );
 
     this.doorbellService

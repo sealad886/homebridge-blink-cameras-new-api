@@ -27,6 +27,7 @@ export const createHap = () => ({
     Model: 'Model',
     SerialNumber: 'SerialNumber',
     Name: 'Name',
+    ConfiguredName: 'ConfiguredName',
     On: 'On',
     SecuritySystemCurrentState: {
       STAY_ARM: 0,
