@@ -170,6 +170,7 @@ same risk decision again unless the exposure or release scope changes.
 For this release, reuse applicable RC.13 runtime observation for the naming-only
 RC.14 changes. The general 48-hour RC guidance above is not a new waiting period
 for documentation, naming, or version-only changes. Verify those changes directly.
-For material runtime corrections, choose observation from the actual failure mode
-and retain necessary natural-refresh evidence. Physical failures remain failures
+Material runtime corrections still restart the minimum 48-hour RC window and
+require two natural refreshes, as specified above. Add failure-specific checks
+where needed. Physical failures remain failures
 until corrected or explicitly dispositioned; time passing is not acceptance.

@@ -534,6 +534,6 @@ playback/snapshot defects remain separate acceptance decisions; elapsed time
 alone does not resolve them. RC.13 authentication/transport observation may be
 carried into naming-only RC.14 where the relevant implementation is unchanged;
 no additional 48-hour wait is required solely because a label or RC number
-changed. A material runtime correction requires targeted regression evidence and
-an observation interval selected for its failure mode, including natural refresh
-coverage when authentication changes. Operator installation remains separate.
+changed. A material runtime correction requires targeted regression evidence and restarts
+the minimum 48-hour RC window with two natural refreshes under
+[the release guide](../RELEASE.md#homebridge-upgrade-and-acceptance). Operator installation remains separate.
