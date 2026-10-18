@@ -158,3 +158,18 @@ separate code completion from deployed acceptance.
 gh workflow run npm-prerelease-cleanup.yml --ref main \
   -f stable_version=VERSION -f dist_tags=alpha,beta,rc
 ```
+
+## 0.10.0 security and observation disposition
+
+The [18 October stable-release disposition](plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
+accepts F05/F06 as disclosed residual risks specifically for stable 0.10.0.
+Both findings remain open. Their closure and native-worker acceptance criteria
+are unchanged; the retained runtime guards are mandatory. Do not request the
+same risk decision again unless the exposure or release scope changes.
+
+For this release, reuse applicable RC.13 runtime observation for the naming-only
+RC.14 changes. The general 48-hour RC guidance above is not a new waiting period
+for documentation, naming, or version-only changes. Verify those changes directly.
+For material runtime corrections, choose observation from the actual failure mode
+and retain necessary natural-refresh evidence. Physical failures remain failures
+until corrected or explicitly dispositioned; time passing is not acceptance.

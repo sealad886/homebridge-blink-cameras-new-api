@@ -394,7 +394,12 @@ Node bundled public roots plus the official Blink vendor anchors only for IMMIS.
 admits only `immedia-semi.com` hosts or canonical public IPv4 authorities on port 443; a refused
 endpoint disables that stream. This conservative restriction still requires real
 provider acceptance. Full RTSP destination control and secret-free FFmpeg execution
-remain open security work. When
+remain open security work. For stable 0.10.0, these are accepted, disclosed
+residual risks under the [release disposition](docs/plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition),
+not resolved vulnerabilities: users able to inspect FFmpeg process arguments on
+the host may obtain session secrets, and enforcement of the intended policy for every RTSP secondary connection
+is not yet verified. Existing runtime guards remain
+mandatory. When
 `ffmpegDebug` is enabled, Blink live-view input URLs and SRTP keys are redacted from startup, FFmpeg
 argument, and FFmpeg stderr logs. The generated HomeKit `srtp://` output address may still appear in
 FFmpeg argument diagnostics. Debug recordings are written under
