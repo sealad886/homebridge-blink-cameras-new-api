@@ -82,7 +82,12 @@ function normalizeCandidate(value: string): string {
 export function deviceServiceName(deviceName: string, purpose: string): string {
   const prefix = toHapName(deviceName, 'Blink Camera');
   const room = HAP_NAME_MAX_LENGTH - purpose.length - 1;
-  const bounded = Array.from(prefix).reduce((name, character) =>
-    name.length + character.length <= room ? name + character : name, '');
+  let bounded = '';
+  for (const character of prefix) {
+    if (bounded.length + character.length > room) {
+      break;
+    }
+    bounded += character;
+  }
   return toHapName(`${bounded} ${purpose}`, `Blink ${purpose}`);
 }

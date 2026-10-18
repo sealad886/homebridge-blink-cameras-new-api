@@ -29,6 +29,12 @@ describe('toHapName', () => {
 });
 
 describe('device service names', () => {
+  it('retains a contiguous prefix at supplementary-character boundaries', () => {
+    const { deviceServiceName } = require('../src/hap-name');
+    expect(deviceServiceName('A'.repeat(46) + '𐐀B', 'Refresh Snapshot'))
+      .toBe('A'.repeat(46) + ' Refresh Snapshot');
+  });
+
   it('keeps the assigned camera name and purpose for long Unicode labels', () => {
     const { deviceServiceName } = require('../src/hap-name');
     const name = deviceServiceName('𐐀'.repeat(40), 'Refresh Snapshot');
