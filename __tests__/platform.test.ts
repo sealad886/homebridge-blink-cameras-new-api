@@ -699,7 +699,7 @@ describe('BlinkCamerasPlatform', () => {
 
     expect(cached.UUID).toBe(uuid);
     expect(cached.displayName).toBe('Corner (ABC-123');
-    expect(motion.displayName).toBe('Corner (ABC-123');
+    expect(motion.displayName).toBe('Corner (ABC-123 Motion Sensor');
     expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
   });
 

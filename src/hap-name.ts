@@ -30,10 +30,21 @@ export function setHapServiceName(
   nameCharacteristic: typeof Characteristic.Name,
   value: string | undefined,
   fallback: string,
+  configuredNameCharacteristic?: typeof Characteristic.ConfiguredName,
 ): string {
   const name = toHapName(value, fallback);
+  const previousName = service.displayName;
   service.displayName = name;
   service.setCharacteristic(nameCharacteristic, name);
+  if (configuredNameCharacteristic) {
+    if (!service.testCharacteristic(configuredNameCharacteristic)) {
+      service.addOptionalCharacteristic(configuredNameCharacteristic);
+    }
+    const configured = service.getCharacteristic(configuredNameCharacteristic).value;
+    if (!configured || configured === previousName) {
+      service.setCharacteristic(configuredNameCharacteristic, name);
+    }
+  }
   return name;
 }
 
@@ -69,4 +80,18 @@ function normalizeCandidate(value: string): string {
     bounded.pop();
   }
   return bounded.join('').trim();
+}
+
+/** Reserve space for the purpose so long camera names still identify the control. */
+export function deviceServiceName(deviceName: string, purpose: string): string {
+  const prefix = toHapName(deviceName, 'Blink Camera');
+  const room = HAP_NAME_MAX_LENGTH - purpose.length - 1;
+  let bounded = '';
+  for (const character of prefix) {
+    if (bounded.length + character.length > room) {
+      break;
+    }
+    bounded += character;
+  }
+  return toHapName(`${bounded} ${purpose}`, `Blink ${purpose}`);
 }

@@ -27,6 +27,7 @@ export const createHap = () => ({
     Model: 'Model',
     SerialNumber: 'SerialNumber',
     Name: 'Name',
+    ConfiguredName: 'ConfiguredName',
     On: 'On',
     SecuritySystemCurrentState: {
       STAY_ARM: 0,
@@ -99,6 +100,15 @@ export class MockService {
 
   constructor(public readonly type: string, public readonly name?: string) {
     this.displayName = name ?? '';
+  }
+
+  testCharacteristic(type: string): boolean {
+    return this.characteristics.has(type);
+  }
+
+  addOptionalCharacteristic(type: string): this {
+    this.getCharacteristic(type);
+    return this;
   }
 
   getCharacteristic(type: string | Record<string, number> | ((...args: unknown[]) => unknown)): MockCharacteristic {

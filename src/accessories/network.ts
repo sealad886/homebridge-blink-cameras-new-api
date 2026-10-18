@@ -16,7 +16,7 @@
 
 import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { BlinkCamerasPlatform } from '../platform';
-import { setHapServiceName, toHapName } from '../hap-name';
+import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { BlinkNetwork } from '../types';
 import { withResponseBudget } from '../operation-budget';
 import { toHapError } from '../hap-errors';
@@ -33,6 +33,7 @@ export class NetworkAccessory {
     private readonly accessory: PlatformAccessory,
     private device: BlinkNetwork,
   ) {
+    const securityName = deviceServiceName(accessory.displayName || device.name, 'Security');
     // Configure accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)
       ?.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Blink')
@@ -44,13 +45,14 @@ export class NetworkAccessory {
       this.accessory.getService(this.platform.Service.SecuritySystem) ||
       this.accessory.addService(
         this.platform.Service.SecuritySystem,
-        toHapName(device.name, 'Blink Network'),
+        securityName,
       );
     setHapServiceName(
       this.service,
       this.platform.Characteristic.Name,
-      device.name,
+      securityName,
       'Blink Network',
+      this.platform.Characteristic.ConfiguredName,
     );
 
     // Remove any legacy Switch service if present

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.14] - 2026-10-18
+
+### Fixed
+- Identify camera, doorbell and Mini/Owl motion controls, motion sensors and snapshot-refresh switches by their assigned device name and purpose, including configured name overrides. Give network security controls a purpose-labelled name.
+- Update existing service labels and Configured Name without changing accessory identities or service subtypes. Reserve space for the purpose when names reach HomeKit's length limit and register configured labels without HAP warnings.
+
+### Acceptance and limitations
+- Home may retain user-assigned or cached labels independently. No pairing reset is required. Names assigned only in Home are not available as prefixes for the plugin's other services; use plugin device-name overrides for consistent prefixes.
+- RC.14 requires operator installation and physical Home acceptance. Corner's post-battery replacement media startup remains unresolved; earlier depleted-battery evidence is not a plugin regression finding. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are included.
+
 ## [0.10.0-rc.13] - 2026-10-12
 
 ### Fixed

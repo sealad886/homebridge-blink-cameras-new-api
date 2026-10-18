@@ -14,7 +14,7 @@ import { CameraController, CharacteristicValue, PlatformAccessory, Service } fro
 import { withResponseBudget, RequestOptions } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkCamerasPlatform } from '../platform';
-import { setHapServiceName, toHapName } from '../hap-name';
+import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { setTimeout, clearTimeout, setImmediate } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, DeviceType } from './camera-source';
 
@@ -72,8 +72,12 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     private readonly modelName: string,
     private readonly deviceLabel: string,
     private readonly cameraSourceType: DeviceType,
-    motionSensorDisplayName?: string,
   ) {
+    const cameraName = this.accessory.displayName || device.name;
+    const motionControlName = deviceServiceName(cameraName, 'Motion Detection');
+    const motionSensorName = deviceServiceName(cameraName, 'Motion Sensor');
+    const refreshName = deviceServiceName(cameraName, 'Refresh Snapshot');
+
     this.accessory.getService(this.platform.Service.AccessoryInformation)
       ?.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Blink')
       .setCharacteristic(this.platform.Characteristic.Model, modelName)
@@ -83,14 +87,15 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.accessory.getServiceById(this.platform.Service.Switch, 'motion-switch') ||
       this.accessory.addService(
         this.platform.Service.Switch,
-        toHapName(`${device.name} Motion`, 'Blink Motion'),
+        motionControlName,
         'motion-switch',
       );
     setHapServiceName(
       this.switchService,
       this.platform.Characteristic.Name,
-      `${device.name} Motion`,
+      motionControlName,
       'Blink Motion',
+      this.platform.Characteristic.ConfiguredName,
     );
 
     this.switchService
@@ -102,14 +107,15 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.accessory.getServiceById(this.platform.Service.MotionSensor, 'motion-sensor') ||
       this.accessory.addService(
         this.platform.Service.MotionSensor,
-        toHapName(motionSensorDisplayName ?? device.name, 'Blink Motion'),
+        motionSensorName,
         'motion-sensor',
       );
     setHapServiceName(
       this.motionService,
       this.platform.Characteristic.Name,
-      motionSensorDisplayName ?? device.name,
+      motionSensorName,
       'Blink Motion',
+      this.platform.Characteristic.ConfiguredName,
     );
 
     this.motionService
@@ -174,7 +180,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.refreshSnapshotService = existingRefreshService ??
         this.accessory.addService(
           this.platform.Service.Switch,
-          toHapName(`${device.name} Refresh Snapshot`, 'Blink Refresh Snapshot'),
+          refreshName,
           'snapshot-refresh',
         );
       this.refreshSnapshotService
@@ -194,8 +200,9 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       setHapServiceName(
         this.refreshSnapshotService,
         this.platform.Characteristic.Name,
-        `${device.name} Refresh Snapshot`,
+        refreshName,
         'Blink Refresh Snapshot',
+        this.platform.Characteristic.ConfiguredName,
       );
     } else if (existingRefreshService) {
       this.accessory.removeService(existingRefreshService);
