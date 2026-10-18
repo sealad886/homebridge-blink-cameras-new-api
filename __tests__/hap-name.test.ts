@@ -37,14 +37,17 @@ describe('device service names', () => {
     expect(name.startsWith('𐐀')).toBe(true);
   });
 
-  it('publishes the same descriptive name in the real HAP service and configured label', () => {
+  it.each(['Switch', 'MotionSensor', 'Doorbell', 'SecuritySystem'])('publishes a warning-free configured label for real HAP %s services', (type) => {
     const { Service, Characteristic } = require('hap-nodejs');
     const { setHapServiceName, deviceServiceName } = require('../src/hap-name');
-    const service = new Service.Switch('SwitchCorner', 'motion-switch');
+    const service = new Service[type]('SwitchCorner', 'motion-switch');
+    const warning = jest.fn();
+    service.on('characteristic-warning', warning);
     const name = deviceServiceName('Corner', 'Motion Detection');
     setHapServiceName(service, Characteristic.Name, name, 'Blink Motion', Characteristic.ConfiguredName);
     expect(service.getCharacteristic(Characteristic.Name).value).toBe('Corner Motion Detection');
     expect(service.getCharacteristic(Characteristic.ConfiguredName).value).toBe('Corner Motion Detection');
     expect(service.subtype).toBe('motion-switch');
+    expect(warning).not.toHaveBeenCalled();
   });
 });

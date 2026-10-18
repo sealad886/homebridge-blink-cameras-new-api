@@ -36,6 +36,9 @@ export function setHapServiceName(
   service.displayName = name;
   service.setCharacteristic(nameCharacteristic, name);
   if (configuredNameCharacteristic) {
+    if (!service.testCharacteristic(configuredNameCharacteristic)) {
+      service.addOptionalCharacteristic(configuredNameCharacteristic);
+    }
     service.setCharacteristic(configuredNameCharacteristic, name);
   }
   return name;

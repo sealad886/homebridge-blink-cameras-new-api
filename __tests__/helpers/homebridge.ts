@@ -102,6 +102,15 @@ export class MockService {
     this.displayName = name ?? '';
   }
 
+  testCharacteristic(type: string): boolean {
+    return this.characteristics.has(type);
+  }
+
+  addOptionalCharacteristic(type: string): this {
+    this.getCharacteristic(type);
+    return this;
+  }
+
   getCharacteristic(type: string | Record<string, number> | ((...args: unknown[]) => unknown)): MockCharacteristic {
     // Handle string keys, enum objects (like SecuritySystemTargetState), and function types
     let key: string;
