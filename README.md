@@ -23,11 +23,24 @@ The current static API catalog is recovered from Blink Android 59.2
 bounded live-evidence baseline. See `docs/api-contract/README.md`. Blink can
 change these private interfaces without notice.
 
-## Two-Way Talk Status
+## Contents
 
-Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden and the plugin forces `twoWayAudio` off until IMMIS uplink framing is validated. Even if you previously enabled talkback, the setting is ignored for now. We will re-enable the UI once payload sequencing and ACK handling are confirmed stable.
+- [Features and supported devices](#features-and-supported-devices)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Sign-in and account verification](#sign-in-and-account-verification)
+- [Configuration](#configuration)
+- [Using the plugin in Apple Home](#using-the-plugin-in-apple-home)
+- [Live streaming and quality](#live-streaming-and-quality)
+- [Troubleshooting](#troubleshooting)
+- [API documentation](#api-documentation)
+- [Development](#development)
+- [Changelog](#changelog)
+- [License](#license)
+- [Credits](#credits)
+- [Disclaimer and trademarks](#disclaimer-and-trademarks)
 
-## Features
+## Features and supported devices
 
 - ✅ **Proper HomeKit SecuritySystem** - Arm/disarm networks using the Security System tile in Home app
 - ✅ **Motion Detection** - Receive motion alerts in HomeKit when your cameras detect motion
@@ -36,6 +49,26 @@ Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden a
 - ✅ **OAuth Authentication** - Modern OAuth 2.0 with automatic token refresh
 - ✅ **Blink-hosted MFA** - Password and hosted MFA stay on Blink's sign-in page
 - ✅ **Retry Logic** - Automatic retry with exponential backoff for rate limits and server errors
+
+### Supported devices
+
+| Blink Device | HomeKit Service | Features |
+| ------------ | --------------- | -------- |
+| **Network** | SecuritySystem | Arm/disarm all cameras in network |
+| **Camera** | Switch + MotionSensor | Enable/disable motion, motion events |
+| **Doorbell** | Doorbell + Switch + MotionSensor | Ring events, enable/disable motion |
+| **Owl (Mini)** | Switch + MotionSensor | Enable/disable motion, motion events |
+
+#### SecuritySystem modes
+
+The HomeKit SecuritySystem exposes standard modes:
+
+- **Away Arm** → Network is armed
+- **Stay Arm** → Network is armed (same as Away)
+- **Night Arm** → Network is armed (same as Away)
+- **Disarm** → Network is disarmed
+
+Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's armed state.
 
 ## Requirements
 
@@ -73,6 +106,112 @@ npm install -g @sealad886/homebridge-blink-cameras-new-api
 ```
 
 Restart Homebridge after installing.
+
+## Sign-in and account verification
+
+### Hosted Blink sign-in
+
+1. Open this plugin's settings in the remote Homebridge UI and choose **Sign in
+   securely with Blink**. Keep the Homebridge settings tab open. If Brave blocks
+   the new tab, choose the revealed **Open Blink Sign-In** fallback.
+2. Finish the account-credential and MFA steps only in the separate
+   Blink-hosted Brave tab. Homebridge never receives either value.
+3. After Blink reaches its desktop **Unsupported Browser** page, copy the full
+   address beginning with
+   `https://applinks.blink.com/signin/callback` from Brave's address bar.
+4. Return to Homebridge and choose **Paste Blink Result and Finish**. This reads
+   the clipboard only from that click. If Brave denies clipboard access, reveal
+   the manual field, paste the complete address, and choose **Finish with Pasted Address**.
+   Clipboard cleanup after completion is best effort: if the browser denies
+   clipboard write access, clear the copied callback address manually.
+5. If Blink asks for client or account verification after issuing tokens, enter
+   that distinct post-token code in Homebridge. This is not Blink's hosted MFA.
+6. Wait for stored-token connection verification, then continue to the normal
+   plugin schema. Restart Homebridge and confirm the stored session reconnects.
+
+The Raspberry Pi owns the PKCE verifier and expected state. While sign-in is in
+progress it stores only the pending transaction in `.blink-auth-pending.json`.
+A valid pending transaction can survive a custom-UI process or full Homebridge
+restart only within its 15-minute lifetime. A valid callback consumes and
+deletes the pending file before the one-time code exchange; if exchange fails,
+the operator must start a new sign-in. Success stores the final token state in
+`.blink-auth.json`, including `oauthClientId=android`, and hosted completion
+forces `persistAuth=true`. Both files are owner-only (`0600`). No public callback
+service or inbound port is required.
+
+### Hosted MFA
+
+Blink's sign-in page owns the account credential and hosted MFA steps. Do not
+put either value in Homebridge configuration.
+
+### Client verification (new device approval)
+
+After tokens exist, Blink may require one-time **client verification** for the
+new Homebridge device. The custom UI identifies this post-token requirement,
+accepts the code through its verification form, and never saves it in plugin
+configuration. Leave **Trust this device** enabled unless you intentionally want
+Blink to ask again.
+
+### Account or phone verification
+
+Some accounts require an additional **account or phone verification** after
+token issuance. Complete it only when the custom UI labels the request as
+account verification. If Blink asks for another PIN, request a new one and use
+the same form; the token state remains authenticated while verification is
+pending.
+
+### Re-authentication and token reset
+
+If you need to re-authenticate or switch Blink accounts, choose **Unlock &
+Re-authenticate** in the custom UI, then start hosted sign-in again. Unlocking
+clears the current token file, legacy auth state, and any pending transaction
+before returning to the signed-out screen. The custom-UI server's `/logout`
+route has the same local storage-clearing semantics for integrations, but the
+current operator UI does not expose a separate logout button. Neither action
+revokes tokens at Blink; it removes the plugin's local ability to reuse them.
+
+### Sign-in verification checklist
+
+- Open Homebridge UI → Plugins → this plugin → Settings.
+- Confirm there is one hosted flow and no Homebridge username, password, or
+  hosted-MFA input.
+- Confirm Brave reaches the exact HTTPS App-Link and the clipboard/manual finish
+  returns to an authenticated status.
+- Confirm the saved plugin config contains no credentials or verification codes.
+- Restart Homebridge and confirm `.blink-auth.json` supplies the same account;
+  refresh uses its persisted OAuth profile.
+
+### Current Hosted-OAuth Validation Boundary
+
+Blink's own hosted UI is the native sign-in surface. A secret-blind Android
+AppAuth harness reproduced the exact Blink Android 57.1 authorization request
+and reached the hosted identity page. Five authorize variations reached the
+same hosted flow, while deliberately invalid token requests reached the token
+parser and were rejected. That proves native hosted-page launch and request
+construction; it does not replace a fresh authorized code exchange.
+
+The remote Raspberry Pi now runs a valid Android-profile session for the
+authorized EU/Ireland account. Blink accepted a still-valid legacy refresh
+session with the exact Android refresh form, rotated it again through the
+installed plugin, returned user information and homescreen/device discovery,
+and survived two clean Homebridge restarts. The persisted state is owner-only,
+the plugin configuration contains no credential or verification-code fields,
+and no temporary relay, proxy, or pending-auth artifact remains.
+
+With that Android state, `tier_info` returned HTTP 406 from `prod` and `a001`,
+and HTTP 200 plus a valid authoritative tier from `prde` and `prsg`. Release
+`0.9.1` therefore advances through only `prod`, `prde`, `prsg`, and `a001` on
+HTTP 406; it stops at the first success and never probes the APK's special
+`cemp` regression or `srf1` refurbishment targets for an ordinary account.
+An explicitly configured safe tier outside that ordinary set—such as `sqa1`,
+`cemp`, `srf1`, or a numbered e-tier—remains a single-target bootstrap and does
+not enter the production-region fallback.
+
+This cross-client refresh proves that the Android token profile works for the
+owner's existing EU session, but it is not a fresh packaged hosted
+authorization-code exchange. Two earlier fresh packaged callbacks reached the
+production token endpoint and returned `invalid_grant`; that final fresh-login
+acceptance case remains open. Non-EU accounts are not live-validated.
 
 ## Configuration
 
@@ -212,90 +351,32 @@ again. A later request can retry. Existing valid cached snapshots remain
 available while the camera is online. A cached image does not confirm current
 connectivity to Blink.
 
-## Quick Start: Hosted Blink Sign-In
+## Using the plugin in Apple Home
 
-1. Open this plugin's settings in the remote Homebridge UI and choose **Sign in
-   securely with Blink**. Keep the Homebridge settings tab open. If Brave blocks
-   the new tab, choose the revealed **Open Blink Sign-In** fallback.
-2. Finish the account-credential and MFA steps only in the separate
-   Blink-hosted Brave tab. Homebridge never receives either value.
-3. After Blink reaches its desktop **Unsupported Browser** page, copy the full
-   address beginning with
-   `https://applinks.blink.com/signin/callback` from Brave's address bar.
-4. Return to Homebridge and choose **Paste Blink Result and Finish**. This reads
-   the clipboard only from that click. If Brave denies clipboard access, reveal
-   the manual field, paste the complete address, and choose **Finish with Pasted Address**.
-   Clipboard cleanup after completion is best effort: if the browser denies
-   clipboard write access, clear the copied callback address manually.
-5. If Blink asks for client or account verification after issuing tokens, enter
-   that distinct post-token code in Homebridge. This is not Blink's hosted MFA.
-6. Wait for stored-token connection verification, then continue to the normal
-   plugin schema. Restart Homebridge and confirm the stored session reconnects.
+### Identifying camera controls
 
-The Raspberry Pi owns the PKCE verifier and expected state. While sign-in is in
-progress it stores only the pending transaction in `.blink-auth-pending.json`.
-A valid pending transaction can survive a custom-UI process or full Homebridge
-restart only within its 15-minute lifetime. A valid callback consumes and
-deletes the pending file before the one-time code exchange; if exchange fails,
-the operator must start a new sign-in. Success stores the final token state in
-`.blink-auth.json`, including `oauthClientId=android`, and hosted completion
-forces `persistAuth=true`. Both files are owner-only (`0600`). No public callback
-service or inbound port is required.
+Each camera, doorbell and Mini/Owl control starts with the device name assigned
+in the plugin (including a configured device-name override):
 
-### Current Hosted-OAuth Validation Boundary
+| Home service | Example |
+| --- | --- |
+| Enable or disable motion detection | Front door Motion Detection |
+| Read-only motion sensor | Front door Motion Sensor |
+| Request a snapshot, then automatically return Off | Front door Refresh Snapshot |
+| Doorbell ring event | Front door Doorbell |
+| Network arm/disarm | Home Security |
 
-Blink's own hosted UI is the native sign-in surface. A secret-blind Android
-AppAuth harness reproduced the exact Blink Android 57.1 authorization request
-and reached the hosted identity page. Five authorize variations reached the
-same hosted flow, while deliberately invalid token requests reached the token
-parser and were rejected. That proves native hosted-page launch and request
-construction; it does not replace a fresh authorized code exchange.
+The camera tile retains its assigned device name. Long names reserve space for
+the control's purpose within HomeKit's name limit. Existing service identities
+remain unchanged, preserving pairings and automations. The plugin updates both
+Name and generated Configured Name on its controls when loading existing accessories,
+while preserving a different Home-assigned Configured Name;
+Home may retain a separate user-assigned name or cached tile label. Those labels
+can be edited in Home without removing or pairing the accessory again. A name
+chosen only in Home is not available to the plugin as a prefix for other services;
+set a device-name override in the plugin for a consistent prefix throughout.
 
-The remote Raspberry Pi now runs a valid Android-profile session for the
-authorized EU/Ireland account. Blink accepted a still-valid legacy refresh
-session with the exact Android refresh form, rotated it again through the
-installed plugin, returned user information and homescreen/device discovery,
-and survived two clean Homebridge restarts. The persisted state is owner-only,
-the plugin configuration contains no credential or verification-code fields,
-and no temporary relay, proxy, or pending-auth artifact remains.
-
-With that Android state, `tier_info` returned HTTP 406 from `prod` and `a001`,
-and HTTP 200 plus a valid authoritative tier from `prde` and `prsg`. Release
-`0.9.1` therefore advances through only `prod`, `prde`, `prsg`, and `a001` on
-HTTP 406; it stops at the first success and never probes the APK's special
-`cemp` regression or `srf1` refurbishment targets for an ordinary account.
-An explicitly configured safe tier outside that ordinary set—such as `sqa1`,
-`cemp`, `srf1`, or a numbered e-tier—remains a single-target bootstrap and does
-not enter the production-region fallback.
-
-This cross-client refresh proves that the Android token profile works for the
-owner's existing EU session, but it is not a fresh packaged hosted
-authorization-code exchange. Two earlier fresh packaged callbacks reached the
-production token endpoint and returned `invalid_grant`; that final fresh-login
-acceptance case remains open. Non-EU accounts are not live-validated.
-
-## Re-Authentication / Token Reset
-
-If you need to re-authenticate or switch Blink accounts, choose **Unlock &
-Re-authenticate** in the custom UI, then start hosted sign-in again. Unlocking
-clears the current token file, legacy auth state, and any pending transaction
-before returning to the signed-out screen. The custom-UI server's `/logout`
-route has the same local storage-clearing semantics for integrations, but the
-current operator UI does not expose a separate logout button. Neither action
-revokes tokens at Blink; it removes the plugin's local ability to reuse them.
-
-## Manual Smoke Checklist (Hosted Authentication)
-
-- Open Homebridge UI → Plugins → this plugin → Settings.
-- Confirm there is one hosted flow and no Homebridge username, password, or
-  hosted-MFA input.
-- Confirm Brave reaches the exact HTTPS App-Link and the clipboard/manual finish
-  returns to an authenticated status.
-- Confirm the saved plugin config contains no credentials or verification codes.
-- Restart Homebridge and confirm `.blink-auth.json` supplies the same account;
-  refresh uses its persisted OAuth profile.
-
-## Live Streaming (FFmpeg)
+## Live streaming and quality
 
 Live streaming uses FFmpeg to transcode Blink's RTSPS stream to HomeKit SRTP. Make sure FFmpeg is installed
 and accessible in your PATH, or set `ffmpegPath` to the full binary location.
@@ -329,46 +410,90 @@ If you use [`brew`](http://brew.sh) (MacOS or Linux), install `ffmpeg` using:
 brew install 'ffmpeg@8'
 ```
 
-## Supported Devices
+### Two-way talk status
 
-| Blink Device | HomeKit Service | Features |
-| ------------ | --------------- | -------- |
-| **Network** | SecuritySystem | Arm/disarm all cameras in network |
-| **Camera** | Switch + MotionSensor | Enable/disable motion, motion events |
-| **Doorbell** | Doorbell + Switch + MotionSensor | Ring events, enable/disable motion |
-| **Owl (Mini)** | Switch + MotionSensor | Enable/disable motion, motion events |
+Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden and the plugin forces `twoWayAudio` off until IMMIS uplink framing is validated. Even if you previously enabled talkback, the setting is ignored for now. We will re-enable the UI once payload sequencing and ACK handling are confirmed stable.
 
-### SecuritySystem Modes
+### Software encoding on smaller hosts
 
-The HomeKit SecuritySystem exposes standard modes:
+`softwareEncodingPreset` defaults to `veryfast` (Balanced), preserving existing
+quality behavior. The optional `ultrafast` (Low CPU) setting uses ultrafast for
+libx264 and software fallback, plus Opus compression level 3. It reduces encoding
+work at the cost of compression efficiency: at the same bitrate, video/audio
+quality may decrease. Hardware video encoders retain their own settings; Opus
+still uses the selected audio complexity. Select it through the existing Streaming settings after
+installation and compare actual Home playback; no Pi configuration is changed
+by publication. Pi5 uses software H.264 encoding. A compiled hardware encoder
+name alone does not prove usable acceleration.
 
-- **Away Arm** → Network is armed
-- **Stay Arm** → Network is armed (same as Away)
-- **Night Arm** → Network is armed (same as Away)
-- **Disarm** → Network is disarmed
+This option still transcodes video. Automatic H.264 passthrough is not enabled:
+source codec/profile/level, dimensions, frame rate and bitrate must first be
+verified against HomeKit negotiation. Audio conversion may remain necessary.
 
-Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's armed state.
+Audio is decoded from the source container and converted to the negotiated
+HomeKit codec, sample rate, channels, bitrate and packet duration. Opus supports
+10/20/40/60 ms packets. AAC-ELD is advertised only after a bounded local encoding
+and RTP capability probe; unavailable AAC-ELD falls back to advertised Opus.
+Video and audio use separate negotiated RTP/SRTP outputs. IMMIS retains the
+initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
+private-pipe backpressure and bounded session cleanup still apply.
 
-## Hosted MFA and Post-Token Verification
+IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Physical video/audio acceptance remains required for each installed RC.
 
-Blink's sign-in page owns the account credential and hosted MFA steps. Do not
-put either value in Homebridge configuration.
+### Input and output quality
 
-## Client Verification (New Device Approval)
+After changing quality in the plugin settings form, click Homebridge's **Save** button. Selecting a value updates the form draft; it does not write the configuration to disk. Apply streaming changes through your normal child-bridge restart workflow, then check the output-profile and negotiated-format receipt in the logs. Publication never changes a running host's settings.
 
-After tokens exist, Blink may require one-time **client verification** for the
-new Homebridge device. The custom UI identifies this post-token requirement,
-accepts the code through its verification form, and never saves it in plugin
-configuration. Leave **Trust this device** enabled unless you intentionally want
-Blink to ask again.
+`outputQuality` applies to every camera's HomeKit video output. Default `auto`
+preserves the current capabilities and lets Home choose. Optional `720p15`
+(1280×720 with a 15-fps encoding ceiling), `360p15` (640×360 with a 15-fps
+ceiling), and `1080p30` (1920×1080/30) retain the 320×240/15 fallback.
+The low-frame-rate profiles also accept a 30-fps selection at their advertised
+dimensions, while encoding at no more than 15 fps. This follows the maintained
+[Homebridge camera-ffmpeg frame-rate limiting approach](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/blob/latest/src/streamingDelegate.ts).
+Dimensions remain exactly selected; unsupported dimensions still fail before
+vendor media work. Output receipts distinguish requested and effective FPS.
+Lower resolution/frame rate reduces encoding work, but improved Pi playback is
+not established until measured on the installed release. 1080p/30 increases work.
+Audio remains independently negotiated and transcoded, including Opus/AAC-ELD
+packet duration, sample rate and separate RTP/SRTP packaging. Software encoding
+preset and bitrate remain separate controls.
 
-## Account/Phone Verification
+Input quality is **per camera only**, under `deviceSettingOverrides`:
 
-Some accounts require an additional **account or phone verification** after
-token issuance. Complete it only when the custom UI labels the request as
-account verification. If Blink asks for another PIN, request a new one and use
-the same form; the token state remains authenticated while verification is
-pending.
+```json
+{
+  "outputQuality": "720p15",
+  "deviceSettingOverrides": [
+    { "deviceIdentifier": "CAMERA_SERIAL", "inputQuality": "auto" }
+  ]
+}
+```
+
+`inputQuality: auto` preserves the camera's current Blink quality; it sends no
+settings write. On first live startup, the plugin remembers the first parseable
+vendor quality and actual input video dimensions/frame rate in Homebridge's
+accessory cache. These observations are separate from configured policy and
+model maximum capability. Missing metadata does not invent an input resolution
+or prevent automatic streaming. Compressed input is demuxed at its real format.
+
+Explicit `saver`, `standard` or `best` selects Blink's persistent camera setting
+before liveview, with supported/restricted values checked and confirmed readback.
+**This also changes recording quality in the Blink app.** Existing settings are
+not restored when returning to `auto`; restore the desired quality explicitly in
+the plugin or Blink app. Failed/unconfirmed changes prevent that stream start;
+ambiguous writes are not replayed. Save settings and restart through Homebridge's
+normal operator workflow; publication does not change the live host.
+
+2K is model-dependent. [Mini 2K+](https://support.blinkforhome.com/en_US/faq-mini-2k/mini-2k-faq)
+Best is 2560×1440/24; the [newer doorbells](https://support.blinkforhome.com/en_US/wired-doorbell-2k-plus-faq/blink-wired-doorbell-2k-faq)
+use square video. The pipeline accepts actual 2560×1440 and 1920×1920 input and
+converts to negotiated output while preserving aspect ratio with padding.
+No universal 2K override or unsupported resolution request is sent. Camera model,
+firmware and subscription may restrict upstream quality. Synthetic 2K conversion
+and mocked config contracts do not establish physical 2K-camera acceptance.
+
+Streaming diagnostics use FFmpeg info-level output, omit per-packet IMMIS and per-NAL traces, and cap detailed records per media child/proxy. A separate error allowance and a final suppressed-record count preserve troubleshooting evidence without unlimited log growth. Input-video observation continues even after the diagnostic allowance is exhausted. TLS, destination, worker and lifecycle failures retain their operational receipts. These controls reduce diagnostic work; Pi smoothness gains still require physical testing.
 
 ## Troubleshooting
 
@@ -441,7 +566,7 @@ node --version
 - Check that the network is armed (motion events only trigger when armed)
 - Reduce `pollInterval` for faster detection (but more API calls)
 
-## API Documentation
+## API documentation
 
 This plugin's API implementation is based on reverse engineering the official
 Blink Home Monitor Android app. The current static catalog is Android 59.2
@@ -529,106 +654,20 @@ The native worker is not enabled or distributed in the current npm runtime.
   non-EU accounts are not live-validated and remain APK-derived plus
   mocked/parameterized pending authorized validation
 
-### Software encoding on smaller hosts
+## Disclaimer and trademarks
 
-`softwareEncodingPreset` defaults to `veryfast` (Balanced), preserving existing
-quality behavior. The optional `ultrafast` (Low CPU) setting uses ultrafast for
-libx264 and software fallback, plus Opus compression level 3. It reduces encoding
-work at the cost of compression efficiency: at the same bitrate, video/audio
-quality may decrease. Hardware video encoders retain their own settings; Opus
-still uses the selected audio complexity. Select it through the existing Streaming settings after
-installation and compare actual Home playback; no Pi configuration is changed
-by publication. Pi5 uses software H.264 encoding. A compiled hardware encoder
-name alone does not prove usable acceleration.
+This is an independent, unofficial community project. Neither the developer nor
+this project is affiliated with, endorsed by, sponsored by, or otherwise
+associated with Immedia Semiconductor, LLC or any of its affiliates, Amazon.com,
+Inc. or any of its affiliates, or the Homebridge project and its contributors.
 
-This option still transcodes video. Automatic H.264 passthrough is not enabled:
-source codec/profile/level, dimensions, frame rate and bitrate must first be
-verified against HomeKit negotiation. Audio conversion may remain necessary.
+Blink, Amazon, Homebridge, Apple, HomeKit, and other product names, trademarks,
+and logos mentioned in this documentation belong to their respective owners.
+Their use is solely to identify products, services, and compatibility; it does
+not imply endorsement or an official relationship.
 
-Audio is decoded from the source container and converted to the negotiated
-HomeKit codec, sample rate, channels, bitrate and packet duration. Opus supports
-10/20/40/60 ms packets. AAC-ELD is advertised only after a bounded local encoding
-and RTP capability probe; unavailable AAC-ELD falls back to advertised Opus.
-Video and audio use separate negotiated RTP/SRTP outputs. IMMIS retains the
-initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
-private-pipe backpressure and bounded session cleanup still apply.
-
-IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Physical video/audio acceptance remains required for each installed RC.
-
-### Input and output quality
-
-After changing quality in the plugin settings form, click Homebridge's **Save** button. Selecting a value updates the form draft; it does not write the configuration to disk. Apply streaming changes through your normal child-bridge restart workflow, then check the output-profile and negotiated-format receipt in the logs. Publication never changes a running host's settings.
-
-`outputQuality` applies to every camera's HomeKit video output. Default `auto`
-preserves the current capabilities and lets Home choose. Optional `720p15`
-(1280×720 with a 15-fps encoding ceiling), `360p15` (640×360 with a 15-fps
-ceiling), and `1080p30` (1920×1080/30) retain the 320×240/15 fallback.
-The low-frame-rate profiles also accept a 30-fps selection at their advertised
-dimensions, while encoding at no more than 15 fps. This follows the maintained
-[Homebridge camera-ffmpeg frame-rate limiting approach](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/blob/latest/src/streamingDelegate.ts).
-Dimensions remain exactly selected; unsupported dimensions still fail before
-vendor media work. Output receipts distinguish requested and effective FPS.
-Lower resolution/frame rate reduces encoding work, but improved Pi playback is
-not established until measured on the installed release. 1080p/30 increases work.
-Audio remains independently negotiated and transcoded, including Opus/AAC-ELD
-packet duration, sample rate and separate RTP/SRTP packaging. Software encoding
-preset and bitrate remain separate controls.
-
-Input quality is **per camera only**, under `deviceSettingOverrides`:
-
-```json
-{
-  "outputQuality": "720p15",
-  "deviceSettingOverrides": [
-    { "deviceIdentifier": "CAMERA_SERIAL", "inputQuality": "auto" }
-  ]
-}
-```
-
-`inputQuality: auto` preserves the camera's current Blink quality; it sends no
-settings write. On first live startup, the plugin remembers the first parseable
-vendor quality and actual input video dimensions/frame rate in Homebridge's
-accessory cache. These observations are separate from configured policy and
-model maximum capability. Missing metadata does not invent an input resolution
-or prevent automatic streaming. Compressed input is demuxed at its real format.
-
-Explicit `saver`, `standard` or `best` selects Blink's persistent camera setting
-before liveview, with supported/restricted values checked and confirmed readback.
-**This also changes recording quality in the Blink app.** Existing settings are
-not restored when returning to `auto`; restore the desired quality explicitly in
-the plugin or Blink app. Failed/unconfirmed changes prevent that stream start;
-ambiguous writes are not replayed. Save settings and restart through Homebridge's
-normal operator workflow; publication does not change the live host.
-
-2K is model-dependent. [Mini 2K+](https://support.blinkforhome.com/en_US/faq-mini-2k/mini-2k-faq)
-Best is 2560×1440/24; the [newer doorbells](https://support.blinkforhome.com/en_US/wired-doorbell-2k-plus-faq/blink-wired-doorbell-2k-faq)
-use square video. The pipeline accepts actual 2560×1440 and 1920×1920 input and
-converts to negotiated output while preserving aspect ratio with padding.
-No universal 2K override or unsupported resolution request is sent. Camera model,
-firmware and subscription may restrict upstream quality. Synthetic 2K conversion
-and mocked config contracts do not establish physical 2K-camera acceptance.
-
-Streaming diagnostics use FFmpeg info-level output, omit per-packet IMMIS and per-NAL traces, and cap detailed records per media child/proxy. A separate error allowance and a final suppressed-record count preserve troubleshooting evidence without unlimited log growth. Input-video observation continues even after the diagnostic allowance is exhausted. TLS, destination, worker and lifecycle failures retain their operational receipts. These controls reduce diagnostic work; Pi smoothness gains still require physical testing.
-
-### Identifying controls in Apple Home
-
-Each camera, doorbell and Mini/Owl control starts with the device name assigned
-in the plugin (including a configured device-name override):
-
-| Home service | Example |
-| --- | --- |
-| Enable or disable motion detection | Front door Motion Detection |
-| Read-only motion sensor | Front door Motion Sensor |
-| Request a snapshot, then automatically return Off | Front door Refresh Snapshot |
-| Doorbell ring event | Front door Doorbell |
-| Network arm/disarm | Home Security |
-
-The camera tile retains its assigned device name. Long names reserve space for
-the control's purpose within HomeKit's name limit. Existing service identities
-remain unchanged, preserving pairings and automations. The plugin updates both
-Name and generated Configured Name on its controls when loading existing accessories,
-while preserving a different Home-assigned Configured Name;
-Home may retain a separate user-assigned name or cached tile label. Those labels
-can be edited in Home without removing or pairing the accessory again. A name
-chosen only in Home is not available to the plugin as a prefix for other services;
-set a device-name override in the plugin for a consistent prefix throughout.
+This plugin uses privately documented interfaces that may change or become
+unavailable without notice. Compatibility and continued access are not
+guaranteed. The plugin is not a substitute for the official Blink app or a
+professionally monitored security system. Software is provided under the terms
+of the applicable [license](LICENSE), including its warranty disclaimer.
