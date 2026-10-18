@@ -626,7 +626,8 @@ in the plugin (including a configured device-name override):
 The camera tile retains its assigned device name. Long names reserve space for
 the control's purpose within HomeKit's name limit. Existing service identities
 remain unchanged, preserving pairings and automations. The plugin updates both
-Name and Configured Name on its controls when loading existing accessories;
+Name and generated Configured Name on its controls when loading existing accessories,
+while preserving a different Home-assigned Configured Name;
 Home may retain a separate user-assigned name or cached tile label. Those labels
 can be edited in Home without removing or pairing the accessory again. A name
 chosen only in Home is not available to the plugin as a prefix for other services;

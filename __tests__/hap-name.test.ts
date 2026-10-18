@@ -57,3 +57,15 @@ describe('device service names', () => {
     expect(warning).not.toHaveBeenCalled();
   });
 });
+
+ it('preserves Home-assigned names while advancing generated labels', () => {
+   const { Service, Characteristic } = require('hap-nodejs');
+   const { setHapServiceName } = require('../src/hap-name');
+   const service = new Service.Switch('Old Motion', 'motion-switch');
+   setHapServiceName(service, Characteristic.Name, 'Corner Motion Detection', 'Blink Motion', Characteristic.ConfiguredName);
+   setHapServiceName(service, Characteristic.Name, 'Lounge Motion Detection', 'Blink Motion', Characteristic.ConfiguredName);
+   expect(service.getCharacteristic(Characteristic.ConfiguredName).value).toBe('Lounge Motion Detection');
+   service.updateCharacteristic(Characteristic.ConfiguredName, 'My custom switch');
+   setHapServiceName(service, Characteristic.Name, 'Entry Motion Detection', 'Blink Motion', Characteristic.ConfiguredName);
+   expect(service.getCharacteristic(Characteristic.ConfiguredName).value).toBe('My custom switch');
+ });

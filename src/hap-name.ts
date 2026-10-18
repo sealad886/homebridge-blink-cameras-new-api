@@ -33,13 +33,17 @@ export function setHapServiceName(
   configuredNameCharacteristic?: typeof Characteristic.ConfiguredName,
 ): string {
   const name = toHapName(value, fallback);
+  const previousName = service.displayName;
   service.displayName = name;
   service.setCharacteristic(nameCharacteristic, name);
   if (configuredNameCharacteristic) {
     if (!service.testCharacteristic(configuredNameCharacteristic)) {
       service.addOptionalCharacteristic(configuredNameCharacteristic);
     }
-    service.setCharacteristic(configuredNameCharacteristic, name);
+    const configured = service.getCharacteristic(configuredNameCharacteristic).value;
+    if (!configured || configured === previousName) {
+      service.setCharacteristic(configuredNameCharacteristic, name);
+    }
   }
   return name;
 }
