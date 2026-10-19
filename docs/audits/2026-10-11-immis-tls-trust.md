@@ -1,5 +1,10 @@
 # IMMIS TLS trust correction for RC.8
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 ## Confirmed cause and provider evidence
 
 RC.7 Home acceptance produced four `IMMIS TLS candidates exhausted` failures across

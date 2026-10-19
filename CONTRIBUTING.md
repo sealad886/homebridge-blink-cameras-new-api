@@ -1,200 +1,107 @@
-# Contributing to @sealad886/homebridge-blink-cameras-new-api
+# Contributing
 
-Thank you for your interest in contributing! This guide will help you get started.
+This guide owns contributor setup, local checks, and the pull-request workflow.
+For installation and operation, start with the [README](README.md). See the
+[documentation map](docs/README.md) for the other information owners.
 
-## Development Setup
+## Development setup
 
-### Prerequisites
-
-- **Node.js 18+** (uses native `fetch` API)
-- **npm** (the repository and CI workflows use npm)
-- A Blink account for testing (optional for unit tests)
-
-### Clone and Install
+Use Node.js **20, 22, or 24**, matching `package.json` and the CI matrix, and npm.
+A Blink account is unnecessary for unit tests; real-provider and Home testing
+require a separately configured test environment.
 
 ```bash
 git clone https://github.com/sealad886/homebridge-blink-cameras-new-api.git
 cd homebridge-blink-cameras-new-api
-npm install
-```
-
-### Build
-
-```bash
+npm ci
 npm run build
 ```
 
-This compiles TypeScript to the `dist/` directory.
+`npm run build` compiles TypeScript into `dist/` and copies custom UI assets.
+Do not edit generated `dist/` files. The packaging invariants are documented in
+[repository conventions](docs/CONVENTIONS.md#custom-ui-packaging).
 
-### Watch Mode (build)
-
-For development, you can use either:
+For TypeScript rebuilds without launching Homebridge:
 
 ```bash
-# Rebuild + run Homebridge against test/hbConfig
-npm run watch
-
-# TypeScript-only rebuilds
 npm run watch:ts
 ```
 
-## Running Tests
+For integration development, `npm run watch` builds the plugin, starts Homebridge
+with `test/hbConfig`, and restarts it on watched changes. This connects to any
+account configured there and advertises accessories, so use an intentional test
+instance. It is not the workflow for modifying a live installation. Keep account
+credentials, tokens, and local Homebridge state out of commits. Follow the
+[operator sign-in instructions](README.md#sign-in-and-account-verification) and
+[diagnostic logging policy](docs/debug_logging_spec.md).
 
-### All Tests
+## Validation
 
-```bash
-npm test
-```
-
-### Watch Mode
-
-```bash
-npm test -- --watch
-```
-
-### Coverage Report
-
-```bash
-npm run test -- --coverage
-```
-
-Coverage reports are generated in `coverage/`.
-
-## Testing in a Real Homebridge Deployment
-
-Homebridge developer guidance recommends linking your plugin into a local
-Homebridge install and running Homebridge in debug mode.
-
-### Link the Plugin into Homebridge
-
-Build the plugin, then link it so your global Homebridge install can discover
-the development version:
-
-```bash
-npm run build
-npm link
-```
-
-### Configure Homebridge
-
-Add the plugin to your Homebridge config (or use Homebridge UI X). This repo
-publishes `config.schema.json`, so the Settings UI will appear in Homebridge UI X
-when the plugin is detected. Blink sign-in itself is handled by the custom UI card,
-while credential and verification-code fields remain intentionally hidden from the
-schema form. For local dev, the repo also includes `test/hbConfig/config.json` for
-`npm run watch`.
-
-### Run Homebridge in Debug Mode
-
-Start Homebridge with debug logging so you can see plugin logs:
-
-```bash
-homebridge -D
-```
-
-If Homebridge is already running, stop it before starting a debug instance to
-avoid conflicts.
-
-### Iterate on Changes
-
-Run TypeScript in watch mode in one terminal, and restart Homebridge when you
-need to load new changes:
-
-```bash
-npm run watch
-```
-
-## Code Style
-
-### ESLint
-
-The project uses ESLint for code style. Run the linter:
+Run these checks for source changes:
 
 ```bash
 npm run lint
+npm run build
+npm test -- --runInBand
+npm run blink-api:validate
 ```
 
-### TypeScript
+Run focused tests while iterating, then the broader checks appropriate to the
+change. Jest also supports `npm test -- --watch` and
+`npm test -- --coverage`; coverage output is written to `coverage/`.
 
-- Strict mode is enabled
-- All public methods should have JSDoc comments
-- Use `ReturnType<typeof setTimeout>` for timer types (not `NodeJS.Timeout`)
-- Import timers from `'timers'` module for explicit Node.js timer types
+Tests should prove observable behavior, contracts, security boundaries, or a
+regression rather than mirror private implementation details. Documentation-only
+changes normally need link/example checks, not new unit tests. Review the actual
+CI results before merging; local success does not establish package publication,
+installed runtime identity, live-provider behavior, or physical Home acceptance.
+The additional release and packaged-artifact gates belong to the
+[release guide](docs/RELEASE.md).
 
-### Formatting
+## Code and architecture
 
-- 2-space indentation
-- Single quotes for strings
-- Trailing commas in multi-line lists
-- No semicolons (enforced by ESLint)
+TypeScript strict mode is enabled in `tsconfig.json`. Follow surrounding code and
+`eslint.config.js`; existing source uses semicolons, single-quoted strings, and
+two-space indentation. ESLint is the executable lint policy, not a promise that
+all formatting preferences are enforced. Document non-obvious public contracts
+and keep timers and cancellation aligned with their existing owners.
 
-## Pull Request Process
+Before adding another coordinator, authentication path, transport, or helper,
+look for its existing owner. The [architecture decisions](docs/adr/README.md)
+record authentication, command recovery, session ownership, media authority, and
+quality decisions. [Repository conventions](docs/CONVENTIONS.md) record the
+packaging and UI identity rules that contributors must preserve. Current
+security findings and release dispositions belong to the
+[security-hardening ledger](docs/plans/security-hardening.md), not a second
+checklist in this guide.
 
-### Branch Naming
+The main source areas are `src/platform.ts` (platform integration),
+`src/accessories/` (HomeKit handlers and media lifecycle), `src/blink-api/`
+(provider and authentication operations), and `src/homebridge-ui/` (settings and
+sign-in UI). Behavioral tests live in `__tests__/`; API-contract extraction and
+validation are described in the [contract guide](docs/api-contract/README.md).
 
-- `feature/description` - New features
-- `fix/description` - Bug fixes
-- `docs/description` - Documentation only
-- `refactor/description` - Code refactoring
+## Issues and pull requests
 
-### Commit Messages
+Search [existing issues](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues)
+before opening a new report. Include reproduction steps, expected and observed
+behavior, affected version, and sanitized diagnostics. Never include tokens,
+capability URLs, account identifiers, or media.
 
-Use conventional commit format:
+Follow [AGENTS.md](AGENTS.md) when using an automated contributor. Preserve
+unrelated working-tree changes. For substantive automated work, use a safe
+`codex/<short-task-slug>` branch in the existing checkout; worktree creation and
+history rewrites require the authorizations specified there. Human contributors
+should use a focused, descriptive task branch.
 
-```text
-type(scope): description
+Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), for
+example `fix(auth): handle token refresh cancellation`. Keep each PR focused and
+use the repository PR template. Include the problem, resulting behavior,
+verification results and their limitations, and any linked issue. Update the
+canonical documentation owner for changed behavior and link to it elsewhere.
+Close an issue only when its acceptance criteria are verified; use closing
+keywords in the default-branch PR that delivers that resolution.
 
-[optional body]
-```
-
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
-
-Examples:
-
-- `feat(doorbell): add ring notification support`
-- `fix(auth): handle token refresh race condition`
-- `docs(readme): update configuration examples`
-
-### Before Submitting
-
-1. **Run tests**: `npm test` - all tests must pass
-2. **Run linter**: `npm run lint` - no errors allowed
-3. **Build**: `npm run build` - must compile without errors
-4. **Update docs**: If adding features, update README.md
-
-### Review Checklist
-
-- [ ] Tests added/updated for new code
-- [ ] JSDoc comments for public methods
-- [ ] README updated if needed
-- [ ] No breaking changes (or documented in PR)
-- [ ] Code follows existing patterns
-
-## Release Process
-
-Release instructions live in `docs/RELEASE.md`.
-
-## Project Structure
-
-```text
-src/
-├── index.ts           # Plugin entry point
-├── platform.ts        # Main platform class
-├── accessories/       # HomeKit accessory handlers
-│   ├── camera.ts
-│   ├── doorbell.ts
-│   ├── network.ts
-│   └── owl.ts
-├── blink-api/         # Blink REST API client
-│   ├── auth.ts        # OAuth authentication
-│   ├── client.ts      # High-level API methods
-│   ├── http.ts        # HTTP layer with retry
-│   └── urls.ts        # URL configuration
-└── types/             # TypeScript type definitions
-
-__tests__/             # Jest test files
-```
-
-## Questions?
-
-Open an issue on GitHub or check the existing issues for similar questions.
+Version changes, release review, publication, and installation follow
+[docs/RELEASE.md](docs/RELEASE.md). A development build or merged PR does not by
+itself authorize publication or changes to a live Homebridge host.
