@@ -1,5 +1,7 @@
 # Audio and LAN output evidence
 
+See the [native prototype overview](README.md) for scope and navigation.
+
 The local prototype now decodes optional AAC/AAC-LATM MPEG-TS audio and encodes mono Opus at 16/24 kHz or PCMA/PCMU at 8 kHz. This proves a bounded codec subset, not HomeKit audio parity or live integration. The source contract is `src/accessories/camera-source.ts`, including `buildAudioEncoderArgs` and the advertised codec/rate combinations.
 
 The installed FFmpeg 9.0.2 native AAC encoder rejects AAC-ELD (the capability probe returns -22). The worker rejects this configuration before opening media; it never substitutes AAC-LC under that label. A maintained, licensing-compatible AAC-ELD encoder or an explicitly approved contract change remains necessary. The pinned [AAC encoder source](https://raw.githubusercontent.com/FFmpeg/FFmpeg/n9.0.2/libavcodec/aacenc.c) rejects unsupported profiles.

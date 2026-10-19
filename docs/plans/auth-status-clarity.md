@@ -1,5 +1,12 @@
 # Plugin Config authentication status
 
+> Historical implementation/checkpoint record. Status, branch names, pending
+> actions and checkboxes below describe the recorded work, not current delivery
+> state or authorization. [Documentation map](../README.md) identifies current
+> owners; [RELEASE.md](../RELEASE.md) owns release procedures and the
+> [security-hardening ledger](security-hardening.md) tracks the current hardening
+> delivery. Preserve the original evidence and verify linked PRs before using it.
+
 ## Problem and status contract
 
 The Plugin Config panel currently interprets an untested stored Blink token as a failed verification. Opening the panel then raises a warning even when the child bridge is operating normally. The custom UI also writes the Homebridge plugin configuration and shows a success toast during a read-only status refresh.

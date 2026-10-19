@@ -1,5 +1,7 @@
 # Codec-only private-pipe prototype
 
+See the [documentation map](../docs/README.md) for scope and navigation.
+
 This is a bounded prototype for the approved owned-vendor-transport architecture. It accepts H.264 video in MPEG-TS through standard input and emits length-framed H.264 and configured audio packets through standard output. Supported optional audio outputs are mono Opus at 16/24 kHz and PCMA/PCMU at 8 kHz. AAC-ELD fails closed because the pinned native AAC encoder rejects that profile. Maintained libsrtp 2.8.1 protects parent-provided RTP/RTCP packets through private IPC. No vendor URL, TLS operation, socket output, filesystem media/configuration, FFmpeg CLI, or provider connection is implemented. The parent retains vendor networking and will eventually own HomeKit transport. This directory does not integrate or enable a worker in the plugin.
 
 Verified scope: macOS arm64, installed FFmpeg 9.0.2 public libraries with libx264. Linux arm64/x64, macOS x64, Windows x64, Windows 11/macOS 13/Ubuntu 22.04 baselines, distribution and physical camera acceptance remain unverified. Win32/POSIX thread adapters are source only on untested targets.

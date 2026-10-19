@@ -1,5 +1,10 @@
 # Owned IMMIS destination policy evidence
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 Source baseline: main `2e86a45`; implementation branch `codex/secure-media-worker`.
 This receipt covers destination admission and IMMIS integration only. It does not close
 F05/F06, establish RTSPS transport enforcement, or claim physical/provider acceptance.

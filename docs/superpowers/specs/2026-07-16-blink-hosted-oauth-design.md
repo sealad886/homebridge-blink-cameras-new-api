@@ -1,8 +1,16 @@
 # Blink Hosted OAuth Login Design
 
-> Historical implementation artifact. The supported runtime contract is now
-> release `0.9.1`; use `docs/adr/001-authentication.md`, `blink_api_map.md`, and
-> `docs/integration_checklist.md` for current behavior and evidence. In
+> Historical design/execution evidence, not current operational instructions.
+> [ADR-001](../../adr/001-authentication.md) owns authentication decisions;
+> [RELEASE.md](../../RELEASE.md) owns release and installation procedures.
+> Any temporary relay, tunnel, service change or live acceptance recipe below
+> remains historical and requires separate explicit authorization before reuse.
+> See the [documentation map](../../README.md). Original outcomes and incomplete
+> acceptance cases are preserved below; no later completion is inferred.
+
+> Historical implementation artifact. The recorded runtime contract was
+> release `0.9.1`; use [ADR-001](../../adr/001-authentication.md) for decisions and
+> the [0.9.1 checklist](../../integration_checklist.md) for that bounded evidence. In
 > particular, a new production Homebridge session now tries the APK's ordinary
 > `prod`, `prde`, `prsg`, and `a001` REST defaults only after HTTP 406, because
 > the OAuth response itself supplies no account tier. Fresh packaged
