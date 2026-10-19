@@ -498,3 +498,42 @@ RC.12's installed identity and saved 720p15 were verified, but both cameras repe
 The correction accepts known same-resolution 30-fps selections for low-frame-rate profiles and derives an actual 15-fps ceiling, following maintained Homebridge camera-ffmpeg practice. Unknown dimensions, malformed selections and unsafe media destinations remain rejected. Default quality, audio negotiation, generation ownership, resource/TLS controls and disabled talkback remain unchanged. Requested/effective FPS and finite rejection/preparation receipts provide the missing diagnosis. No host migration is necessary: settings keys and saved values retain their meaning.
 
 Verification must cover real HAP capability TLVs, previous 30-fps selection reaching startup, actual 15-fps encoding/packaging, rejection-before-vendor and released ownership, focused/full regressions and independent review. Publication follows existing CI; operator owns installation and settings. Physical acceptance and fresh 48 hours/two natural refreshes required after installation. Issue #52 and F05/F06 remain open. Rollback uses a verified secure artifact or disables streaming; do not weaken TLS or transport bounds to recover playback.
+
+## 18 October 2026: delegated stable-release residual-risk disposition
+
+Andrew explicitly delegated the F05/F06 release decision in this chat: “you
+decide f05/f06 and just get it done.” Acting under that delegation, the delivery
+owner accepts the following residual risks for stable **0.10.0** with the media
+implementation shipped in RC.14. This supersedes the earlier statements that a
+stable-specific disposition is absent. It is not a finding closure, a completed
+native-worker milestone, or a waiver of functional acceptance.
+
+| Finding | Accepted residual risk | Required retained controls |
+|---|---|---|
+| F05 | Current FFmpeg execution exposes session secrets, including SRTP key material, in process arguments. An attacker able to inspect those arguments on the Homebridge host may obtain those secrets. | Existing diagnostic redaction, private child media transport, bounded session retirement and disabled unsupported talkback remain enabled. Do not claim argv secrecy or an OS sandbox. |
+| F06 | Complete RTSP destination enforcement, including secondary/control/redirect connections, remains unproved. A malicious or compromised upstream media descriptor can create network authority beyond the intended destination boundary on affected paths. | Retain implemented IMMIS actual numeric-connect admission, verified TLS/vendor trust, public-address restrictions, reconnect validation and separate HomeKit output validation. Do not broaden destinations or bypass TLS to recover playback. |
+
+Rationale: accept these known, disclosed residuals for this bounded release rather
+than make the unfinished cross-platform native replacement a prerequisite for
+all incremental releases. The current IMMIS path has materially stronger
+controls than the legacy implementation, but that does not eliminate either
+finding. Local compromise and malicious upstream descriptors remain relevant
+threats; acceptance is a release tradeoff, not evidence that they cannot occur.
+
+Disposition: **F05 and F06 remain open, accepted for 0.10.0**. Their AC-07/AC-08
+closure criteria and WI-05/WI-07 implementation obligations remain unchanged.
+Reassess before a later stable release, any new media scheme or expanded trust
+policy, a material change in exposure, or an incident involving these paths.
+Release notes must disclose the residuals without claiming comprehensive
+hardening. If retained controls regress, this acceptance does not apply: stop
+promotion, use a verified guarded artifact or disable the affected streaming
+mode rather than restore known unsafe behavior.
+
+Independent review and ordinary source/CI/artifact gates still apply. Concrete
+playback/snapshot defects remain separate acceptance decisions; elapsed time
+alone does not resolve them. RC.13 authentication/transport observation may be
+carried into naming-only RC.14 where the relevant implementation is unchanged;
+no additional 48-hour wait is required solely because a label or RC number
+changed. A material runtime correction requires targeted regression evidence and restarts
+the minimum 48-hour RC window with two natural refreshes under
+[the release guide](../RELEASE.md#homebridge-upgrade-and-acceptance). Operator installation remains separate.
