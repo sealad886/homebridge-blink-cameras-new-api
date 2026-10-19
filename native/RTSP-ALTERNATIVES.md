@@ -1,5 +1,7 @@
 # Bounded RTSP architecture comparison
 
+See the [native prototype overview](README.md) for scope and navigation.
+
 The private-pipe codec prototype is an executable ingredient, not RTSP protocol parity, F05/F06 resolution or a plugin runtime artifact. It does not enter the npm runtime until full audio parity, SRTP output/talkback, generation ownership, calibration, physical acceptance and all five target builds are verified.
 
 ## Two concrete options

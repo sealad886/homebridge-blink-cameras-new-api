@@ -1,5 +1,10 @@
 # RC.4 PR #50 review corrections
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 The initial immutable head was `b1baadb5012ecd953c7a262e17c0c3b976765303`,
 against main `2e86a455d2950411ebb17c277d90e2486d2209d1`. Review round 1
 completed with CodeRabbit CLI clean, one independent Codex memory finding and

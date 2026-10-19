@@ -1,5 +1,12 @@
 # HAP names and HomeKit connection recovery
 
+> Historical implementation/checkpoint record. Status, branch names, pending
+> actions and checkboxes below describe the recorded work, not current delivery
+> state or authorization. [Documentation map](../README.md) identifies current
+> owners; [RELEASE.md](../RELEASE.md) owns release procedures and the
+> [security-hardening ledger](security-hardening.md) tracks the current hardening
+> delivery. Preserve the original evidence and verify linked PRs before using it.
+
 Status: implementation, local verification, Codex review, and CI complete;
 CodeRabbit authentication pending
 
@@ -7,9 +14,9 @@ Branch: `codex/hap-names-connection-recovery`
 
 Last updated: 2026-09-28
 
-This document is the implementation source of truth for HAP-safe naming and
-HomeKit-visible Blink connection failures. Update it whenever implementation,
-verification, review, or delivery evidence changes.
+This document records the original HAP-safe naming and HomeKit-visible Blink
+connection-recovery implementation. Later behavior and delivery evidence are
+tracked through the canonical owners linked above.
 
 ## Problem
 

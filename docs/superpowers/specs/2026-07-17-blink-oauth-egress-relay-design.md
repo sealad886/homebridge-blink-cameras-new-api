@@ -1,5 +1,13 @@
 # Blink OAuth Egress-Matched Acceptance Design
 
+> Historical design/execution evidence, not current operational instructions.
+> [ADR-001](../../adr/001-authentication.md) owns authentication decisions;
+> [RELEASE.md](../../RELEASE.md) owns release and installation procedures.
+> Any temporary relay, tunnel, service change or live acceptance recipe below
+> remains historical and requires separate explicit authorization before reuse.
+> See the [documentation map](../../README.md). Original outcomes and incomplete
+> acceptance cases are preserved below; no later completion is inferred.
+
 ## Status
 
 Approved for one live EU/Ireland account acceptance run on 2026-07-17.

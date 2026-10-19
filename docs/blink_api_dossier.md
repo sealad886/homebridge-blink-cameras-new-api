@@ -2,8 +2,10 @@
 
 > Historical 57.1 evidence and bounded live observations are preserved below
 > with their original E1–E95 identifiers. The canonical current static catalog
-> is `docs/api-contract/blink-59.2-29823413.json`; its generated human view is
-> `docs/api-contract/blink-59.2-29823413.md`.
+> is [Android 59.2 JSON](api-contract/blink-59.2-29823413.json); its generated
+> [human view](api-contract/blink-59.2-29823413.md) comes from the same source.
+> [Contract usage and regeneration](api-contract/README.md) owns current catalog
+> guidance. See the [documentation map](README.md) for other canonical owners.
 
 This dossier combines the earlier endpoint inventory with the locally retained,
 git-ignored Blink Android 57.1 (`versionCode` 29715642) JADX/apktool snapshot

@@ -1,5 +1,10 @@
 # RC.4 local milestone review
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 2026-10-03. Independent, read-only Codex context reviewed the IMMIS destination,
 actual DNS admission, TLS/configuration, evidence export, native source inputs,
 codec/SRTP worker, parent IPC/output prototypes and CI changes. This is a working-

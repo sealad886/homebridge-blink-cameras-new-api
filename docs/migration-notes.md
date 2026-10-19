@@ -3,6 +3,9 @@
 > Historical restructuring proposal, not current deployment instructions. The
 > current release and rollback procedure is in [RELEASE.md](RELEASE.md). Keep the
 > existing `dist/homebridge-ui` layout and valid authentication during upgrades.
+> [CONVENTIONS.md](CONVENTIONS.md) owns the current custom-UI packaging contract;
+> the alternate layout and commands below were proposals, not migration approval.
+> See the [documentation map](README.md) for current owners.
 
 > Note: Codanna MCP tools are not available in this environment, so this plan is derived from manual inspection + `rg`.
 
@@ -61,7 +64,7 @@ Top-level (target):
 
 ## Custom UI strategy (planned)
 
-- Publish UI under `homebridge-ui/` to match plugin-ui-utils conventions. citeturn0search0
+- Publish UI under `homebridge-ui/` to match plugin-ui-utils conventions. (historical proposal; no retained source citation)
 - Decision: **Switch `customUiPath` to `./homebridge-ui`** and copy build outputs there, while still emitting `dist/homebridge-ui` for continuity. This matches plugin-ui-utils layout while preserving runtime behavior.
 
 ## Done criteria (per request)

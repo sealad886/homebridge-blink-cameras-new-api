@@ -1,5 +1,10 @@
 # Owned media output prototype evidence
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 2026-10-03. Isolated prototype; camera-source runtime unchanged by this slice.
 
 ## Decision and source identity
