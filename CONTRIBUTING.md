@@ -90,13 +90,13 @@ capability URLs, account identifiers, or media.
 
 Follow [AGENTS.md](AGENTS.md) when using an automated contributor. Preserve
 unrelated working-tree changes. For substantive automated work, use a safe
-`codex/<short-task-slug>` branch in the existing checkout; worktree creation and
-history rewrites require the authorizations specified there. Human contributors
+`codex/<short-task-slug>` branch in the existing checkout. Obtain explicit human
+authorization before creating a worktree or rewriting history. Human contributors
 should use a focused, descriptive task branch.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), for
 example `fix(auth): handle token refresh cancellation`. Keep each PR focused and
-use the repository PR template. Include the problem, resulting behavior,
+use the [shared PR template](https://github.com/sealad886/.github/blob/main/.github/pull_request_template.md). Include the problem, resulting behavior,
 verification results and their limitations, and any linked issue. Update the
 canonical documentation owner for changed behavior and link to it elsewhere.
 Close an issue only when its acceptance criteria are verified; use closing

@@ -50,8 +50,8 @@ instructions. Do not silently rewrite those outcomes as later successes.
 - `future/`: unimplemented research; not advertised functionality.
 - `superpowers/`: retained OAuth designs and execution plans, not a second
   project-management or installation system.
-- [Legacy intake](../todo/TODO.md): retained user requests, superseded as an active
-  tracker by GitHub issues.
+- [Legacy intake](audits/2026-09-15-auth-token-diagnostics-audit.md): retained
+  audit intake for reconciliation with GitHub issues.
 
 Generated files under `api-contract/` and `graphify-out/` are derived artifacts.
 Regenerate them through their owning tool rather than editing duplicate facts.
