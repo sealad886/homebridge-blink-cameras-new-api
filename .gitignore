@@ -265,3 +265,6 @@ vite.config.ts.timestamp-*
 
 # Approved README artwork
 !/docs/assets/header-editorial-brand-wordmarks.png
+
+# Finder metadata in nested directories
+**/.DS_Store
