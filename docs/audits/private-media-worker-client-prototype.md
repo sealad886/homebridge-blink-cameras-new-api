@@ -1,5 +1,10 @@
 # Private media worker client prototype
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 2026-10-03. Prototype only: no camera-source integration, binary packaging, discovery, download, network connection or fallback. Caller supplies an externally verified absolute executable path. Process launch uses executable only, empty argv, empty environment, shell:false and three private standard pipes. Key material travels only in private framed stdin, is never logged, and temporary client buffers are cleared after write/request completion. Native retains libsrtp contexts. Public errors are fixed; stderr is drained/discarded.
 
 ## Exact negotiated protocol

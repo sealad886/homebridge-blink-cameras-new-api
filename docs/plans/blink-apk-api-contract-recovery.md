@@ -1,5 +1,12 @@
 # Blink APK API Contract Recovery Implementation Plan
 
+> Historical implementation/checkpoint record. Status, branch names, pending
+> actions and checkboxes below describe the recorded work, not current delivery
+> state or authorization. [Documentation map](../README.md) identifies current
+> owners; [RELEASE.md](../RELEASE.md) owns release procedures and the
+> [security-hardening ledger](security-hardening.md) tracks the current hardening
+> delivery. Preserve the original evidence and verify linked PRs before using it.
+
 ## Objective
 
 Recover the Blink Android 59.2 build 29823413 static API declaration catalog

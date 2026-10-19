@@ -1,5 +1,10 @@
 # WI05 native worker feasibility gate
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 Date: 2026-10-03. Scope: read-only public API feasibility assessment; no credentials, media connections, installations, worker implementation, or runtime exploit tests.
 
 ## Disposition

@@ -1,7 +1,14 @@
-# Blink API Integration Gap Analysis
+# Historical Blink API Integration Gap Analysis
+
+This snapshot records the authentication-integration pass described below.
+“Addressed” and “remaining” are historical assessments, not current issue or
+release status. Use [GitHub issues](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues)
+for outstanding work, the [static API contract](api-contract/README.md) for
+recovered declarations, and the [documentation map](README.md) for current owners.
+No proposal here authorizes provider calls or implementation.
 
 This document captures the remaining parity gaps against
-`docs/blink_api_dossier.md` and the Homebridge plugin implementation.
+[historical API dossier](blink_api_dossier.md) and the Homebridge plugin implementation.
 
 ## Addressed in this pass
 
@@ -28,8 +35,8 @@ This document captures the remaining parity gaps against
 
 ## References
 
-- `docs/blink_api_dossier.md` (E1–E95)
-- `docs/integration_checklist.md`
+- [historical API dossier](blink_api_dossier.md) (E1–E95)
+- [0.9.1 acceptance receipt](integration_checklist.md)
 
 ## Handoff Notes
 
