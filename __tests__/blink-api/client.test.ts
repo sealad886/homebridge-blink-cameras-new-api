@@ -110,6 +110,16 @@ describe('BlinkApi', () => {
     return { api, auth: api.auth, http: api.http, runtimeConfig };
   };
 
+  it('retires a command using its Unit contract without ambiguous POST replay', async () => {
+    const { api, http } = createApi(); api.accountId = 10;
+    http.post.mockResolvedValue(undefined);
+    await expect((api as unknown as BlinkApi).completeCommand(5, 7)).resolves.toBeUndefined();
+    expect(http.post).toHaveBeenCalledWith('accounts/10/networks/5/commands/7/done', undefined, [404],
+      expect.objectContaining({ responseType: 'void', retryServerErrors: false }));
+    http.post.mockRejectedValue(new BlinkHttpError('missing', 404, '', 'https://example.test', 'POST'));
+    await expect((api as unknown as BlinkApi).completeCommand(5, 7)).resolves.toBeNull();
+  });
+
   describe('vendor input quality', () => {
     const createQualityApi = () => {
       const result = createApi();

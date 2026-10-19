@@ -1,4 +1,4 @@
-import { readBoundedJson } from './response-body';
+import { readBoundedBody, readBoundedJson } from './response-body';
 /**
  * Blink HTTP Client
  *
@@ -23,6 +23,8 @@ import {
 export interface BlinkPostRequestOptions extends RequestOptions {
   /** Disable replay after an ambiguous server response for stateful commands. */
   retryServerErrors?: boolean;
+  /** Unit-returning endpoints do not require JSON. Body limits still apply. */
+  responseType?: 'void';
 }
 
 /**
@@ -250,6 +252,14 @@ export class BlinkHttp {
       return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
     }
 
+    // Observed provider 406 refusals can recover on the same read without
+    // changing routing or authentication. Retry once; never replay a mutation.
+    if (response.status === 406 && method === 'GET' && attempt === 0) {
+      await response.body?.cancel().catch(() => undefined);
+      await budgetedDelay(1000, options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
+    }
+
     // Rate limited - exponential backoff
     if (response.status === 429 && attempt < 3) {
       const delay = 1000 * Math.pow(2, attempt);
@@ -282,6 +292,11 @@ export class BlinkHttp {
         this.log.error(error.toLogString());
       }
       throw error;
+    }
+
+    if (options.responseType === 'void') {
+      await readBoundedBody(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: 'command' });
+      return undefined as T;
     }
 
     let responseData: T;

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.15] - 2026-10-19
+
+### Fixed
+- Wait for previous command retirement before reopening the same camera. Cancel or fail startup after a bounded four-second wait rather than overlap an outstanding cleanup; local STOP and independent five-second remote cleanup remain bounded.
+- Accept bodyless successful command-completion responses as declared by Blink's Android API, retain response byte limits, and disable ambiguous server-error replay for completion POSTs.
+- Retry transient HTTP 406 once for read-only GET requests, with cancellation and caller deadlines retained. Never replay live-view POSTs on 406; existing failure cooldown remains.
+- Emit a finite budget of secret-free command-retirement outcomes, distinguishing acknowledgement, missing command and failed cleanup.
+
+### Acceptance and limitations
+- A STOP/reopen race and bodyless-response failure are reproduced locally. Actual read-only command probes alternated between HTTP 200 JSON and HTTP 406 HTML with unchanged routing/authentication; the provider's internal reason is unavailable. These changes do not claim elimination of all provider refusals.
+- Operator installation and new physical STOP/reopen, video/audio, snapshot and runtime-observation acceptance remain required. Corner currently has dead batteries. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are performed.
+
 ## [0.10.0-rc.14] - 2026-10-18
 
 ### Fixed

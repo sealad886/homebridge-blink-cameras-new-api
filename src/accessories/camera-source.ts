@@ -349,6 +349,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
   private streamFailureCooldownUntil = 0;
+  private remoteRetirement: Promise<void> = Promise.resolve();
+  private retirementReceiptBudget = 8;
   private readonly negotiationDiagnostics = new StreamDiagnosticBudget(32, 8);
 
   private logNegotiation(message: string, error = false): void {
@@ -760,6 +762,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         await withinRequestBudget(this.beforeLiveview(options), options);
         if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       }
+      // Leave time to report a bounded startup failure before the remote
+      // cleanup duty reaches its independent five-second deadline.
+      await withinRequestBudget(this.remoteRetirement, { signal: owner.abort.signal, deadline: Date.now() + 4000 });
+      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       const liveview = await this.requestLiveView();
       active.commandId = liveview.command_id ?? liveview.id;
       if (!this.ownsSession(sessionId, active)) {
@@ -871,10 +877,24 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     if (this.ownsSession(sessionId, active)) this.streamFailureCooldownUntil = Date.now() + 30_000;
   }
 
-  private async completeLiveview(commandId: number): Promise<void> {
-    try {
-      await withResponseBudget(this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000 }), 5000);
-    } catch { this.logError('Live view remote cleanup failed or timed out'); }
+  private completeLiveview(commandId: number): Promise<void> {
+    const retirement = this.remoteRetirement.then(async () => {
+      let outcome: string;
+      try {
+        const result = await withResponseBudget(
+          this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000 }), 5000);
+        outcome = result === null ? 'not_found' : 'acknowledged';
+      } catch (error) {
+        outcome = error instanceof BlinkHttpError ? `http_${error.status}` : 'timeout_or_failure';
+        this.logError('Live view remote cleanup failed or timed out');
+      }
+      if (this.retirementReceiptBudget > 0) {
+        this.retirementReceiptBudget--;
+        this.log(`Live view retirement: ${outcome}`);
+      }
+    });
+    this.remoteRetirement = retirement;
+    return retirement;
   }
 
   private async closeChild(child: ChildProcess): Promise<void> {
