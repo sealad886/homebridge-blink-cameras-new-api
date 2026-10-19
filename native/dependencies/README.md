@@ -1,5 +1,7 @@
 # Pinned native source inputs
 
+See the [native prototype overview](../README.md) for scope and navigation.
+
 This directory prepares source inputs and local static libraries for the codec-only
 worker. It does not enable worker loading, install anything globally, publish a
 binary, or prove five-target distribution acceptance.

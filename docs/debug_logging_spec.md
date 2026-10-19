@@ -5,7 +5,7 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 ## Logging Controls
 
 - `debugAuth` (config): Enables verbose auth + HTTP diagnostics in `src/blink-api/auth.ts` and `src/blink-api/http.ts`.
-- `ffmpegDebug` (config): Enables FFmpeg debug output for live streaming in `src/accessories/camera-source.ts`.
+- `ffmpegDebug` (config): Enables bounded, redacted streaming detail in `src/accessories/camera-source.ts`.
 - `logger` (config): `BlinkLogger` interface used by auth + HTTP layers (defaults to no-op when absent).
 
 ## Required Log Levels
@@ -79,7 +79,14 @@ across diagnostic bundles.
 
 ## Streaming Diagnostics
 
-- `ffmpegDebug` should toggle FFmpeg loglevel (`debug` vs `info`).
+Operator settings, recording locations and codec behavior are owned by the
+[streaming guide](streaming.md).
+
+- FFmpeg runs at `info` loglevel. `ffmpegDebug` controls bounded diagnostic
+  emission; it does not enable packet/NAL traces or unbounded FFmpeg debug output.
+- Each media child/proxy has finite detail and error allowances, bounded line
+  lengths and suppression reporting. Operational failure receipts remain visible.
+  Input-format observation continues after the detail allowance is exhausted.
 - Streaming logs must not include raw stream tokens, liveview URLs, SRTP keys, or device serials unless redacted.
 - Debug stream recordings must avoid raw camera serials in filenames and use owner-only file permissions.
 - Camera and proxy failures use Homebridge's error level even when debug is off.

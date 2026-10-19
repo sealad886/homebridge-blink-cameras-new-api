@@ -262,3 +262,9 @@ vite.config.ts.timestamp-*
 !/scripts/pi-evidence/tests/test_report.py
 !/scripts/pi-evidence/tests/test_normalize.py
 !/scripts/pi-evidence/README.md
+
+# Approved README artwork
+!/docs/assets/header-editorial-brand-wordmarks.png
+
+# Finder metadata in nested directories
+**/.DS_Store

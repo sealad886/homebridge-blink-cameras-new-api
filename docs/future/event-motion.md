@@ -4,19 +4,14 @@
 
 This document outlines potential improvements to motion detection using real-time events instead of polling.
 
-## Current Implementation
+## Implemented baseline
 
-The plugin currently detects motion by:
-
-1. Polling `GET /api/v1/accounts/{account}/media/unwatched` at configurable intervals
-2. Comparing clip timestamps to detect new media
-3. Triggering MotionDetected characteristic on associated accessories
-
-**Limitations:**
-
-- Minimum 15-second poll interval (to avoid rate limits)
-- Motion events delayed by up to poll interval duration
-- Unnecessary API calls when no motion occurs
+The accepted polling design is [ADR-002](../adr/002-motion-detection.md).
+Current user-facing settings belong to the [configuration reference](../configuration.md),
+and API declarations belong to the [static contract](../api-contract/README.md).
+The proposals below are unimplemented research hypotheses, not supported
+features or approved delivery work. Estimates are historical planning context,
+not current commitments. See the [documentation map](../README.md).
 
 ## Proposed Improvements
 
@@ -83,9 +78,9 @@ If push notifications aren't feasible, consider:
 
 ## Related Files
 
-- [src/platform.ts](/Users/andrew/zzApps/homebridge-blinkcameras/src/platform.ts) - Current polling implementation
-- [src/blink-api/client.ts](/Users/andrew/zzApps/homebridge-blinkcameras/src/blink-api/client.ts) - Media API calls
-- [docs/adr/002-motion-detection.md](/Users/andrew/zzApps/homebridge-blinkcameras/docs/adr/002-motion-detection.md) - Original decision
+- [src/platform.ts](../../src/platform.ts) - Current polling implementation
+- [src/blink-api/client.ts](../../src/blink-api/client.ts) - Media API calls
+- [docs/adr/002-motion-detection.md](../adr/002-motion-detection.md) - Original decision
 
 ## Estimated Effort
 

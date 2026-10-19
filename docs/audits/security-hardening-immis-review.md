@@ -1,5 +1,10 @@
 # Independent IMMIS hardening review
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 Date: 2026-10-03. Scope: current working-tree `src/blink-api/immis-proxy.ts`, its focused tests, and the camera-source readiness/consumer integration. Reviewer did not author the IMMIS implementation. No production edits made during this review.
 
 ## Result
