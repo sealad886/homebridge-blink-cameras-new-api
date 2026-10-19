@@ -1,5 +1,13 @@
 # Blink OAuth Egress-Matched Acceptance Implementation Plan
 
+> Historical design/execution evidence, not current operational instructions.
+> [ADR-001](../../adr/001-authentication.md) owns authentication decisions;
+> [RELEASE.md](../../RELEASE.md) owns release and installation procedures.
+> Any temporary relay, tunnel, service change or live acceptance recipe below
+> remains historical and requires separate explicit authorization before reuse.
+> See the [documentation map](../../README.md). Original outcomes and incomplete
+> acceptance cases are preserved below; no later completion is inferred.
+
 > Historical implementation recipe. Beads was retired on 2026-09-15; use GitHub issues and `docs/RELEASE.md` for current tracking and release commands.
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

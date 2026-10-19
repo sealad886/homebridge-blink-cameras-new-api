@@ -1,180 +1,62 @@
-# Repository Standards & Conventions
-
-## 1. Scope and Purpose
-
-- This file captures non-obvious, repo-specific rules that matter for correctness, maintainability, and team sanity.
-
-## 2. Core Conventions
-
-### Homebridge Plugin Identity Source
-
-**Status:** REQUIRED
-
-**Scope:** Installation and display of this plugin in Homebridge UI.
-
-**Rule:** The Homebridge UI shows the publisher/handle only when the plugin is installed from the npm registry; local tarball installs will display `@` and omit the publisher handle.
-
-**Rationale (Why this exists):**
-
-- Homebridge pulls publisher info from npm registry metadata, not from the `author` field in `package.json`, when resolving plugin identity.
-- Local tarball installs lack registry metadata, so the handle is blank by design.
-
-**Examples:**
-
-- Good: Publish through GitHub Actions and install via `npm install @sealad886/homebridge-blink-cameras-new-api`; the UI shows the publisher handle.
-- Bad: Install via `hb-service add ./sealad886-homebridge-blink-cameras-new-api-0.1.x.tgz`; the UI shows `@` because registry metadata is unavailable.
-
-**Related Files / Modules:**
-
-- `package.json` (version and metadata)
-
-### CI-Owned NPM Release Path
-
-**Status:** REQUIRED
-
-**Scope:** Release tooling, version bumps, npm publication, and supported Pi deployment flows.
-
-**Rule:** Merge the reviewed version bump into `main`, then explicitly dispatch `.github/workflows/publish.yml` with the exact version. Ordinary pushes do not publish. The workflow uses npm trusted publishing through GitHub OIDC; repo scripts may validate or install published versions, but must not perform direct local `npm publish` or tarball-based bypasses.
-
-**Rationale (Why this exists):**
-
-- The GitHub Actions workflow compares `package.json` against the registry before publishing, which avoids duplicate releases.
-- CI derives the correct npm dist-tag for prereleases, which is easy to get wrong in ad hoc local publishing.
-- Installing from the registry preserves npm metadata that Homebridge uses for plugin identity.
-
-**Examples:**
-
-- Good: Update release notes, run `npm version VERSION --no-git-tag-version`, commit, and pass `npm run release` in a clean checkout. Merge the reviewed PR, then run `gh workflow run publish.yml --ref main -f version=VERSION`.
-- Good: Use `scripts/deploy-to-pi.sh` only after the target version is live on npm.
-- Bad: Reintroducing `npm run release -- --yes` or other direct `npm publish` paths in repo-managed scripts.
-- Bad: Reintroducing a tarball deployment mode that bypasses the registry for the supported release/deploy flow.
-
-**Related Files / Modules:**
-
-- `.github/workflows/publish.yml`
-- `docs/RELEASE.md`
-- `scripts/release.mjs`
-- `scripts/deploy-to-pi.sh`
-
-### IMMIS Control-Plane Handling
-
-**Status:** STRONGLY RECOMMENDED
-
-**Scope:** All IMMIS transport interactions within `src/blink-api/*`.
-
-**Rule:** Enumerate and log control-plane message types (`INLINE_COMMAND`, `ACCESSORY_MESSAGE`, `SESSION_COMMAND`, `SESSION_MESSAGE`) alongside `VIDEO`. Use wrapper methods for session lifecycle (`startAudio()`, `stopAudio()`) and centralize command emission via `sendSessionCommand()`.
-
-**Rationale (Why this exists):**
-
-- Control-plane observability is essential while reverse-engineering payloads and sequencing; logging avoids silent drops of important messages.
-- Wrapper methods provide a single source of truth for Start/Stop audio semantics while payload structure is being finalized.
-- Centralized emission keeps header construction consistent and reduces duplication during future protocol evolution.
-
-**Examples:**
-
-- Good: Use `startAudio()` to request two-way audio; `handleImmisData()` logs incoming `SESSION_MESSAGE` acks.
-- Bad: Manually craft ad-hoc buffers in multiple modules for session commands; drop control-plane messages without telemetry.
-
-**Related Files / Modules:**
-
-- `src/blink-api/immis-proxy.ts`
-
-### Two-Way Talk Status & Guardrails
-
-**Status:** REQUIRED
-
-**Scope:** Audio talkback features and configuration.
-
-**Rule:** Two-way talk is disabled until IMMIS uplink framing and ACK handling are validated. Always force `twoWayAudio` off, hide the HomeKit microphone UI, and log a warning if users attempt to enable it.
-
-**Rationale (Why this exists):**
-
-- Device and locale differences affect IMMIS uplink behavior; robust ACK parsing is still in progress.
-- Exposing the HomeKit microphone advertises a feature that is not yet reliable.
-- Clear runtime messaging avoids user confusion while the feature is gated.
-
-**Examples:**
-
-- Good: Config contains `twoWayAudio: true` but logs warn that talk is disabled and microphone UI stays hidden.
-- Good: LOAS/LATM framing work continues behind the scenes without advertising talkback to HomeKit.
-- Bad: Surfacing the microphone tile or passing through `twoWayAudio` to streaming delegates.
-
-**Related Files / Modules:**
-
-- `src/accessories/camera-source.ts`
-- `src/blink-api/immis-proxy.ts`
-
-### Custom UI Packaging Path
-
-**Status:** REQUIRED
-
-**Scope:** Custom UI build, publish, and runtime packaging.
-
-**Rule:** Source assets live in `src/homebridge-ui/public` and must be copied to
-`dist/homebridge-ui/public` during `npm run build`. `config.schema.json` expects
-`customUiPath: "./dist/homebridge-ui"`, and the npm package must include `dist`.
-
-**Rationale (Why this exists):**
-
-- Homebridge Custom UI loads assets from `customUiPath`; if the folder is empty, the config modal spins forever with 404s instead of rendering the form.
-- The build step must succeed in a clean checkout; copying from the wrong source path (`homebridge-ui/public`) fails and yields an empty npm tarball.
-- CI explicitly builds and verifies the packed assets before publication; ensuring the correct source path prevents regressions when cutting releases.
-
-**Examples:**
-
-- Good:
-  - `npm run build` copies `src/homebridge-ui/public` →
-    `dist/homebridge-ui/public`, then publishes `dist` including those assets.
-- Bad:
-  - Copying from `homebridge-ui/public` (nonexistent in a clean repo) causes `cp: homebridge-ui/public/*: No such file or directory`, leaving the custom UI missing from the package and causing an infinite spinner in Homebridge UI.
-
-**Related Files / Modules:**
-
-- `config.schema.json`
-- `package.json` (`copy-ui-assets` script)
-- `src/homebridge-ui/public/index.html`
-
-### Authentication UI Single Source of Truth
-
-**Status:** REQUIRED
-
-**Scope:** Homebridge settings UX and authentication configuration.
-
-**Rule:** When `homebridge.customUi` is enabled for this plugin, credential and verification-code inputs must exist only in the custom UI and must not be defined in `config.schema.json` properties/layout.
-
-**Rationale (Why this exists):**
-
-- Config UI X renders both schema fields and custom UI in plugin settings; defining auth fields in both creates duplicate and conflicting login flows.
-- Keeping credentials out of schema avoids persisting passwords and one-time verification codes in `config.json`.
-- Token persistence already exists via the owner-only `.blink-auth.json` file,
-  so the custom UI can remain the single auth entry point.
-
-**Examples:**
-
-- Good: `config.schema.json` keeps non-secret platform settings only, while
-  `src/homebridge-ui/public/index.html` launches Blink's hosted sign-in and
-  contains only the distinct post-token verification workflow.
-- Bad: Reintroducing `username`, `password`, `twoFactorCode`, `clientVerificationCode`, or `accountVerificationCode` into schema properties or layout.
-
-**Related Files / Modules:**
-
-- `config.schema.json`
-- `homebridge-ui/public/index.html`
-- `src/homebridge-ui/server.ts`
-
-## 3. Rationale and Examples
-
-- See individual conventions above.
-
-## 4. Known Exceptions
-
-- Manual tarball installs outside the repo-managed scripts still show a blank publisher handle (`@`). This is expected, but that path is not part of the supported release or Pi deployment workflow.
-
-## 5. Change History (Human-Readable)
-
-- 2026-09-15: Require explicit versioned CI dispatch, npm OIDC trusted publishing, and registry-only installation.
-- 2026-04-01: Added required convention that npm releases are CI-owned and removed supported local publish/tarball bypasses from repo-managed scripts.
-- 2026-02-14: Added required convention that auth credentials/codes must not be exposed in schema when custom UI auth is enabled.
-- 2026-01-20: Two-way talk is now forced off; HomeKit microphone UI is hidden and any config attempts log warnings.
-- 2026-01-17: Added convention clarifying npm registry requirement for publisher handle in Homebridge UI.
-- 2026-01-18: Added two-way talk status guardrails and experimental designation.
+# Repository conventions
+
+This document owns the non-obvious packaging and UI identity invariants.
+Contributor setup and checks belong to [CONTRIBUTING](../CONTRIBUTING.md);
+architecture, operations, and delivery have their own owners in the
+[documentation map](README.md).
+
+## Registry identity and release ownership
+
+Homebridge's publisher identity depends on npm registry metadata. A local
+archive can display a blank publisher handle (`@`); changing the package's
+`author` field does not substitute for registry identity. Supported release and
+installation paths use the published registry artifact.
+
+The complete versioning, CI publication, artifact verification, and deployment
+procedure is owned by the [release guide](RELEASE.md). Do not duplicate it in
+scripts or replace CI publishing with local `npm publish` or a tarball bypass.
+
+## Custom UI packaging
+
+Custom UI assets are authored in `src/homebridge-ui/public` and copied to
+`dist/homebridge-ui/public` by `npm run build`. `config.schema.json` declares
+`customUiPath: "./dist/homebridge-ui"`; `package.json` declares the custom UI
+server as `dist/homebridge-ui/server.js` and includes `dist` in the npm package.
+These paths must agree in a clean build and the packed artifact. An empty asset
+directory otherwise leaves Homebridge settings unable to render.
+
+The executable owners are `package.json` (`build`, `copy-ui-assets`, and
+`homebridge.customUi`), `config.schema.json`, and `src/homebridge-ui/`.
+Validate the actual package using the [release gates](RELEASE.md), rather than
+assuming an existing local `dist/` directory proves correct packaging.
+
+## Authentication UI ownership
+
+Blink sign-in has one entry point: the custom Homebridge UI. Credential and
+verification-code inputs must not be added to schema properties or layout,
+where they would create a second flow and risk persistence in `config.json`.
+The schema owns non-secret platform settings. Authentication state and storage
+are governed by [ADR-001](adr/001-authentication.md); user instructions belong
+to the [authentication guide](authentication.md).
+
+## Media lifecycle and diagnostics
+
+Use the existing IMMIS command emission and session lifecycle owners rather than
+constructing headers or adding competing coordinators. Command recovery is
+owned by [ADR-003](adr/003-blink-command-recovery.md); generation ownership,
+private transport, and confirmed retirement by
+[ADR-004](adr/004-stream-session-ownership.md). Destination and native-worker
+constraints are recorded in
+[ADR-005](adr/005-secure-media-network-feasibility.md) and the
+[security-hardening ledger](plans/security-hardening.md).
+
+Diagnostics must follow the [logging specification](debug_logging_spec.md).
+Do not log raw control-plane payloads, unbounded per-message traces, secrets, or
+media while investigating IMMIS sequencing. Prefer bounded categories and
+counters through the existing diagnostic owners.
+
+Two-way talk remains disabled; the current user-visible status is owned by the
+[streaming guide](streaming.md#two-way-talk-status). Protocol scaffolding in
+`src/blink-api/immis-proxy.ts` does not authorize advertising a working talkback
+feature. Changes must preserve the enforced configuration and HomeKit UI guards
+until the corresponding acceptance requirements are verified.

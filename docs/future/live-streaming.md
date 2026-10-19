@@ -1,157 +1,22 @@
-# Live Streaming Implementation
+# Historical live-streaming proposal
 
-> Status: historical design note. Live streaming is now implemented in
-> `src/accessories/camera-source.ts` with IMMIS proxy support in
-> `src/blink-api/immis-proxy.ts`. Use the README live-streaming section for
-> current user-facing configuration.
+This proposal preceded the implemented HomeKit streaming path. It is retained
+as a navigation record rather than an implementation recipe: its speculative
+endpoint, FFmpeg command, architecture alternatives and estimates have been
+superseded.
 
-## Overview
+- [Streaming configuration and troubleshooting](../streaming.md) owns current
+  user-facing behavior, requirements and limitations.
+- [ADR-004](../adr/004-stream-session-ownership.md) owns session lifecycle and
+  private child transport decisions.
+- [ADR-005](../adr/005-secure-media-network-feasibility.md) owns the media network
+  boundary and remaining enforcement requirements.
+- [ADR-006](../adr/006-stream-quality-authority.md) owns source/output quality
+  authority and negotiation decisions.
+- [Static API contract](../api-contract/README.md) owns recovered vendor
+  interface metadata; static declarations do not prove live behavior.
+- [Security-hardening ledger](../plans/security-hardening.md) owns finding
+  dispositions and acceptance evidence, including unresolved F05/F06.
 
-This document outlined the original technical requirements for adding live
-video streaming to @sealad886/homebridge-blink-cameras-new-api.
-
-## Implemented State
-
-The plugin currently supports:
-
-- Static snapshots via the Blink thumbnail API
-- Motion detection via polling
-- HomeKit live streaming through `CameraStreamingDelegate`
-- FFmpeg transcoding from Blink RTSPS/IMMIS input to HomeKit SRTP output
-- Optional hardware H.264 encoder probing with `libx264` fallback
-- Single-stream default enforcement via `maxStreams`
-- Secure-by-default IMMIS TLS verification and redacted FFmpeg diagnostics
-
-## Technical Requirements
-
-### 1. RTSPS to SRTP Transcoding
-
-HomeKit uses SRTP (Secure Real-time Transport Protocol) for video streaming. Blink cameras provide RTSPS (Real Time Streaming Protocol over TLS) streams.
-
-**Required Components:**
-
-- FFmpeg for transcoding
-- Process lifecycle management (spawn/kill)
-- SDP negotiation with HomeKit
-
-### 2. Blink API Integration
-
-**Live Video Request:**
-
-```text
-POST /api/v3/media/live_view
-Body: { account_id, network_id, camera_id }
-Response: { server: "immedia-semi.com", rtsps_uri: "rtsps://..." }
-```
-
-**Evidence References:**
-
-- [api_dossier.md](/Users/andrew/zzApps/blink-home-monitor/base-apk/docs/api_dossier.md) Section 4.2
-- BlinkLiveVideoResponse interface in types/blink-api.ts
-
-### 3. HomeKit CameraStreamingDelegate
-
-Full implementation of `CameraStreamingDelegate` required:
-
-```typescript
-interface CameraStreamingDelegate {
-  handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void;
-  prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void;
-  handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void;
-}
-```
-
-`handleSnapshotRequest`, `prepareStream`, and `handleStreamRequest` are now
-implemented in `src/accessories/camera-source.ts`.
-
-### 4. Stream Lifecycle
-
-```text
-                    HomeKit
-                       │
-                       ▼
-              ┌────────────────┐
-              │  prepareStream │  Allocate ports, setup SDP
-              └────────────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │handleStreamReq │  Start FFmpeg process
-              │  (type: START) │
-              └────────────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │  FFmpeg runs   │  RTSPS input → SRTP output
-              │   continuous   │
-              └────────────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │handleStreamReq │  Kill FFmpeg process
-              │  (type: STOP)  │
-              └────────────────┘
-```
-
-## Implementation Complexity
-
-**High** - This is the most complex feature to implement:
-
-1. **External Dependency**: Requires FFmpeg installation
-2. **Platform Specifics**: Different FFmpeg flags for macOS/Linux
-3. **Resource Management**: CPU-intensive transcoding
-4. **Network Complexity**: NAT traversal, port management
-5. **Stream Reliability**: Reconnection handling, error recovery
-
-## Recommended Approach
-
-1. Start with a separate FFmpeg wrapper utility
-2. Add FFmpeg detection and version checking
-3. Implement basic single-stream support
-4. Add concurrent stream handling
-5. Add audio support (if available)
-
-## FFmpeg Command Template
-
-```bash
-ffmpeg -rtsp_transport tcp \
-       -i "rtsps://..." \
-       -an \                           # No audio initially
-       -vcodec libx264 \
-       -pix_fmt yuv420p \
-       -preset ultrafast \
-       -tune zerolatency \
-       -profile:v baseline \
-       -level 3.1 \
-       -f rtp \
-       -payload_type 99 \
-       -ssrc 1234 \
-       -srtp_out_suite AES_CM_128_HMAC_SHA1_80 \
-       -srtp_out_params "..." \
-       "srtp://[ip]:[port]?localport=[port]"
-```
-
-## Alternative Approaches
-
-### FFmpeg-for-homebridge
-
-Consider using the [homebridge-camera-ffmpeg](https://github.com/Sunoo/homebridge-camera-ffmpeg) plugin as a reference or dependency.
-
-### Scrypted
-
-The Scrypted platform has mature RTSP handling that could be integrated.
-
-## Blockers
-
-- Need to verify RTSPS URL format and authentication
-- Need to test stream stability and reconnection behavior
-- Need to assess CPU impact on common Homebridge hosts (Raspberry Pi)
-
-## Estimated Effort
-
-4-6 weeks for a senior developer including:
-
-- 1 week: FFmpeg integration and testing
-- 2 weeks: HomeKit CameraStreamingDelegate implementation
-- 1 week: Multi-stream and resource management
-- 1-2 weeks: Testing, edge cases, documentation
+See the [documentation map](../README.md) for other canonical owners. Git
+history retains the original speculative implementation recipe.

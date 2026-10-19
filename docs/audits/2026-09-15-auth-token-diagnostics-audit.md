@@ -1,5 +1,10 @@
 # Login, token persistence, and diagnostic errors — 2026-09-15
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 ## Outcome and scope
 
 Audit baseline: `0b87f3b`, package `0.9.1`, local branch

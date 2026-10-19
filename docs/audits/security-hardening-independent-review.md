@@ -1,5 +1,10 @@
 # Bounded security-hardening review receipt
 
+> Evidence record: findings and verification below describe the recorded revision
+> and environment. Current finding status and release dispositions are owned by
+> the [hardening ledger](../plans/security-hardening.md); current procedures are
+> indexed in the [documentation map](../README.md).
+
 Date: 2026-10-03. Branch: `codex/security-hardening`. Baseline: `fb96b9b33921e39d825f1be8636705e8a9839d20`.
 
 ## Scope and disposition
