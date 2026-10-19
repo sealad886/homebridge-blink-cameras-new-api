@@ -73,4 +73,3 @@ node --version
 - Ensure `enableMotionPolling` is `true`
 - Check that the network is armed (motion events only trigger when armed)
 - Reduce `pollInterval` for faster detection (but more API calls)
-

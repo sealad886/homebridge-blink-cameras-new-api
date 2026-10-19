@@ -126,4 +126,3 @@ converts to negotiated output while preserving aspect ratio with padding.
 No universal 2K override or unsupported resolution request is sent. Camera model,
 firmware and subscription may restrict upstream quality. Synthetic 2K conversion
 and mocked config contracts do not establish physical 2K-camera acceptance.
-

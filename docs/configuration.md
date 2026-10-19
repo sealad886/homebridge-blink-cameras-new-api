@@ -101,4 +101,3 @@ a failed attempt, fresh requests return that failure without contacting Blink
 again. A later request can retry. Existing valid cached snapshots remain
 available while the camera is online. A cached image does not confirm current
 connectivity to Blink.
-

@@ -101,4 +101,3 @@ them for the legacy iOS-profile sign-in path when compatible token state is
 missing or unusable. That hidden fallback sends the credentials through
 Homebridge and is deprecated; it is not part of the supported custom-UI flow.
 Remove those fields after migrating to hosted sign-in.
-
