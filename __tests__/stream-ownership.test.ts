@@ -26,6 +26,29 @@ const make = (api: object) => new BlinkCameraSource(api as any, createHap() as a
 
 describe('generation-owned streaming', () => {
   beforeEach(() => (spawn as jest.Mock).mockClear());
+  it('stops a one-way IMMIS stream without sending talkback session commands', async () => {
+    const socket = new EventEmitter() as any;
+    socket.authorized = true; socket.write = jest.fn(() => true);
+    socket.pause = jest.fn(); socket.resume = jest.fn();
+    socket.destroy = jest.fn(() => { socket.emit('close'); return socket; });
+    const connecting = (tls.connect as jest.Mock).mockImplementation((_options, callback) => {
+      void Promise.resolve().then(callback); return socket;
+    });
+    const source = new BlinkCameraSource({ startCameraLiveview: jest.fn().mockResolvedValue({
+      server: 'immis://8.8.8.8:443/?client_id=1',
+    }) } as any, createHap() as any, 1, 2, 'camera', 'serial', jest.fn(), () => true, jest.fn(),
+    { audio: { enabled: true, twoWay: false }, video: { encoder: 'libx264' } });
+    try {
+      await prepare(source); source.handleStreamRequest(request, jest.fn());
+      await new Promise(resolve => setImmediate(resolve));
+      expect(socket.write).toHaveBeenCalled();
+      const child = (spawn as jest.Mock).mock.results[0].value;
+      const stopping = stop(source); child.emit('close', 0, null); await stopping;
+      const sessionCommands = socket.write.mock.calls.filter(([packet]: [Buffer]) => packet[0] === 0x17);
+      expect(sessionCommands).toHaveLength(0);
+      expect(socket.destroy).toHaveBeenCalled();
+    } finally { connecting.mockReset(); await stop(source); }
+  });
   it('bounds debug floods while observing input and preserving error diagnostics', async () => {
     const log = jest.fn(); const errorLog = jest.fn(); const observation = jest.fn();
     const source = new BlinkCameraSource({ startCameraLiveview: jest.fn().mockResolvedValue({ server: 'rtsps://vendor.example/live' }) } as any,

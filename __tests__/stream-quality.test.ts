@@ -83,6 +83,37 @@ describe('System-wide output quality profiles', () => {
     expect(args[args.indexOf('-r') + 1]).toBe('15');
   });
 
+  it.each([
+    ['720p15', 30, 15], ['360p15', 30, 15], ['1080p30', 30, 30], ['auto', 30, 30],
+  ] as const)('reduces %s frames before scaling while preserving output FPS', (profile, requested, effective) => {
+    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
+      () => undefined, () => true, jest.fn(), { audio: { enabled: false }, video: { outputQuality: profile } });
+    const args = (source as any).buildFfmpegArgs('pipe:0', {
+      video: { width: 1280, height: 720, fps: requested, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
+    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
+    const filter = args[args.indexOf('-vf') + 1];
+    // Discard unneeded source frames before the expensive spatial conversion.
+    expect(filter).toContain(`1/${effective}-0.000001`);
+    expect(filter.indexOf('select=')).toBeLessThan(filter.indexOf('scale='));
+    expect(args[args.indexOf('-r') + 1]).toBe(String(effective));
+  });
+
+  it.each([
+    [15, 'auto', 30, 15, ''], [7, '720p15', 30, 7, ''], [30, '720p15', 30, 15, ''],
+    [30, 'auto', 30, 20, "select='not(eq(mod(n,3),1))',"],
+  ] as const)('never creates source frames before scaling %sfps input under %s', (inputFps, profile, requested, expected, variableInput) => {
+    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
+      () => undefined, () => true, jest.fn(), { audio: { enabled: false }, video: { outputQuality: profile } });
+    const args = (source as any).buildFfmpegArgs('pipe:0', {
+      video: { width: 320, height: 240, fps: requested, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
+    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
+    const result = spawnSync(require('ffmpeg-for-homebridge'), ['-hide_banner', '-f', 'lavfi', '-i',
+      `testsrc2=size=64x64:rate=${inputFps}:duration=1`, '-vf', variableInput + args[args.indexOf('-vf') + 1] + ',showinfo',
+      '-vsync', '0', '-f', 'null', '-'], { timeout: 10_000 });
+    expect(result.status).toBe(0);
+    expect((result.stderr.toString().match(/n:\s*\d+ pts:/g) ?? []).length).toBe(expected);
+  });
+
   it.each([0, -1, 60, NaN, Infinity, 15.5])('rejects invalid/unadvertised FPS %s', fps => {
     expect(isSupportedOutputVideo('720p15', { width: 1280, height: 720, fps, level: 0 })).toBe(false);
   });
@@ -155,7 +186,7 @@ describe('System-wide output quality profiles', () => {
       expect(args.filter((arg: string) => arg === '-vf')).toHaveLength(1);
       expect(args).not.toContain('-s');
       const filter = args[args.indexOf('-vf') + 1];
-      expect(filter).toBe('scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
+      expect(filter).toBe("select='isnan(prev_selected_t)+gte(t-prev_selected_t,1/15-0.000001)'," + 'scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
         'pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' +
         (encoder === 'h264_vaapi' ? ',format=nv12,hwupload' : ''));
     });

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.16] - 2026-10-20
+
+### Fixed
+- Reduce video to the effective output frame rate before scaling and padding, avoiding unnecessary conversion work for 15-fps profiles. Keep current quality defaults, negotiated geometry, bitrate limits and audio packaging.
+- Cooperatively retire authenticated IMMIS sessions with the official client termination exchange before closing transport. Wait at most one second for a termination response, then force bounded local teardown; retain port/session ownership until actual closure. Fatal failures still stop immediately.
+- Do not send experimental talkback controls when stopping one-way video/audio streams. Emit bounded, secret-free transport-retirement outcomes alongside the existing remote-command receipts.
+
+### Development tooling
+- Initialize the operator-approved A Team project roster using pinned official definitions and compiler, preserving existing instructions and hooks. Tooling files are excluded from the npm package.
+
+### Acceptance and limitations
+- The early filter only drops excess frames; slower or variable-rate sources are not duplicated before scaling. Synthetic count/timing tests do not establish Pi CPU savings or smoothness. The official native client proves the termination protocol mismatch, but the exact provider-side reason for the RC.15 disconnects is not observable from retained logs.
+- Operator installation and fresh physical live video/audio, smoothness, STOP/reopen, snapshot and runtime-observation acceptance remain required. Issue #52 and F05/F06 remain open. No Pi configuration, installation or restart changes are included.
+
 ## [0.10.0-rc.15] - 2026-10-19
 
 ### Fixed

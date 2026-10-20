@@ -78,6 +78,8 @@ const enum ImmisMessageType {
   /** Video stream data (MPEG-TS) */
   VIDEO = 0x00,
   AUTH_ACCEPTED = 0x06,
+  TERMINATE = 0x07,
+  TERMINATED = 0x08,
   /** Keep-alive packet */
   KEEPALIVE = 0x0a,
   /** Inline command (device control) */
@@ -204,6 +206,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private receiveBuffer = Buffer.alloc(0);
   private receivedMedia = false;
   private authAccepted = false;
+  private retiring = false;
+  private retirementTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   /** Attached upstream audio source stream (LATM) */
   private audioInput: Readable | null = null;
   private audioCleanup: (() => void) | null = null;
@@ -291,7 +295,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
   /** Attach only the child process stdin owned by this session. No socket is exposed. */
   attachConsumer(consumer: Writable): void {
-    if (!this.isRunning) throw new Error('Proxy is not running');
+    if (!this.isRunning || this.retiring) throw new Error('Proxy is not running');
     if (consumer.destroyed || consumer.writableEnded) throw new Error('Consumer is closed');
     if (this.consumer) this.blockedWriters.get(this.consumer)?.();
     this.detachConsumer();
@@ -380,6 +384,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   private writeUpstream(data: Buffer): void {
+    if (this.retiring && data[0] !== ImmisMessageType.TERMINATE) return;
     if (this.isRunning && this.targetSocket && this.targetSocket === this.verifiedSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
       () => this.fail('IMMIS upstream writer exceeded its budget'));
   }
@@ -676,6 +681,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
     socket.on('error', (error) => {
       if (!this.isRunning || this.targetSocket !== socket) return;
+      if (this.retiring) { this.finishRetirement('closed'); return; }
       if (!verified) { refuseHandshake(tlsFailureReason(error)); return; }
       // Ignore APPLICATION_DATA_AFTER_CLOSE_NOTIFY SSL errors
       if (error.message.includes('APPLICATION_DATA_AFTER_CLOSE_NOTIFY')) {
@@ -700,6 +706,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       this.incompleteTimer = null;
       // Clear current socket reference
       this.targetSocket = null;
+      if (this.retiring) { this.finishRetirement('closed'); return; }
       if (!verified && this.isRunning && this.consumer) {
         this.candidateIndex++;
         if (this.candidateIndex < this.candidates.length) {
@@ -798,7 +805,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.receiveBuffer = Buffer.concat([this.receiveBuffer, data]);
 
     // Process complete packets
-    while (this.isRunning && this.consumer && !this.blockedWriters.has(this.consumer) && this.receiveBuffer.length >= 9) {
+    while (this.isRunning && (this.retiring || (this.consumer && !this.blockedWriters.has(this.consumer))) && this.receiveBuffer.length >= 9) {
       // Read 9-byte header
       const msgtype = this.receiveBuffer.readUInt8(0);
       const sequence = this.receiveBuffer.readUInt32BE(1);
@@ -823,7 +830,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       if (this.incompleteTimer) globalThis.clearTimeout(this.incompleteTimer);
       this.incompleteTimer = null;
       // Handle different message types
-      if (msgtype === ImmisMessageType.VIDEO) {
+      if (this.retiring) {
+        // Continue bounded framing for the termination ACK, discarding media.
+        if (msgtype === ImmisMessageType.TERMINATED && payloadLength === 0) this.finishRetirement('response');
+      } else if (msgtype === ImmisMessageType.VIDEO) {
         // Skip packets without valid MPEG-TS sync byte
         if (payloadLength > 0 && payload[0] === MPEGTS_SYNC_BYTE) {
           if (!this.receivedMedia) { this.receivedMedia = true; this.log('IMMIS first media received'); }
@@ -962,6 +972,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * @param stream Readable stream producing LOAS/LATM frames
    */
   attachAudioInput(stream: Readable): void {
+    if (!this.isRunning || this.retiring) return;
     if (this.audioInput === stream) {
       return;
     }
@@ -1040,6 +1051,44 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   /**
+   * Cooperatively terminate a verified session before bounded local teardown.
+   * Unknown Home presentation counts use the native zero-count termination flag.
+   */
+  retire(): void {
+    if (!this.isRunning || this.retiring) return;
+    const socket = this.targetSocket;
+    if (!socket || socket !== this.verifiedSocket || !this.authAccepted || socket.destroyed) { this.stop(); return; }
+    this.retiring = true;
+    if (this.keepAliveInterval) globalThis.clearInterval(this.keepAliveInterval);
+    this.keepAliveInterval = null;
+    if (this.reconnectTimeout) globalThis.clearTimeout(this.reconnectTimeout);
+    this.reconnectTimeout = null;
+    this.stopStreamRecording();
+    this.audioCleanup?.();
+    this.audioInput = null;
+    this.audioBuffer = Buffer.alloc(0);
+    this.detachConsumer();
+    this.cancelIdleShutdown();
+    if (this.incompleteTimer) globalThis.clearTimeout(this.incompleteTimer);
+    this.incompleteTimer = null;
+    this.retirementTimer = globalThis.setTimeout(() => this.finishRetirement('timeout'), 1000);
+    const packet = Buffer.alloc(9);
+    packet[0] = ImmisMessageType.TERMINATE;
+    packet.writeUInt32BE(1, 1);
+    this.writeUpstream(packet);
+    if (this.isRunning && this.targetSocket === socket) {
+      this.handleImmisData(Buffer.alloc(0));
+      if (this.isRunning) socket.resume();
+    }
+  }
+
+  private finishRetirement(outcome: 'response' | 'timeout' | 'closed'): void {
+    if (!this.isRunning || !this.retiring) return;
+    this.log(`IMMIS retirement: ${outcome}`);
+    this.stop();
+  }
+
+  /**
    * Stop the proxy server and clean up all connections
    */
   stop(): void {
@@ -1048,6 +1097,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     }
 
     this.isRunning = false;
+    if (this.retirementTimer) globalThis.clearTimeout(this.retirementTimer);
+    this.retirementTimer = null;
     this.resolutionController?.abort();
     this.cancelHandshake?.();
     this.candidates = [];
