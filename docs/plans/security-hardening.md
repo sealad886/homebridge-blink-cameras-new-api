@@ -537,3 +537,17 @@ no additional 48-hour wait is required solely because a label or RC number
 changed. A material runtime correction requires targeted regression evidence and restarts
 the minimum 48-hour RC window with two natural refreshes under
 [the release guide](../RELEASE.md#homebridge-upgrade-and-acceptance). Operator installation remains separate.
+
+### 19 October 2026 — command retirement and transient provider refusal
+
+RC.15 addresses a reproduced START-before-remote-retirement race and the
+Android 59.2 `Call<Unit>` completion-response contract. START waits at most four
+seconds for pending remote retirement; STOP retains independent local cleanup
+and five-second remote duty. One read-only GET retry handles transient 406;
+POST refusals are not replayed. Retirement receipts are budgeted and secret-free.
+
+Read-only same-endpoint probes observed both 200 JSON and 406 HTML. The provider's
+internal cause remains unproven. Local tests establish bounded recovery and
+cancellation, not physical repair. Issue #52 remains open pending installation
+and Home acceptance. F05/F06 dispositions are unchanged. See
+[the audit](../audits/2026-10-19-command-retirement.md).

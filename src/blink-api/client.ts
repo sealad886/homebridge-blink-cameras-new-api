@@ -892,6 +892,8 @@ export class BlinkApi {
     return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v6/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/liveview`,
       body,
+      [],
+      { retryServerErrors: false },
     );
   }
 
@@ -916,6 +918,8 @@ export class BlinkApi {
     return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/owls/${owlId}/liveview`,
       body,
+      [],
+      { retryServerErrors: false },
     );
   }
 
@@ -940,6 +944,8 @@ export class BlinkApi {
     return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/liveview`,
       body,
+      [],
+      { retryServerErrors: false },
     );
   }
 
@@ -1020,27 +1026,23 @@ export class BlinkApi {
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/done
    * Note: No version prefix - uses root URL (without /api/)
    *
-   * @deprecated This endpoint was deprecated by Blink around late 2025. The method now silently
-   * ignores 404 errors as the server no longer supports this endpoint.
+   * Android 59.2 declares a Unit response. A missing command (404) is
+   * reported separately from acknowledged completion.
    */
-  async completeCommand(networkId: number, commandId: number, options?: RequestOptions): Promise<BlinkCommandStatus | null> {
+  async completeCommand(networkId: number, commandId: number, options?: RequestOptions): Promise<void | null> {
     requireRemoteId(networkId);
     requireRemoteId(commandId);
     checkRequestBudget(options);
     const accountId = await withinRequestBudget(this.ensureAccountId(), options);
     try {
-      return await this.sharedRootHttp.post<BlinkCommandStatus>(
+      await this.sharedRootHttp.post<void>(
         `accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
         undefined,
         [404],
-        options,
+        { ...options, responseType: 'void', retryServerErrors: false },
       );
     } catch (error) {
-      // The /done endpoint was deprecated by Blink and now returns 404
-      // Silently ignore this error as the endpoint is no longer functional
-      if (error instanceof BlinkHttpError && error.status === 404) {
-        return null;
-      }
+      if (error instanceof BlinkHttpError && error.status === 404) return null;
       throw error;
     }
   }

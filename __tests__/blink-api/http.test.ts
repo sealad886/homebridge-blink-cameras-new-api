@@ -43,6 +43,64 @@ describe('BlinkHttp', () => {
     jest.restoreAllMocks();
   });
 
+  it('recovers one transient GET 406 without replaying a POST', async () => {
+    (fetch as jest.Mock).mockResolvedValueOnce(response(406)).mockResolvedValueOnce(response(200, { complete: false }));
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.get('accounts/1/networks/2/commands/3')).resolves.toEqual({ complete: false });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    (fetch as jest.Mock).mockClear().mockResolvedValue(response(406));
+    await expect(http.post('accounts/1/networks/2/cameras/3/liveview')).rejects.toMatchObject({ status: 406 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([[401, 406], [406, 401], [403, 406], [406, 403]])(
+    'keeps authentication refresh and 406 recovery independent for %j', async (first, second) => {
+      const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+      (fetch as jest.Mock).mockResolvedValueOnce(response(first)).mockResolvedValueOnce(response(second))
+        .mockResolvedValueOnce(response(200, { complete: false }));
+      await expect(http.get('accounts/1/networks/2/commands/3')).resolves.toEqual({ complete: false });
+      expect(auth.refreshTokens).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(3);
+    });
+
+  it('stops after one refused GET retry', async () => {
+    (fetch as jest.Mock).mockResolvedValue(response(406));
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.get('accounts/1/networks/2/commands/3')).rejects.toMatchObject({ status: 406 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels a pending 406 retry without issuing another request', async () => {
+    (fetch as jest.Mock).mockResolvedValue(response(406));
+    const controller = new AbortController();
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    const pending = http.get('accounts/1/networks/2/commands/3', { signal: controller.signal });
+    setTimeout(() => controller.abort(), 10);
+    await expect(pending).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains byte ceilings for Unit completion responses', async () => {
+    (fetch as jest.Mock).mockResolvedValue(new Response(Buffer.alloc(256 * 1024 + 1)));
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.post<void>('accounts/1/networks/2/commands/3/done', undefined, [],
+      { responseType: 'void' })).rejects.toThrow('resource boundary');
+  });
+
+  it.each([200, 204])('accepts bodyless command completion at HTTP %s', async status => {
+    (fetch as jest.Mock).mockResolvedValue(new Response(null, { status }));
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.post<void>('accounts/1/networks/2/commands/3/done', undefined, [],
+      { responseType: 'void', retryServerErrors: false })).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rejects an empty response from a JSON endpoint', async () => {
+    (fetch as jest.Mock).mockResolvedValue(new Response(null, { status: 200 }));
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.get('accounts/1/networks/2/commands/3')).rejects.toMatchObject({ failure: 'response' });
+  });
+
   it.each(['accounts/0/homescreen', 'accounts/1/networks/01/state/arm', 'accounts/1/networks/1/cameras/NaN/liveview',
     'accounts/1/networks/1/commands/-1', 'accounts/9007199254740992/homescreen'])('rejects invalid path %s before any authentication', async path => {
     const auth = mockAuth();

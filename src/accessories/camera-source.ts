@@ -349,6 +349,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
   private streamFailureCooldownUntil = 0;
+  private remoteRetirement: Promise<void> = Promise.resolve();
+  private readonly remoteAllocations = new Set<Promise<void>>();
+  private retirementReceiptBudget = 8;
   private readonly negotiationDiagnostics = new StreamDiagnosticBudget(32, 8);
 
   private logNegotiation(message: string, error = false): void {
@@ -760,12 +763,26 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         await withinRequestBudget(this.beforeLiveview(options), options);
         if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       }
-      const liveview = await this.requestLiveView();
-      active.commandId = liveview.command_id ?? liveview.id;
-      if (!this.ownsSession(sessionId, active)) {
-        if (active.commandId) void this.completeLiveview(active.commandId);
-        throw new Error('Streaming startup cancelled');
-      }
+      // Leave time to report a bounded startup failure before the remote
+      // cleanup duty reaches its independent five-second deadline.
+      await withinRequestBudget(Promise.all([this.remoteRetirement, ...this.remoteAllocations]),
+        { signal: owner.abort.signal, deadline: Date.now() + 4000 });
+      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
+      const allocation = this.requestLiveView().then(async liveview => {
+        active.commandId = liveview.command_id ?? liveview.id;
+        if (!this.ownsSession(sessionId, active)) {
+          if (active.commandId) await this.completeLiveview(active.commandId);
+          throw new Error('Streaming startup cancelled');
+        }
+        return liveview;
+      });
+      // Keep a cancelled POST owned until a late command has been retired.
+      // This barrier never depends on local slots and does not replay the POST.
+      const allocationDuty = allocation.then(() => undefined, () => undefined);
+      this.remoteAllocations.add(allocationDuty);
+      void allocationDuty.then(() => this.remoteAllocations.delete(allocationDuty));
+      const liveview = await allocation;
+      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       const originalUrl = liveview.server;
       if (!originalUrl) {
         throw new Error('Live view did not return a server URL');
@@ -871,10 +888,24 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     if (this.ownsSession(sessionId, active)) this.streamFailureCooldownUntil = Date.now() + 30_000;
   }
 
-  private async completeLiveview(commandId: number): Promise<void> {
-    try {
-      await withResponseBudget(this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000 }), 5000);
-    } catch { this.logError('Live view remote cleanup failed or timed out'); }
+  private completeLiveview(commandId: number): Promise<void> {
+    const retirement = this.remoteRetirement.then(async () => {
+      let outcome: string;
+      try {
+        const result = await withResponseBudget(
+          this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000 }), 5000);
+        outcome = result === null ? 'not_found' : 'acknowledged';
+      } catch (error) {
+        outcome = error instanceof BlinkHttpError ? `http_${error.status}` : 'timeout_or_failure';
+        this.logError('Live view remote cleanup failed or timed out');
+      }
+      if (this.retirementReceiptBudget > 0) {
+        this.retirementReceiptBudget--;
+        this.log(`Live view retirement: ${outcome}`);
+      }
+    });
+    this.remoteRetirement = retirement;
+    return retirement;
   }
 
   private async closeChild(child: ChildProcess): Promise<void> {
