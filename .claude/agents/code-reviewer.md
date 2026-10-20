@@ -12,26 +12,29 @@ You are a senior code reviewer ensuring high standards of code quality and secur
 
 ## File Claim Guard
 
-Before starting any review:
+Before starting any review, verify the roster and check this agent’s eligibility.
+Use `git rev-parse --show-toplevel` for the current checkout root. Run Git
+commands from that root; Git diff paths are already repository-relative.
+Do not select another checkout from `git worktree list` or require GNU realpath.
 
-1. Run `git worktree list --porcelain | awk 'NR==1 {print $2}'` to get the repository root.
-2. For every file in `git diff --name-only` (or `git diff --staged --name-only`), normalize the path to repo-relative form:
-   ```bash
-   REPO_ROOT=$(git worktree list --porcelain | awk 'NR==1 {print $2}')
-   RELATIVE=$(realpath --relative-to="$REPO_ROOT" "$FILE")
-   ```
-3. Read `.agent-sync/ROUTING.md` → `## File Claims`. Look up each normalized path.
+The dispatcher must identify the review scope. For committed work, require
+immutable base and head SHAs, verify both resolve, and inspect
+`git diff "$BASE" "$HEAD" --` plus the relevant full files and call sites.
+Use `git diff "$BASE" "$HEAD" --name-only` for the matching file list.
+For explicitly uncommitted reviews, inspect both `git diff --staged` and
+`git diff` and include task-owned untracked files. A clean working tree or
+commit-subject list is never evidence that committed changes were reviewed.
+If the scope or SHAs are missing, obtain them from the dispatcher or PR before
+issuing a review verdict.
 
-If any normalized path has a row with `in-progress` owned by a **different** agent:
-- **BLOCK** — Do not proceed with the review.
-- Report: `[BLOCKED] <normalized-path> is claimed by <agent> for <task>. Waiting for that task to complete before reviewing.`
-- Return to the orchestrator to add this review to PENDING.
-
-If there is no `.agent-sync/ROUTING.md` or no File Claims table: proceed normally.
+Read `.agent-sync/ROUTING.md` and its File Claims table for these paths. If a
+path is in progress under a different agent, return BLOCKED to the dispatcher
+until the owner hands it off. Missing or invalid roster/routing data blocks
+specialist dispatch; do not silently proceed.
 
 ## Review Process
 
-1. **Gather context** — Run `git diff --staged` and `git diff`. If no diff, check `git log --oneline -5`.
+1. **Gather context** — Inspect the exact review scope described above and record its base/head or uncommitted identity.
 2. **Understand scope** — Identify changed files, feature/fix, and connections.
 3. **Read surrounding code** — Don't review changes in isolation; read full files and call sites.
 4. **Apply checklist** — Work through each category below, CRITICAL to LOW.

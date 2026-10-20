@@ -35,7 +35,7 @@ test('returns empty array when no users match the filter', () => {
 **Run it. Watch it fail.**
 
 ```bash
-npm test -- --testPathPattern="user-filter"
+npm test -- --testPathPatterns="user-filter"
 # Expected: FAIL (function doesn't exist yet)
 ```
 
@@ -60,7 +60,7 @@ function filterActiveUsers(users: User[]): User[] {
 **Run it. Watch it pass.**
 
 ```bash
-npm test -- --testPathPattern="user-filter"
+npm test -- --testPathPatterns="user-filter"
 # Expected: PASS
 ```
 
@@ -72,7 +72,7 @@ Now clean up. Rename, extract, simplify — **while keeping tests green**.
 
 ```bash
 # Run tests continuously during refactor
-npm test -- --watch --testPathPattern="user-filter"
+npm test -- --watch --testPathPatterns="user-filter"
 ```
 
 Rules during refactor:

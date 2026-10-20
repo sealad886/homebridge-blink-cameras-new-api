@@ -82,6 +82,7 @@ After verification passes, Step 5 of `verification-before-completion` is mandato
 
 | Situation | Required Agent |
 |-----------|---------------|
+| TypeScript / TSX / JavaScript files changed | **typescript-reviewer** |
 | Go files changed | **go-reviewer** |
 | Python files changed | **python-reviewer** |
 | Rust files changed | **rust-reviewer** |

@@ -18,7 +18,7 @@ it provides higher quality through per-task fresh context and two-stage review.
 1. Read plan file completely
 2. Review critically — identify questions or concerns about the plan
 3. If concerns: raise with human partner BEFORE starting
-4. If no concerns: create TodoWrite and proceed
+4. If no concerns: update the canonical plan checklist and proceed; keep at most one phase active
 
 ### Step 2: Execute Tasks
 

@@ -11,11 +11,13 @@ explicit roster checks without hooks, existing-checkout isolation, reviewed
 release/rollback, preservation of unrelated files and required evidence, and
 explicit handling of the documented optional native-worker test skip.
 
-Adapted files: orchestrator, build-error-resolver, doc-updater, e2e-runner,
+Adapted files: code-reviewer, harness-optimizer, infra-reviewer, orchestrator,
+build-error-resolver, doc-updater, e2e-runner,
 python-reviewer, refactor-cleaner, security-reviewer, tdd-guide and
 typescript-reviewer profiles; using-a-team, using-git-worktrees,
 finishing-a-development-branch, incident-response, test-driven-development and
-verification-before-completion skills. These no longer claim byte identity.
+verification-before-completion, executing-plans and subagent-driven-development
+skills. These no longer claim byte identity.
 All other copied profiles and the compiler retain the pinned upstream bytes.
 No global plugin cache or host hook was changed.
 

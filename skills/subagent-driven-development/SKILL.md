@@ -16,8 +16,8 @@ The only reasons to stop: BLOCKED status you cannot resolve, genuine ambiguity, 
 
 ### Step 0: Setup
 - Read plan file once; extract ALL tasks with full text and context
-- Create TodoWrite with all tasks
-- Verify git worktree isolation is configured
+- Record tasks in the existing canonical plan checklist; keep at most one phase active
+- Verify the existing task branch and checkout are safe. Follow repository isolation rules; never create a worktree without individual authorization.
 
 ### Per Task:
 1. Dispatch implementer subagent with full task text + relevant context
@@ -27,7 +27,7 @@ The only reasons to stop: BLOCKED status you cannot resolve, genuine ambiguity, 
 5. If spec issues → implementer fixes, reviewer re-reviews (loop)
 6. Dispatch code quality reviewer — confirms quality standards met
 7. If quality issues → implementer fixes, reviewer re-reviews (loop)
-8. Mark task complete in TodoWrite
+8. Mark task complete in the canonical plan checklist
 
 ### After All Tasks:
 - Dispatch final code reviewer for entire implementation
@@ -44,13 +44,7 @@ The only reasons to stop: BLOCKED status you cannot resolve, genuine ambiguity, 
 
 ## Model Selection
 
-Select the lowest tier that can handle the task:
-
-| Scope | Claude Code | OpenAI | Google |
-|-------|------------|--------|--------|
-| 1-2 files, clear spec | `claude-haiku-4-5` | `gpt-4.1-mini` | `gemini-2.0-flash-lite` |
-| Multi-file, integration concerns | `claude-sonnet-4-6` | `gpt-4.1` | `gemini-2.5-flash` |
-| Design judgment, broad codebase | `claude-opus-4-8` | `o3` / `gpt-5.5` | `gemini-2.5-pro` |
+Use the current runtime’s inherited model by default. Override it only when the user or applicable agent instructions require an available model. Do not select model identifiers copied from another host.
 
 ## Review Order (Critical)
 

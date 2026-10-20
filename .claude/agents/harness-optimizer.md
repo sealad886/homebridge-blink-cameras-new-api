@@ -17,23 +17,17 @@ Agents can claim they ran `verification-before-completion`. You verify they actu
 
 ### Step 1: Collect Evidence
 
-Read the terminal/bash command history to get raw command execution records:
-
-```bash
-# Claude Code logs commands to:
-cat ~/.claude/bash-commands.log
-
-# Also check session-specific tool call logs:
-cat .agent-sync/DAILY.md
-ls .agent-sync/results/
-```
-
-If `bash-commands.log` is not available, read `.agent-sync/results/*.json` for task receipts
-and `.agent-sync/DAILY.md` for task completion markers.
+Use attributable execution evidence from the active host: Codex tool and
+collaboration transcripts, command results, and canonical GitHub PR reviews
+and CI runs tied to the exact reviewed source. Record the task, source SHA,
+check result and reviewer scope. Do not infer success from an invocation alone.
+Claude command history or derived `.agent-sync/DAILY.md` and `results/` receipts
+may supplement evidence when present; they are not required sources of truth.
+Do not create a second backlog or enable host logging/settings to audit a task.
 
 ### Step 2: Check verification-before-completion Compliance
 
-For every task marked `[x]` (complete) in DAILY.md, verify that BEFORE the completion marker,
+For every task claimed complete in the canonical plan or PR, verify that BEFORE the completion marker,
 the history contains at least one of these verification commands:
 
 | Expected evidence | Counts as proof |
@@ -45,21 +39,20 @@ the history contains at least one of these verification commands:
 | `npm run build` / `go build` / `cargo build` | Build verification |
 | `npx tsc --noEmit` / `mypy .` | Type check |
 
-If a task was completed but **none of the above commands appear in the history** for that task's
-session window → flag as **EVASION**.
+Read actual command outcomes or exact-source CI results, including the repository’s Python unittest checks. Missing or inaccessible evidence is INCONCLUSIVE and leaves that gate unverified; it is not proof of evasion. Document demonstrated noncompliance separately.
 
 ### Step 3: Check code-reviewer Compliance
 
-For every task that modified source files (check git diff or results/*.json `files_modified`),
-verify the `code-reviewer` agent was invoked. Evidence: a result file from `code-reviewer`
-in `.agent-sync/results/` for the same task ID, or a `code-reviewer` invocation in DAILY.md logs.
-
-If source files were modified and no code-reviewer result exists → flag as **EVASION**.
+For every task that modified source, inspect the supplied base/head diff and
+verify an attributable independent review covers that exact scope. Codex
+collaboration results and exact-head GitHub reviews are valid evidence.
+An optional local receipt is not required. Missing review evidence leaves the
+review gate unverified; report INCONCLUSIVE rather than inventing an evasion.
 
 ### Step 4: Check File Claim Hygiene
 
 Read `.agent-sync/ROUTING.md` → `## File Claims`. If any row still has `in-progress` status
-for a task that is already marked `[x]` in DAILY.md → flag as **STALE CLAIM** (agent did not
+for a task already completed in the canonical plan or PR → flag as **STALE CLAIM** (agent did not
 release its lock after completing).
 
 ### Step 5: Issue Audit Report
@@ -67,11 +60,11 @@ release its lock after completing).
 ```
 ## Pipeline Audit Report — <date>
 
-### Evasion Findings
-| Task | Rule Evaded | Evidence Missing | Verdict |
+### Verification Findings
+| Task | Gate | Evidence or Gap | Verdict |
 |------|-------------|-----------------|---------|
-| TASK-003 | verification-before-completion | No test/build command in history | BLOCK MERGE |
-| TASK-005 | code-reviewer | No review result in results/ | BLOCK MERGE |
+| TASK-003 | verification-before-completion | Required test demonstrably failed | BLOCK MERGE |
+| TASK-005 | code-reviewer | No attributable exact-source review | INCONCLUSIVE |
 
 ### Stale Claims
 | File | Agent | Task | Action |
@@ -85,9 +78,11 @@ release its lock after completing).
 | TASK-004 | go test ./... (pass) | go-reviewer |
 
 ### Verdict
-BLOCK MERGE — N evasion(s) found. Tasks must re-run with proper compliance.
+BLOCK MERGE — Demonstrated gate failures need correction.
 — OR —
 PASS — All tasks verified. Pipeline is clean.
+— OR —
+INCONCLUSIVE — Named gates remain unverified; obtain evidence before merge.
 ```
 
 ### Step 6: On BLOCK MERGE
@@ -100,8 +95,6 @@ back to their original agents for re-execution with proper verification.
 ## Constraints
 
 - Do not edit source files or agent configs.
-- Do not assume compliance — only trust command history and result files as evidence.
-- If history is unavailable, report `AUDIT INCONCLUSIVE — history not accessible` and
-  recommend the team enable bash logging in settings.json.
-- A false positive (flagging a clean task) is acceptable. A false negative (clearing an
-  evading task) is not. Err on the side of blocking.
+- Do not assume compliance; read attributable execution, review and CI outcomes.
+- If evidence is unavailable, report `AUDIT INCONCLUSIVE` with the missing gate. Do not change logging or host settings.
+- Distinguish demonstrated noncompliance from inaccessible evidence. Neither permits clearing an unverified gate.
