@@ -892,6 +892,8 @@ export class BlinkApi {
     return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v6/accounts/${accountId}/networks/${networkId}/cameras/${cameraId}/liveview`,
       body,
+      [],
+      { retryServerErrors: false },
     );
   }
 
@@ -916,6 +918,8 @@ export class BlinkApi {
     return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/owls/${owlId}/liveview`,
       body,
+      [],
+      { retryServerErrors: false },
     );
   }
 
@@ -940,6 +944,8 @@ export class BlinkApi {
     return this.sharedHttp.post<BlinkLiveVideoResponse>(
       `v2/accounts/${accountId}/networks/${networkId}/doorbells/${doorbellId}/liveview`,
       body,
+      [],
+      { retryServerErrors: false },
     );
   }
 

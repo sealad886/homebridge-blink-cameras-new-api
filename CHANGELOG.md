@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [0.10.0-rc.15] - 2026-10-19
 
 ### Fixed
-- Wait for previous command retirement before reopening the same camera. Cancel or fail startup after a bounded four-second wait rather than overlap an outstanding cleanup; local STOP and independent five-second remote cleanup remain bounded.
+- Wait for previous command retirement and cancelled in-flight allocations, including late cleanup, before reopening the same camera. Cancel or fail startup after a bounded four-second wait rather than overlap an outstanding cleanup; local STOP and independent five-second remote cleanup remain bounded.
 - Accept bodyless successful command-completion responses as declared by Blink's Android API, retain response byte limits, and disable ambiguous server-error replay for completion POSTs.
-- Retry transient HTTP 406 once for read-only GET requests, with cancellation and caller deadlines retained. Never replay live-view POSTs on 406; existing failure cooldown remains.
+- Retry transient HTTP 406 once for read-only GET requests, with cancellation and caller deadlines retained. Never replay live-view POSTs on 406 or ambiguous server errors; existing failure cooldown remains.
 - Emit a finite budget of secret-free command-retirement outcomes, distinguishing acknowledgement, missing command and failed cleanup.
 
 ### Acceptance and limitations

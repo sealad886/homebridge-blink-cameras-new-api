@@ -89,6 +89,30 @@ describe('generation-owned streaming', () => {
     await closing; retire();
   });
 
+  it('holds reopen behind a cancelled in-flight allocation and its late cleanup', async () => {
+    let allocate!: (value: unknown) => void; let retire!: () => void;
+    const liveview = jest.fn().mockImplementationOnce(() => new Promise(resolve => { allocate = resolve; }))
+      .mockResolvedValue({ server: 'rtsps://vendor.example/live', command_id: 8 });
+    const completeCommand = jest.fn().mockImplementationOnce(() => new Promise<void>(resolve => { retire = resolve; }))
+      .mockResolvedValue(undefined);
+    const source = make({ startCameraLiveview: liveview, completeCommand,
+      getCommandStatus: jest.fn().mockResolvedValue({ complete: false }) });
+    await prepare(source); const first = jest.fn(); source.handleStreamRequest(request, first);
+    await new Promise(resolve => setImmediate(resolve));
+    await stop(source); await prepare(source); source.handleStreamRequest(request, jest.fn());
+    await new Promise(resolve => setImmediate(resolve));
+    expect(liveview).toHaveBeenCalledTimes(1);
+    allocate({ server: 'rtsps://vendor.example/live', command_id: 7 });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(completeCommand).toHaveBeenCalledWith(1, 7, expect.any(Object));
+    expect(liveview).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
+    retire(); await new Promise(resolve => setImmediate(resolve));
+    expect(liveview).toHaveBeenCalledTimes(2);
+    expect(first).toHaveBeenCalledTimes(1);
+    const closing = stop(source); (spawn as jest.Mock).mock.results[0].value.emit('close', 0, null); await closing;
+  });
+
   it.each(['stop', 'timeout'])('does not revive a reopen cancelled by %s while retirement is pending', async reason => {
     let retire!: () => void;
     const liveview = jest.fn().mockResolvedValue({ server: 'rtsps://vendor.example/live', command_id: 7 });

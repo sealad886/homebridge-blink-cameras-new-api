@@ -350,6 +350,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private snapshotFailure: Error | null = null;
   private streamFailureCooldownUntil = 0;
   private remoteRetirement: Promise<void> = Promise.resolve();
+  private readonly remoteAllocations = new Set<Promise<void>>();
   private retirementReceiptBudget = 8;
   private readonly negotiationDiagnostics = new StreamDiagnosticBudget(32, 8);
 
@@ -764,14 +765,24 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
       // Leave time to report a bounded startup failure before the remote
       // cleanup duty reaches its independent five-second deadline.
-      await withinRequestBudget(this.remoteRetirement, { signal: owner.abort.signal, deadline: Date.now() + 4000 });
+      await withinRequestBudget(Promise.all([this.remoteRetirement, ...this.remoteAllocations]),
+        { signal: owner.abort.signal, deadline: Date.now() + 4000 });
       if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
-      const liveview = await this.requestLiveView();
-      active.commandId = liveview.command_id ?? liveview.id;
-      if (!this.ownsSession(sessionId, active)) {
-        if (active.commandId) void this.completeLiveview(active.commandId);
-        throw new Error('Streaming startup cancelled');
-      }
+      const allocation = this.requestLiveView().then(async liveview => {
+        active.commandId = liveview.command_id ?? liveview.id;
+        if (!this.ownsSession(sessionId, active)) {
+          if (active.commandId) await this.completeLiveview(active.commandId);
+          throw new Error('Streaming startup cancelled');
+        }
+        return liveview;
+      });
+      // Keep a cancelled POST owned until a late command has been retired.
+      // This barrier never depends on local slots and does not replay the POST.
+      const allocationDuty = allocation.then(() => undefined, () => undefined);
+      this.remoteAllocations.add(allocationDuty);
+      void allocationDuty.then(() => this.remoteAllocations.delete(allocationDuty));
+      const liveview = await allocation;
+      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       const originalUrl = liveview.server;
       if (!originalUrl) {
         throw new Error('Live view did not return a server URL');

@@ -110,6 +110,15 @@ describe('BlinkApi', () => {
     return { api, auth: api.auth, http: api.http, runtimeConfig };
   };
 
+  it.each(['startCameraLiveview', 'startOwlLiveview', 'startDoorbellLiveview'] as const)(
+    '%s forbids ambiguous server-error POST replay', async method => {
+      const { api, http } = createApi(); api.accountId = 10;
+      http.post.mockResolvedValue({ command_id: 7, server: 'immis://vendor.example' });
+      await (api as unknown as BlinkApi)[method](5, 7);
+      expect(http.post).toHaveBeenCalledWith(expect.stringContaining('/liveview'),
+        { intent: 'liveview', motion_event_start_time: null }, [], { retryServerErrors: false });
+    });
+
   it('retires a command using its Unit contract without ambiguous POST replay', async () => {
     const { api, http } = createApi(); api.accountId = 10;
     http.post.mockResolvedValue(undefined);

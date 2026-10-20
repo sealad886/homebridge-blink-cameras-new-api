@@ -8,7 +8,9 @@ Private evidence: `logs/rc14-2026-10-19-home/analysis.md`.
 ## Findings and changes
 
 1. A behavioral regression reproduced a new live-view POST while previous remote
-   retirement was pending. START now waits for that duty with owner cancellation,
+   retirement was pending, including when STOP preceded the allocation response.
+   Pending allocation remains owned until any late command cleanup settles.
+   START now waits for those duties with owner cancellation,
    ownership recheck and a four-second startup bound. Remote cleanup retains its
    separate five-second deadline and cannot hold local capacity forever.
 2. Android 59.2 `CommandApi.terminateCommand` returns `Call<Unit>`, while the plugin
