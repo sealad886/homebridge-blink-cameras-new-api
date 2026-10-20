@@ -83,6 +83,21 @@ describe('System-wide output quality profiles', () => {
     expect(args[args.indexOf('-r') + 1]).toBe('15');
   });
 
+  it.each([
+    ['720p15', 30, 15], ['360p15', 30, 15], ['1080p30', 30, 30], ['auto', 30, 30],
+  ] as const)('reduces %s frames before scaling while preserving output FPS', (profile, requested, effective) => {
+    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
+      () => undefined, () => true, jest.fn(), { audio: { enabled: false }, video: { outputQuality: profile } });
+    const args = (source as any).buildFfmpegArgs('pipe:0', {
+      video: { width: 1280, height: 720, fps: requested, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
+    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
+    const filters = args[args.indexOf('-vf') + 1].split(',');
+    // Discard unneeded source frames before the expensive spatial conversion.
+    expect(filters[0]).toBe(`fps=${effective}`);
+    expect(filters[1]).toMatch(/^scale=/);
+    expect(args[args.indexOf('-r') + 1]).toBe(String(effective));
+  });
+
   it.each([0, -1, 60, NaN, Infinity, 15.5])('rejects invalid/unadvertised FPS %s', fps => {
     expect(isSupportedOutputVideo('720p15', { width: 1280, height: 720, fps, level: 0 })).toBe(false);
   });
@@ -155,7 +170,7 @@ describe('System-wide output quality profiles', () => {
       expect(args.filter((arg: string) => arg === '-vf')).toHaveLength(1);
       expect(args).not.toContain('-s');
       const filter = args[args.indexOf('-vf') + 1];
-      expect(filter).toBe('scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
+      expect(filter).toBe('fps=15,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
         'pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' +
         (encoder === 'h264_vaapi' ? ',format=nv12,hwupload' : ''));
     });

@@ -551,3 +551,33 @@ internal cause remains unproven. Local tests establish bounded recovery and
 cancellation, not physical repair. Issue #52 remains open pending installation
 and Home acceptance. F05/F06 dispositions are unchanged. See
 [the audit](../audits/2026-10-19-command-retirement.md).
+
+
+### 20 October 2026 — IMMIS cooperative retirement and reduced conversion work
+
+RC.15 post-outage Home testing established working Front door video/audio with
+stutter and fresh manual snapshots with automatic switch reset. The reopened
+stream initially authenticated and delivered media, then upstream closed three
+times. No HTTP 406 was observed in that bounded test. The provider's internal
+reason remains unproven; these failures are not attributed to Google or Wi-Fi.
+
+RC.16 delivery checklist:
+
+- [x] Approved A Team roster initialized and independently reviewed; pinned
+  upstream files remain outside the published package.
+- [x] Measure and reproduce late frame-rate reduction; select effective FPS
+  before scaling while retaining negotiated geometry and output limits.
+- [x] Verify native-client termination request/response, bounded cooperative
+  STOP, one-way teardown without experimental audio commands, and actual closure
+  before resource release. See [protocol audit](../audits/2026-10-20-immis-retirement.md).
+- [x] Complete independent local code/security review, 994 passing Jest tests
+  (one existing skip), lint/build/contracts and 26 synthetic media packaging cases.
+- [ ] Complete Node 20/22/24 CI and reviewed merge.
+- [ ] Publish and verify the unused RC.16 artifact through existing CI.
+- [ ] Operator installs; repeat physical acceptance and attributable observation.
+
+The local synthetic workload measured about 21% lower user CPU after early FPS
+selection. It does not establish Pi CPU savings, network causation or smoothness.
+F05/F06 and issue #52 remain open; the existing stable-specific residual-risk
+record and mandatory guards remain unchanged. No Pi installation/configuration,
+restart, pairing reset or experimental talkback enablement is authorized here.
