@@ -90,15 +90,15 @@ Run when the user invokes `/orchestrate init` or when `.agent-sync/TEAM.md` does
    - Call the deterministic compiler with the selected comma-separated identities (replace placeholders with all selected names):
 
      ```bash
-     python scripts/roster.py init --agents "orchestrator,planner,code-reviewer" --skills "using-a-team,verification-before-completion,writing-plans"
-     python scripts/roster.py verify
+     python3 scripts/roster.py init --agents "orchestrator,planner,code-reviewer" --skills "using-a-team,verification-before-completion,writing-plans"
+     python3 scripts/roster.py verify
      ```
 
    - When a previous `TEAM.md` or `ROUTING.md` exists, stop and request explicit user permission to reinitialize. Only then invoke `init --replace`. The compiler refuses replacement while file claims are in progress.
 
 6. **Read generated `.agent-sync/TEAM.md`** — this is the authoritative, *exhaustive* project roster. `Roster-Mode: logical-v1` and `Roster-Status: ACTIVE` are mandatory. The four sections are `Active Agents`, `Inactive Agents`, `Active Skills`, `Inactive Skills`. Each listed name has a reason; all files are retained on disk. Do not label an incomplete or invalid roster as initialized.
 
-7. **Read generated `.agent-sync/ROUTING.md`** — it lists **only active agents** in `## Eligible Agents`, with the same roster fingerprint as `TEAM.md`, followed by the original `## File Claims` table. `python scripts/roster.py verify` rejects stale routing, unexpected identities, missing components, and mismatched fingerprints. Never dispatch an inactive agent or invoke an inactive skill; the project-level `PreToolUse` hook blocks direct native Agent/Skill calls on supported hosts. Native discovery may still show installed inactive files, which is not permission to run them.
+7. **Read generated `.agent-sync/ROUTING.md`** — it lists **only active agents** in `## Eligible Agents`, with the same roster fingerprint as `TEAM.md`, followed by the original `## File Claims` table. `python3 scripts/roster.py verify` rejects stale routing, unexpected identities, missing components, and mismatched fingerprints. Never dispatch an inactive agent or invoke an inactive skill; this project installs no dispatch hook, so explicit roster checks are required before every call. Native discovery may still show installed inactive files, which is not permission to run them.
 
 8. **Report to the user**: list what was kept, what was pruned, and next steps.
 
@@ -111,7 +111,7 @@ Run for `morning`, `tick`, and `report` sub-commands.
 ### Statelessness Contract
 
 You have no memory between invocations. Every execution — without exception:
-1. `Bash: python scripts/roster.py verify`; STOP on any mismatch and request /orchestrate init repair. Read TEAM.md and use ROUTING.md only for active agents.
+1. `Bash: python3 scripts/roster.py verify`; STOP on any mismatch and request /orchestrate init repair. Read TEAM.md and use ROUTING.md only for active agents.
 2. `Read .agent-sync/DAILY.md` (create from template if missing)
 3. `Glob .agent-sync/results/*.json` — completed task receipts
 4. `Read TASKS.md` — project backlog
@@ -188,7 +188,7 @@ Never assume what happened in a prior session. DAILY.md is your only source of t
 
 ## Dispatching Sub-Agents
 
-Before dispatch, run `python scripts/roster.py check Agent <agent-name>` and require exit code 0. For any skill, run `python scripts/roster.py check Skill <skill-name>`. If denied, STOP and place the task in the Veto Buffer; do not silently substitute another agent. Use the Agent tool with `subagent_type` set to an active agent's name. Pass the task description
+Before dispatch, run `python3 scripts/roster.py check Agent <agent-name>` and require exit code 0. For any skill, run `python3 scripts/roster.py check Skill <skill-name>`. If denied, STOP and place the task in the Veto Buffer; do not silently substitute another agent. Use the runtime's available delegation tool with the checked active profile as instructions. In Codex, use collaboration tools; do not claim an unavailable native Agent tool or slash command ran. Pass the task description
 and relevant context file paths. Parse the sub-agent's output and update DAILY.md.
 If the output contains `DECISIONS`, add a Veto Buffer entry.
 
@@ -229,4 +229,4 @@ add to Veto Buffer if any sub-agent output violates a declared constraint.
 - Never resolve a Veto Buffer item — that is a human decision.
 - Never assume state — always derive from DAILY.md and results/.
 - In INIT mode: **never delete** installed agents or skills; record inactive selections without removing files.
-- For all task dispatches require an ACTIVE, verified logical-v1 roster and successful `roster.py check`. Never bypass the PreToolUse guard.
+- For all task dispatches require an ACTIVE, verified logical-v1 roster and successful `roster.py check`. Never bypass the explicit roster eligibility checks.

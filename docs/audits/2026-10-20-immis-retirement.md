@@ -66,6 +66,15 @@ termination response was received; it does not assert provider success from its
 status field. No guessed ping/echo or presentation-statistics
 reporting was introduced.
 
+PR review additionally reproduced late talkback callbacks writing session
+commands after the termination request. The shared upstream-write boundary now
+permits only the termination packet during retirement; session commands, audio
+frames, and keep-alives cannot follow it. New audio inputs are refused during
+retirement or after shutdown, so they cannot retain listeners. The regression
+observed four writes before this correction and only the one termination write
+afterward, including late audio calls before and after the response. All 74
+proxy tests pass after this correction.
+
 The proxy regression first failed because cooperative retirement did not exist,
 then passed with the implementation. Expanded tests cover fragmented ACK,
 timeout at one second, peer close, blocked consumers, unauthenticated transport,

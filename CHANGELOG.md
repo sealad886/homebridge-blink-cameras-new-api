@@ -13,7 +13,7 @@ All notable changes to this project will be documented in this file.
 - Initialize the operator-approved A Team project roster using pinned official definitions and compiler, preserving existing instructions and hooks. Tooling files are excluded from the npm package.
 
 ### Acceptance and limitations
-- Local synthetic early-frame selection reduced user CPU by about 21% on the measured Mac workload; this is not a Pi CPU or smoothness measurement. The official native client proves the termination protocol mismatch, but the exact provider-side reason for the RC.15 disconnects is not observable from retained logs.
+- The early filter only drops excess frames; slower or variable-rate sources are not duplicated before scaling. Synthetic count/timing tests do not establish Pi CPU savings or smoothness. The official native client proves the termination protocol mismatch, but the exact provider-side reason for the RC.15 disconnects is not observable from retained logs.
 - Operator installation and fresh physical live video/audio, smoothness, STOP/reopen, snapshot and runtime-observation acceptance remain required. Issue #52 and F05/F06 remain open. No Pi configuration, installation or restart changes are included.
 
 ## [0.10.0-rc.15] - 2026-10-19

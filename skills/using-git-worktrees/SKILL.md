@@ -5,6 +5,18 @@ description: Create or verify an isolated git worktree before starting any devel
 
 # Using Git Worktrees
 
+## Project constraint takes precedence
+
+This repository's approved work uses the existing checkout. Do not create a
+worktree unless the human explicitly authorizes that individual worktree. A
+workflow, subagent assignment or implementation approval does not grant it.
+Inspect status, branches, worktrees and ownership first; reuse a task-specific
+branch or create a safe local branch without moving unrelated changes. Give
+concurrent agents disjoint file ownership. This satisfies the isolation check
+for the current project; do not block work merely because no new worktree exists.
+The creation examples below apply only after that separate authorization and
+must use the repository's required location and preservation rules.
+
 ## Why Worktrees
 
 A worktree is a second checkout of the same repo in a separate directory. Each worktree has its own working tree and HEAD, but shares the git object store. This means:
@@ -16,7 +28,9 @@ A worktree is a second checkout of the same repo in a separate directory. Each w
 
 ## When to Use
 
-Use at the START of every feature or bug fix. Do NOT start implementation until a clean worktree exists or you've confirmed you're already in one.
+Use at the START of every feature or bug fix to verify isolation permitted by
+the project constraint above. A dedicated branch in the existing checkout is
+the selected isolation method for this project.
 
 Mandatory before:
 - `subagent-driven-development` skill
@@ -36,32 +50,26 @@ pwd
 ```
 
 If you're already in a worktree for this feature: proceed to Step 3 (verify clean baseline).
-If you're in the main checkout: proceed to Step 2.
+If you're in the main checkout: use the approved local task branch. Proceed to
+Step 2 only after explicit authorization for that individual new worktree.
 
 ### Step 2: Create the Worktree
 
 ```bash
-# Create worktree + new branch in one command
-git worktree add ../worktrees/<feature-name> -b feat/<feature-name>
-
-# Examples:
-git worktree add ../worktrees/stripe-billing -b feat/stripe-billing
-git worktree add ../worktrees/fix-auth-bug -b fix/auth-token-expiry
+# Only after explicit authorization, verify the global ignore rule first.
+git check-ignore .worktrees/example
+git worktree add .worktrees/<feature-name> -b codex/<feature-name>
 ```
 
-The worktree is created at `../worktrees/<feature-name>` (sibling of the project root).
-If the project uses `.claude/worktrees/`, use that path instead:
-
-```bash
-git worktree add .claude/worktrees/<feature-name> -b feat/<feature-name>
-```
+Use only the primary workspace's `.worktrees/` location required by project
+policy; do not substitute a plugin cache, system temporary or sibling directory.
 
 ### Step 3: Verify Clean Baseline
 
 Move into the worktree and confirm it starts clean:
 
 ```bash
-cd ../worktrees/<feature-name>   # or .claude/worktrees/<feature-name>
+cd .worktrees/<feature-name>
 git status                        # Should show: "nothing to commit"
 git log --oneline -3              # Confirm you branched from the right point
 ```
@@ -86,13 +94,10 @@ Now development starts. The worktree is isolated, the baseline is confirmed clea
 
 ## Cleanup After Work Completes
 
-After the branch is merged or abandoned:
-
-```bash
-# From the main checkout (not from inside the worktree)
-git worktree remove ../worktrees/<feature-name>
-git branch -d feat/<feature-name>   # Only after merge
-```
+Inspect status, untracked files, unpushed commits, active owners and reachability
+first. Follow repository policy for removal of that individually authorized
+worktree. Branch deletion requires its own applicable authorization; a merge
+alone is not permission to delete existing branches.
 
 ## Common Issues
 
@@ -112,4 +117,5 @@ git branch -d feat/<feature-name>   # Only after merge
 | Independent node_modules | Yes (separate dir) | Shared |
 | Subagent isolation | Clean | Risk of contamination |
 
-Always use worktrees for subagent work. The isolation is the point.
+Use the isolation method authorized for this project. Subagents share the
+existing checkout with disjoint file ownership; they may not create worktrees.

@@ -384,6 +384,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   private writeUpstream(data: Buffer): void {
+    if (this.retiring && data[0] !== ImmisMessageType.TERMINATE) return;
     if (this.isRunning && this.targetSocket && this.targetSocket === this.verifiedSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
       () => this.fail('IMMIS upstream writer exceeded its budget'));
   }
@@ -971,6 +972,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
    * @param stream Readable stream producing LOAS/LATM frames
    */
   attachAudioInput(stream: Readable): void {
+    if (!this.isRunning || this.retiring) return;
     if (this.audioInput === stream) {
       return;
     }

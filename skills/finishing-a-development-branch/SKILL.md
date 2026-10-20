@@ -13,8 +13,7 @@ Complete all final steps before merging a feature branch.
 
 ### 1. Verify Tests Pass
 ```bash
-npm test           # or pytest, go test, cargo test
-npm run test:coverage
+npm test -- --runInBand --coverage
 ```
 - All tests must pass (no skips, no TODOs in critical paths)
 - Coverage must be ≥ 80%

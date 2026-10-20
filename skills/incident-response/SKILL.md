@@ -58,12 +58,14 @@ Use this skill immediately when:
 
 Look for the fastest way to reduce impact — in this order:
 
-1. **Rollback** — was there a recent deploy? Roll it back. Rollback is always faster than a hotfix.
-   ```bash
-   git revert HEAD --no-edit && git push
-   # or
-   kubectl rollout undo deployment/api
-   ```
+1. **Rollback** — evaluate the exact deployed artifact and the last verified
+   secure version using [the release guide](../../docs/RELEASE.md#rollback-and-cleanup).
+   Andrew owns Pi installation and configuration; do not perform a live rollback
+   without authorization for that action. Preserve authentication/persistence and
+   security guards. Never revert an arbitrary local HEAD or push directly to main.
+   A source revert requires identifying the exact offending commit, preparing a
+   scoped task-branch PR, review and CI, then authorized publication through the
+   existing workflow. No source revert alone changes the installed runtime.
 
 2. **Feature flag off** — can the broken feature be disabled without affecting the whole service?
 

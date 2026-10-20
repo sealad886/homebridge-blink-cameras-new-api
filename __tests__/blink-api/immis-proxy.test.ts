@@ -136,6 +136,25 @@ describe('ImmisProxyServer private consumer', () => {
     socket.emit('close'); await proxy.whenClosed;
   });
 
+  it('allows only termination upstream while retiring despite late talkback callbacks', async () => {
+    await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution(); const socket = latestSocket();
+    socket.emit('data', Buffer.from([6, 0, 0, 0, 0, 0, 0, 0, 0]));
+    const previous = new PassThrough(); proxy.attachAudioInput(previous);
+    (socket.write as jest.Mock).mockClear(); proxy.retire();
+    const late = new PassThrough(); proxy.attachAudioInput(late);
+    proxy.startAudio(); proxy.stopAudio();
+    previous.write(buildLoasFrame(Buffer.from([1, 2])));
+    late.write(buildLoasFrame(Buffer.from([3, 4])));
+    expect(socket.write).toHaveBeenCalledTimes(1);
+    expect(late.listenerCount('data')).toBe(0);
+    expect(previous.listenerCount('data')).toBe(0);
+    expect(socket.write).toHaveBeenCalledWith(Buffer.from([7, 0, 0, 0, 1, 0, 0, 0, 0]));
+    socket.emit('data', Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]));
+    proxy.startAudio(); proxy.stopAudio(); late.write(buildLoasFrame(Buffer.from([5, 6])));
+    expect(socket.write).toHaveBeenCalledTimes(1);
+    socket.emit('close'); await proxy.whenClosed;
+  });
+
   it('retirement closes unverified transport immediately without sending protocol commands', async () => {
     const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true });
     (tls.connect as jest.Mock).mockImplementationOnce(() => socket);

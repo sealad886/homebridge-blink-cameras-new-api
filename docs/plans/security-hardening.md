@@ -570,14 +570,17 @@ RC.16 delivery checklist:
 - [x] Verify native-client termination request/response, bounded cooperative
   STOP, one-way teardown without experimental audio commands, and actual closure
   before resource release. See [protocol audit](../audits/2026-10-20-immis-retirement.md).
-- [x] Complete independent local code/security review, 994 passing Jest tests
+- [x] Complete independent local code/security review, 999 passing Jest tests
   (one existing skip), lint/build/contracts and 26 synthetic media packaging cases.
 - [ ] Complete Node 20/22/24 CI and reviewed merge.
 - [ ] Publish and verify the unused RC.16 artifact through existing CI.
 - [ ] Operator installs; repeat physical acceptance and attributable observation.
 
-The local synthetic workload measured about 21% lower user CPU after early FPS
-selection. It does not establish Pi CPU savings, network causation or smoothness.
+PR review replaced a duplicating FPS filter with drop-only source selection.
+Tests cover high, low and variable input rates. A separate 60-second synthetic
+video-only benchmark, with warmup and three alternating pairs on the Mac, measured
+23.44% lower mean user CPU (12.451s to 9.533s). This is not Pi resource evidence
+and does not establish network causation or physical smoothness.
 F05/F06 and issue #52 remain open; the existing stable-specific residual-risk
 record and mandatory guards remain unchanged. No Pi installation/configuration,
 restart, pairing reset or experimental talkback enablement is authorized here.

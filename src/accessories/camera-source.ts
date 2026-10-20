@@ -1494,9 +1494,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     // Preserve square doorbell and other source aspect ratios within the exact
     // HomeKit-negotiated frame. Hardware upload follows CPU scale/padding.
     const videoFilter = [
-      // Drop unneeded source frames before scaling instead of scaling frames
-      // that the output frame-rate conversion would immediately discard.
-      `fps=${effectiveOutputFps(this.streamingConfig.video.outputQuality, video.fps)}`,
+      // Select existing frames before scaling; unlike fps, select never creates
+      // duplicates for slower sources. Output -r handles any required upconversion.
+      `select='isnan(prev_selected_t)+gte(t-prev_selected_t,1/${effectiveOutputFps(this.streamingConfig.video.outputQuality, video.fps)}-0.000001)'`,
       `scale=${video.width}:${video.height}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
       `pad=${video.width}:${video.height}:(ow-iw)/2:(oh-ih)/2`,
       'setsar=1',

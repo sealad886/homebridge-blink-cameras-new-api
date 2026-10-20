@@ -17,9 +17,18 @@ Skipping a mandatory skill to save time is not allowed.
 
 On any project that uses `/orchestrate init`, all installed agent and skill files stay on disk. **Discoverability does not mean activation.** The active set is recorded in `.agent-sync/TEAM.md` and the eligible routing table in `.agent-sync/ROUTING.md`.
 
-Before dispatching an A Team specialist or invoking a project-scoped skill, run `python scripts/roster.py verify` and `python scripts/roster.py check Agent <name>` or `check Skill <name>`. If the required specialist is inactive, STOP and request an approved reinitialization; do not invoke it merely because its file is installed. Missing, stale and legacy roster formats are invalid and block specialist dispatch. The orchestrator and bootstrap meta-skills remain available for roster repair.
+Before dispatching an A Team specialist or invoking a project-scoped skill, run `python3 scripts/roster.py verify` and `python3 scripts/roster.py check Agent <name>` or `check Skill <name>`. If the required specialist is inactive, STOP and request an approved reinitialization; do not invoke it merely because its file is installed. Missing, stale and legacy roster formats are invalid and block specialist dispatch. The orchestrator and bootstrap meta-skills remain available for roster repair.
 
-The `PreToolUse` guard blocks direct Agent/Skill tool calls on supported hosts; text-only/third-party dispatch still requires explicit roster checks.
+This repository has no installed `PreToolUse` dispatch hook. Roster enforcement
+here is an explicit agent workflow: run the `python3 scripts/roster.py` checks
+before every specialist dispatch or project-scoped skill invocation. Do not
+claim that the host automatically prevents direct invocation of inactive files.
+
+Repository and user constraints control every workflow below. In this project,
+use the existing checkout and a safe task branch; do not create a worktree
+without separate explicit authorization. Codex does not expose the upstream
+slash commands natively: carry out their documented review/check steps and
+record evidence rather than claiming an unavailable command ran.
 
 ## Before ANY Code Is Written
 
@@ -28,7 +37,7 @@ The `PreToolUse` guard blocks direct Agent/Skill tool calls on supported hosts; 
 | New feature, component, or capability | **brainstorming** skill first |
 | Have a spec, need an implementation plan | **writing-plans** skill |
 | Have a plan, executing it | **subagent-driven-development** or **executing-plans** skill |
-| Starting development work | **using-git-worktrees** skill (create isolation first) |
+| Starting development work | **using-git-worktrees** skill (verify permitted isolation; existing checkout/task branch for this project) |
 
 ## During Development
 

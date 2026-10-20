@@ -2,6 +2,19 @@
 
 Recovered missing roster compiler, agent profiles and skill definitions from official https://github.com/RBraga01/a-team at immutable commit `b59f579118473f23014543d7cd5bde84b4218245`. Installed cache identifies as 1.4.1 but omits these runtime files; official v1.4.1 tag also lacks roster.py. No existing repository instructions, hooks or files were overwritten. No global plugin update or hook installation performed.
 
+## Project adaptations
+
+The initial bootstrap matched upstream bytes. PR review subsequently required
+bounded local adaptations: `skills/using-a-team` accurately describes explicit
+roster checks without an installed hook; `skills/using-git-worktrees` honors the
+existing-checkout constraint; `skills/finishing-a-development-branch` uses the
+repository's actual coverage command; and `skills/incident-response` routes
+rollback through the reviewed release workflow. These files no longer claim
+byte identity with upstream. The active orchestrator and meta-skill use the available `python3` command
+and explicit Codex dispatch checks without claiming native hooks or commands.
+All other copied profiles/compiler retain the
+pinned source; no global plugin cache or host hooks were changed.
+
 ## Upstream license
 
 MIT License
