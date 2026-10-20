@@ -53,6 +53,16 @@ describe('BlinkHttp', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it.each([[401, 406], [406, 401], [403, 406], [406, 403]])(
+    'keeps authentication refresh and 406 recovery independent for %j', async (first, second) => {
+      const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+      (fetch as jest.Mock).mockResolvedValueOnce(response(first)).mockResolvedValueOnce(response(second))
+        .mockResolvedValueOnce(response(200, { complete: false }));
+      await expect(http.get('accounts/1/networks/2/commands/3')).resolves.toEqual({ complete: false });
+      expect(auth.refreshTokens).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(3);
+    });
+
   it('stops after one refused GET retry', async () => {
     (fetch as jest.Mock).mockResolvedValue(response(406));
     const http = new BlinkHttp(mockAuth(), mockConfig);

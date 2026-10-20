@@ -20,7 +20,7 @@ Private evidence: `logs/rc14-2026-10-19-home/analysis.md`.
    then 406 (156-byte HTML), then 200 again with existing stored authentication.
    Adding the plugin's language header and using current Android identity did not
    establish a causal difference. No routing/header/version change is justified.
-   A single one-second GET retry is allowed; POSTs and persistent refusals remain
+   A single one-second GET retry is allowed, independently of token-refresh attempts; POSTs and persistent refusals remain
    bounded failures. No token refresh is forced by 406.
 4. Finite retirement receipts distinguish acknowledged, not_found and failed
    cleanup. A 404 is not confirmed retirement. No command IDs or bodies are logged.

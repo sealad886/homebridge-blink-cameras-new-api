@@ -190,6 +190,7 @@ export class BlinkHttp {
     runPreflight = true,
     expectedErrorStatuses: readonly number[] = [],
     options: BlinkPostRequestOptions = {},
+    retried406 = false,
   ): Promise<T> {
     checkRequestBudget(options);
     const url = this.buildUrl(path);
@@ -249,15 +250,15 @@ export class BlinkHttp {
       this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
       await response.body?.cancel().catch(() => undefined);
       await withinRequestBudget(this.auth.refreshTokens(), options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
     }
 
     // Observed provider 406 refusals can recover on the same read without
     // changing routing or authentication. Retry once; never replay a mutation.
-    if (response.status === 406 && method === 'GET' && attempt === 0) {
+    if (response.status === 406 && method === 'GET' && !retried406) {
       await response.body?.cancel().catch(() => undefined);
       await budgetedDelay(1000, options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
+      return this.request<T>(method, path, body, attempt, false, expectedErrorStatuses, options, true);
     }
 
     // Rate limited - exponential backoff
@@ -266,7 +267,7 @@ export class BlinkHttp {
       this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);
       await budgetedDelay(delay, options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
     }
 
     // Server error - linear backoff
@@ -275,7 +276,7 @@ export class BlinkHttp {
       this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);
       await budgetedDelay(delay, options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options);
+      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
     }
 
     if (!response.ok) {
