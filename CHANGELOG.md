@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.17] - 2026-10-20
+
+### Fixed
+- Follow Homebridge's configured light/dark theme and accent in the custom configuration UI. Use the injected host styles for controls, panels and alerts instead of Bootstrap's default palette variables; keep helper text and debug output readable in dark mode.
+- Authentication, settings handlers and control identities are unchanged. No streaming runtime or quality changes are included.
+
+### Acceptance and limitations
+- Isolated Brave previews use the actual Homebridge stylesheet and synthetic account data, checked in light/dark orange and teal themes. Installed UI acceptance still requires operator upgrade. RC.16 streaming acceptance and issue #52 remain pending; F05/F06 remain open. No Pi configuration or installation changes are performed.
+
 ## [0.10.0-rc.16] - 2026-10-20
 
 ### Fixed

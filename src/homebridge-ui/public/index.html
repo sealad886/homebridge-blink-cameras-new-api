@@ -6,6 +6,12 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
 
+  /* Homebridge themes style body/classes, not Bootstrap's root palette. */
+  .blink-ui .text-muted {
+    color: inherit !important;
+    opacity: 0.75;
+  }
+
   .blink-logo {
     text-align: center;
     margin-bottom: 1.5rem;
@@ -14,7 +20,7 @@
   .blink-logo svg {
     width: 64px;
     height: 64px;
-    fill: var(--bs-primary, var(--primary, #6f42c1));
+    fill: currentColor;
   }
 
   .step-indicator {
@@ -28,17 +34,18 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background-color: var(--bs-secondary, var(--secondary, #6c757d));
+    background-color: currentColor;
+    opacity: 0.35;
     transition: all 0.3s ease;
   }
 
   .step.active {
-    background-color: var(--bs-primary, var(--primary, #6f42c1));
+    opacity: 1;
     transform: scale(1.2);
   }
 
   .step.completed {
-    background-color: var(--bs-success, var(--success, #198754));
+    opacity: 1;
   }
 
   .auth-step {
@@ -72,16 +79,7 @@
     border-radius: 2rem;
     font-size: 0.875rem;
     margin-bottom: 1rem;
-  }
-
-  .status-badge.success {
-    background-color: rgba(var(--bs-success-rgb, var(--success-rgb, 40, 167, 69)), 0.1);
-    color: var(--bs-success-text-emphasis, var(--success, #198754));
-  }
-
-  .status-badge.warning {
-    background-color: rgba(var(--bs-warning-rgb, var(--warning-rgb, 255, 193, 7)), 0.1);
-    color: var(--bs-warning-text-emphasis, var(--warning, #997404));
+    border: 1px solid currentColor;
   }
 
   .status-icon {
@@ -89,10 +87,9 @@
     height: 16px;
   }
 
-  .log-container {
+  .blink-ui .log-container {
     max-height: 150px;
     overflow-y: auto;
-    background: var(--bs-tertiary-bg, var(--bg-secondary, #f8f9fa));
     border-radius: 0.375rem;
     padding: 0.75rem;
     font-family: monospace;
@@ -101,7 +98,7 @@
     display: none;
   }
 
-  .log-container.visible {
+  .blink-ui .log-container.visible {
     display: block;
   }
 
@@ -110,14 +107,10 @@
     word-break: break-word;
   }
 
-  .log-entry.debug { color: var(--bs-secondary, var(--secondary, #6c757d)); }
-  .log-entry.info { color: var(--bs-info-text-emphasis, var(--info, #087990)); }
-  .log-entry.warn { color: var(--bs-warning-text-emphasis, var(--warning, #997404)); }
-  .log-entry.error { color: var(--bs-danger, var(--danger, #dc3545)); }
+  .log-entry.debug { opacity: 0.75; }
+  .log-entry.warn, .log-entry.error { font-weight: 600; }
 
   .verification-hint {
-    background: rgba(var(--bs-info-rgb, var(--info-rgb, 23, 162, 184)), 0.1);
-    border-left: 3px solid var(--bs-info-text-emphasis, var(--info, #087990));
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
     border-radius: 0.25rem;
@@ -129,8 +122,6 @@
   }
 
   .success-details {
-    background: rgba(var(--bs-success-rgb, var(--success-rgb, 40, 167, 69)), 0.05);
-    border: 1px solid rgba(var(--bs-success-rgb, var(--success-rgb, 40, 167, 69)), 0.2);
     border-radius: 0.5rem;
     padding: 1rem;
     margin-top: 1rem;
@@ -138,7 +129,7 @@
 
   .success-details dt {
     font-weight: 600;
-    color: var(--bs-secondary-color, var(--text-muted, #6c757d));
+    opacity: 0.75;
     font-size: 0.75rem;
     text-transform: uppercase;
   }
@@ -160,7 +151,6 @@
 
   .device-id-toggle {
     cursor: pointer;
-    color: var(--bs-primary, var(--primary, #6f42c1));
     font-size: 0.875rem;
     margin-top: 0.5rem;
   }
@@ -182,7 +172,7 @@
   </div>
 
   <div class="blink-logo">
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <svg class="primary-text" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
       <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
     </svg>
     <h4 class="mt-2 mb-0">Blink Cameras</h4>
@@ -190,9 +180,9 @@
   </div>
 
   <div class="step-indicator" aria-hidden="true">
-    <div class="step active" id="step1-dot"></div>
-    <div class="step" id="step2-dot"></div>
-    <div class="step" id="step3-dot"></div>
+    <div class="step primary-text active" id="step1-dot"></div>
+    <div class="step primary-text" id="step2-dot"></div>
+    <div class="step primary-text" id="step3-dot"></div>
   </div>
 
   <div class="auth-step active" id="step-login">
@@ -212,7 +202,7 @@
           </div>
         </div>
 
-        <button type="button" class="btn btn-link device-id-toggle p-0" id="toggleDeviceId" aria-expanded="false" aria-controls="deviceIdSection">Advanced Options</button>
+        <button type="button" class="btn btn-link primary-text device-id-toggle p-0" id="toggleDeviceId" aria-expanded="false" aria-controls="deviceIdSection">Advanced Options</button>
 
         <div class="text-center mt-4">
           <button type="button" class="btn btn-primary w-100" id="startAuthButton">
@@ -233,7 +223,7 @@
           <li>Return here and choose <strong>Paste Blink Result and Finish</strong>.</li>
         </ol>
 
-        <a id="fallbackLink" class="btn btn-outline-primary w-100 hidden" target="_blank" rel="noopener noreferrer">
+        <a id="fallbackLink" class="btn btn-primary w-100 hidden" target="_blank" rel="noopener noreferrer">
           Open Blink Sign-In
         </a>
 
@@ -247,7 +237,7 @@
             <textarea class="form-control" id="callbackInput" rows="3" maxlength="2048"
                       autocomplete="off" autocapitalize="off" spellcheck="false" required></textarea>
           </div>
-          <button type="submit" class="btn btn-outline-primary w-100" id="manualCallbackButton">
+          <button type="submit" class="btn btn-primary w-100" id="manualCallbackButton">
             Finish with Pasted Address
           </button>
         </form>
@@ -265,7 +255,7 @@
         <span class="badge bg-warning text-dark text-wrap mb-2">Blink tokens stored; verification required</span>
         <h5 class="card-title" id="verifyTitle">Verification Required</h5>
 
-        <div class="verification-hint">
+        <div class="verification-hint alert alert-info">
           <strong>Check your email or phone</strong>
           <span id="verifyHintText">Blink sent a post-sign-in verification code.</span>
         </div>
@@ -282,7 +272,7 @@
 
           <div class="btn-group-vertical">
             <button type="submit" class="btn btn-primary" id="verifyBtn">Verify Code</button>
-            <button type="button" class="btn btn-outline-secondary" id="verifyTestConnectionButton">
+            <button type="button" class="btn btn-control" id="verifyTestConnectionButton">
               Test Connection
             </button>
             <button type="button" class="btn btn-link" id="restartVerificationButton">Start sign-in again</button>
@@ -305,7 +295,7 @@
         <h5 class="card-title" id="successTitle">Connected to Blink</h5>
         <p class="card-text text-muted" id="successSummary">Blink tokens are stored and verified.</p>
 
-        <div class="success-details text-start">
+        <div class="success-details card text-start">
           <dl class="mb-0">
             <dt>Account</dt>
             <dd id="successEmail">Blink account</dd>
@@ -317,27 +307,27 @@
 
           <div class="status-error alert alert-warning py-2 px-3 hidden" id="statusError" role="alert">
             <span id="statusErrorMessage">Unable to reach the plugin backend.</span>
-            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="statusRetry">Retry</button>
+            <button type="button" class="btn btn-sm btn-control ms-2" id="statusRetry">Retry</button>
           </div>
         </div>
 
         <div class="form-group mt-3 text-start">
           <strong>Exclude Blink Networks</strong>
           <p class="small text-muted">Excluded networks and their cameras are removed from this Homebridge instance. Restart the Blink child bridge after saving.</p>
-          <button type="button" class="btn btn-outline-secondary" id="loadNetworks">Choose Networks</button>
+          <button type="button" class="btn btn-control" id="loadNetworks">Choose Networks</button>
           <div id="blinkNetworkList" class="mt-2"></div>
-          <button type="button" class="btn btn-outline-primary hidden" id="saveNetworks">Save Network Selection</button>
+          <button type="button" class="btn btn-primary hidden" id="saveNetworks">Save Network Selection</button>
         </div>
 
         <div class="mt-4">
           <p class="text-muted small">
             Blink tokens are stored in Homebridge's protected authentication file. Configure camera settings below, then click Homebridge's Save button to write them to disk. Restart the child bridge yourself to apply streaming changes.
           </p>
-          <button type="button" class="btn btn-outline-secondary mb-2" id="testConnectionButton">
+          <button type="button" class="btn btn-control mb-2" id="testConnectionButton">
             Test Connection
           </button>
           <br>
-          <button type="button" class="btn btn-outline-primary" id="showSchemaForm">
+          <button type="button" class="btn btn-primary" id="showSchemaForm">
             Configure Camera Settings
           </button>
         </div>
@@ -352,7 +342,7 @@
           </p>
 
           <div id="lockControls">
-            <button type="button" class="btn btn-sm btn-outline-warning" id="lockAuthBtn">
+            <button type="button" class="btn btn-sm btn-warning" id="lockAuthBtn">
               🔒 Lock Authentication
             </button>
           </div>
@@ -360,7 +350,7 @@
           <div id="unlockControls" class="hidden">
             <span class="badge bg-warning text-dark text-wrap mb-2">🔒 Authentication Locked</span>
             <br>
-            <button type="button" class="btn btn-sm btn-outline-danger" id="unlockAuthBtn">
+            <button type="button" class="btn btn-sm btn-danger" id="unlockAuthBtn">
               🔓 Unlock &amp; Re-authenticate
             </button>
           </div>
@@ -371,14 +361,14 @@
 
   <div id="configSaveError" class="alert alert-warning mt-3 hidden" role="alert">
     Blink tokens are stored, but Homebridge settings could not be saved. Retry saving before restarting the child bridge.
-    <button type="button" class="btn btn-outline-secondary mt-2" id="retryConfigSave">Retry Saving Settings</button>
+    <button type="button" class="btn btn-control mt-2" id="retryConfigSave">Retry Saving Settings</button>
   </div>
 
   <div id="errorAlert" class="alert alert-danger mt-3 hidden" role="alert">
     <strong>Error:</strong> <span id="errorMessage"></span>
   </div>
 
-  <div class="log-container" id="logContainer">
+  <div class="log-container card" id="logContainer">
     <strong class="d-block mb-2">Debug Log:</strong>
     <div id="logOutput"></div>
   </div>
