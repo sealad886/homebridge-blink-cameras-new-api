@@ -4,16 +4,20 @@ Recovered missing roster compiler, agent profiles and skill definitions from off
 
 ## Project adaptations
 
-The initial bootstrap matched upstream bytes. PR review subsequently required
-bounded local adaptations: `skills/using-a-team` accurately describes explicit
-roster checks without an installed hook; `skills/using-git-worktrees` honors the
-existing-checkout constraint; `skills/finishing-a-development-branch` uses the
-repository's actual coverage command; and `skills/incident-response` routes
-rollback through the reviewed release workflow. These files no longer claim
-byte identity with upstream. The active orchestrator and meta-skill use the available `python3` command
-and explicit Codex dispatch checks without claiming native hooks or commands.
-All other copied profiles/compiler retain the
-pinned source; no global plugin cache or host hooks were changed.
+The initial bootstrap matched upstream bytes. PR review required local
+adaptations to the project constraints and installed capabilities. Adapted
+profiles/skills use CONTRIBUTING.md validation and GitHub issue/PR ownership,
+explicit roster checks without hooks, existing-checkout isolation, reviewed
+release/rollback, preservation of unrelated files and required evidence, and
+explicit handling of the documented optional native-worker test skip.
+
+Adapted files: orchestrator, build-error-resolver, doc-updater, e2e-runner,
+python-reviewer, refactor-cleaner, security-reviewer, tdd-guide and
+typescript-reviewer profiles; using-a-team, using-git-worktrees,
+finishing-a-development-branch, incident-response, test-driven-development and
+verification-before-completion skills. These no longer claim byte identity.
+All other copied profiles and the compiler retain the pinned upstream bytes.
+No global plugin cache or host hook was changed.
 
 ## Upstream license
 

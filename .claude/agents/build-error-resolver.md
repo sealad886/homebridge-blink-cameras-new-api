@@ -24,15 +24,11 @@ You are a build error resolution specialist. Your mission is to get builds passi
 
 ## Diagnostic Commands
 
-```bash
-npx tsc --noEmit --pretty
-npx tsc --noEmit --pretty --incremental false
-npm run build
-npx eslint . --ext .ts,.tsx,.js,.jsx
-go build ./...
-cargo check
-python -m py_compile **/*.py
-```
+Use the existing [contributor validation commands](../../CONTRIBUTING.md#validation)
+for this TypeScript/Jest project. Run Python checks only for changed Python
+helpers using the existing interpreter and unittest suites; do not infer Go,
+Rust or framework tooling from generic examples.
+
 
 ## Workflow
 
@@ -65,13 +61,13 @@ python -m py_compile **/*.py
 
 **DON'T:** Refactor unrelated code, change architecture, rename variables unless causing error, add new features, optimize performance.
 
-## Nuclear Options (Last Resort)
+## Dependency and cache failures
 
-```bash
-rm -rf .next node_modules/.cache && npm run build
-rm -rf node_modules package-lock.json && npm install
-npx eslint . --fix
-```
+Classify the first meaningful error before changing dependencies. Preserve
+lockfiles and unrelated caches; do not delete them or run broad auto-fixes as a
+build-repair shortcut. A temporary task-specific npm cache can isolate a cache
+permission failure without changing global configuration. Any dependency change
+must be necessary, scoped and use the existing manifest/lockfile workflow.
 
 ## Success Metrics
 

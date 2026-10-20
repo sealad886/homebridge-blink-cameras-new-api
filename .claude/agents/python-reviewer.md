@@ -57,13 +57,12 @@ When invoked:
 
 ## Diagnostic Commands
 
-```bash
-mypy .
-ruff check .
-black --check .
-bandit -r .
-pytest --cov=app --cov-report=term-missing
-```
+Use `python3 scripts/roster.py verify` for roster changes and
+`python3 -m unittest discover -s scripts/pi-evidence/tests` for the maintained
+Python diagnostic tooling. Select existing native/dependency unittest suites
+when those sources change. Do not assume pytest, app/, mypy, Ruff, Black or
+Bandit are installed or install them solely to execute this profile.
+
 
 ## Framework Checks
 

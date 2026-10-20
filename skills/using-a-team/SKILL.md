@@ -58,7 +58,7 @@ record evidence rather than claiming an unavailable command ran.
 | "The feature works" | **verification-before-completion** (run the feature, read output) |
 | "Done" / "Complete" | **verification-before-completion** (ALWAYS, no exceptions) |
 
-After verification passes, Step 5 of `verification-before-completion` is mandatory: delete all log files, stack traces, and debug dumps generated during this task before reporting done.
+After verification passes, Step 5 of `verification-before-completion` is mandatory: inspect exact task-created disposable artifacts, preserve tracked/unrelated files and required evidence, and remove only authorized disposable paths.
 
 ## After Code Changes
 
@@ -66,7 +66,7 @@ After verification passes, Step 5 of `verification-before-completion` is mandato
 |-----------|---------------|
 | After writing or modifying code | **code-reviewer** agent |
 | Auth, API, input handling, DB changes | **security-reviewer** agent |
-| Before any PR merge | **quality-gate** command (runs both) |
+| Before any PR merge | Roster-checked independent **code-reviewer** and **security-reviewer** dispatches; explicit results required |
 | Wrapping up a branch | **finishing-a-development-branch** skill |
 
 ## Architectural Decisions

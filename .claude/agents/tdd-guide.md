@@ -32,7 +32,7 @@ Remove duplication, improve names, optimize — tests must stay green.
 
 ### 6. Verify Coverage
 ```bash
-npm run test:coverage
+npm test -- --runInBand --coverage
 # Required: 80%+ branches, functions, lines, statements
 ```
 

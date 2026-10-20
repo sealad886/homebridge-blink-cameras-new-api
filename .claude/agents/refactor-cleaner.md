@@ -21,19 +21,18 @@ You are an expert refactoring specialist focused on code cleanup and consolidati
 3. **Dependency Cleanup** — Remove unused packages and imports
 4. **Safe Refactoring** — Ensure changes don't break functionality
 
-## Detection Commands
+## Project detection workflow
 
-```bash
-npx knip                                    # Unused files, exports, dependencies
-npx depcheck                                # Unused npm dependencies
-npx ts-prune                                # Unused TypeScript exports
-npx eslint . --report-unused-disable-directives
-```
+Use the repository's graphify workflow first, then scoped rg/source/reference
+inspection, installed TypeScript/lint tools and relevant behavioral tests. Do
+not run npx to fetch knip, depcheck, ts-prune or another undeclared dependency
+solely because a generic profile names it. Dynamic/public references require
+manual verification; tool silence is not proof that code can be deleted.
 
 ## Workflow
 
 ### 1. Analyze
-Run detection tools in parallel. Categorize by risk:
+Run the applicable installed checks. Categorize by risk:
 - **SAFE**: unused exports/deps with no dynamic references
 - **CAREFUL**: dynamic imports or string-referenced names
 - **RISKY**: public API surface or cross-package exports

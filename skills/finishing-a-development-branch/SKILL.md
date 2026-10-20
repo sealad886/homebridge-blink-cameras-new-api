@@ -15,7 +15,10 @@ Complete all final steps before merging a feature branch.
 ```bash
 npm test -- --runInBand --coverage
 ```
-- All tests must pass (no skips, no TODOs in critical paths)
+- All required tests must pass. Reject unexpected/new skips or disabled critical-path tests.
+- The existing optional native-worker vector test may remain skipped when
+  `BLINK_MEDIA_TEST_WORKER_PATH` is unset; report that limitation explicitly.
+  Do not claim that skip establishes secure-worker or platform acceptance.
 - Coverage must be ≥ 80%
 - If tests fail → stop and fix before continuing
 
@@ -27,14 +30,23 @@ npx tsc --noEmit
 - Build must succeed with zero errors
 
 ### 3. Quality Gate
-- Run `/quality-gate` (code review + security review in parallel)
+- Verify roster and reviewer eligibility before dispatch:
+  ```bash
+  python3 scripts/roster.py verify
+  python3 scripts/roster.py check Agent code-reviewer
+  python3 scripts/roster.py check Agent security-reviewer
+  ```
+- Use the available collaboration tools to dispatch independent code and security
+  reviewers with their installed profiles, exact head/base, scope and evidence.
+  Require explicit outcomes and resolve actionable findings. `/quality-gate` is
+  not an installed command in this Codex project.
 - Block MUST be resolved before merge
 - Warn can merge with documented issue
 
 ### 4. Clean Up
-- Remove all `console.log` and debug statements
-- Remove all commented-out code
-- Remove all TODO/FIXME without issue references
+- Remove only disposable debug statements introduced by this task; retain intentional diagnostics.
+- Remove obsolete commented-out code introduced by this task.
+- Link this task's remaining TODO/FIXME items to verified issues; preserve unrelated work.
 
 ### 5. Update Documentation
 - Update CLAUDE.md or README.md if setup changed

@@ -16,7 +16,7 @@ You are a senior TypeScript/React reviewer ensuring type-safe, accessible, idiom
 
 When invoked:
 1. Run `git diff -- '*.ts' '*.tsx'` to see recent changes
-2. Run the FULL static gate, not a subset: `tsc --noEmit && eslint . && vitest run`
+2. Run the FULL static gate, not a subset: `npm run build && npm run lint && npm test -- --runInBand`
    (a passing `tsc` alone is not "green" — dead imports/types and lint violations escape otherwise)
 3. Focus on modified `.ts`/`.tsx` files; begin review immediately
 

@@ -131,7 +131,7 @@ Integration tests should hit real dependencies — but unit tests must be fast a
 After each feature or bug fix, verify coverage meets the project minimum:
 
 ```bash
-npm run test:coverage
+npm test -- --runInBand --coverage
 # Required: ≥ 80% branches, functions, lines, statements
 ```
 

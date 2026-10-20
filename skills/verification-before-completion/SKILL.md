@@ -38,7 +38,7 @@ Before claiming completion, state the exact command that proves the claim:
 | "Type checking passes" | `npx tsc --noEmit` / `mypy .` |
 | "Bug is fixed" | Run the exact steps that reproduced the bug |
 | "Feature works" | Run the specific user flow end-to-end |
-| "Coverage is 80%+" | `npm run test:coverage` / `pytest --cov` |
+| "Coverage is 80%+" | `npm test -- --runInBand --coverage` / `pytest --cov` |
 | "No security issues" | `npm audit` / `cargo audit` / `bandit -r .` |
 
 ### Step 2: Run the Command Fresh
@@ -62,27 +62,19 @@ If the output contradicts the claim → fix the issue, then re-verify from Step 
 
 ### Step 5: Prune Workspace Artifacts (Mandatory)
 
-After verification succeeds, **before reporting done**, clean up all diagnostic debris produced during this task:
+After verification succeeds, inspect the exact disposable artifacts created by
+this task before reporting done. This is an ownership check, not a wildcard
+cleanup command.
 
-```
-# Delete temporary logs and stack traces generated in this session
-rm -f *.log *.tmp build-output.txt error-dump.txt
-rm -f *-stack-trace.txt *-stderr.txt *-debug.txt
-# Truncate test output files that were created locally (keep test results, not raw stdout dumps)
-```
-
-**What to clean:**
-- Stack traces saved to local files (`*.log`, `*-error.txt`, `*-trace.txt`)
-- Build output dumps that were written to the workspace during debugging
-- Temporary debugging files created to capture stdout/stderr
-- Any file whose sole purpose was to hold error output during this session
-
-**What NOT to clean:**
-- Source files, test files, configuration files
-- Official test result files (JUnit XML, coverage reports) that the project intentionally persists
-- Any file tracked by git (`git ls-files` — don't delete those)
-
-**Why this matters:** Stack traces and log dumps left in the workspace are silently read by Claude Code in subsequent iterations, inflating context with noise that was only relevant during the error state. Pruning keeps the next agent's context focused.
+1. Enumerate exact paths from this task's commands and existing evidence ledger.
+   If ownership is unknown, preserve the file.
+2. Check each candidate with Git and the retention requirements. Preserve tracked
+   files, unrelated user/agent files, official test results, required diagnostic
+   evidence, recovery material and user-requested logs, even when untracked.
+3. Remove only exact, task-created disposable paths whose deletion is authorized.
+   Never use filename globs, blanket truncation or repository-wide cleanup.
+4. Record what was removed or retained and why. If no disposable files were
+   created, no deletion is required. Do not delete other files to satisfy this step.
 
 ## Rationalization Red Flags
 

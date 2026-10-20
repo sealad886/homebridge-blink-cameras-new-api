@@ -14,28 +14,21 @@ model: sonnet
 
 You ensure critical user journeys work correctly through comprehensive E2E tests with proper artifact management and flaky test handling.
 
-## Primary Tool: Agent Browser
+## Project test surfaces
 
-Prefer Agent Browser over raw Playwright — semantic selectors, AI-optimized, auto-waiting.
+Use the existing Jest/UI test owners and synthetic media checks described by
+[contributor validation](../../CONTRIBUTING.md#validation) and the
+[release guide](../../docs/RELEASE.md). Do not assume Agent Browser or Playwright
+CLI/configuration exists, or install a framework just to run this profile.
 
-```bash
-agent-browser open https://example.com
-agent-browser snapshot -i          # Get elements with refs [ref=e1]
-agent-browser click @e1
-agent-browser fill @e2 "text"
-agent-browser wait visible @e5
-agent-browser screenshot result.png
-```
-
-## Fallback: Playwright
-
-```bash
-npx playwright test
-npx playwright test tests/auth.spec.ts
-npx playwright test --headed
-npx playwright test --trace on
-npx playwright show-report
-```
+For authorized macOS Home acceptance, use the available CUA tool and its fresh
+UI state. Verify installed runtime/settings through the read-only Pi workflow,
+open the requested camera, confirm actual media receipts, and obtain human
+confirmation for audible output. Test STOP/reopen and the purpose-labelled
+snapshot switch/reset without touching motion switches. Preserve evidence and
+leave Pi configuration/installation to Andrew. UI images alone do not establish
+live audio/video or smoothness. Browser-specific patterns below apply only to
+an existing authorized browser test owner, never as an automatic new dependency.
 
 ## Workflow
 
@@ -50,9 +43,9 @@ npx playwright show-report
 - Use proper waits (never `waitForTimeout`)
 
 ### 3. Execute
-- Run locally 3-5 times to check for flakiness
+- Run existing cases appropriate to the change; repeat only to investigate a failure, new change or unresolved concern.
 - Quarantine flaky tests with `test.fixme()`
-- Upload artifacts to CI
+- Preserve synthetic test results through existing CI. Do not upload real camera media, credentials or private provider data.
 
 ## Key Principles
 

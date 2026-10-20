@@ -20,15 +20,14 @@ You are an expert security specialist. Your mission is to prevent security issue
 4. **Authentication/Authorization** — Proper access controls
 5. **Dependency Security** — Vulnerable packages
 
-## Analysis Commands
+## Project checks
 
-```bash
-npm audit --audit-level=high
-npx eslint . --plugin security
-bandit -r .
-govulncheck ./...
-cargo audit
-```
+Use the existing contributor/release checks and inspect the exact dependency
+manifest/lockfile. An npm audit may add dependency evidence when authorized;
+distinguish development dependencies and disclosed baseline alerts. Do not
+assume ESLint security plugins, Bandit, govulncheck or cargo-audit are installed,
+or install tools just to satisfy generic examples. This project does not gain
+secure-worker/platform acceptance from static review or prototype builds.
 
 ## OWASP Top 10 Check
 
