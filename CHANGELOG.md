@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.18] - 2026-10-22
+
+### Fixed
+- Notify HomeKit through HAP's normal configuration-update mechanism when a camera's advertised audio capabilities change, including AAC-ELD to Opus after an operator changes FFmpeg. Fingerprint the actual audio offer in public characteristic metadata because HAP excludes characteristic values from its configuration hash.
+- Preserve accessory, stream and pairing identities; unchanged offers do not cause repeated configuration updates. Unsupported AAC-ELD requests still fail before vendor media allocation rather than receiving substituted Opus payloads.
+
+### Acceptance and limitations
+- Real-HAP restoration and post-publication advertisement regressions pass, including the Pi's installed HAP version in an isolated in-memory probe. This corrects a reproduced invalidation defect; it does not prove that controller caching caused every physical startup failure.
+- Keep the operator-managed Homebrew FFmpeg binary and configuration. Operator installation and fresh live video/audio, STOP/reopen and snapshot/reset acceptance remain required. Issue #52 and F05/F06 remain open; no Pi configuration, installation or pairing changes are included.
+
 ## [0.10.0-rc.17] - 2026-10-20
 
 ### Fixed

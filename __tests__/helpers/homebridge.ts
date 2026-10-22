@@ -16,6 +16,7 @@ export const createHap = () => ({
   },
   Service: {
     AccessoryInformation: 'AccessoryInformation',
+    CameraRTPStreamManagement: { UUID: 'CameraRTPStreamManagement' },
     Switch: 'Switch',
     SecuritySystem: 'SecuritySystem',
     MotionSensor: 'MotionSensor',

@@ -12,6 +12,7 @@ import {
   CameraControllerOptions,
   CameraStreamingDelegate,
   HAP,
+  Service,
   PrepareStreamCallback,
   PrepareStreamRequest,
   PrepareStreamResponse,
@@ -38,7 +39,7 @@ import { effectiveOutputFps, isSupportedOutputVideo, outputH264Levels, outputRes
 import { InputVideoObservation, InputVideoObserver } from './input-video-observation';
 import { Buffer } from 'node:buffer';
 import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
 
 import { URL } from 'node:url';
@@ -1767,4 +1768,22 @@ export function createSnapshotControllerOptions(
   delegate: CameraStreamingDelegate,
 ): CameraControllerOptions {
   return createCameraControllerOptions(hap, delegate, { enabled: false });
+}
+
+/** Refresh HAP's configuration identity when a restored audio offer changes.
+ * HAP excludes characteristic values from its config hash. The public
+ * description carries a stable identity for the actual advertised TLV, while
+ * the service event schedules the normal bridge configuration advertisement.
+ */
+export function refreshCameraAudioCapabilities(hap: HAP, services: readonly Service[]): void {
+  for (const service of services) {
+    if (service.UUID !== hap.Service.CameraRTPStreamManagement.UUID) continue;
+    const characteristic = service.getCharacteristic(hap.Characteristic.SupportedAudioStreamConfiguration);
+    if (typeof characteristic.value !== 'string') continue;
+    const digest = createHash('sha256').update(characteristic.value).digest('hex');
+    const description = `Supported Audio Stream Configuration: ${digest}`;
+    if (characteristic.props.description === description) continue;
+    characteristic.setProps({ description });
+    service.emit('service-configurationChange');
+  }
 }

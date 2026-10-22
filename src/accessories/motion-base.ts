@@ -16,7 +16,7 @@ import { toHapError } from '../hap-errors';
 import { BlinkCamerasPlatform } from '../platform';
 import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { setTimeout, clearTimeout, setImmediate } from 'timers';
-import { BlinkCameraSource, createCameraControllerOptions, DeviceType } from './camera-source';
+import { BlinkCameraSource, createCameraControllerOptions, refreshCameraAudioCapabilities, DeviceType } from './camera-source';
 
 export interface MotionDevice {
   id: number;
@@ -174,6 +174,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig),
     );
     this.accessory.configureController(this.cameraController);
+    refreshCameraAudioCapabilities(this.platform.api.hap, this.accessory.services);
 
     const existingRefreshService = this.accessory.getServiceById(this.platform.Service.Switch, 'snapshot-refresh');
     if (this.platform.streamingConfig.persistSnapshotCache) {

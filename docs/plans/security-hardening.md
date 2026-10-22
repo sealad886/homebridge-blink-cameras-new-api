@@ -572,8 +572,9 @@ RC.16 delivery checklist:
   before resource release. See [protocol audit](../audits/2026-10-20-immis-retirement.md).
 - [x] Complete independent local code/security review, 999 passing Jest tests
   (one existing skip), lint/build/contracts and 26 synthetic media packaging cases.
-- [ ] Complete Node 20/22/24 CI and reviewed merge.
-- [ ] Publish and verify the unused RC.16 artifact through existing CI.
+- [x] Complete Node 20/22/24 CI and reviewed merge (PR #76).
+- [x] Publish and verify RC.16 through CI run39475769566; release receipts in
+  `logs/rc16-release-2026-10-20/`.
 - [ ] Operator installs; repeat physical acceptance and attributable observation.
 
 PR review replaced a duplicating FPS filter with drop-only source selection.
@@ -584,3 +585,24 @@ and does not establish network causation or physical smoothness.
 F05/F06 and issue #52 remain open; the existing stable-specific residual-risk
 record and mandatory guards remain unchanged. No Pi installation/configuration,
 restart, pairing reset or experimental talkback enablement is authorized here.
+
+
+### 22 October 2026 — audio offer invalidation after encoder changes
+
+RC.17 is installed and matches its CI artifact. Operator configuration now uses
+Homebrew FFmpeg8.1.3, Automatic video output, ultrafast and Opus. The binary lacks
+libfdk_aac; four Home AAC-ELD selections fail before media allocation. Real-HAP
+reproduction finds that the audio TLV changes while the normal configuration
+hash does not. See [the audio audit](../audits/2026-10-22-audio-capability-invalidation.md).
+
+Delivery checklist:
+
+- [x] Reproduce the missing configuration invalidation with real HAP.
+- [x] Bind actual audio offers to public characteristic metadata and notify the
+  existing HAP configuration owner; preserve identities and early codec refusal.
+- [ ] Complete regression, broader validation and independent reviews.
+- [ ] Merge and publish an unused RC through existing CI; verify exact artifacts.
+- [ ] Operator installs and repeats physical audio/video and lifecycle acceptance.
+
+The Homebrew binary and Pi configuration stay operator-owned. No pairing reset,
+codec substitution, F05/F06 closure or physical success is inferred from tests.
