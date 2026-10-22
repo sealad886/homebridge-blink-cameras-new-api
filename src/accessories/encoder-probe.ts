@@ -241,3 +241,18 @@ export async function probeAacEldEncoder(ffmpegPath: string): Promise<boolean> {
   }
   return true;
 }
+
+/** Identify the selected binary's RTP SSRC option without processing media. */
+export async function probeRtpSsrcMode(ffmpegPath: string): Promise<'signed' | 'unsigned' | undefined> {
+  return new Promise(resolve => {
+    execFile(ffmpegPath, ['-hide_banner', '-h', 'muxer=rtp'], {
+      timeout: PROBE_TIMEOUT_MS, maxBuffer: 64 * 1024, killSignal: 'SIGKILL',
+    }, (error, stdout, stderr) => {
+      if (error) { resolve(undefined); return; }
+      const line = `${stdout}\n${stderr}`.split('\n').find(value => /^\s*-ssrc\s+/.test(value));
+      if (line && /<unsigned>.*\(from 0 to (?:UINT32_MAX|4294967295)\)/.test(line)) resolve('unsigned');
+      else if (line && /<int>.*\(from (?:INT_MIN|-2147483648) to (?:INT_MAX|2147483647)\)/.test(line)) resolve('signed');
+      else resolve(undefined);
+    });
+  });
+}

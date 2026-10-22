@@ -59,6 +59,8 @@ export interface BlinkCameraStreamingConfig {
   enabled: boolean;
   ffmpegPath: string;
   ffmpegDebug: boolean;
+  /** Internal capability of the selected executable; never persisted. */
+  rtpSsrcMode: 'signed' | 'unsigned';
   rtspTransport: 'tcp' | 'udp';
   maxStreams: number;
   audio: {
@@ -98,6 +100,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
   ffmpegPath: 'ffmpeg',
   ffmpegDebug: false,
+  rtpSsrcMode: 'unsigned',
   rtspTransport: 'tcp',
   maxStreams: 1,
   audio: {
@@ -128,6 +131,7 @@ export const resolveStreamingConfig = (
     enabled: config?.enabled ?? DEFAULT_STREAMING_CONFIG.enabled,
     ffmpegPath: config?.ffmpegPath ?? DEFAULT_STREAMING_CONFIG.ffmpegPath,
     ffmpegDebug: config?.ffmpegDebug ?? DEFAULT_STREAMING_CONFIG.ffmpegDebug,
+    rtpSsrcMode: config?.rtpSsrcMode ?? DEFAULT_STREAMING_CONFIG.rtpSsrcMode,
     rtspTransport: config?.rtspTransport ?? DEFAULT_STREAMING_CONFIG.rtspTransport,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
@@ -206,18 +210,9 @@ interface FfmpegStderrState {
 
 const usedPorts = new Set<number>();
 
-/**
- * Convert unsigned 32-bit SSRC to signed 32-bit for FFmpeg.
- * FFmpeg's RTP muxer expects signed int32 (-2147483648 to 2147483647).
- * HomeKit provides/expects unsigned uint32 (0 to 4294967295).
- * Values above INT32_MAX (2147483647) need to be converted to negative.
- */
-const ssrcToSigned = (ssrc: number): number => {
-  if (ssrc > 0x7FFFFFFF) {
-    return ssrc - 0x100000000;
-  }
-  return ssrc;
-};
+/** Preserve SSRC bits while matching the selected RTP muxer's option type. */
+const formatRtpSsrc = (ssrc: number, mode: BlinkCameraStreamingConfig['rtpSsrcMode']): number =>
+  mode === 'signed' && ssrc > 0x7FFFFFFF ? ssrc - 0x100000000 : ssrc;
 
 const redactFfmpegArgs = (args: string[]): string[] => {
   const redacted = [...args];
@@ -1539,7 +1534,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       '-maxrate', `${bitrate}k`,
       '-bufsize', `${bitrate}k`,
       '-payload_type', `${video.pt}`,
-      '-ssrc', `${ssrcToSigned(session.videoSSRC)}`,
+      '-ssrc', `${formatRtpSsrc(session.videoSSRC, this.streamingConfig.rtpSsrcMode)}`,
       '-f', 'rtp',
     );
 
@@ -1567,7 +1562,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         '-map', '0:a:0?',
         ...audioArgs,
         '-payload_type', `${audio.pt}`,
-        '-ssrc', `${ssrcToSigned(session.audioSSRC)}`,
+        '-ssrc', `${formatRtpSsrc(session.audioSSRC, this.streamingConfig.rtpSsrcMode)}`,
         '-f', 'rtp',
       );
 

@@ -1,4 +1,4 @@
-import { probeAacEldEncoder, probeVideoEncoder, resetProbeCache } from '../src/accessories/encoder-probe';
+import { probeAacEldEncoder, probeRtpSsrcMode, probeVideoEncoder, resetProbeCache } from '../src/accessories/encoder-probe';
 import { execFile } from 'node:child_process';
 import { createSocket } from 'node:dgram';
 import { EventEmitter } from 'node:events';
@@ -252,5 +252,40 @@ describe('AAC-ELD capability', () => {
     expect(await probeAacEldEncoder('ffmpeg')).toBe(false);
     expect(mockExecFile).not.toHaveBeenCalled();
     expect(sockets[0].close).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('RTP SSRC option capability', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it.each([
+    ['unsigned', '  -ssrc <unsigned> E.......... Stream identifier (from 0 to UINT32_MAX) (default 0)'],
+    ['signed', '  -ssrc <int> E.......... Stream identifier (from INT_MIN to INT_MAX) (default 0)'],
+  ] as const)('recognizes the actual %s RTP option contract', async (mode, help) => {
+    mockExecFile.mockImplementation((_cmd, _args, options, callback) => {
+      expect(options.timeout).toBe(5000);
+      expect(options.maxBuffer).toBe(64 * 1024);
+      callback(null, help, '');
+    });
+    await expect(probeRtpSsrcMode('/operator/ffmpeg')).resolves.toBe(mode);
+    expect(mockExecFile.mock.calls[0][0]).toBe('/operator/ffmpeg');
+    expect(mockExecFile.mock.calls[0][1]).toEqual(['-hide_banner', '-h', 'muxer=rtp']);
+  });
+
+  it.each([
+    '',
+    '  -ssrc <string> Stream identifier',
+    '  -ssrc <int> Stream identifier (from 0 to INT_MAX)',
+    '  -other <unsigned> Stream identifier (from 0 to UINT32_MAX)',
+  ])('refuses an unproven RTP contract: %s', async help => {
+    mockExecFile.mockImplementation((_cmd, _args, _options, callback) => callback(null, help, ''));
+    await expect(probeRtpSsrcMode('/operator/ffmpeg')).resolves.toBeUndefined();
+  });
+
+  it.each(['ENOENT', 'ETIMEDOUT', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'])('refuses failed help execution: %s', async code => {
+    mockExecFile.mockImplementation((_cmd, _args, _options, callback) => callback(Object.assign(new Error(code), { code }),
+      '  -ssrc <unsigned> Stream identifier (from 0 to UINT32_MAX)', ''));
+    await expect(probeRtpSsrcMode('/operator/ffmpeg')).resolves.toBeUndefined();
   });
 });

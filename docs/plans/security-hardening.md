@@ -590,7 +590,7 @@ restart, pairing reset or experimental talkback enablement is authorized here.
 ### 22 October 2026 — audio offer invalidation after encoder changes
 
 RC.17 is installed and matches its CI artifact. Operator configuration now uses
-Homebrew FFmpeg8.1.3, Automatic video output, ultrafast and Opus. The binary lacks
+Homebrew FFmpeg 8.1.3, Automatic video output, ultrafast and Opus. The binary lacks
 libfdk_aac; four Home AAC-ELD selections fail before media allocation. Real-HAP
 reproduction finds that the audio TLV changes while the normal configuration
 hash does not. See [the audio audit](../audits/2026-10-22-audio-capability-invalidation.md).
@@ -600,9 +600,31 @@ Delivery checklist:
 - [x] Reproduce the missing configuration invalidation with real HAP.
 - [x] Bind actual audio offers to public characteristic metadata and notify the
   existing HAP configuration owner; preserve identities and early codec refusal.
-- [ ] Complete regression, broader validation and independent reviews.
-- [ ] Merge and publish an unused RC through existing CI; verify exact artifacts.
-- [ ] Operator installs and repeats physical audio/video and lifecycle acceptance.
+- [x] Complete regression, broader validation and independent reviews (PR #78).
+- [x] Publish and verify RC.18 through CI run39824348095.
+- [x] Operator installs; physical checks confirm actual Opus and fresh snapshots/reset.
+- [ ] Full live playback/lifecycle acceptance: blocked by the separate RTP SSRC failure.
 
 The Homebrew binary and Pi configuration stay operator-owned. No pairing reset,
 codec substitution, F05/F06 closure or physical success is inferred from tests.
+
+
+### 22 October 2026 — selected-executable RTP SSRC compatibility
+
+RC.18 Home validation confirms actual Opus but fails RTP initialization because
+its Homebrew binary requires unsigned SSRC arguments. The bundled executable
+uses a signed option. The [SSRC audit](../audits/2026-10-22-rtp-ssrc-compatibility.md)
+owns the reproduced contract, capability decision, tests and limits.
+
+- [x] Reproduce boundary/observed failures before implementation.
+- [x] Extend the existing capability owner and shared video/audio formatter;
+  preserve all 32 identity bits and keep operator settings/binary unchanged.
+- [x] Verify synthetic packet identities with both local muxer contracts and
+  the actual unchanged Pi binary; no live installation or configuration writes.
+- [ ] Complete final broad validation, independent review and CI.
+- [ ] Reviewed merge and publication of unused RC.19; verify exact npm artifact.
+- [ ] Operator installs and repeats physical playback/lifecycle acceptance.
+
+F05/F06 and issue #52 remain open. Existing stable 0.10.0 residual-risk disposition
+and mandatory security/cleanup limits are unchanged. No physical success or
+performance improvement is inferred from synthetic output.
