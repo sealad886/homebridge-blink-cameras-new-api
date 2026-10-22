@@ -8,6 +8,9 @@ import { sampleBlinkConnection } from '../src/blink-api/connection-diagnostics';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
 import { Blink2FARequiredError, BlinkTokenRefreshError } from '../src/blink-api/auth';
 
+import { probeRtpSsrcMode, probeVideoEncoder, probeAacEldEncoder } from '../src/accessories/encoder-probe';
+
+jest.mock('../src/accessories/encoder-probe');
 jest.mock('../src/blink-api');
 jest.mock('../src/blink-api/connection-diagnostics', () => ({
   sampleBlinkConnection: jest.fn().mockResolvedValue({ dns: 'ok', addressCount: 1, connection: 'ok', elapsedMs: 1 }),
@@ -65,6 +68,9 @@ describe('BlinkCamerasPlatform', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    jest.mocked(probeRtpSsrcMode).mockResolvedValue('unsigned');
+    jest.mocked(probeVideoEncoder).mockResolvedValue({ selected: 'libx264', compiledEncoders: ['libx264'], testedEncoders: [] });
+    jest.mocked(probeAacEldEncoder).mockResolvedValue(false);
     jest.mocked(sampleBlinkConnection).mockResolvedValue({ dns: 'ok', addressCount: 1, connection: 'ok', elapsedMs: 1 });
     jest.useFakeTimers();
     hapApi = null;
@@ -124,6 +130,28 @@ describe('BlinkCamerasPlatform', () => {
     expect(() => new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
       ...config, outputQuality: 'unbounded' as never,
     }, hapApi!)).toThrow('Invalid output quality profile');
+  });
+
+  it.each(['signed', 'unsigned', undefined] as const)('probes the operator binary with a manual encoder and keeps discovery available (%s)', async mode => {
+    hapApi = createApi() as unknown as MockAPI;
+    const blinkApi = buildBlinkApi();
+    blinkApi.getHomescreen.mockResolvedValue({
+      account: { account_id: 1 }, networks: [],
+      cameras: [{ id: 2, network_id: 1, name: 'Camera', enabled: true }],
+      doorbells: [], owls: [], sync_modules: [],
+    });
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    jest.mocked(probeRtpSsrcMode).mockResolvedValue(mode);
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
+      ...config, ffmpegPath: '/operator/ffmpeg', videoEncoder: 'libx264',
+    }, hapApi);
+    await expect((platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices()).resolves.toBe(true);
+    expect(probeRtpSsrcMode).toHaveBeenCalledWith('/operator/ffmpeg');
+    expect(probeVideoEncoder).not.toHaveBeenCalled();
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+    expect(platform.accessories.length).toBeGreaterThan(0);
+    expect(platform.streamingConfig.enabled).toBe(mode !== undefined);
+    if (mode) expect(platform.streamingConfig.rtpSsrcMode).toBe(mode);
   });
 
   it('registers new accessories from homescreen data', async () => {

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0-rc.19] - 2026-10-22
+
+### Fixed
+- Match video and audio SSRC arguments to the selected FFmpeg executable's actual signed/unsigned RTP option, preserving the complete 32-bit stream identifier. Prevent negative-SSRC startup failures with the operator's Homebrew binary without breaking the bundled signed muxer.
+- Extend existing startup capability checks, including manual video encoders. Use bounded help output instead of a version guess; leave core discovery/accessories available while disabling live streaming for an unverified RTP contract. No new saved setting or binary replacement is required.
+
+### Acceptance and limitations
+- Boundary regressions and real synthetic RTP packet checks pass with signed/unsigned local binaries and the unchanged Pi Homebrew binary, including the exact observed Corner values. These do not prove physical Home playback, smoothness or CPU savings.
+- Operator installation and fresh live video/audio, STOP/reopen, snapshot/reset and observation acceptance remain required. Issue #52 and F05/F06 remain open. Pi configuration, installation and the Homebrew FFmpeg binary are unchanged.
+
 ## [0.10.0-rc.18] - 2026-10-22
 
 ### Fixed

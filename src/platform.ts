@@ -39,7 +39,7 @@ import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } fr
 import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
 import { OutputQualityProfile } from './accessories/stream-quality';
 import { BlinkInputQuality } from './types';
-import { probeAacEldEncoder, probeVideoEncoder } from './accessories/encoder-probe';
+import { probeAacEldEncoder, probeRtpSsrcMode, probeVideoEncoder } from './accessories/encoder-probe';
 import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { withResponseBudget } from './operation-budget';
@@ -425,6 +425,17 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private async performDiscovery(): Promise<boolean> {
     try {
+      if (this.streamingConfig.enabled) {
+        const mode = await probeRtpSsrcMode(this.streamingConfig.ffmpegPath);
+        if (mode) {
+          this.streamingConfig.rtpSsrcMode = mode;
+          this.log.info(`RTP SSRC option resolved to: ${mode}`);
+        } else {
+          this.streamingConfig.enabled = false;
+          this.log.warn('RTP SSRC capability could not be verified; live streaming disabled for this runtime.');
+        }
+      }
+
       if (this.streamingConfig.video.encoder === 'auto') {
         const probe = await probeVideoEncoder(
           this.streamingConfig.ffmpegPath,

@@ -4,9 +4,11 @@ const { spawn, spawnSync } = require("child_process");
 const dgram = require("dgram");
 const { createCipheriv, createHmac, timingSafeEqual } = require("crypto");
 const { BlinkCameraSource } = require("../dist/accessories/camera-source");
-const { probeAacEldEncoder } = require("../dist/accessories/encoder-probe");
+const { probeAacEldEncoder, probeRtpSsrcMode } = require("../dist/accessories/encoder-probe");
 const hap = require("hap-nodejs");
-const ffmpegPath = require("ffmpeg-for-homebridge");
+const ffmpegPath = process.env.BLINK_MEDIA_FFMPEG_PATH || require("ffmpeg-for-homebridge");
+const ssrcOnly = process.argv.includes("--ssrc-only");
+let rtpSsrcMode;
 
 // Test-only AES-CM/HMAC-SHA1-80 receiver for known dummy keys. RFC3711
 // sections4.1.1/4.2/4.3, and RFC3640 AAC-hbr AU headers (13-bit size/3-bit index).
@@ -85,7 +87,7 @@ function generateInput(audioEnabled, seconds = 8, secondAudio = false, geometry 
     return input.stdout;
 }
 
-async function runCase(input, preset, duration, audioEnabled, codec = "opus", sampleRate = 24, openPipe = false, fragmented = false, qualityCase = null) {
+async function runCase(input, preset, duration, audioEnabled, codec = "opus", sampleRate = 24, openPipe = false, fragmented = false, qualityCase = null, ssrcs = [1234, 5678]) {
     const sinks = [dgram.createSocket("udp4"), dgram.createSocket("udp4")];
     const counts = [0, 0],
         times = [[], []],
@@ -115,7 +117,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
                     return;
                 }
                 if ((b[1] & 127) !== [99, 110][i]) return;
-                if (b.readUInt32BE(8) !== [1234, 5678][i])
+                if (b.readUInt32BE(8) !== ssrcs[i])
                     packetError = "unexpected RTP SSRC";
                 if (b.length > 1378)
                     packetError = "RTP packet exceeded negotiated MTU";
@@ -161,6 +163,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             () => true,
             () => {},
             {
+                ffmpegPath, rtpSsrcMode,
                 video: { encoder: "libx264", softwarePreset: preset, outputQuality: qualityCase?.profile ?? "auto" },
                 audio: { enabled: audioEnabled, codec,
                     ...(codec === "aac-eld" ? { aacEldEncoder: "libfdk_aac" } : {}) },
@@ -174,13 +177,13 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             localVideoRtcpPort: 0,
             videoCryptoSuite: 0,
             videoSRTP: Buffer.alloc(30, 1),
-            videoSSRC: 1234,
+            videoSSRC: ssrcs[0],
             audioPort: sinks[1].address().port,
             localAudioPort: 0,
             localAudioRtcpPort: 0,
             audioCryptoSuite: 0,
             audioSRTP: Buffer.alloc(30, 2),
-            audioSSRC: 5678,
+            audioSSRC: ssrcs[1],
         };
         const request = {
             video: {
@@ -301,6 +304,8 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
         }
         return {
             preset,
+            rtp_ssrc_mode: rtpSsrcMode,
+            expected_ssrcs: ssrcs,
             ...(qualityCase ? { output_profile: qualityCase.profile, requested_fps: qualityCase.requestedFps ?? qualityCase.output.fps, observed_descriptors: descriptors,
                 video_frames: videoFrames.length, video_timestamp_step: videoSteps[0], h264_sps_levels: [...videoSpsLevels] } : {}),
             open_pipe_startup: openPipe,
@@ -331,6 +336,20 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
 (async () => {
     if (typeof ffmpegPath !== "string")
         throw Error("installed packaged FFmpeg is unavailable");
+    rtpSsrcMode = await probeRtpSsrcMode(ffmpegPath);
+    if (!rtpSsrcMode) throw Error("RTP SSRC capability probe failed");
+    const boundaryCases = async () => {
+        const input = generateInput(true, 1);
+        const results = [];
+        for (const ssrcs of [[0x7fffffff, 0x80000000], [0x80000000, 0xffffffff],
+            [0xffffffff, 0x7fffffff], [4254621614, 1801702378]])
+            results.push(await runCase(input, "ultrafast", 20, true, "opus", 24, false, false, null, ssrcs));
+        return results;
+    };
+    if (ssrcOnly) {
+        console.log(JSON.stringify(await boundaryCases(), null, 2));
+        return;
+    }
     if (!await probeAacEldEncoder(ffmpegPath))
         throw Error("packaged FFmpeg AAC-ELD capability probe failed");
     const audioInput = generateInput(true);
@@ -366,6 +385,7 @@ async function runCase(input, preset, duration, audioEnabled, codec = "opus", sa
             { profile: "720p15", requestedFps: 30,
                 input: { width: 1280, height: 720, fps: 30 },
                 output: { width: 1280, height: 720, fps: 15 } }));
+    results.push(...await boundaryCases());
     console.log(JSON.stringify(results, null, 2));
 })().catch((error) => {
     console.error(error.message);

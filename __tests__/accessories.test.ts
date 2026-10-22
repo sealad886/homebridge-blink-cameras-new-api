@@ -911,7 +911,14 @@ describe('Accessory handlers', () => {
     expect(handler).toBeInstanceOf(OwlAccessory);
   });
 
-  it('includes local RTP ports in SRTP output URLs', () => {
+  it.each([
+    [1234, 5678],
+    [0x7FFFFFFF, 0x7FFFFFFF],
+    [0x80000000, 0x80000000],
+    [0xFFFFFFFF, 0xFFFFFFFF],
+    [4254621614, 1801702378],
+  ].flatMap(([videoSSRC, audioSSRC]) => (['unsigned', 'signed'] as const).map(mode =>
+    [videoSSRC, audioSSRC, mode] as const)))('preserves RTP SSRC identity %i/%i with %s output and local ports', (videoSSRC, audioSSRC, mode) => {
     const hap = createHap();
     const logFn = jest.fn();
     const apiClient = {
@@ -931,6 +938,7 @@ describe('Accessory handlers', () => {
       jest.fn(),
       () => true,
       logFn,
+      { rtpSsrcMode: mode },
     );
 
     const session = {
@@ -942,13 +950,13 @@ describe('Accessory handlers', () => {
       localVideoRtcpPort: 5102,
       videoCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
       videoSRTP: Buffer.alloc(30, 1),
-      videoSSRC: 1234,
+      videoSSRC,
       audioPort: 5001,
       localAudioPort: 5101,
       localAudioRtcpPort: 5103,
       audioCryptoSuite: hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
       audioSRTP: Buffer.alloc(30, 2),
-      audioSSRC: 5678,
+      audioSSRC,
     };
 
     const request = {
@@ -977,6 +985,12 @@ describe('Accessory handlers', () => {
     const ffmpegSource = source as unknown as CameraSourceFfmpegAccess;
     const args = ffmpegSource.buildFfmpegArgs('tcp://127.0.0.1:1234', request, session);
     const argString = args.join(' ');
+    const outputSsrcs = args.flatMap((arg, index) => arg === '-ssrc' ? [args[index + 1]] : []);
+
+    const expectedSsrcs = [videoSSRC, audioSSRC].map(value =>
+      String(mode === 'signed' && value > 0x7FFFFFFF ? value - 0x100000000 : value));
+    expect(outputSsrcs).toEqual(expectedSsrcs);
+    expect(outputSsrcs.map(value => Number(value) >>> 0)).toEqual([videoSSRC, audioSSRC]);
 
     expect(argString).toContain('-frame_duration 40');
     expect(argString).toContain('-ar 24000');
