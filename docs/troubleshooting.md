@@ -1,5 +1,7 @@
 # Troubleshooting
 
+Last reviewed: 23 October 2026.
+
 Start with the checks below. For safe collection/redaction use the
 [diagnostic specification](debug_logging_spec.md) and the
 [trusted evidence reporter](../scripts/pi-evidence/README.md). Never attach token
@@ -41,6 +43,55 @@ Automatic status recovery retries one transient homescreen GET failure within a
 25-second budget, without automatically signing in again for network outages.
 Confirmed outages log a bounded, unauthenticated DNS/connection diagnostic;
 credentials, response bodies, and resolved IP addresses are excluded.
+
+## Live video fails, stutters or stops
+
+First distinguish a current camera problem from a HomeKit conversion problem.
+Check battery/power status, camera connectivity and live view in the official
+Blink app with the Home viewer closed. A cached image or the Home “Live” label
+alone is not proof of changing video or audible audio. Battery depletion and
+provider outages need separate evidence; a disconnect message alone does not
+identify their cause.
+
+Check the selected executable and negotiated codec in the bounded startup and
+stream receipts. The executable must be runnable by the Homebridge service
+account, not merely your interactive shell. See [FFmpeg requirements](streaming.md#ffmpeg-requirements)
+for codec probing, audio-offer updates and signed/unsigned RTP SSRC handling.
+An unavailable AAC-ELD selection or failed SSRC capability check should be
+investigated against the actual executable; do not reset pairing, replace a
+working binary blindly, or disable certificate verification to bypass it.
+
+For stutter, compare the same camera and scene with the same network conditions.
+The [quality guide](streaming.md#input-and-output-quality) describes lower output
+profiles and the optional low-CPU preset. Change one setting at a time, save it,
+apply it through your normal restart workflow, and verify the effective output
+receipt. Collect matched CPU/memory and encoder progress before assigning a
+cause to transcoding or Wi-Fi. Audio has its own negotiation and conversion;
+changing video quality does not establish audio compatibility.
+
+For STOP/reopen failures, retain timestamps for the explicit close, retirement
+response or timeout, new stream start, first media and final cleanup. Bounded
+reconnect exhaustion is a failure receipt, not proof of successful recovery.
+HTTP 406 may be transient provider behavior; an eligible command GET has one
+bounded retry, while liveview/completion POSTs are not ambiguously replayed.
+Never include their capability URLs, command identifiers or full FFmpeg argv in
+an issue. Use the [diagnostic policy](debug_logging_spec.md) and
+[release acceptance guidance](RELEASE.md) to record proof and limitations.
+
+## Manual snapshot refresh
+
+Enable the optional manual control through
+[`persistSnapshotCache`](configuration.md#configuration-options). In Home,
+select the camera's **Refresh Snapshot** control, not its Motion Detection or
+network Security control. The refresh switch returns to Off after the attempt,
+including an error; this is a momentary request, not a persistent mode.
+
+A fresh-capture receipt and downloaded-image receipt distinguish a new snapshot
+from a cached or provider-busy fallback. To verify freshness, close live viewers
+and retry when the camera is idle. Concurrent requests coalesce, and failed
+attempts have a 15-second retry backoff. Repeated rapid toggles do not guarantee
+new images and can consume camera battery. Do not share the image itself in
+public diagnostic reports.
 
 ## 401 Unauthorized / 403 Forbidden
 

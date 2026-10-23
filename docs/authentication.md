@@ -1,20 +1,22 @@
 # Sign-in and account verification
 
+Last reviewed: 23 October 2026.
+
 This guide owns operator sign-in and stored-session recovery. Architecture and
 vendor routing belong to [ADR-001](adr/001-authentication.md).
 
 ## Hosted Blink sign-in
 
 1. Open this plugin's settings in the remote Homebridge UI and choose **Sign in
-   securely with Blink**. Keep the Homebridge settings tab open. If Brave blocks
+   securely with Blink**. Keep the Homebridge settings tab open. If your browser blocks
    the new tab, choose the revealed **Open Blink Sign-In** fallback.
 2. Finish the account-credential and MFA steps only in the separate
-   Blink-hosted Brave tab. Homebridge never receives either value.
+   Blink-hosted browser tab. Homebridge never receives either value.
 3. After Blink reaches its desktop **Unsupported Browser** page, copy the full
    address beginning with
-   `https://applinks.blink.com/signin/callback` from Brave's address bar.
+   `https://applinks.blink.com/signin/callback` from your browser’s address bar.
 4. Return to Homebridge and choose **Paste Blink Result and Finish**. This reads
-   the clipboard only from that click. If Brave denies clipboard access, reveal
+   the clipboard only from that click. If the browser denies clipboard access, reveal
    the manual field, paste the complete address, and choose **Finish with Pasted Address**.
    Clipboard cleanup after completion is best effort: if the browser denies
    clipboard write access, clear the copied callback address manually.
@@ -62,7 +64,7 @@ revokes tokens at Blink; it removes the plugin's local ability to reuse them.
 - Open Homebridge UI → Plugins → this plugin → Settings.
 - Confirm there is one hosted flow and no Homebridge username, password, or
   hosted-MFA input.
-- Confirm Brave reaches the exact HTTPS App-Link and the clipboard/manual finish
+- Confirm the browser reaches the exact HTTPS App-Link and the clipboard/manual finish
   returns to an authenticated status.
 - Confirm the saved plugin config contains no credentials or verification codes.
 - Restart Homebridge and confirm `.blink-auth.json` supplies the same account;

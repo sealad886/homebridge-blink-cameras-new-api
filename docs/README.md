@@ -4,6 +4,8 @@ Start with the [user guide](../README.md). This map assigns one owner to each
 maintained topic. Update that owner first; use links elsewhere instead of copying
 procedures, settings tables or release decisions.
 
+Last reviewed: 23 October 2026.
+
 ## Current guides and sources
 
 | Topic | Canonical owner | Scope |
@@ -33,8 +35,13 @@ extended guides because `docs/` is not included in the current npm package.
 
 ## Evidence, proposals and history
 
-Historical records preserve what was known or tested at the time. Their unchecked
-items, example commands and pending-release statements are not current operating
+Historical records preserve what was known or tested at the time. Personal
+camera labels, serial numbers, hostnames, home-directory paths and operator
+identities are omitted or replaced with generic examples in published prose.
+Source versions, platform constraints, observed outcomes and limitations remain.
+Private diagnostic receipts are not public documentation or operator recipes.
+
+Historical unchecked items, example commands and pending-release statements are not current operating
 instructions. Do not silently rewrite those outcomes as later successes.
 
 - [API dossier](blink_api_dossier.md): original APK evidence and provenance;
@@ -56,3 +63,21 @@ instructions. Do not silently rewrite those outcomes as later successes.
 Generated files under `api-contract/` and `graphify-out/` are derived artifacts.
 Regenerate them through their owning tool rather than editing duplicate facts.
 License and third-party notice texts retain their upstream wording.
+
+Latest review: [23 October documentation audit](audits/2026-10-23-documentation-audit.md).
+
+## Documentation maintenance and validation
+
+Update the canonical owner for a changed behavior and link to it from summaries.
+Keep source/schema/CI as executable authority; do not copy defaults, capability
+matrices or release gates into historical plans. Label proposals and dated
+receipts so they cannot be mistaken for current features or authorization.
+Preserve failure observations when later hardware or operator evidence supplies
+a disposition; do not retroactively turn an unverified test into a pass.
+
+For documentation-only changes, check relative files and heading anchors,
+source-backed examples/defaults, personal-data placeholders and `git diff --check`.
+No new media test, dependency or full runtime suite is needed unless a machine-
+readable contract or implementation changed. Generated API catalogs and graph
+files are regenerated only through their owners; license texts retain upstream
+wording. Verify remote links when their target or technical claim changes.

@@ -22,7 +22,7 @@ tracked through the canonical owners linked above.
 
 Blink or user-supplied names can become HAP `Name` characteristic values that
 HAP-NodeJS rejects. One observed form ends with a parenthesized serial number,
-for example `Corner (G8T1-K001-3255-014P)`. HAP-NodeJS currently requires a
+for example `Camera A (ABCD-1234-5678-9XYZ)`. HAP-NodeJS currently requires a
 Unicode letter or number at both ends and permits only a bounded set of
 characters in the middle.
 

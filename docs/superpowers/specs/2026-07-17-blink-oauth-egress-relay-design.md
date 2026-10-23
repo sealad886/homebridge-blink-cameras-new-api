@@ -10,7 +10,7 @@
 
 ## Status
 
-Approved for one live EU/Ireland account acceptance run on 2026-07-17.
+Approved for one live European-region account acceptance run on 2026-07-17.
 
 ## Context
 

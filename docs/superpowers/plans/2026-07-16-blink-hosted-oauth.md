@@ -16,11 +16,12 @@
 > only on HTTP 406. Fresh packaged authorization-code exchange acceptance
 > remains open.
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical checkboxes record the original scope. They do not activate a workflow
+> or authorize execution; follow current repository instructions for new work.
 
 **Goal:** Let a Homebridge user authenticate through Blink's hosted Android OAuth UI in Brave, securely return the registered App-Link callback to the Raspberry Pi, and keep working after token refresh and restart in every APK-supported region.
 
-**Architecture:** The Raspberry Pi owns a restart-safe, owner-only Authorization Code with PKCE transaction; Brave handles Blink credentials and MFA; the Homebridge UI submits only the final callback. A focused coordinator validates and consumes the callback, `BlinkAuth` performs the exact Android AppAuth exchange and durable token persistence, and `BlinkApi` discovers the authoritative tier before account and homescreen calls. The Ireland account provides the live EU proof; non-EU support is verified best-effort through Blink Android 57.1 code traces and parameterized routing tests.
+**Architecture:** The Raspberry Pi owns a restart-safe, owner-only Authorization Code with PKCE transaction; Brave handles Blink credentials and MFA; the Homebridge UI submits only the final callback. A focused coordinator validates and consumes the callback, `BlinkAuth` performs the exact Android AppAuth exchange and durable token persistence, and `BlinkApi` discovers the authoritative tier before account and homescreen calls. The European-region account provides the live EU proof; non-EU support is verified best-effort through Blink Android 57.1 code traces and parameterized routing tests.
 
 **Tech Stack:** TypeScript 5.9, Node.js 20/22/24 Web Fetch API and `node:crypto`, Jest 30 with ts-jest, Homebridge Plugin UI Utils 2.1.2, HTML/CSS/vanilla JavaScript, Raspberry Pi Homebridge 2.1.1, Brave.
 
@@ -38,7 +39,7 @@
 - Never log or echo password, MFA/PIN, callback URL, authorization code, PKCE verifier, OAuth state, access token, refresh token, cookies, or upstream token response bodies.
 - The browser receives only authorization URL, opaque flow ID, expiry, and redacted account status; access and refresh tokens never enter browser JavaScript or Homebridge config.
 - The supported UI contains no Blink username, password, hosted-flow MFA, or region selector. It stores `deviceId`, discovered `tier`, and `persistAuth=true`, and removes legacy credential/code fields.
-- Ireland/EU is the only account authorized for live acceptance. Non-EU claims must say APK-evidenced and mocked/parameterized, not live-tested.
+- European-region is the only account authorized for live acceptance. Non-EU claims must say APK-evidenced and mocked/parameterized, not live-tested.
 - The end-user flow is region-independent. Production accounts authorize at `api.oauth.blink.com`; `v1/users/tier_info` selects `rest-{tier}.immedia-semi.com` after token issuance.
 - Preserve the existing post-token client/account verification route; do not ask Homebridge for the hosted OAuth MFA code.
 - Preserve user-owned untracked `.vscode/` and `__tests__/.DS_Store` files.
@@ -1043,7 +1044,7 @@ In `docs/blink_api_dossier.md`, add a concise trace table:
 | Explicit production tiers | `ProductionTier` | prod, prde, prsg, a001, cemp, srf1 |
 | Service-returned tier acceptance | `TierRepository` regex `[a-zA-Z\\d]{4}` | numbered e-tier routing without UI guess |
 
-State: only `prde` was live-tested through the owner’s Ireland account; all other listed targets are APK-evidenced and covered by mocks. Explain that the user journey is the same and only post-token REST routing changes.
+State: only `prde` was live-tested through the tested European-region account; all other listed targets are APK-evidenced and covered by mocks. Explain that the user journey is the same and only post-token REST routing changes.
 
 - [ ] **Step 4: Version to 0.9.0 and add the changelog entry**
 
@@ -1087,92 +1088,19 @@ Review every secret-scan match as protocol prose or fixture placeholder; no live
 
 ---
 
-### Task 8: Package, deploy, live EU acceptance, rollback safety, and landing
+### Task 8: Release and physical acceptance (historical scope)
 
-**Files:**
-- Verify only: repository working tree and packed tarball
-- Remote runtime: `andrew@raspberrypi.local:/var/lib/homebridge`
-- Remote auth state: `/var/lib/homebridge/.blink-auth.json`
-- Remote pending state: `/var/lib/homebridge/.blink-auth-pending.json`
-- Temporary package: repository-generated `.tgz`, removed after successful installation
+This task originally proposed a host-specific local package transfer, service
+restart and rollback sequence. Those commands are retired. Use the current
+[release guide](../../RELEASE.md) for reviewed CI artifacts, operator-owned
+Homebridge-native installation, backups, identity verification and rollback.
+Use [authentication](../../authentication.md) for hosted sign-in and recovery.
 
-**Interfaces:**
-- Consumes: version 0.9.0 package, Homebridge service commands, Brave, iCloud Keychain operator action, Messages MFA operator action, and the owner’s EU/Ireland account.
-- Produces: live hosted login proof, file-mode/restart/refresh/device-discovery evidence, rollback capability, final GitHub issue closure, conventional commit(s), and pushed `main`.
-
-- [ ] **Step 1: Create a metadata-only protected rollback backup on the Pi**
-
-Run without reading auth contents:
-
-```bash
-ssh andrew@raspberrypi.local 'set -eu; stamp=$(date -u +%Y%m%dT%H%M%SZ); if sudo test -f /var/lib/homebridge/.blink-auth.json; then sudo install -o root -g root -m 600 /var/lib/homebridge/.blink-auth.json /home/andrew/.blink-auth.json.pre-hosted-$stamp; sudo stat -c "%n %U:%G %a %s" /home/andrew/.blink-auth.json.pre-hosted-$stamp; else echo "no existing auth state"; fi'
-```
-
-Expected: only filename, ownership, mode, and byte count are printed; no JSON or token material appears.
-
-- [ ] **Step 2: Build, pack, transfer, and install the exact local commit**
-
-Run:
-
-```bash
-npm ci
-npm test -- --runInBand
-npm run lint
-npm run build
-npm pack
-PACKAGE=$(ls -1t sealad886-homebridge-blink-cameras-new-api-0.9.0.tgz | head -n 1)
-scp "$PACKAGE" andrew@raspberrypi.local:/home/andrew/
-ssh andrew@raspberrypi.local "sudo /usr/local/bin/hb-service add /home/andrew/$PACKAGE && sudo /usr/local/bin/hb-service restart"
-ssh andrew@raspberrypi.local '/opt/homebridge/bin/node /var/lib/homebridge/node_modules/homebridge/bin/homebridge.js -V; sudo systemctl is-active homebridge; sudo /usr/local/bin/hb-service status'
-```
-
-Expected: Homebridge version prints, service is active, and installed package reports 0.9.0. Do not print environment or config files.
-
-- [ ] **Step 3: Complete the authorized EU/Ireland hosted flow in Brave**
-
-Open `http://raspberrypi.local:8581` in Brave, open **Homebridge Blink Cameras (New API)** settings, click **Sign in securely with Blink**, use iCloud Keychain’s Amazon.co.uk/Blink credential only inside Blink’s hosted page, read the newest Blink MFA from Messages and enter it only into Blink, copy the final `https://applinks.blink.com/signin/callback?...` address, and click **Paste Blink Result and Finish**.
-
-Record only bounded outcomes: hosted page reached, MFA accepted, callback accepted, success displayed, tier label `prde`, and device discovery count equality with the pre-test installation. Never record the callback, code, state, token, email, device names, or message contents.
-
-- [ ] **Step 4: Verify durable owner-only state and no stranded pending transaction**
-
-Run:
-
-```bash
-ssh andrew@raspberrypi.local 'sudo stat -c "%n %U:%G %a %s" /var/lib/homebridge/.blink-auth.json; if sudo test -e /var/lib/homebridge/.blink-auth-pending.json; then sudo stat -c "%n %U:%G %a %s" /var/lib/homebridge/.blink-auth-pending.json; exit 1; else echo "pending transaction absent"; fi'
-```
-
-Expected: final auth state belongs to `homebridge:homebridge` with mode `600`; pending transaction is absent. Do not read file contents.
-
-- [ ] **Step 5: Restart Homebridge and prove persisted Android refresh/discovery**
-
-Run:
-
-```bash
-ssh andrew@raspberrypi.local 'sudo /usr/local/bin/hb-service restart; sudo systemctl is-active homebridge'
-```
-
-Reopen plugin settings in Brave; confirm it restores authenticated status without username/password/MFA and the same EU tier and device inventory. Use **Test Connection** and confirm homescreen access. Inspect only redacted service log lines for successful refresh/discovery; never request raw auth-state or debug bodies.
-
-- [ ] **Step 6: Execute rollback only if a live acceptance gate fails**
-
-If a gate fails, reinstall the known 0.8.1 package, stop Homebridge before restoring the untouched backup with `homebridge:homebridge` ownership and mode `0600`, remove pending state, restart, and verify service/device recovery. Record the failure category without secret-bearing data, create or update the related GitHub issue with a reference to historical `homebridge-blinkcameras-2yh`, and leave the main issue open.
-
-If all gates pass, retain the new hosted token state and delete the temporary transferred tarball; retain the root-owned rollback backup until the user explicitly asks to remove it.
-
-- [ ] **Step 7: Update the GitHub issue, inspect the final diff, commit any acceptance-only correction, and push**
-
-Run:
-
-```bash
-git status --short --branch
-git log --oneline --decorate -8
-git pull --rebase
-git push
-git status --short --branch
-```
-
-If live acceptance required a tracked correction, run the focused failing test first, implement it, rerun full gates, and commit it with a scoped Conventional Commit before closing the GitHub issue. Final status must show `main...origin/main` with only `.vscode/` and `__tests__/.DS_Store` untracked.
+The original acceptance scope covered hosted sign-in, owner-only token-state
+persistence, account-tier discovery, restart/persisted authentication, natural
+refresh and unchanged device discovery. A single European account did not
+establish non-European live compatibility. Unchecked tasks are not evidence of
+successful execution; retained integration receipts own recorded outcomes.
 
 ---
 
@@ -1180,7 +1108,7 @@ If live acceptance required a tracked correction, run the focused failing test f
 
 - Exact commits and changed files for each task.
 - Red/green test command evidence plus full Jest, lint, build, audit, package inspection, and `git diff --check` outcomes.
-- EU/Ireland live result on `raspberrypi.local`, including hosted flow, `prde` discovery, owner/mode metadata, restart, refresh, homescreen, and unchanged device discovery, without account secrets.
+- European-account live result on the acceptance host, including hosted flow, `prde` discovery, owner/mode metadata, restart, refresh, homescreen, and unchanged device discovery, without account secrets.
 - Non-EU evidence statement: explicit APK production tier constants and four-character dynamic tier acceptance, plus passing target matrix; no non-EU live-account claim.
 - Remaining bounded risk: Blink OAuth and REST APIs are private/undocumented and may change independently of this plugin.
 - Final GitHub issue state, pushed commit hash, and confirmation that unrelated untracked files were untouched.

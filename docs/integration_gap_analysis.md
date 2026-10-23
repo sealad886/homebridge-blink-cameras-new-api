@@ -13,7 +13,7 @@ This document captures the remaining parity gaps against
 ## Addressed in this pass
 
 - **Hosted authentication aligned**: The supported custom UI now launches
-  Blink-hosted Android-profile OAuth with Pi-owned PKCE/state and stores no
+  Blink-hosted Android-profile OAuth with Homebridge-owned PKCE/state and stores no
   account credential or hosted-MFA field in plugin configuration.
 - **Tier coverage expanded**: URL validation accepts APK-known and safe
   service-returned four-character tiers. Fresh hosted discovery advances only

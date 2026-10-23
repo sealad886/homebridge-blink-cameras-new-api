@@ -8,7 +8,7 @@
 ## Confirmed cause and provider evidence
 
 RC.7 Home acceptance produced four `IMMIS TLS candidates exhausted` failures across
-Entry and Corner. AAC-ELD/Opus advertisement succeeded, but no live media rendered.
+two test cameras. AAC-ELD/Opus advertisement succeeded, but no live media rendered.
 Owner-only evidence: `logs/rc7-2026-10-11-acceptance/analysis.md`.
 
 A bounded diagnostic using the installed API client requested one current liveview,
@@ -88,9 +88,9 @@ no private key is committed or packaged.
 ## Release and rollback disposition
 
 RC.8 is a compatible transport repair within the existing 0.10.0 RC series.
-Operator installation starts a fresh observation window. Require physical Home
-live video/audio, STOP/reopen, manual snapshot refresh, 48 hours and two concrete
-natural post-storage refresh receipts. Current handshake evidence does not waive
+Operator installation requires attributable observation and physical Home
+live video/audio, STOP/reopen, manual snapshot refresh and natural-refresh evidence
+under [the release guide](../RELEASE.md). Current handshake evidence does not waive
 those gates or prove performance savings. Issue #52 remains open until physical
 acceptance. F05/F06 remain open; this change does not provide secret-free FFmpeg
 execution or complete RTSP destination enforcement.

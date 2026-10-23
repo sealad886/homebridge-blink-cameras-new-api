@@ -16,7 +16,11 @@ Extend existing global streaming configuration with outputQuality auto,720p15,
 360p15,1080p30. Auto preserves existing capabilities. Fixed profiles advertise
 chosen dimensions/fps and mandatory 320×240/15 fallback. The 1080p/30 profile
 requires H.264 level 4.0; lower levels cannot carry its macroblock rate. Reject stale unsupported
-START requests before vendor allocation; honor the negotiated format exactly.
+START requests before vendor allocation. Preserve negotiated geometry, codec and
+bitrate constraints. Fixed 15-fps profiles accept supported same-resolution
+15/30-fps requests but cap effective encoder output at 15 fps (RC.13 correction);
+they do not increase output to 30 fps. The [streaming guide](../streaming.md)
+owns current profile behavior.
 Preserve source aspect ratio while scaling/padding. Audio negotiation, bitrate,
 private pipes, resource ceilings, SRTP packaging and disabled talkback remain.
 

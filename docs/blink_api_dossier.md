@@ -1393,7 +1393,7 @@ code exchange.
 
 **E95 — EU Android refresh and production-default gateway proof (bounded live result)**
 
-Using only the authorized EU/Ireland account, a still-valid legacy refresh
+Using only the authorized EU-region account, a still-valid legacy refresh
 session was accepted by the exact Android refresh form and rotated. The
 resulting Android-profile state refreshed again through the installed plugin,
 reached user information and homescreen/device discovery, and survived two
@@ -1466,7 +1466,7 @@ path, AppAuth/Retrofit fields, and request-time tier/environment substitutions.
 
 ### Evidence boundary
 
-The owner's EU/Ireland account is the only live account used for the protocol
+The authorized EU-region test account is the only live account used for the protocol
 proof. It returned `prde`; hosted authorization, exact code exchange, refresh,
 user information, and homescreen requests succeeded without retaining secret
 values. A later native AppAuth harness reproduced the exact Android request and
@@ -1591,7 +1591,7 @@ Generated apktool smali independently confirms each token interceptor calls Kotl
   Android form and produced working Android-profile state. This bounded
   cross-client migration result is not treated as a Blink guarantee and is not
   applied automatically to every legacy installation. (E95)
-- The live Ireland proof showed hosted REST requests succeeding with bearer
+- The live EU-region proof showed hosted REST requests succeeding with bearer
   authentication alone. The APK's general authenticated client can also add
   `TOKEN-AUTH` for legacy/app sessions (E14); the repository preserves that only
   for non-Android persisted profiles.
@@ -1612,7 +1612,7 @@ Generated apktool smali independently confirms each token interceptor calls Kotl
 The APK's general authenticated Retrofit client adds bearer when an access
 token exists and adds `TOKEN-AUTH` only when registration-token state exists
 (E14). The Homebridge hosted-Android profile uses bearer alone, matching the
-live Ireland proof; legacy persisted profiles can retain `TOKEN-AUTH` when
+live EU-region proof; legacy persisted profiles can retain `TOKEN-AUTH` when
 present. Endpoint Auth cells below use that conditional general-client
 contract.
 

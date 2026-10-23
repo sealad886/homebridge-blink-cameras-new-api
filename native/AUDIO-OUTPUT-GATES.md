@@ -8,7 +8,7 @@ The installed FFmpeg 9.0.2 native AAC encoder rejects AAC-ELD (the capability pr
 
 The synthetic audio/video fixture preserves its common source timeline: audio begins at zero and video begins at 64 ms. Encoded output includes microsecond PTS/DTS/duration, encoder initial padding and per-packet skip-sample metadata. Tests decode each supported output and verify nonzero audio energy and the preserved offset after padding correction. Source timestamp discontinuities over 2 ms fail closed. This does not establish drift, jitter, timestamp wrap, resynchronization or real vendor fixture behavior. Video retains source PTS; requested FPS is an encoder hint, not a proven frame-rate conversion policy.
 
-The audio FIFO holds at most two seconds; individual conversion batches, input samples, elapsed watchdog and aggregate sample/output counts are bounded. Public `swr_alloc_set_opts2`, `swr_convert`, `av_audio_fifo_*` and codec APIs handle conversion. Only local macOS arm64 execution is verified.
+The audio FIFO holds at most two seconds; individual conversion batches, input samples, elapsed watchdog and aggregate sample/output counts are bounded. Public `swr_alloc_set_opts2`, `swr_convert`, `av_audio_fifo_*` and codec APIs handle conversion. The original local execution receipt covers macOS arm64; the same prototype behavioral suite also runs in Ubuntu x64/macOS arm64 [source-build CI](dependencies/README.md#prototype-ci-validation). Neither scope establishes integrated HomeKit or five-target artifact acceptance.
 
 ## Next executable output proof
 

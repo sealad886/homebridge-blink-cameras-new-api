@@ -8,7 +8,7 @@ installation gates, and the [documentation map](README.md) identifies other owne
 
 Use this checklist to validate the `0.9.1` hosted-authentication release against
 the implementation, its Blink Android 57.1 evidence, the native AppAuth harness,
-and the authorized EU/Ireland account. Native hosted-page launch and the
+and the authorized EU-region account. Native hosted-page launch and the
 deployed Android refresh/restart path are proven. Two fresh packaged exchanges
 returned `BHO-HTTP-INVALID-GRANT`, so only the fresh packaged code-exchange box
 remains open.
@@ -32,7 +32,7 @@ checklist remains the authority for the bounded live AppAuth proof it records.
 
 ## Android 57.1 protocol contract
 
-- [x] `/auth/start` creates a 15-minute Pi-owned transaction with a 64-byte
+- [x] `/auth/start` creates a 15-minute Homebridge-owned transaction with a 64-byte
   verifier, S256 challenge, independent 32-byte state and flow ID, stable
   hardware ID, `client_id=android`, scope `client`, and prompt `login`.
 - [x] Document the APK manufacturer gate separately from account region:
@@ -57,14 +57,14 @@ checklist remains the authority for the bounded live AppAuth proof it records.
 - [x] Hosted REST requests use bearer authentication without requiring
   `TOKEN-AUTH`.
 
-## Remote Homebridge and Brave flow
+## Remote Homebridge and browser flow
 
-- [x] Open the remote Homebridge Config UI in Brave and enter this plugin's
+- [x] Open the remote Homebridge Config UI in browser and enter this plugin's
   settings; do not use a local Homebridge process as the acceptance target.
 - [x] **Sign in securely with Blink** opens a no-opener Blink-hosted tab, or the
   safe **Open Blink Sign-In** fallback link if popup creation is blocked.
 - [x] Account credentials and hosted MFA are entered only on Blink's page.
-- [x] Copy the full final App-Link from Brave's address bar and choose **Paste
+- [x] Copy the full final App-Link from browser's address bar and choose **Paste
   Blink Result and Finish**.
 - [x] When clipboard read is unavailable, paste the same full address and choose
   **Finish with Pasted Address**.
@@ -92,11 +92,11 @@ checklist remains the authority for the bounded live AppAuth proof it records.
 - [x] A connection or verification failure after token issuance retains durable
   authentication and exposes bounded retry/client/account guidance.
 
-## EU/Ireland live evidence and remaining acceptance
+## EU-region live evidence and remaining acceptance
 
 - [x] Earlier manual protocol proof completed Blink-hosted authorization, code
   exchange, refresh, `prde` discovery, user information, and homescreen access
-  with the owner's authorized EU/Ireland account.
+  with an authorized EU test account.
 - [x] Two fresh packaged callbacks were submitted once and promptly; both
   reached token exchange and returned `BHO-HTTP-INVALID-GRANT` without writing
   final auth state.
@@ -109,7 +109,7 @@ checklist remains the authority for the bounded live AppAuth proof it records.
 - [x] A live Android-token bootstrap probe returned HTTP 406 for `prod` and
   `a001`, and HTTP 200 with a valid authoritative tier for `prde` and `prsg`.
 - [ ] Complete a fresh packaged Blink-hosted sign-in with only the owner's
-  authorized EU/Ireland account and confirm the service returns tier `prde`.
+  authorized EU-region account and confirm the service returns tier `prde`.
 - [x] Confirm post-token user info, client/account verification when requested,
   homescreen, and camera/device discovery without printing identifiers or
   secrets.
@@ -133,7 +133,7 @@ checklist remains the authority for the bounded live AppAuth proof it records.
 
 ## Rollback safety
 
-- [x] Before deployment, back up existing Pi auth state without printing it;
+- [x] Before deployment, back up existing host auth state without printing it;
   preserve owner and mode metadata.
 - [x] Record the currently installed plugin version and package identity.
 - [x] Confirm no pending, legacy, upgrade, rollback, recovery, proxy, relay, or
@@ -156,7 +156,7 @@ checklist remains the authority for the bounded live AppAuth proof it records.
 - [x] Each tier authorizes through the same production hosted flow; only the
   post-token `rest-{tier}` and `rest-{shared_tier}` hosts change.
 - [x] Documentation states that non-EU accounts are not live-validated; every
-  target other than the observed Ireland `prde` account is APK-evidenced and
+  target other than the observed EU-region `prde` account is APK-evidenced and
   mocked/parameterized, not live-account tested.
 
 ## Residual risk

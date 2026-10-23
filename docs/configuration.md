@@ -1,13 +1,15 @@
 # Configuration reference
 
+Last reviewed: 23 October 2026.
+
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
 are identified below. Return to the [user guide](../README.md).
 
 ## Via Homebridge UI
 
-The plugin provides a full configuration UI. Open the remote Homebridge UI in
-Brave (for example, `http://raspberrypi:8581`), then navigate to `Plugins`
+The plugin provides a configuration UI. Open your Homebridge UI in a browser
+using its configured address, then navigate to `Plugins`
 → `Settings` for `@sealad886/homebridge-blink-cameras-new-api`.
 Click Homebridge’s **Save** button after changing settings; selection alone updates
 only the form draft. Apply runtime changes through your normal operator-owned
@@ -59,7 +61,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required only for streaming) |
-| `ffmpegPath` | No | `ffmpeg` | Executable path; AAC-ELD requires verified FDK AAC support |
+| `ffmpegPath` | No | `ffmpeg` | Operator-managed executable path; required capabilities are described in [streaming requirements](streaming.md#ffmpeg-requirements) |
 | `ffmpegDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
@@ -72,7 +74,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
 | `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
 | `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging |
-| `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` always fetches a new snapshot |
+| `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` requests fresh snapshots, subject to capture coalescing, failure backoff and provider busy fallback |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
@@ -93,7 +95,7 @@ For stored-session validation, recovery and legacy credential migration, see
 
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to request a fresh thumbnail capture.
-A busy capture can return an existing thumbnail; see [snapshot diagnostics](troubleshooting.md#blink-connection-failure-in-homekit).
+The switch resets to Off after the attempt, including failure; its reset alone does not prove a fresh capture. A busy capture can return an existing thumbnail; see [snapshot diagnostics](troubleshooting.md#blink-connection-failure-in-homekit).
 
 Concurrent fresh snapshot requests for the same camera share one capture and
 download, including requests from the manual refresh switch. For 15 seconds after

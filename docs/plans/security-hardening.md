@@ -6,12 +6,13 @@ Manifest SHA-256: `0c970d21f83f14912e1e7c6dd343ba3b79419aa3c4b99c0c9b241e8bb033c
 Approved design: scan supplemental `hardening/hardening.md`, artifact
 `a531f35a81c4ac522960f23f6b95f1ecab85e75280fe513c00f5e1968145c363`.
 
-Current release branch: `codex/security-hardening-rc4`, existing checkout. No new worktree.
-The original `codex/secure-media-worker` branch and unpushed commit remain intact;
-the release branch starts with an identical signed tree and corrected commit text.
-The preceding staged delivery merged through PR #49 at `2e86a45` and published
-`0.10.0-rc.3` through CI run `37132584266`. Historical local receipts below retain
-their original scope and do not describe current branch or review state.
+Current published candidate: **0.10.0-rc.19**, source
+`6f88a4b120ef415db62c83522238e5b2fd1820f8`, delivered through
+[PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79).
+The [current acceptance checkpoint](#23-october-2026-rc19-acceptance-and-stable-readiness)
+supersedes the historical candidate/branch and pending-release statements below.
+Stable 0.10.0 has not been published. Source, package and publication identities
+must be verified through the [release guide](../RELEASE.md).
 Implementation and review assignments remain unassigned for ongoing maintenance.
 Maintainer owns architecture/release decisions; operator owns physical acceptance.
 
@@ -22,7 +23,7 @@ Maintainer owns architecture/release decisions; operator owns physical acceptanc
 - [x] Independent local review and verification receipt (WI-09 local slice).
 - [x] Revised media-network design approved on 2026-10-03: private worker IPC and owned transport feeding codec-only processing.
 - [ ] Native worker and five-target distribution (WI-05/07/08 implementation and enforcement proof pending).
-- [ ] Exact registry artifact, physical acceptance, observation (WI-09 release slice).
+- [ ] Full native/integrated physical acceptance, resource stress and five-target artifact proof (WI-09 final slice). RC.19 bounded registry/physical/refresh acceptance is recorded in the current checkpoint below.
 
 ## Work items and dependencies
 
@@ -46,9 +47,9 @@ not wired into the plugin or included in npm artifacts. No unconstrained native
 worker or hostname-only substitution is accepted.
 F05 and F06 remain open. Existing FFmpeg execution still contains those exposures.
 
-## Acceptance and finding disposition
+## Baseline acceptance requirements
 
-| Requirement | Required evidence | Current release disposition |
+| Requirement | Required evidence | Baseline implementation disposition |
 |---|---|---|
 | AC-01 | No public IMMIS consumer listener | local implementation under verification |
 | AC-02 | STOP at startup awaits, duplicate/expired preparation, late success, confirmed closure | local implementation under verification |
@@ -63,8 +64,9 @@ F05 and F06 remain open. Existing FFmpeg execution still contains those exposure
 | AC-11 | Linux arm64/x64, macOS arm64/x64, Windows x64 clean-host launch/codec proof | blocked: no native artifact |
 | AC-12 | Independent review, integrated/physical parity, measured resources and observation | local review pending; physical acceptance pending |
 
-F01/F02/F03/F04/F07/F08/F09/F10/F11/F12/F13 require regression evidence and independent
-review before resolution. No finding is closed merely because source changed.
+This table preserves the initial acceptance contract and implementation checkpoint;
+it is not a current release-readiness table. Later review receipts below establish
+staged controls. No finding is closed merely because source changed.
 F05/F06 remain explicitly open in early stages.
 
 ## Measurement and release gates
@@ -82,9 +84,8 @@ Preparation expires at 30 seconds. Recording budgets are independent of live tra
 Preserve ADR-003 coordination, deadlines, no ambiguous POST replay, coalesced snapshots
 and confirmed-state semantics. Keep unsupported talkback disabled.
 
-Publication follows `docs/RELEASE.md`: alpha → beta → RC → stable, immutable CI-built
-artifact, exact registry identity. Beta: 24h/one natural refresh. RC: 48h/two refreshes;
-runtime corrections restart RC observation. The original planning turn authorized
+Publication and observation follow the [release guide](../RELEASE.md#homebridge-upgrade-and-acceptance):
+alpha → beta → RC → stable, immutable CI-built artifact and exact registry identity. The original planning turn authorized
 no mutations; subsequent delivery authority is recorded below. Live installation
 and host configuration changes remain outside this delivery.
 
@@ -300,9 +301,9 @@ without debug provider bodies. Storage failures emit no completion receipt.
 
 Delivery: focused regressions -> lint/build/full Jest/API/release/package gates ->
 independent review/PR/CI -> CI-published unused RC.5. No installation authority is
-added. New runtime observation starts after Andrew installs the exact registry RC;
+added. New runtime observation starts after the maintainer installs the exact registry RC;
 physical live video/audio, STOP/reopen, manual refresh and two natural refreshes
-remain required. Intentional reboot confirmed by Andrew; F05/F06 remain open and
+remain required. Intentional reboot confirmed by the maintainer; F05/F06 remain open and
 stable-specific residual-risk disposition is still absent. Rollback must retain
 security guards or disable affected live streaming, never restore TLS bypass.
 
@@ -328,7 +329,7 @@ key parameters; ordinary progress remains redacted and bounded. Tests use dummy
 keys only, including fragmented records and final-buffer flush. Raw diagnostic
 receipts remain private. This does not close broader F05 process-argv exposure.
 
-Physical acceptance cannot be established before Andrew installs the successor
+Physical acceptance cannot be established before the maintainer installs the successor
 registry artifact. Keep #52 open until runtime video/audio/STOP/reopen acceptance;
 close #53 only after independently reviewed regression delivery is verified.
 Do not claim full media/security acceptance from synthetic or native-prototype
@@ -411,22 +412,22 @@ A fresh reviewed RC and operator installation restart observation.
 
 ## RC.9 media liveness repair — 12 October 2026
 
-RC.8 physical acceptance failed: Corner authenticated without useful media during Home tests; Front door briefly rendered then hit the consumer budget. Both failures were confirmed by the operator. Findings and unchanged-runtime timing remain in `logs/rc8-2026-10-12-acceptance/analysis.md`.
+RC.8 physical acceptance failed: Camera A authenticated without useful media during Home tests; Camera B briefly rendered then hit the consumer budget. Both failures were confirmed by the operator. Findings and unchanged-runtime timing remain in `logs/rc8-2026-10-12-acceptance/analysis.md`.
 
 The consumer boundary continued writing after `Writable.write` returned false, so normal bursts could consume the entire child queue. RC.9 pauses the upstream readable and frame parser, retains already delivered frames under the existing 2 MiB input cap, and resumes only after actual drain. The 1 MiB child cap, two-second drain deadline, frame deadline, independent recorder quotas and STOP/replacement ownership remain in force.
 
 Official Android startup sends an immediate keep-alive. Its presentation statistics are omitted when no rendered counts exist; the plugin previously sent fabricated zero statistics. RC.9 follows the immediate keep-alive and omits unsupported presentation reporting. Official command polling begins with an immediate GET and uses `polling_interval`; `continue_interval` is the Continue-button interval. The existing single-request, generation-fenced polling owner is corrected without treating command completion as proof that media ended.
 
-Metadata-only, in-memory diagnostics on the installed RC.8 demonstrated Corner source media through its unchanged parser: native-style startup with provider15-second polling sustained9.27MiB over49.6seconds. A final immediate-GET probe validates the combined scheduling contract. These probes use normal bounded vendor liveview/cleanup commands, no host installation/configuration changes, no credential storage writes, and no media retention. They do not identify a single exclusively causal Corner divergence or establish physical Home playback.
+Metadata-only, in-memory diagnostics on the installed RC.8 demonstrated Camera A source media through its unchanged parser: native-style startup with provider15-second polling sustained9.27MiB over49.6seconds. A final immediate-GET probe validates the combined scheduling contract. These probes use normal bounded vendor liveview/cleanup commands, no host installation/configuration changes, no credential storage writes, and no media retention. They do not identify a single exclusively causal Camera A divergence or establish physical Home playback.
 
 Focused regressions cover coalesced-frame pacing, unchanged overflow/drain bounds, consumer replacement, stale drain after STOP, immediate authenticated keep-alive without fabricated stats, immediate/serialized polling and actual polling interval selection. Full project and CI gates plus independent review precede publication. F05/F06 and issue52 remain open. Rollback uses a verified artifact or disables streaming; TLS/private transport/resource guards stay enabled.
 
 ## RC.10 startup analysis and momentary snapshot repair — 12 October 2026
 
-Installed RC.9 authenticated Corner and decoded H.264 SPS/PPS/IDR, but never
-completed FFmpeg input analysis before Home stopped the attempts. Front door
+Installed RC.9 authenticated Camera A and decoded H.264 SPS/PPS/IDR, but never
+completed FFmpeg input analysis before Home stopped the attempts. Camera B
 produced sustained video/audio confirmed by the operator, and reopened video.
-Corner manual refresh succeeded, but Home retained On until explicitly reset.
+Camera A manual refresh succeeded, but Home retained On until explicitly reset.
 Evidence remains in `logs/rc9-2026-10-12-acceptance/analysis.md`.
 
 Pinned Homebridge FFmpeg 7.0.2 defaults to five seconds of media analysis, with
@@ -444,7 +445,7 @@ commit; no UI delay, parallel capture owner or polling coordinator is introduced
 Actual installed HAP write-path tests cover success, failure and Off writes.
 
 Open-pipe RTP regressions cover short three-stream bursts, fragmentation and
-video-only input alongside existing codec/packaging cases. Physical Corner
+video-only input alongside existing codec/packaging cases. Physical Camera A
 video/audio and automatic Home reset require operator installation. A runtime
 correction resets RC observation; F05/F06 and #52 remain open. Rollback preserves
 TLS, private transport and resource guards or disables the affected mode.
@@ -497,11 +498,11 @@ RC.12's installed identity and saved 720p15 were verified, but both cameras repe
 
 The correction accepts known same-resolution 30-fps selections for low-frame-rate profiles and derives an actual 15-fps ceiling, following maintained Homebridge camera-ffmpeg practice. Unknown dimensions, malformed selections and unsafe media destinations remain rejected. Default quality, audio negotiation, generation ownership, resource/TLS controls and disabled talkback remain unchanged. Requested/effective FPS and finite rejection/preparation receipts provide the missing diagnosis. No host migration is necessary: settings keys and saved values retain their meaning.
 
-Verification must cover real HAP capability TLVs, previous 30-fps selection reaching startup, actual 15-fps encoding/packaging, rejection-before-vendor and released ownership, focused/full regressions and independent review. Publication follows existing CI; operator owns installation and settings. Physical acceptance and fresh 48 hours/two natural refreshes required after installation. Issue #52 and F05/F06 remain open. Rollback uses a verified secure artifact or disables streaming; do not weaken TLS or transport bounds to recover playback.
+Verification must cover real HAP capability TLVs, previous 30-fps selection reaching startup, actual 15-fps encoding/packaging, rejection-before-vendor and released ownership, focused/full regressions and independent review. Publication follows existing CI; operator owns installation and settings. Physical acceptance and release-scoped natural-refresh evidence are required under the [release guide](../RELEASE.md#homebridge-upgrade-and-acceptance). Issue #52 and F05/F06 remain open. Rollback uses a verified secure artifact or disables streaming; do not weaken TLS or transport bounds to recover playback.
 
 ## 18 October 2026: delegated stable-release residual-risk disposition
 
-Andrew explicitly delegated the F05/F06 release decision in this chat: “you
+the maintainer explicitly delegated the F05/F06 release decision in this chat: “you
 decide f05/f06 and just get it done.” Acting under that delegation, the delivery
 owner accepts the following residual risks for stable **0.10.0** with the media
 implementation shipped in RC.14. This supersedes the earlier statements that a
@@ -530,13 +531,10 @@ promotion, use a verified guarded artifact or disable the affected streaming
 mode rather than restore known unsafe behavior.
 
 Independent review and ordinary source/CI/artifact gates still apply. Concrete
-playback/snapshot defects remain separate acceptance decisions; elapsed time
-alone does not resolve them. RC.13 authentication/transport observation may be
-carried into naming-only RC.14 where the relevant implementation is unchanged;
-no additional 48-hour wait is required solely because a label or RC number
-changed. A material runtime correction requires targeted regression evidence and restarts
-the minimum 48-hour RC window with two natural refreshes under
-[the release guide](../RELEASE.md#homebridge-upgrade-and-acceptance). Operator installation remains separate.
+playback/snapshot defects require verified correction or an explicit operator
+disposition; elapsed time alone does not resolve them. Reuse evidence only for
+unchanged relevant behavior, following the [release guide](../RELEASE.md#homebridge-upgrade-and-acceptance).
+Operator installation remains separate.
 
 ### 19 October 2026 — command retirement and transient provider refusal
 
@@ -555,7 +553,7 @@ and Home acceptance. F05/F06 dispositions are unchanged. See
 
 ### 20 October 2026 — IMMIS cooperative retirement and reduced conversion work
 
-RC.15 post-outage Home testing established working Front door video/audio with
+RC.15 post-outage Home testing established working Camera B video/audio with
 stutter and fresh manual snapshots with automatic switch reset. The reopened
 stream initially authenticated and delivered media, then upstream closed three
 times. No HTTP 406 was observed in that bounded test. The provider's internal
@@ -589,9 +587,8 @@ restart, pairing reset or experimental talkback enablement is authorized here.
 
 ### 22 October 2026 — audio offer invalidation after encoder changes
 
-RC.17 is installed and matches its CI artifact. Operator configuration now uses
-Homebrew FFmpeg 8.1.3, Automatic video output, ultrafast and Opus. The binary lacks
-libfdk_aac; four Home AAC-ELD selections fail before media allocation. Real-HAP
+At the RC.17 checkpoint, the acceptance host matched its CI artifact. Its selected
+FFmpeg 8.1.3 executable supported Opus but lacked FDK AAC. Four Home AAC-ELD selections failed before media allocation. Real-HAP
 reproduction finds that the audio TLV changes while the normal configuration
 hash does not. See [the audio audit](../audits/2026-10-22-audio-capability-invalidation.md).
 
@@ -605,14 +602,14 @@ Delivery checklist:
 - [x] Operator installs; physical checks confirm actual Opus and fresh snapshots/reset.
 - [ ] Full live playback/lifecycle acceptance: blocked by the separate RTP SSRC failure.
 
-The Homebrew binary and Pi configuration stay operator-owned. No pairing reset,
+The selected executable and host configuration stay operator-owned. No pairing reset,
 codec substitution, F05/F06 closure or physical success is inferred from tests.
 
 
 ### 22 October 2026 — selected-executable RTP SSRC compatibility
 
 RC.18 Home validation confirms actual Opus but fails RTP initialization because
-its Homebrew binary requires unsigned SSRC arguments. The bundled executable
+its selected executable requires unsigned SSRC arguments. The bundled executable
 uses a signed option. The [SSRC audit](../audits/2026-10-22-rtp-ssrc-compatibility.md)
 owns the reproduced contract, capability decision, tests and limits.
 
@@ -620,11 +617,52 @@ owns the reproduced contract, capability decision, tests and limits.
 - [x] Extend the existing capability owner and shared video/audio formatter;
   preserve all 32 identity bits and keep operator settings/binary unchanged.
 - [x] Verify synthetic packet identities with both local muxer contracts and
-  the actual unchanged Pi binary; no live installation or configuration writes.
-- [ ] Complete final broad validation, independent review and CI.
-- [ ] Reviewed merge and publication of unused RC.19; verify exact npm artifact.
-- [ ] Operator installs and repeats physical playback/lifecycle acceptance.
+  the actual unchanged acceptance-host binary; no live installation or configuration writes.
+- [x] Complete final broad validation, independent review and CI (PR #79).
+- [x] Reviewed merge and RC.19 CI publication; exact npm artifact verified.
+- [x] Operator installs and repeats physical playback/lifecycle acceptance (checkpoint below).
 
 F05/F06 and issue #52 remain open. Existing stable 0.10.0 residual-risk disposition
 and mandatory security/cleanup limits are unchanged. No physical success or
 performance improvement is inferred from synthetic output.
+
+
+## 23 October 2026: RC.19 acceptance and stable readiness
+
+The installed RC.19 source above and eight checked runtime/UI hashes matched the
+CI artifact. Actual selected-executable tests accepted upper-half unsigned SSRC
+values for both video and audio, preserving all 32 identity bits; the Opus encoder
+ran with the negotiated format. Independent review verified the bounded receipts.
+
+Physical Home acceptance covered two cameras: operator-confirmed smooth changing
+video and audible audio, deliberate STOP/reopen with new media, fresh manual
+snapshots while idle and automatic Off→On→Off switch reset. Initial busy/existing-
+thumbnail fallbacks were not counted as fresh captures. No encoder children
+remained in final stopped samples. A later shutdown on one camera is attributed
+to battery depletion by the operator; logs record the disconnect and bounded
+cleanup but do not independently establish that hardware cause or a software fix.
+
+Six explicit proactive post-storage token refresh completions occurred on the
+same runtime. One transient refresh network error recovered on its bounded retry.
+The latest read-only check found unchanged runtime hashes, operator settings and
+selected FFmpeg executable, with no newly logged plugin error since the morning
+check. No CPU, Wi-Fi, resource-trend or five-target claim follows from these tests.
+
+The maintainer accepts this accumulated functional and observation evidence for
+stable preparation. [Release acceptance](../RELEASE.md#homebridge-upgrade-and-acceptance)
+is evidence-based and has no fixed RC waiting period. This records readiness,
+not stable publication or a transfer of older runtime hours. Reviewed version/
+release-note changes, CI publication and exact registry verification remain.
+Host configuration and installation remain operator-owned.
+
+F05/F06 remain **open, accepted specifically for stable 0.10.0** under the
+[existing disposition](#18-october-2026-delegated-stable-release-residual-risk-disposition).
+Native integration, secret-free execution, complete RTSP enforcement and five-
+target distribution remain unfinished. Issue #52 is not closed by this document;
+its tracker acceptance must be reconciled independently. Full AC-12 stress and
+resource measurements remain distinct from this bounded release acceptance.
+
+Private owner-only receipts: `logs/rc19-2026-10-22-home/`,
+`logs/rc19-2026-10-23-morning/`, and
+`logs/rc19-2026-10-23-release-readiness/`. These local files are not published
+installation instructions; public implementation/release history is in linked PRs.

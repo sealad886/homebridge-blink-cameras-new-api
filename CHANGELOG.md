@@ -2,15 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+Acceptance notes describe evidence available when each version was prepared,
+not current installation instructions. The [release guide](docs/RELEASE.md)
+owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
+owns subsequent acceptance and finding dispositions.
+
 ## [0.10.0-rc.19] - 2026-10-22
 
 ### Fixed
-- Match video and audio SSRC arguments to the selected FFmpeg executable's actual signed/unsigned RTP option, preserving the complete 32-bit stream identifier. Prevent negative-SSRC startup failures with the operator's Homebrew binary without breaking the bundled signed muxer.
+- Match video and audio SSRC arguments to the selected FFmpeg executable's actual signed/unsigned RTP option, preserving the complete 32-bit stream identifier. Prevent negative-SSRC startup failures with the selected Homebrew binary without breaking the bundled signed muxer.
 - Extend existing startup capability checks, including manual video encoders. Use bounded help output instead of a version guess; leave core discovery/accessories available while disabling live streaming for an unverified RTP contract. No new saved setting or binary replacement is required.
 
 ### Acceptance and limitations
-- Boundary regressions and real synthetic RTP packet checks pass with signed/unsigned local binaries and the unchanged Pi Homebrew binary, including the exact observed Corner values. These do not prove physical Home playback, smoothness or CPU savings.
-- Operator installation and fresh live video/audio, STOP/reopen, snapshot/reset and observation acceptance remain required. Issue #52 and F05/F06 remain open. Pi configuration, installation and the Homebrew FFmpeg binary are unchanged.
+- Boundary regressions and real synthetic RTP packet checks pass with signed/unsigned local binaries and the unchanged Pi Homebrew binary, including the observed failing identifiers. These do not prove physical Home playback, smoothness or CPU savings.
+- Subsequent installed-RC acceptance confirmed smooth live video and audible audio on two test cameras, STOP/reopen, fresh snapshots with automatic switch reset, and six natural token refreshes on the unchanged runtime. High-bit video/audio SSRC values were accepted by the selected FFmpeg binary. See the [hardening ledger](docs/plans/security-hardening.md) for the dated acceptance disposition; this does not establish universal device compatibility or CPU savings.
+- F05/F06 remain open under the disclosed stable-release residual-risk disposition. This entry does not claim stable publication, secure native-worker integration or comprehensive security closure. Host configuration and installation remain operator-owned.
 
 ## [0.10.0-rc.18] - 2026-10-22
 
@@ -55,7 +61,7 @@ All notable changes to this project will be documented in this file.
 
 ### Acceptance and limitations
 - A STOP/reopen race and bodyless-response failure are reproduced locally. Actual read-only command probes alternated between HTTP 200 JSON and HTTP 406 HTML with unchanged routing/authentication; the provider's internal reason is unavailable. These changes do not claim elimination of all provider refusals.
-- Operator installation and new physical STOP/reopen, video/audio, snapshot and runtime-observation acceptance remain required. Corner currently has dead batteries. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are performed.
+- Operator installation and new physical STOP/reopen, video/audio, snapshot and runtime-observation acceptance remain required. One test device was unavailable because of depleted batteries. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are performed.
 
 ## [0.10.0-rc.14] - 2026-10-18
 
@@ -65,7 +71,7 @@ All notable changes to this project will be documented in this file.
 
 ### Acceptance and limitations
 - Home may retain user-assigned or cached labels independently. No pairing reset is required. Names assigned only in Home are not available as prefixes for the plugin's other services; use plugin device-name overrides for consistent prefixes.
-- RC.14 requires operator installation and physical Home acceptance. Corner's post-battery replacement media startup remains unresolved; earlier depleted-battery evidence is not a plugin regression finding. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are included.
+- RC.14 requires operator installation and physical Home acceptance. A battery-powered test device had unresolved media startup after replacement; depleted-battery evidence alone does not establish a plugin regression. Issue #52 and F05/F06 remain open. No Pi configuration or installation changes are included.
 
 ## [0.10.0-rc.13] - 2026-10-12
 
@@ -85,8 +91,8 @@ All notable changes to this project will be documented in this file.
 - Bound FFmpeg/IMMIS diagnostics, omit packet/NAL traces, retain reserved error reporting and suppression receipts, and continue source-video observation independently of log limits.
 
 ### Acceptance and limitations
-- RC.11's captured output was 30 fps, not the reported 720p/15 profile. Front door's initial interruption overlapped a host reboot; Corner's manual snapshot failed a provider network request. These observations do not establish a new codec or Wi-Fi root cause.
-- Operator installation and configuration, physical video/audio/smoothness, snapshots, STOP/reopen and a fresh 48-hour/two-natural-refresh observation remain required. Issue #52 and F05/F06 remain open. No live Pi configuration or installation is performed by this release.
+- RC.11's captured output was 30 fps, not the reported 720p/15 profile. One interruption overlapped a host reboot; another device’s manual snapshot failed a provider network request. These observations do not establish a new codec or Wi-Fi root cause.
+- Operator installation and configuration, physical video/audio/smoothness, snapshots, STOP/reopen and [release acceptance](docs/RELEASE.md) remain required. Issue #52 and F05/F06 remain open. No live Pi configuration or installation is performed by this release.
 
 ## [0.10.0-rc.11] - 2026-10-12
 
@@ -106,8 +112,8 @@ All notable changes to this project will be documented in this file.
 - Reset the manual snapshot switch after HomeKit commits its write, preventing successful refreshes from leaving the switch On. Capture deadlines, coalescing and failure reporting remain unchanged.
 
 ### Acceptance and limitations
-- Open-pipe synthetic startup tests exercise short three-stream bursts and fragmented delivery; installed HAP tests exercise the actual write commit. These do not establish Corner physical playback.
-- Operator installation, fresh Home video/audio, STOP/reopen, automatic snapshot reset and a new 48-hour/two-natural-refresh observation remain required. Issue #52 and F05/F06 remain open.
+- Open-pipe synthetic startup tests exercise short three-stream bursts and fragmented delivery; installed HAP tests exercise the actual write commit. These do not establish physical playback.
+- Operator installation, fresh Home video/audio, STOP/reopen, automatic snapshot reset and [release acceptance](docs/RELEASE.md) remain required. Issue #52 and F05/F06 remain open.
 
 ## [0.10.0-rc.9] - 2026-10-12
 
@@ -118,7 +124,7 @@ All notable changes to this project will be documented in this file.
 - Add bounded authentication-accepted and first-media receipts to distinguish transport startup from actual source media.
 
 ### Acceptance and limitations
-- Real-provider metadata probes demonstrate sustained Corner source media; local regressions cover pacing, stalled children, replacement and STOP. These do not establish Home video/audio or Pi CPU savings.
+- Real-provider metadata probes demonstrate sustained source media; local regressions cover pacing, stalled children, replacement and STOP. These do not establish Home video/audio or Pi CPU savings.
 - Installation remains operator-owned. A fresh RC observation window and physical Home acceptance are required. Issue #52 and security findings F05/F06 remain open.
 
 ## [0.10.0-rc.8] - 2026-10-11
@@ -130,7 +136,7 @@ All notable changes to this project will be documented in this file.
 
 ### Acceptance
 
-- A current strict provider handshake verifies the peer with the source-backed anchors. This proves TLS authentication, not Home video/audio playback. Fresh installed Home video/audio, STOP/reopen, manual snapshots and 48-hour/two-natural-refresh observation remain required.
+- A current strict provider handshake verifies the peer with the source-backed anchors. This proves TLS authentication, not Home video/audio playback. Fresh installed Home video/audio, STOP/reopen, manual snapshots and [release acceptance](docs/RELEASE.md) remain required.
 - No Pi installation, restart, configuration or global trust changes. F05/F06 remain open; no comprehensive security-resolution claim.
 
 ## [0.10.0-rc.7] - 2026-10-11
@@ -144,7 +150,7 @@ All notable changes to this project will be documented in this file.
 
 - Retain the operator-managed FFmpeg executable and configuration. The pinned Homebridge FFmpeg package is development/CI test tooling only; this plugin does not install a runtime encoder or change host settings.
 - Flush AAC access units individually rather than batching about 384 ms of audio. Synthetic tests authenticate/decrypt dummy SRTP and verify single-AU framing at both advertised sample rates.
-- Actual Pi video/audio, STOP/reopen, manual snapshots and a fresh 48-hour/two-natural-refresh observation remain required. Synthetic AAC-ELD/Opus RTP tests do not establish physical playback or Pi CPU savings. F05/F06 remain open; no comprehensive security-resolution claim.
+- Actual Pi video/audio, STOP/reopen, manual snapshots and [release acceptance](docs/RELEASE.md) remain required. Synthetic AAC-ELD/Opus RTP tests do not establish physical playback or Pi CPU savings. F05/F06 remain open; no comprehensive security-resolution claim.
 
 ## [0.10.0-rc.6] - 2026-10-10
 
@@ -175,7 +181,7 @@ All notable changes to this project will be documented in this file.
   preventing immediate Home retries from flooding liveview requests.
 - Log secret-free token-refresh completion after successful token capture and
   storage, distinguishing expiry/proactive refresh from requested refresh.
-- Use `raspberrypi` in the Homebridge HTTP example.
+- Correct the host placeholder in the Homebridge HTTP example.
 
 ### Acceptance and remaining gates
 
@@ -183,9 +189,8 @@ All notable changes to this project will be documented in this file.
   Current provider TLS, live video/audio, STOP/reopen and manual refresh require
   verification after installation; local tests do not establish physical parity.
 - F05/F06 remain open. No native worker runtime cutover or complete RTSP authority
-  claim is made. A fresh RC observation requires at least 48 hours and two natural
-  refreshes; stable promotion remains gated by physical acceptance and security
-  disposition. Installation remains operator-owned.
+  claim is made. RC promotion follows the [release guide](docs/RELEASE.md), including physical
+  acceptance, refresh evidence and security disposition. Installation remains operator-owned.
 
 ## [0.10.0-rc.4] - 2026-10-03
 
@@ -216,8 +221,7 @@ All notable changes to this project will be documented in this file.
   migration and physical HomeKit/provider parity remain unverified. Unsupported
   talkback stays disabled. A refused IMMIS endpoint stops that stream safely.
 - Install through Homebridge only after reviewing these limitations. This runtime
-  change restarts RC observation: at least 48 hours and two natural refreshes
-  before stable promotion. No live-device installation is part of this delivery.
+  change requires renewed [release acceptance](docs/RELEASE.md). No live-device installation is part of this delivery.
 
 ## [0.10.0-rc.3] - 2026-10-03
 
@@ -243,8 +247,8 @@ All notable changes to this project will be documented in this file.
 - Secure native media worker, five-platform native artifacts and configuration
   migration are not included. Unsupported talkback remains disabled.
 - Physical video/audio parity, provider-valid traffic calibration and resource/
-  latency measurements remain acceptance gates. This runtime change restarts RC
-  observation: at least 48 hours and two natural refreshes before stable promotion.
+  latency measurements remain acceptance gates. This runtime change requires renewed
+  [release acceptance](docs/RELEASE.md).
 
 ## [0.10.0-rc.2] - 2026-10-02
 
@@ -268,9 +272,8 @@ All notable changes to this project will be documented in this file.
   device; use the existing Retry Blink Connection switch to retry. Dismissing
   a notification leaves automatic recovery running.
 - Physical notification delivery, concurrent camera operations, and runtime
-  recovery remain acceptance gates. This runtime fix restarts RC observation:
-  at least 48 hours and two natural token refreshes are required before stable
-  promotion. Historical transport outage cause remains unresolved.
+  recovery remain acceptance gates. This runtime fix requires renewed
+  [release acceptance](docs/RELEASE.md). Historical transport outage cause remains unresolved.
 
 ## [0.10.0-rc.1] - 2026-09-28
 
@@ -296,9 +299,8 @@ All notable changes to this project will be documented in this file.
 
 - Improved diagnostics do not establish the cause of earlier transport errors
   whose native error details were not retained.
-- This runtime update restarts RC acceptance: physical critical-path testing,
-  at least 48 hours of observation, and two natural token refreshes are still
-  required before stable promotion.
+- This runtime update requires physical critical-path testing and
+  [release acceptance](docs/RELEASE.md) before stable promotion.
 
 ## [0.10.0-rc.0] - 2026-09-28
 
@@ -334,9 +336,8 @@ All notable changes to this project will be documented in this file.
 
 - Blink's interfaces remain private and can change without notice.
 - Registry publication and automated review do not establish live Blink or
-  HomeKit acceptance. RC promotion still requires physical critical-path
-  testing, at least 48 hours of observation, and two natural token refreshes;
-  any runtime fix restarts that observation window.
+  HomeKit acceptance. RC promotion requires physical critical-path
+  testing and attributable observation under the [release guide](docs/RELEASE.md).
 
 ## [0.10.0-beta.0] - 2026-09-28
 
@@ -377,8 +378,8 @@ All notable changes to this project will be documented in this file.
   attribution as unresolved where the retained static evidence does not
   establish them uniquely; static workflow recovery is not live acceptance.
 - Beta runtime acceptance still requires private hosted sign-in, logout and
-  relogin, offline recovery, at least 24 hours of observation, and one natural
-  token refresh after exact-version installation.
+  relogin, offline recovery, attributable observation and natural
+  token refresh evidence under the [release guide](docs/RELEASE.md).
 
 ## [0.10.0-alpha.2] - 2026-09-20
 
@@ -496,7 +497,7 @@ All notable changes to this project will be documented in this file.
   request and reached Blink's hosted sign-in page on Android. This proves the
   native hosted surface and request construction, not a fresh packaged
   Homebridge code exchange.
-- With the authorized EU/Ireland account, a valid legacy refresh session was
+- With the authorized European-region account, a valid legacy refresh session was
   accepted by Blink's exact Android cross-client refresh form. The resulting
   Android-profile state rotated again through the installed plugin, reached
   user information and homescreen/device discovery, and survived two clean
@@ -542,7 +543,7 @@ All notable changes to this project will be documented in this file.
 
 ### Validation status
 
-- An earlier authorized EU/Ireland-account proof established hosted code
+- An earlier authorized European-region-account proof established hosted code
   exchange, refresh, `prde` routing, and homescreen access. Two later packaged
   flows reached token exchange but returned `BHO-HTTP-INVALID-GRANT`.
 - Packaged end-to-end acceptance remains open. Non-EU accounts are not

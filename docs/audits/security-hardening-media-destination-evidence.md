@@ -113,7 +113,7 @@ these invariants; they do not establish real provider connectivity or family com
 The 8 October Home test exposed 59 synchronous `Unsupported media destination`
 refusals before DNS/TLS, followed by 287 liveview HTTP 409 responses during client
 retries. Local private evidence: `logs/rc4-2026-10-08-acceptance/home-ui-test.md`.
-Images in Home were insufficient evidence of live video. Andrew confirmed the
+Images in Home were insufficient evidence of live video. The operator confirmed the
 7 October reboot was intentional and manually triggered.
 
 Historical actual provider responses on 19 August at 14:41:53, 14:41:57 and
@@ -143,4 +143,4 @@ Synthetic certificates test identity matching, not real endpoint trust or media.
 One bounded unauthenticated strict-TLS probe to a historical address timed out.
 It proves neither current reachability nor current certificate acceptance. Real
 provider/TLS/HomeKit acceptance requires installation of the reviewed new RC by
-Andrew and subsequent testing. F05/F06 remain open.
+the operator and subsequent testing. F05/F06 remain open.

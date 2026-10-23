@@ -17,9 +17,9 @@ Blink cameras detect motion and store video clips in the cloud. HomeKit expects 
 
 ### Investigation Results
 
-- **Push Notifications**: FCM integration requires app-level configuration; not practical for a Homebridge plugin
-- **WebSocket/SSE**: No evidence of real-time event streams in the API
-- **Local API**: Blink cameras communicate through sync modules; no direct device access
+- **Push Notifications**: Not implemented; requires separate protocol, authorization and privacy review.
+- **WebSocket/SSE**: No implemented real-time event ingestion in this plugin
+- **Local API**: Local device onboarding/control is outside this plugin's implemented motion path
 - **Media API**: Returns timestamped clips with device IDs; can detect new events
 
 ## Decision
@@ -31,16 +31,16 @@ We implement motion detection via media API polling:
 - Poll the `unwatched_media` endpoint at configurable intervals
 - Default: 60 seconds (reasonable balance of responsiveness and API load)
 - Minimum: 15 seconds (to avoid rate limiting)
-- Maximum: 600 seconds (10 minutes)
+- Settings UI range: 15–600 seconds. Runtime clamps the minimum to 15 seconds; it does not enforce that UI maximum on manually supplied configuration.
 
 ### Motion Event Detection
 
 1. Store timestamp of last media check
 2. Fetch unwatched media clips
 3. For each clip newer than last check:
-   - Match `device_id` to registered camera/doorbell/owl
+   - Match `camera_id` to registered camera/doorbell/owl
    - Trigger `MotionDetected` characteristic on matching accessory
-   - For doorbells, also trigger `ProgrammableSwitchEvent` for ring events
+   - Doorbell motion is handled as motion; the exposed Doorbell service does not establish automatic ring-event ingestion.
 
 ### Motion State Reset
 
@@ -51,32 +51,31 @@ We implement motion detection via media API polling:
 ### Rate Limiting Protection
 
 - Minimum poll interval enforced at 15 seconds
-- Exponential backoff on API errors (429, 5xx)
-- Single concurrent poll operation (prevents overlap)
+- Shared HTTP retry and connection-recovery policies apply to eligible requests.
+- The platform uses an asynchronous interval callback; it does not guarantee non-overlapping polling cycles when a request outlasts the interval.
 
 ## Consequences
 
 ### Positive
 
-- Works reliably with documented API behavior
+- Uses the recovered media API contract; private provider behavior can change
 - Configurable polling interval for user preference
-- No dependency on undocumented real-time APIs
+- No additional push or real-time event client
 - Per-device motion timeout customization
 
 ### Negative
 
-- Motion detection delay equals poll interval
-- Higher poll frequency = more API calls = more battery drain (sync module)
+- Polling contributes to motion detection delay; provider clip availability and request latency also matter
+- Higher poll frequency increases cloud API traffic; device battery impact has not been measured
 - No distinction between motion start/end (Blink clips are post-event)
 - Missed events if poll fails during active motion
 
 ### Trade-offs
 
-| Poll Interval | Latency | API Calls/Hour | Battery Impact |
-|---------------|---------|----------------|----------------|
-| 15 seconds    | ~15s    | 240            | High           |
-| 60 seconds    | ~60s    | 60             | Low            |
-| 5 minutes     | ~5m     | 12             | Minimal        |
+Shorter intervals reduce the polling component of detection latency and increase
+cloud request volume. They do not guarantee immediate events or measured battery
+savings. The [configuration reference](../configuration.md) owns supported user
+settings; the [API contract](../api-contract/README.md) owns recovered declarations.
 
 ### Future Considerations
 

@@ -123,8 +123,14 @@ Alpha requires snapshots, bounded live streams, normal/debug log inspection, and
 repeated child-bridge restarts. Beta additionally requires private hosted sign-in,
 logout/relogin, offline/recovery acceptance, at least 24 hours and one natural
 refresh. RC requires a feature freeze, current automated/review gates, physical
-critical paths, at least 48 hours and two natural refreshes. A runtime fix restarts
-the RC observation window. Keep corruption and hostile-token tests isolated.
+critical paths and two successful natural token refreshes on the accepted runtime.
+There is no fixed RC soak period. Observe for long enough to exercise the changed
+behavior, normal refresh/recovery, and relevant failure boundaries; record the
+actual interval and results rather than treating elapsed time as a pass.
+A runtime correction requires targeted regression and physical checks of the
+affected behavior. Reuse earlier evidence only for demonstrably unchanged paths;
+identify its source, configuration and limitations. Keep corruption and
+hostile-token tests isolated.
 
 Stable must match the accepted RC runtime source except version and release notes.
 Publish and install it through the same CI/registry route. Repeat smoke acceptance
@@ -167,10 +173,10 @@ Both findings remain open. Their closure and native-worker acceptance criteria
 are unchanged; the retained runtime guards are mandatory. Do not request the
 same risk decision again unless the exposure or release scope changes.
 
-For this release, reuse applicable RC.13 runtime observation for the naming-only
-RC.14 changes. The general 48-hour RC guidance above is not a new waiting period
-for documentation, naming, or version-only changes. Verify those changes directly.
-Material runtime corrections still restart the minimum 48-hour RC window and
-require two natural refreshes, as specified above. Add failure-specific checks
-where needed. Physical failures remain failures
-until corrected or explicitly dispositioned; time passing is not acceptance.
+Current functional acceptance is recorded in the
+[hardening ledger](plans/security-hardening.md#23-october-2026-rc19-acceptance-and-stable-readiness).
+Release acceptance follows the evidence requirements above; a new RC number,
+label or documentation change does not create a waiting period. Hardware failures
+and other external causes require an explicit operator disposition. Preserve the
+observed failure and the basis for that disposition without reporting a software
+fix that was not made.
