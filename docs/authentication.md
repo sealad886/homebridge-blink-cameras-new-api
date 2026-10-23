@@ -7,6 +7,10 @@ vendor routing belong to [ADR-001](adr/001-authentication.md).
 
 ## Hosted Blink sign-in
 
+Use a desktop browser for this callback-copy flow. On a mobile device with the
+Blink app installed, the registered App Link may open the app instead of leaving
+a copyable callback in the address bar; no mobile fallback is verified here.
+
 1. Open this plugin's settings in the remote Homebridge UI and choose **Sign in
    securely with Blink**. Keep the Homebridge settings tab open. If your browser blocks
    the new tab, choose the revealed **Open Blink Sign-In** fallback.

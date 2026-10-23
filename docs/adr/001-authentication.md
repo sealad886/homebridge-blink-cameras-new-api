@@ -26,7 +26,7 @@ Link, not to a callback controlled by this plugin.
 ### Trust boundary and user journey
 
 The Homebridge host owns the OAuth transaction. The Homebridge custom UI requests
-a new transaction, opens Blink's hosted page in a no-opener the browser tab, and keeps
+a new transaction, opens Blink's hosted page in a no-opener desktop browser tab, and keeps
 the settings tab open. Blink alone receives the account credentials and hosted
 MFA code.
 

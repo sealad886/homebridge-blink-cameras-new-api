@@ -103,7 +103,7 @@ Restart Homebridge after installing.
 
 ## Sign-in and account verification
 
-Open the plugin settings in Homebridge UI and choose **Sign in securely with
+Use a desktop browser to open the plugin settings in Homebridge UI and choose **Sign in securely with
 Blink**. Enter credentials and hosted MFA only on Blink’s page, then return the
 complete callback address through **Paste Blink Result and Finish**. Complete
 any distinct post-token verification requested by Homebridge.
