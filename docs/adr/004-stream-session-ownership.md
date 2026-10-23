@@ -1,6 +1,6 @@
 # ADR-004: Own media sessions through confirmed retirement
 
-Status: accepted implementation direction; behavioral verification pending.
+Status: accepted and implemented in the plugin media path. Native-worker integration and full security closure remain separate gates in the [hardening ledger](../plans/security-hardening.md).
 
 PREPARE admits a unique generation before allocating ports. That generation owns
 late allocations, preparation expiry, START continuations, callbacks, children,

@@ -102,6 +102,6 @@ Interruption/overflow removes only owned temporary file. Offline checks cover ex
 limit, limit+1, false/missing Content-Length, interrupted cleanup, HTTPS rejection,
 and cached checksum failure before signature/build execution.
 
-This workflow has not been dispatched or run as part of local implementation.
+The Ubuntu x64 and macOS arm64 prototype jobs have run successfully in release-source CI, including the RC.19 validation recorded in [PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79). This verifies source-build/test scope, not production artifact distribution or installed media integration.
 Windows/macOS x64/Linux arm64 and all five baseline/runtime/artifact acceptance
 remain open. macOS15 CI does not prove macOS13 runtime compatibility.

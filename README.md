@@ -2,6 +2,8 @@
 
 # @sealad886/homebridge-blink-cameras-new-api
 
+Last reviewed: 23 October 2026.
+
 [![npm](https://img.shields.io/npm/v/%40sealad886%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api)
 [![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
@@ -9,7 +11,7 @@
 
 > Important: This plugin uses Blink's private OAuth and REST APIs. All APK-known
 > production regions use the same production OAuth host; geography changes only
-> the REST tier discovered after token issuance. Only an EU/Ireland account has
+> the REST tier discovered after token issuance. Only an EU-region account has
 > live-account evidence. Non-EU accounts are not live-validated and remain covered
 > by Android 57.1 APK traces plus automated routing tests.
 
@@ -17,8 +19,10 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 
 - **SecuritySystem** for arm/disarm control of networks
 - **MotionSensor** for motion detection events
-- **Doorbell** service for ring notifications
+- **Doorbell** service exposed for doorbell devices; automatic ring delivery is not implemented
 - **Switch** for enabling/disabling motion detection per device
+- **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
+- **Connection monitor and retry control** for provider outages
 
 The current static API catalog is recovered from Blink Android 59.2
 (`versionCode` 29823413), with Android 57.1 retained as the comparison and
@@ -42,11 +46,11 @@ change these private interfaces without notice.
 
 - ✅ **Proper HomeKit SecuritySystem** - Arm/disarm networks using the Security System tile in Home app
 - ✅ **Motion Detection** - Receive motion alerts in HomeKit when your cameras detect motion
-- ✅ **Doorbell Support** - Ring notifications appear as HomeKit doorbell events
+- **Doorbell devices** - Motion controls, sensors and a HomeKit Doorbell service; see the ring-event limitation below
 - ✅ **Status Polling** - Automatically syncs device states with Blink cloud
 - ✅ **OAuth Authentication** - Modern OAuth 2.0 with automatic token refresh
 - ✅ **Blink-hosted MFA** - Password and hosted MFA stay on Blink's sign-in page
-- ✅ **Retry Logic** - Automatic retry with exponential backoff for rate limits and server errors
+- ✅ **Retry Logic** - Bounded retries for eligible reads, rate limits and server errors; ambiguous liveview/completion POSTs are not replayed
 
 ### Supported devices
 
@@ -54,8 +58,12 @@ change these private interfaces without notice.
 | ------------ | --------------- | -------- |
 | **Network** | SecuritySystem | Arm/disarm all cameras in network |
 | **Camera** | Switch + MotionSensor | Enable/disable motion, motion events |
-| **Doorbell** | Doorbell + Switch + MotionSensor | Ring events, enable/disable motion |
+| **Doorbell** | Doorbell + Switch + MotionSensor | Enable/disable motion, motion events; automatic ring delivery unavailable |
 | **Owl (Mini)** | Switch + MotionSensor | Enable/disable motion, motion events |
+
+Doorbell devices expose a HomeKit Doorbell service, but the current runtime does
+not connect incoming Blink ring events to it. Its presence does not establish
+automatic ring notifications; use the official Blink app for those alerts.
 
 #### SecuritySystem modes
 
@@ -95,7 +103,7 @@ Restart Homebridge after installing.
 
 ## Sign-in and account verification
 
-Open the plugin settings in Homebridge UI and choose **Sign in securely with
+Use a desktop browser to open the plugin settings in Homebridge UI and choose **Sign in securely with
 Blink**. Enter credentials and hosted MFA only on Blink’s page, then return the
 complete callback address through **Paste Blink Result and Finish**. Complete
 any distinct post-token verification requested by Homebridge.
@@ -123,11 +131,11 @@ in the plugin (including a configured device-name override):
 
 | Home service | Example |
 | --- | --- |
-| Enable or disable motion detection | Front door Motion Detection |
-| Read-only motion sensor | Front door Motion Sensor |
-| Request a snapshot, then automatically return Off | Front door Refresh Snapshot |
-| Doorbell ring event | Front door Doorbell |
-| Network arm/disarm | Home Security |
+| Enable or disable motion detection | Test Camera Motion Detection |
+| Read-only motion sensor | Test Camera Motion Sensor |
+| Request a snapshot, then automatically return Off | Test Camera Refresh Snapshot |
+| Doorbell service (automatic ring delivery unavailable) | Test Doorbell Doorbell |
+| Network arm/disarm | Example Network Security |
 
 The camera tile retains its assigned device name. Long names reserve space for
 the control's purpose within HomeKit's name limit. Existing service identities
@@ -190,7 +198,7 @@ The native worker is not enabled or distributed in the current npm runtime.
 
 - API documentation derived from reverse engineering the Blink Android app
 - Homebridge platform plugin architecture
-- EU/Ireland hosted, Android-refresh, REST-bootstrap, and restart evidence;
+- EU-region hosted, Android-refresh, REST-bootstrap, and restart evidence;
   non-EU accounts are not live-validated and remain APK-derived plus
   mocked/parameterized pending authorized validation
 

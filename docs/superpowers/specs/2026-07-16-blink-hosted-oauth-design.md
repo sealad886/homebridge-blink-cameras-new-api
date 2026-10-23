@@ -28,7 +28,7 @@
 
 Replace the Homebridge custom UI's direct collection of Blink credentials and
 OAuth MFA codes with Blink's native hosted sign-in experience. The Homebridge
-instance on `raspberrypi.local` will create and retain a short-lived OAuth 2.0
+instance will create and retain a short-lived OAuth 2.0
 Authorization Code with PKCE transaction. Brave will open Blink's hosted sign-in
 page, where Blink handles credentials and MFA. After Blink redirects to its
 registered Android App Link, the user will copy the final Brave address and use
@@ -381,9 +381,8 @@ the hosted flow and are not written back by the UI.
 - Redaction is extended to remove query-string `code` and `state` values from
   unexpected errors before they reach UI or Homebridge logs.
 - Access and refresh tokens never cross back into browser JavaScript.
-- The released plugin does not automate password-manager or Messages access.
-- The live acceptance test may use the user's authorized iCloud Keychain and
-  Messages locally, but those are test-operator actions outside plugin code.
+- The released plugin does not automate password-manager or messaging-application access.
+- Password-manager and MFA interactions belong to the operator, outside plugin code.
 
 ## Test strategy
 
@@ -424,24 +423,15 @@ Implementation will follow red-green-refactor cycles.
 - Package contents inspection to ensure no APK, decompilation output, temporary
   callback, token response, or local machine artifact is included.
 
-### Live Raspberry Pi acceptance test
+### Physical acceptance scope
 
-1. Back up the existing `.blink-auth.json` on the Pi without reading or printing
-   it; preserve owner and mode.
-2. Build a unique local prerelease package and install it with `hb-service add`.
-3. Restart Homebridge and verify the service, UI, and plugin child are active.
-4. Open `http://raspberrypi.local:8581` in Brave and open the plugin settings.
-5. Start hosted sign-in from the Homebridge UI.
-6. Use the previously authorized iCloud Keychain Blink/Amazon credential in
-   Blink's page.
-7. Read the newest Blink MFA code from Messages and enter it only into Blink.
-8. Copy the final Blink callback and use **Paste Blink Result and Finish**.
-9. Verify UI success, owner-only auth-state persistence, tier/account/homescreen
-   access, and device discovery without exposing secret values.
-10. Restart Homebridge and verify the plugin remains authenticated and discovers
-    the same account through refresh/persisted tokens.
-11. If acceptance fails, reinstall version 0.8.1 and restore the untouched auth
-    backup; otherwise retain the new hosted token state.
+Use the current [release guide](../../RELEASE.md) for artifact verification,
+operator installation, protected backups and rollback, and
+[authentication](../../authentication.md) for hosted sign-in. The original
+acceptance scope includes owner-only auth-state persistence, tier/homescreen
+discovery, restart recovery and natural refresh. No password-manager, messaging
+application, host address or machine-specific deployment workflow is required.
+Historical unchecked acceptance criteria below do not establish completion.
 
 ## Documentation and versioning
 

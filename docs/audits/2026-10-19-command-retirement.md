@@ -1,8 +1,8 @@
 # Command retirement and HTTP 406 investigation — 19 October 2026
 
-RC.14 Front door initially played smooth live video/audio with human confirmation.
+RC.14 test-camera playback initially played smooth live video/audio with human confirmation.
 Its command GETs returned 406, upstream media later closed, and immediate reopen
-POSTs repeatedly failed 406. Current Corner testing is blocked by dead batteries.
+POSTs repeatedly failed 406. At the time, testing on a second camera was blocked by depleted batteries.
 Private evidence: `logs/rc14-2026-10-19-home/analysis.md`.
 
 ## Findings and changes

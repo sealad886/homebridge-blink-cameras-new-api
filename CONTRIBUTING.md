@@ -1,5 +1,7 @@
 # Contributing
 
+Last reviewed: 23 October 2026.
+
 This guide owns contributor setup, local checks, and the pull-request workflow.
 For installation and operation, start with the [README](README.md). See the
 [documentation map](docs/README.md) for the other information owners.
@@ -86,7 +88,7 @@ validation are described in the [contract guide](docs/api-contract/README.md).
 Search [existing issues](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues)
 before opening a new report. Include reproduction steps, expected and observed
 behavior, affected version, and sanitized diagnostics. Never include tokens,
-capability URLs, account identifiers, or media.
+capability URLs, account identifiers, private camera/network names, host addresses, or media. Use generic example names and paths in documentation; keep deployment-specific evidence outside published guides.
 
 Follow [AGENTS.md](AGENTS.md) when using an automated contributor. Preserve
 unrelated working-tree changes. For substantive automated work, use a safe

@@ -3,7 +3,7 @@
 ## Observed failure and limits
 
 Private RC.15 evidence is retained in `logs/rc15-2026-10-20-home/`.
-The first Front door stream delivered video and audio with human-confirmed
+The first test-camera stream delivered video and audio with human-confirmed
 stutter. STOP at 18:11:09 sent a session command with ID 4 and immediately
 destroyed the TLS socket. HTTP retirement subsequently returned `not_found`.
 The reopened stream authenticated and received media at 18:11:31, then its

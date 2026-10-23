@@ -1,6 +1,6 @@
 # ADR-003: Blink command coordination and Home connection recovery
 
-Status: accepted design; implemented locally; physical acceptance pending
+Status: accepted and implemented; release acceptance is tracked in the hardening ledger
 
 Date: 2026-10-02
 
@@ -59,6 +59,7 @@ resolved-address logs, or arbitrary destinations.
 Deterministic tests cover serialization, reconciliation, deadlines, late results,
 controlled HAP failures, retry classification, recovery, identity retention,
 cache policy, and diagnostic privacy. Physical Home notification delivery,
-concurrent camera behavior, exact registry installation, and at least 48 hours of
-RC observation with two natural token refreshes remain required. Local tests do
-not close those gates. Follow docs/RELEASE.md.
+concurrent camera behavior and exact registry installation require release-scoped
+evidence. Local tests do not close physical acceptance gates. Follow the
+[release guide](../RELEASE.md#homebridge-upgrade-and-acceptance) and record current
+results in the [hardening ledger](../plans/security-hardening.md).

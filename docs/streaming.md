@@ -1,12 +1,14 @@
 # Live streaming and quality
 
+Last reviewed: 23 October 2026.
+
 This guide owns FFmpeg requirements, stream compatibility, quality and talkback
 behavior. See [configuration](configuration.md) for settings and
 [diagnostics](debug_logging_spec.md) for log policy.
 
 ## FFmpeg requirements
 
-For the core HomeKit features (arm/disarm, motion, doorbell events, snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it. Set `ffmpegPath` to the executable when it is outside PATH.
+For the core HomeKit features (arm/disarm, motion and snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it. Set `ffmpegPath` to the executable when it is outside PATH.
 
 The selected executable's RTP SSRC option is checked during discovery, including when a video encoder is selected manually. Signed and unsigned muxer options receive equivalent representations of the same 32-bit stream identifier. This is an automatic runtime capability, not a saved setting or a version-based guess. If the bounded check fails or reports an unknown contract, live streaming is disabled for that runtime while discovery and core accessories continue. See the [SSRC compatibility audit](audits/2026-10-22-rtp-ssrc-compatibility.md) for evidence and reproduction.
 
@@ -18,11 +20,13 @@ Home may retain a previously advertised AAC-ELD offer after an encoder change. T
 Live streaming converts Blink IMMIS/RTSPS media to HomeKit RTP/SRTP.
 
 Set `videoEncoder` to `auto` for the safest default across mixed installations. On macOS it prefers
-`h264_videotoolbox`, on Linux ARM boards such as Raspberry Pi it prefers `h264_v4l2m2m`, and it falls back
+`h264_videotoolbox`, on Linux ARM it probes `h264_v4l2m2m`, and it falls back
 to `libx264` if the hardware encoder cannot be started.
 
-> [!NOTE]
-> The automatic encoder selection has been tested on a limited set of hardware (macOS with VideoToolbox and Raspberry Pi with V4L2). If you run into choppy streams, encoding errors, or unexpected fallback to software encoding on your platform, please [open an issue](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/new) with your hardware details and bounded streaming diagnostics (`ffmpegDebug: true`).
+Hardware availability depends on the host, drivers and executable. A compiled
+encoder name alone does not prove usable acceleration. When reporting fallback
+or choppy output, include the selected encoder and sanitized diagnostic receipts;
+do not attach full process arguments or media.
 
 IMMIS live streams always verify the upstream TLS certificate and hostname, using
 Node bundled public roots plus the official Blink vendor anchors only for IMMIS. The former
@@ -45,7 +49,7 @@ sensitive footage.
 
 ### Two-way talk status
 
-Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden and the plugin forces `twoWayAudio` off until IMMIS uplink framing is validated. Even if you previously enabled talkback, the setting is ignored for now. We will re-enable the UI once payload sequencing and ACK handling are confirmed stable.
+Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden and the plugin forces `twoWayAudio` off until IMMIS uplink framing is validated. Even if you previously enabled talkback, the setting is ignored for now. Re-enabling it requires validated payload sequencing and ACK handling; it is not a supported current feature.
 
 ### Software encoding on smaller hosts
 
@@ -55,9 +59,8 @@ libx264 and software fallback, plus Opus compression level 3. It reduces encodin
 work at the cost of compression efficiency: at the same bitrate, video/audio
 quality may decrease. Hardware video encoders retain their own settings; Opus
 still uses the selected audio complexity. Select it through the existing Streaming settings after
-installation and compare actual Home playback; no Pi configuration is changed
-by publication. Pi5 uses software H.264 encoding. A compiled hardware encoder
-name alone does not prove usable acceleration.
+installation and compare actual Home playback on the same host and settings.
+Publication does not change installed configuration.
 
 This option still transcodes video. Automatic H.264 passthrough is not enabled:
 source codec/profile/level, dimensions, frame rate and bitrate must first be
@@ -72,7 +75,7 @@ Video and audio use separate negotiated RTP/SRTP outputs. IMMIS retains the
 initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
 private-pipe backpressure and bounded session cleanup still apply.
 
-IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Physical video/audio acceptance remains required for each installed RC.
+IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Release acceptance and the evidence required after a runtime change are owned by the [release guide](RELEASE.md).
 
 ### Input and output quality
 
@@ -89,7 +92,7 @@ dimensions, while encoding at no more than 15 fps. This follows the maintained
 [Homebridge camera-ffmpeg frame-rate limiting approach](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/blob/latest/src/streamingDelegate.ts).
 Dimensions remain exactly selected; unsupported dimensions still fail before
 vendor media work. Output receipts distinguish requested and effective FPS.
-Lower resolution/frame rate reduces encoding work, but improved Pi playback is
+Lower resolution/frame rate reduces encoding work, but improved playback is
 not established until measured on the installed release. 1080p/30 increases work.
 Audio remains independently negotiated and transcoded, including Opus/AAC-ELD
 packet duration, sample rate and separate RTP/SRTP packaging. Software encoding

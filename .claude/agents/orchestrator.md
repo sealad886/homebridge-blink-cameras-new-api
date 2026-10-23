@@ -103,5 +103,5 @@ for the exact final head/base, plus relevant contributor/release checks. Resolve
 actual findings, keep old results attributed to their reviewed revisions, and
 never infer clean coverage from silence or an accepted review request. Follow
 existing GitHub review and CI workflows; do not merge or publish without the
-human's corresponding authority. Andrew owns Pi configuration and installation.
+human's corresponding authority. The operator owns host configuration and installation.
 No mode authorizes live restart, pairing reset or persistence deletion.

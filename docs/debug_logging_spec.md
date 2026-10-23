@@ -1,12 +1,14 @@
 # Blink Debug Logging Specification
 
+Last reviewed: 23 October 2026.
+
 This spec defines how the Homebridge Blink plugin should log diagnostic information for authentication, HTTP, and streaming while protecting sensitive data.
 
 ## Logging Controls
 
 - `debugAuth` (config): Enables verbose auth + HTTP diagnostics in `src/blink-api/auth.ts` and `src/blink-api/http.ts`.
 - `ffmpegDebug` (config): Enables bounded, redacted streaming detail in `src/accessories/camera-source.ts`.
-- `logger` (config): `BlinkLogger` interface used by auth + HTTP layers (defaults to no-op when absent).
+- `logger` (internal API): `BlinkLogger` interface used by auth + HTTP layers (defaults to no-op when absent); this is not a JSON configuration field.
 
 ## Required Log Levels
 
@@ -19,10 +21,10 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 ## HTTP Diagnostics (debugAuth only)
 
 - Log method + URL for each request with a per-request correlation ID.
-- Log request headers with redaction applied.
+- Log request headers with redaction applied; debug output remains sensitive operational evidence.
 - Format and log request bodies only when debug is enabled.
 - Log response status + elapsed time (include correlation ID).
-- Log response body only in debug mode and truncate to a safe length (current behavior uses 500 chars).
+- Successful decoded response summaries are redacted and truncated to 500 characters in debug mode. This does not authorize raw provider-body collection or attaching debug logs without review. Error response bodies are discarded rather than included in exception diagnostics.
 
 ## Authentication Diagnostics (debugAuth only)
 

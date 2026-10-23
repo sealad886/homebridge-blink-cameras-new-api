@@ -25,8 +25,8 @@ Link, not to a callback controlled by this plugin.
 
 ### Trust boundary and user journey
 
-The Raspberry Pi owns the OAuth transaction. The Homebridge custom UI requests
-a new transaction, opens Blink's hosted page in a no-opener Brave tab, and keeps
+The Homebridge host owns the OAuth transaction. The Homebridge custom UI requests
+a new transaction, opens Blink's hosted page in a no-opener desktop browser tab, and keeps
 the settings tab open. Blink alone receives the account credentials and hosted
 MFA code.
 
@@ -42,7 +42,7 @@ is best effort. If the browser denies clipboard write access, the callback can
 remain there and the operator must clear it manually.
 
 There is no public callback relay, inbound port, companion app, or browser
-extension. The callback travels only from Blink to Brave, then from the
+extension. The callback travels only from Blink to the browser, then from the
 operator's clipboard to the authenticated Homebridge Config UI request channel.
 
 ### Hosted Android profile and manufacturer gate
@@ -53,13 +53,13 @@ HTTPS App-Link redirect. The authorization URL includes the APK-derived
 dark-mode flag, PKCE S256 challenge, and opaque state. The stable hardware ID
 comes from the plugin `deviceId`, defaulting to `homebridge-blink`.
 
-The Pi generates a verifier from 64 random bytes plus independent 32-byte state
+The Homebridge host generates a verifier from 64 random bytes plus independent 32-byte state
 and flow identifiers. A transaction lasts exactly 15 minutes.
 
 The APK does not choose its OAuth client by account geography. Its manufacturer
 gate is `Build.MANUFACTURER == "Amazon"`: Amazon hardware uses
 `client_id=amazon`, while all other Android hardware uses `client_id=android`.
-Homebridge runs on a Raspberry Pi and deliberately models the ordinary
+Homebridge deliberately models the ordinary
 non-Amazon Android public client, so its hosted transaction uses `android` for
 EU, US, AP, and AU accounts alike. Native Fire OS/`amazon` hosted sessions are
 not claimed as a supported Homebridge flow.
@@ -111,7 +111,7 @@ The hosted code exchange posts form-encoded data to
 grant_type=authorization_code
 redirect_uri=https://applinks.blink.com/signin/callback
 code=<one-time code>
-code_verifier=<Pi-owned verifier>
+code_verifier=<Homebridge-owned verifier>
 client_id=android
 ```
 
@@ -187,7 +187,7 @@ New hosted state persists the Android profile. Older state without
 not relabeled. Explicit `ios` state remains on that legacy contract:
 `client_id=ios`, no refresh `scope`, and legacy headers when applicable.
 
-In the authorized EU/Ireland test, Blink also accepted a valid legacy refresh
+In the authorized EU test, Blink also accepted a valid legacy refresh
 token submitted with the exact Android form, rotated it, and allowed the
 resulting Android-profile state to refresh again. This is live evidence for a
 cross-client migration path on that account, not a documented Blink guarantee.
@@ -205,8 +205,8 @@ hosted sign-in, that fallback necessarily gives the credentials to Homebridge.
 
 ## Evidence boundary
 
-An earlier protocol proof on 2026-07-16 used the owner's authorized EU/Ireland
-account. It observed hosted sign-in and MFA in Brave, the exact App-Link,
+An earlier protocol proof on 2026-07-16 used an authorized EU test
+account. It observed hosted sign-in and MFA in the browser, the exact App-Link,
 successful token exchange and refresh, `prde` discovery, user information, and
 homescreen access without recording secret values. A later secret-blind native
 AppAuth harness reproduced Blink Android 57.1's exact authorization request on
@@ -231,7 +231,7 @@ returned HTTP 406 from `prod` and `a001`, and HTTP 200 plus the same valid
 service-authoritative tier from `prde` and `prsg`; hosted completion stops at
 the first success (`prde` for this account).
 
-Fresh packaged end-to-end acceptance still requires an authorized EU/Ireland
+Fresh packaged end-to-end acceptance still requires an authorized EU
 flow that reaches the authorization-code exchange. The later refresh,
 persistence, restart, homescreen, and device-discovery legs are now proven.
 Non-EU accounts are not live-validated; their production defaults remain
@@ -243,7 +243,7 @@ APK-evidenced and mocked/parameterized.
 
 - During the supported hosted-UI flow, Homebridge never receives or stores the
   Blink account credentials or hosted MFA code.
-- PKCE/state and durable tokens stay on the remote Pi with owner-only storage.
+- PKCE/state and durable tokens stay on the Homebridge host with owner-only storage.
 - Restart and refresh work without credential fields in plugin configuration.
 - The same user flow supports APK-known production defaults and
   service-returned account tiers without asking the operator to choose a
@@ -251,10 +251,10 @@ APK-evidenced and mocked/parameterized.
 
 ### Trade-offs and risks
 
-- Desktop Brave cannot claim Blink's Android App Link, so the operator must copy
+- Desktop the browser cannot claim Blink's Android App Link, so the operator must copy
   the final address back to Homebridge.
 - APK AppAuth performs browser authorization and native token exchange on one
-  Android device. Homebridge splits those legs between Brave and the Pi; two
+  Android device. Homebridge splits those legs between the browser and the Homebridge host; two
   fresh packaged exchanges have returned `invalid_grant`, so that split remains
   the unresolved compatibility boundary.
 - EU/AP/AU accounts may require up to four read-only `tier_info` attempts during

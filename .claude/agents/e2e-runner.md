@@ -21,12 +21,12 @@ Use the existing Jest/UI test owners and synthetic media checks described by
 [release guide](../../docs/RELEASE.md). Do not assume Agent Browser or Playwright
 CLI/configuration exists, or install a framework just to run this profile.
 
-For authorized macOS Home acceptance, use the available CUA tool and its fresh
-UI state. Verify installed runtime/settings through the read-only Pi workflow,
+For authorized macOS Home acceptance, use the explicitly requested available automation tool and fresh
+UI state. Verify installed runtime/settings through the authorized read-only host workflow,
 open the requested camera, confirm actual media receipts, and obtain human
 confirmation for audible output. Test STOP/reopen and the purpose-labelled
 snapshot switch/reset without touching motion switches. Preserve evidence and
-leave Pi configuration/installation to Andrew. UI images alone do not establish
+leave host configuration/installation to the operator. UI images alone do not establish
 live audio/video or smoothness. Browser-specific patterns below apply only to
 an existing authorized browser test owner, never as an automatic new dependency.
 
