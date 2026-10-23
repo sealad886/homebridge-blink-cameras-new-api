@@ -7,6 +7,29 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [0.10.0] - 2026-10-23
+
+### Added
+- Device-prefixed accessory names that preserve distinct Home-assigned labels.
+- System-wide automatic, 720p/15, 640×360/15 and 1080p/30 output profiles; per-camera input quality and observed source metadata; optional lower-CPU software encoding.
+- Connection status/retry accessories, bounded diagnostics and an interface that follows the parent Homebridge theme.
+
+### Fixed
+- Harden vendor response consumption, identifiers, IMMIS framing/private transport, session generation ownership, cancellation, bounded cleanup and trusted diagnostic reproduction.
+- Correct IMMIS vendor TLS trust, command polling/retirement and STOP/reopen behavior while retaining certificate, destination and resource checks.
+- Match HomeKit audio offers to actual executable capabilities, invalidate stale offers and preserve negotiated codec packaging. Format RTP SSRC arguments for signed/unsigned muxers without losing identity bits.
+- Save configuration through the current Homebridge configuration owner and reduce repetitive debug output.
+
+### Upgrade and acceptance
+- Promote the accepted RC.19 runtime without implementation or dependency changes. Installed acceptance established smooth live video/audio on two cameras, STOP/reopen, fresh snapshots with automatic reset, unsigned SSRC operation and six natural refreshes. This is bounded evidence, not universal device or performance certification.
+- Use the Homebridge-native registry upgrade workflow. Keep the selected FFmpeg executable and settings; installation and configuration remain operator-owned.
+- Documentation is centralized, uses generic examples and corrects the limitation that automatic doorbell-ring ingestion is not implemented. The Doorbell service alone does not establish ring delivery.
+
+### Known security limitations
+- F05/F06 remain open: FFmpeg process arguments can contain media secrets, and complete RTSP secondary/control/redirect destination enforcement is unproved. The disclosed residual risks are accepted specifically for stable 0.10.0; retained TLS/destination/resource/diagnostic controls remain mandatory.
+- The native worker is a development prototype, not enabled in the npm runtime. No complete security-hardening, OS sandbox or five-target native-distribution claim is made. Talkback remains disabled.
+- See the [streaming guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md), [release guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/RELEASE.md) and [finding ledger](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md) for acceptance and remaining work.
+
 ## [0.10.0-rc.19] - 2026-10-22
 
 ### Fixed

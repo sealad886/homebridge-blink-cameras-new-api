@@ -11,8 +11,10 @@ Current published candidate: **0.10.0-rc.19**, source
 [PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79).
 The [current acceptance checkpoint](#23-october-2026-rc19-acceptance-and-stable-readiness)
 supersedes the historical candidate/branch and pending-release statements below.
-Stable 0.10.0 has not been published. Source, package and publication identities
-must be verified through the [release guide](../RELEASE.md).
+Stable **0.10.0** promotes this accepted runtime with version/release metadata
+and the documentation audit. Verify its publication source and exact registry
+artifact through the [release guide](../RELEASE.md) and
+[release receipt](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v0.10.0).
 Implementation and review assignments remain unassigned for ongoing maintenance.
 Maintainer owns architecture/release decisions; operator owns physical acceptance.
 
