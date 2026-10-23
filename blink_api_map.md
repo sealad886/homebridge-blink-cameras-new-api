@@ -230,7 +230,7 @@ the Blink-hosted Android path.
 
 ## Validation boundary
 
-- The owner's EU/Ireland account is the only account region used for live
+- An authorized EU-region test account is the only account region used for live
   authenticated testing.
 - A native Android AppAuth harness reproduced the Android 57.1 authorization
   request and reached Blink's hosted identity page.

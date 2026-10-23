@@ -40,8 +40,8 @@ and local task transcripts are retained evidence, not published user guidance.
 Source/schema/package/workflow checks supported the changed behavior descriptions.
 Independent documentation review checked the final changes and retained evidence
 boundaries. Validation inspected 92 maintained/historical Markdown documents: 281 local
-repository file links and 42 heading links resolved with no issues. The tracked
-document scan found no identified personal camera/setup references or fixed RC
+repository file links and 42 heading links resolved with no issues. A final tracked-document scan, including the root API routing map, found no
+identified personal camera/setup references or fixed RC
 waiting-period instructions; `git diff --check` passed.
 Documentation-only work changes no executable code, package version or runtime
 configuration, so no full Jest/media suite or live-device test was required.
