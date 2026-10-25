@@ -7,7 +7,15 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
-## [0.10.1-beta.0] - 2026-10-25
+## [0.11.0-beta.0] - 2026-10-25
+
+### Added
+- Expose optional HomeKit temperature sensors for traditional Blink cameras that report temperature. The global `exposeTemperature` setting defaults to false; existing per-device overrides can enable or disable it for individual cameras.
+- Read the camera's cached configuration temperature in Fahrenheit and convert it to Celsius for HomeKit. Enabled cameras add at most one bounded metadata read per normal state poll; HomeKit reads do not contact Blink or wake/calibrate the camera.
+- Keep temperature faults local, wait for valid metadata before adding a sensor, reuse restored sensors, and report missing, invalid or offline readings as unavailable rather than inventing a value. Owl/Mini and doorbell temperature are not supported.
+
+### Fixed
+- Preserve the latest unresolved network arm/disarm target on HomeKit reads through older command completion and queue expiration. Current security state and motion reads still report confirmed device state; reconciliation or an explicit already-confirmed replacement resolves the intent without replaying a command. This delivers the source correction for issue #48 in a new immutable release.
 
 ### Development tooling
 - Validate complete pull-request and push commit ranges with pinned commitlint 20.5.3. Generated dependency-update messages with long URLs now pass the upstream URL exception; malformed subjects and oversized non-URL prose remain rejected.
@@ -15,9 +23,9 @@ owns subsequent acceptance and finding dispositions.
 - Update the development-only URI parser to fast-uri 3.1.9, addressing its URI parsing and normalization advisories.
 
 ### Beta scope and acceptance
-- Plugin runtime behavior, saved configuration and production dependencies are unchanged from 0.10.0.
-- F05/F06 remain open with the existing runtime controls and limitations. The native worker remains a development prototype; talkback remains disabled.
-- Follow the [release guide](docs/RELEASE.md) for installation and beta acceptance. Automated checks do not establish physical hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta.
+- This minor beta includes the reviewed runtime changes in PR #86 and supersedes the unpublished 0.10.1-beta.0 preparation. Production dependencies and stored-data formats are unchanged. Temperature sensing is opt-in; other existing settings remain in effect.
+- F05/F06 remain open: FFmpeg process arguments can contain media secrets, and complete RTSP secondary/control/redirect destination enforcement is unproved. Retain all implemented TLS, destination, resource and diagnostic guards. The 0.10.0 stable-specific disposition is not a claim of closure or acceptance for a future stable release. The native worker remains a development prototype; talkback remains disabled.
+- Follow the [release guide](docs/RELEASE.md) for exact-registry installation and beta acceptance. Local and hosted tests cover target-state regressions, metadata conversion, sensor lifecycle and fault isolation; they do not establish physical temperature accuracy, Home display, hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta. No Homebridge installation, restart or pairing is included in publication.
 
 ## [0.10.0] - 2026-10-23
 
