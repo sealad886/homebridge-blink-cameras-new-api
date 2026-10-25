@@ -67,6 +67,10 @@ Use `npm version VERSION --no-git-tag-version`, inspect and commit the changes,
 then merge the reviewed PR to main. Resolve current-head reviews and CI before
 merging. Do not include unrelated editor files, credentials, or build artifacts.
 
+Validate the proposed squash commit title and body with `npx --no-install commitlint`
+before merging. PR checks validate the source commits; the push check validates
+the resulting squash commit. Wrap body prose to 100 characters or fewer.
+
 ## Gates and publication
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
