@@ -78,6 +78,46 @@ class DownloadTests(unittest.TestCase):
                     prepare.fetch()
                 run.assert_not_called()
 
+    def test_signature_verification_converts_all_gpg_paths_only_for_windows(self):
+        for system in ('Windows', 'Linux'):
+            with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                downloads = root / 'downloads'
+                downloads.mkdir()
+                archive = downloads / 'ffmpeg-9.0.2.tar.xz'
+                archive.write_bytes(b'authenticated source fixture')
+                fingerprint = 'A' * 40
+                manifest = {'sources': [{'name': 'ffmpeg', 'filename': archive.name,
+                    'url': 'https://example.test/source',
+                    'sha256': prepare.hashlib.sha256(archive.read_bytes()).hexdigest()}],
+                    'ffmpeg_signature': {'url': 'https://example.test/signature',
+                        'key_url': 'https://example.test/key', 'fingerprint': fingerprint}}
+                convert = lambda value: '/msys/' + Path(value).name
+                with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'MANIFEST', manifest), \
+                        patch.object(prepare, 'download'), patch.object(prepare.platform, 'system', return_value=system), \
+                        patch.object(prepare, 'unix_path', side_effect=convert) as unix_path, \
+                        patch.object(prepare, 'run') as imported, \
+                        patch.object(prepare.subprocess, 'run', return_value=Mock(
+                            stdout=f'[GNUPG:] VALIDSIG {fingerprint}\n')) as verified:
+                    prepare.fetch()
+                import_args = [prepare.argument(value) for value in imported.call_args.args[0]]
+                verify_args = [prepare.argument(value) for value in verified.call_args.args[0]]
+                expected_prefix = ['gpg', '--batch', '--no-options', '--no-autostart', '--homedir']
+                self.assertEqual(import_args[:5], expected_prefix)
+                self.assertEqual(verify_args[:6], import_args[:6])
+                home = import_args[5]
+                self.assertIn('blink-gpg-', home)
+                self.assertFalse(Path(home).exists())
+                self.assertEqual(import_args[6:], ['--import', convert(downloads / 'ffmpeg-devel.asc')]
+                    if system == 'Windows' else ['--import', str(downloads / 'ffmpeg-devel.asc')])
+                expected_files = [downloads / 'ffmpeg-9.0.2.tar.xz.asc', archive]
+                self.assertEqual(verify_args[6:], ['--status-fd', '1', '--verify',
+                    *(convert(value) if system == 'Windows' else str(value) for value in expected_files)])
+                if system == 'Windows':
+                    self.assertTrue(home.startswith('/msys/blink-gpg-'))
+                else:
+                    unix_path.assert_not_called()
+
 
 class BuildHostTests(unittest.TestCase):
     def test_windows_requires_ucrt64_before_any_build_side_effect(self):

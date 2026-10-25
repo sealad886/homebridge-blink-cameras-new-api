@@ -158,13 +158,15 @@ def fetch():
     download(signature['url'], downloads / 'ffmpeg-9.0.2.tar.xz.asc', SIGNATURE_LIMIT)
     download(signature['key_url'], downloads / 'ffmpeg-devel.asc', KEY_LIMIT)
     # Temporary keyring is isolated; no user's GnuPG configuration/keyring is read.
-    temporary_root = tempfile.gettempdir() if platform.system() == 'Windows' else '/tmp'
+    system = platform.system()
+    gpg_path = unix_path if system == 'Windows' else argument
+    temporary_root = tempfile.gettempdir() if system == 'Windows' else '/tmp'
     with tempfile.TemporaryDirectory(prefix='blink-gpg-', dir=temporary_root) as keyring:
         os.chmod(keyring, 0o700)
-        args = ['gpg', '--batch', '--no-options', '--no-autostart', '--homedir', Path(keyring).as_posix()]
-        run(args + ['--import', downloads / 'ffmpeg-devel.asc'])
+        args = ['gpg', '--batch', '--no-options', '--no-autostart', '--homedir', gpg_path(Path(keyring))]
+        run(args + ['--import', gpg_path(downloads / 'ffmpeg-devel.asc')])
         verified = subprocess.run(args + ['--status-fd', '1', '--verify',
-            downloads / 'ffmpeg-9.0.2.tar.xz.asc', downloads / 'ffmpeg-9.0.2.tar.xz'],
+            gpg_path(downloads / 'ffmpeg-9.0.2.tar.xz.asc'), gpg_path(downloads / 'ffmpeg-9.0.2.tar.xz')],
             check=True, capture_output=True, text=True)
         lines = verified.stdout.splitlines()
         valid = [line.split()[2] for line in lines if line.startswith('[GNUPG:] VALIDSIG ')]
