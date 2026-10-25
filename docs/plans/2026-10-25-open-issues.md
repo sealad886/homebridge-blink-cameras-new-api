@@ -22,8 +22,8 @@ accessory/platform suites: 114 tests passed. No unknown blocks local source work
 ## Ordered work and milestones
 
 - [x] M1: Inventory every open issue/PR, requirements and minimal design.
-- [ ] M2: Network target reads and reconciliation regressions. **Active.**
-- [ ] M3: Optional real camera temperature, configuration, regression tests and user docs.
+- [x] M2: Network target reads and reconciliation regressions.
+- [ ] M3: Optional real camera temperature, configuration, regression tests and user docs. **Active.**
 - [ ] M4: Full local validation, independent review and conventional milestone commits.
 - [ ] M5: PR review rounds, current-head CI, gated main integration, tracker reconciliation and cleanup.
 

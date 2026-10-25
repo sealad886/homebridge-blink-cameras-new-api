@@ -570,11 +570,12 @@ describe('Accessory handlers', () => {
       const second = new Promise<void>((resolve, reject) => { finishSecond = resolve; rejectSecond = reject; });
       const accessory = new MockAccessory('Device', 'uuid-device', hap);
       let characteristic;
+      let networkHandler: NetworkAccessory | undefined;
       const isNetwork = kind === 'network';
       if (isNetwork) {
         apiClient.armNetwork.mockReturnValue(first);
         apiClient.disarmNetwork.mockReturnValue(second);
-        new NetworkAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+        networkHandler = new NetworkAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
           { id: 1, name: 'Device', armed: false });
         characteristic = accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.SecuritySystemTargetState);
       } else {
@@ -599,12 +600,28 @@ describe('Accessory handlers', () => {
       finishFirst();
       await jest.advanceTimersByTimeAsync(0);
       expect(characteristic?.value).toBe(isNetwork ? 3 : false);
+      // Target reads retain unresolved network intent; motion reads remain confirmed.
+      expect(characteristic?.onGetHandler?.()).toBe(isNetwork ? 3 : true);
+      if (isNetwork) {
+        expect(accessory.getService(hap.Service.SecuritySystem)
+          ?.getCharacteristic(hap.Characteristic.SecuritySystemCurrentState).onGetHandler?.()).toBe(1);
+      }
       if (expires) {
         const fault = isNetwork
           ? accessory.getService(hap.Service.SecuritySystem)?.getCharacteristic(hap.Characteristic.StatusFault)
           : accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')?.getCharacteristic(hap.Characteristic.StatusFault);
         expect(fault?.value).toBe(1);
         expect(isNetwork ? apiClient.disarmNetwork : apiClient.disableCameraMotion).toHaveBeenCalledTimes(1);
+        if (networkHandler) {
+          networkHandler.updateState({ id: 1, name: 'Device', armed: true });
+          expect(characteristic?.onGetHandler?.()).toBe(3);
+          expect(fault?.value).toBe(1);
+          networkHandler.updateState({ id: 1, name: 'Device', armed: false });
+          expect(characteristic?.onGetHandler?.()).toBe(3);
+          expect(fault?.value).toBe(0);
+          networkHandler.updateState({ id: 1, name: 'Device', armed: true });
+          expect(characteristic?.onGetHandler?.()).toBe(1);
+        }
       } else {
         finishSecond();
         await opposite;
@@ -727,6 +744,24 @@ describe('Accessory handlers', () => {
     handler.updateState({ ...device, armed: true });
     expect(service?.getCharacteristic(hap.Characteristic.StatusFault).value)
       .toBe(hap.Characteristic.StatusFault.NO_FAULT);
+  });
+
+  it('resolves failed network intent when a new write selects the confirmed state', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    apiClient.armNetwork.mockRejectedValueOnce(new Error('command failed'));
+    const accessory = new MockAccessory('Network', 'uuid-network', hap);
+    new NetworkAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+      { id: 1, name: 'Network', armed: false });
+    const service = accessory.getService(hap.Service.SecuritySystem)!;
+    const target = service.getCharacteristic(hap.Characteristic.SecuritySystemTargetState);
+    await expect(target.onSetHandler?.(1)).rejects.toMatchObject({ hapStatus: -70402 });
+    expect(target.onGetHandler?.()).toBe(1);
+    expect(service.getCharacteristic(hap.Characteristic.SecuritySystemCurrentState).onGetHandler?.()).toBe(3);
+    await target.onSetHandler?.(3);
+    expect(target.onGetHandler?.()).toBe(3);
+    expect(service.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(0);
+    expect(apiClient.armNetwork).toHaveBeenCalledTimes(1);
+    expect(apiClient.disarmNetwork).not.toHaveBeenCalled();
   });
 
   it('bounds network writes while late completion updates confirmed state and preserves platform fault', async () => {

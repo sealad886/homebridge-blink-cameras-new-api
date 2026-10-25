@@ -23,11 +23,15 @@
   npm token revocation confirmation; repository and npm-release environment
   secret inventories empty. No new account-side Travis audit claimed.
 - #25: deferred trigger not reproduced; no Android/device changes.
-- #48: independently reproduced by read-only debugger; source regression/fix pending.
+- #48: independently reproduced by read-only debugger. New getter assertions failed
+  in both pending/expired network cases while motion cases passed. After the
+  minimal owner fix, accessory suite passed 84 tests and production lint passed.
+  Added reconciliation and explicit confirmed-state replacement coverage.
 - #54: read-only architect verified actual config field/unit in recovered Android
   source. Proposed sensor design avoids unsupported homescreen assumptions.
 - Context7 unavailable due monthly quota; installed HAP 0.14.0 source and official
   primary provider documentation are fallback evidence.
+- Independent planner reviewed the complete design/plan with no blocking findings.
 
 ## Review source state
 
