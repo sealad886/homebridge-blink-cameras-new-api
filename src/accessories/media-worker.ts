@@ -19,24 +19,37 @@ export type WorkerSpawner = (path: string, args: string[], options: { env: Recor
 interface QueuedWrite { type: number; payload: Buffer; resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof globalThis.setTimeout>; }
 interface Pending { type: number; stream: number; resolve: (data: Buffer) => void; reject: (error: Error) => void;
   timer: ReturnType<typeof globalThis.setTimeout>; bytes?: number; }
+interface MediaConsumption { remaining: number; dispatched: boolean; resolve: () => void; reject: (error: Error) => void;
+  timer: ReturnType<typeof globalThis.setTimeout>; }
 function frame(type: number, payload: Buffer): Buffer {
   const header = Buffer.alloc(12); header.write('BMI1'); header.writeUInt32BE(type, 4); header.writeUInt32BE(payload.length, 8);
   return Buffer.concat([header, payload]);
 }
 export class PrivateMediaWorker {
   readonly whenClosed: Promise<void>;
+  readonly whenReady: Promise<void>;
+  readonly whenMediaDrained: Promise<void>;
   #failed = false;
   get failed(): boolean { return this.#failed; }
   #child: ChildProcessWithoutNullStreams; #closed = false; #stopping = false; #ended = false; #configured = false; #inputEnded = false; #inputBytes = 0;
   #buffer = Buffer.alloc(0); #processing = false; #pending = new Map<number, Pending>();
   #initialized = new Set<number>(); #initializing = new Set<number>(); #request = 0; #writing = false;
   #writingType = 0; #control?: QueuedWrite; #producer?: QueuedWrite;
+  #mediaConsumption?: MediaConsumption; #consumedBytes = 0;
+  #ready = false; #fps = 0;
+  #resolveReady!: () => void; #rejectReady!: (error: Error) => void;
+  #resolveDrained!: () => void; #rejectDrained!: (error: Error) => void;
+  #readyTimer?: ReturnType<typeof globalThis.setTimeout>; #drainTimer?: ReturnType<typeof globalThis.setTimeout>;
   #codecQueue: CodecPacket[] = []; #codecBytes = 0; #consuming = false;
   #cancel = new globalThis.AbortController(); #outputBytes = 0; #finish!: () => void;
   #life: ReturnType<typeof globalThis.setTimeout>; #frameTimer?: ReturnType<typeof globalThis.setTimeout>; #kill?: ReturnType<typeof globalThis.setTimeout>;
   constructor(path: string, private readonly callbacks: MediaWorkerCallbacks = {}, launch: WorkerSpawner = spawn) {
     if (!isAbsolute(path) || path.includes('\0')) { throw new Error('Verified worker path required'); }
     this.whenClosed = new Promise(resolve => { this.#finish = resolve; });
+    this.whenReady = new Promise((resolve, reject) => { this.#resolveReady = resolve; this.#rejectReady = reject; });
+    this.whenMediaDrained = new Promise((resolve, reject) => { this.#resolveDrained = resolve; this.#rejectDrained = reject; });
+    // Observers retain rejection semantics without requiring every stop-only caller to await them.
+    this.whenReady.catch(() => undefined); this.whenMediaDrained.catch(() => undefined);
     this.#child = launch(path, [], { env: {}, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     this.#life = globalThis.setTimeout(() => this.#fail(), MEDIA_WORKER_LIMITS.lifetimeMs);
     this.#child.stdout.on('data', (chunk: Buffer) => this.#receive(chunk));
@@ -46,13 +59,18 @@ export class PrivateMediaWorker {
     this.#child.stderr.on('data', () => {}); this.#child.stderr.on('error', () => this.#fail());
     this.#child.on('error', () => this.#fail());
     this.#child.on('close', (code: number | null) => {
-      if (!this.#stopping && (code !== 0 || !this.#ended || this.#buffer.length || this.#pending.size || this.#consuming || this.#codecQueue.length || this.#writing || this.#control || this.#producer)) { this.#failed = true; this.#rejectAll(); }
+      if (!this.#stopping && (code !== 0 || !this.#ended || this.#buffer.length || this.#pending.size || this.#mediaConsumption || this.#consuming || this.#codecQueue.length || this.#writing || this.#control || this.#producer)) { this.#failed = true; this.#rejectAll(); }
       this.#closed = true; this.#stopping = true; this.#cancel.abort(); this.#dropCodec(); this.#buffer = Buffer.alloc(0); this.#rejectAll();
       globalThis.clearTimeout(this.#frameTimer); globalThis.clearTimeout(this.#life); globalThis.clearTimeout(this.#kill); this.#finish();
     });
   }
   #dropCodec(): void { for (const packet of this.#codecQueue.splice(0)) { this.#codecBytes -= packet.data.length + 48; } }
   #rejectAll(): void {
+    globalThis.clearTimeout(this.#readyTimer); globalThis.clearTimeout(this.#drainTimer);
+    this.#rejectReady(new Error('Media worker unavailable')); this.#rejectDrained(new Error('Media worker unavailable'));
+    if (this.#mediaConsumption) {
+      globalThis.clearTimeout(this.#mediaConsumption.timer); this.#mediaConsumption.reject(new Error('Media worker unavailable')); this.#mediaConsumption = undefined;
+    }
     for (const queued of [this.#control, this.#producer]) {
       if (queued) { globalThis.clearTimeout(queued.timer); queued.payload.fill(0); queued.reject(new Error('Media worker unavailable')); }
     }
@@ -79,6 +97,7 @@ export class PrivateMediaWorker {
   }
   async #performWrite(type: number, payload: Buffer): Promise<void> {
     this.#writing = true; this.#writingType = type; const bytes = frame(type, payload);
+    if (type === 2 && this.#mediaConsumption) { this.#mediaConsumption.dispatched = true; }
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = globalThis.setTimeout(() => { cleanup(); this.#fail(); reject(new Error('Media worker write expired')); }, MEDIA_WORKER_LIMITS.requestMs);
@@ -101,19 +120,42 @@ export class PrivateMediaWorker {
     }
   }
   async configure(values: readonly number[]): Promise<void> {
-    if (this.#configured || values.length !== 10 || values.some(n => !Number.isInteger(n) || n < 0 || n > 0xffffffff)) {
+    if (this.#configured || values.length !== 13 || values.some(n => !Number.isInteger(n) || n < 0 || n > 0xffffffff)) {
       throw new Error('Invalid codec configuration');
     }
-    const payload = Buffer.alloc(40); values.forEach((value, i) => payload.writeUInt32BE(value, i * 4));
-    const write = this.#write(1, payload); this.#configured = true; await write;
+    const payload = Buffer.alloc(52); values.forEach((value, i) => payload.writeUInt32BE(value, i * 4));
+    const write = this.#write(1, payload); this.#configured = true; this.#fps = values[2];
+    this.#readyTimer = globalThis.setTimeout(() => this.#fail(), MEDIA_WORKER_LIMITS.requestMs); await write;
   }
   async media(bytes: Buffer): Promise<void> {
-    if (!this.#configured || this.#inputEnded || !bytes.length || this.#inputBytes + bytes.length > 128 * 1024 * 1024) { throw new Error('Invalid media input'); }
-    const write = this.#write(2, bytes); this.#inputBytes += bytes.length; await write;
+    if (!this.#configured || this.#inputEnded || this.#mediaConsumption || !bytes.length || bytes.length > MEDIA_WORKER_LIMITS.inputBytes || this.#inputBytes + bytes.length > 128 * 1024 * 1024) { throw new Error('Invalid media input'); }
+    let pending!: MediaConsumption;
+    const consumed = new Promise<void>((resolve, reject) => {
+      pending = { remaining: bytes.length, dispatched: false, resolve, reject,
+        timer: globalThis.setTimeout(() => this.#fail(), MEDIA_WORKER_LIMITS.requestMs) };
+      this.#mediaConsumption = pending;
+    });
+    consumed.catch(() => undefined);
+    try {
+      const write = this.#write(2, bytes); this.#inputBytes += bytes.length;
+      await Promise.all([write, consumed]);
+    } finally {
+      globalThis.clearTimeout(pending.timer);
+      if (this.#mediaConsumption === pending) { this.#mediaConsumption = undefined; }
+    }
   }
-  async endMedia(): Promise<void> { if (!this.#configured || this.#inputEnded) { throw new Error('Invalid media EOF'); } const write = this.#write(3, Buffer.alloc(0)); this.#inputEnded = true; await write; }
+  async endMedia(): Promise<void> {
+    if (!this.#configured || this.#inputEnded || this.#mediaConsumption) { throw new Error('Invalid media EOF'); }
+    const write = this.#write(3, Buffer.alloc(0)); this.#inputEnded = true;
+    this.#drainTimer = globalThis.setTimeout(() => this.#fail(), MEDIA_WORKER_LIMITS.requestMs); await write;
+  }
+  #mediaDrained(): void {
+    if (this.#ended && !this.#consuming && !this.#codecQueue.length && !this.#stopping) {
+      globalThis.clearTimeout(this.#drainTimer); this.#resolveDrained();
+    }
+  }
   finishInput(): Promise<void> {
-    if (!this.#ended || this.#pending.size || this.#writing || this.#control || this.#producer || this.#stopping || this.#consuming || this.#codecQueue.length) { throw new Error('Media worker not drained'); }
+    if (!this.#ended || this.#pending.size || this.#mediaConsumption || this.#writing || this.#control || this.#producer || this.#stopping || this.#consuming || this.#codecQueue.length) { throw new Error('Media worker not drained'); }
     this.#child.stdin.end(); return this.whenClosed;
   }
   #expect(id: number, type: number, stream: number, bytes?: number): Promise<Buffer> {
@@ -169,7 +211,7 @@ export class PrivateMediaWorker {
         if (this.#buffer.toString('ascii', 0, 4) !== 'BMO1') { throw new Error(); }
         const type = this.#buffer.readUInt32BE(4); const size = this.#buffer.readUInt32BE(8);
         const maximum = ({ 1: 8, 2: MEDIA_WORKER_LIMITS.frameBytes - 12, 3: 0, 4: MEDIA_WORKER_LIMITS.frameBytes - 12,
-          5: 4116, 10: 4, 11: 2066, 12: 2070 } as Record<number, number>)[type];
+          5: 4116, 6: 4, 10: 4, 11: 2066, 12: 2070 } as Record<number, number>)[type];
         if (maximum === undefined || size > maximum) { throw new Error(); }
         if (this.#buffer.length < 12 + size) { break; }
         globalThis.clearTimeout(this.#frameTimer); this.#frameTimer = undefined;
@@ -180,6 +222,11 @@ export class PrivateMediaWorker {
           const pending = this.#pending.get(id);
           if ((type !== 10 && size < 30) || !pending || pending.type !== type || pending.stream !== stream || (type === 10 && size !== 4) || (type !== 10 && size !== 8 + pending.bytes! + (type === 11 ? 10 : 14))) { throw new Error(); }
           this.#pending.delete(id); globalThis.clearTimeout(pending.timer); pending.resolve(body.subarray(type === 10 ? 4 : 8));
+        } else if (type === 6) {
+          const pending = this.#mediaConsumption; const total = size === 4 ? body.readUInt32BE(0) : 0;
+          const bytes = total - this.#consumedBytes;
+          if (!pending?.dispatched || bytes <= 0 || bytes > pending.remaining || total > this.#inputBytes) { throw new Error(); }
+          this.#consumedBytes = total; pending.remaining -= bytes; if (!pending.remaining) { pending.resolve(); }
         } else if (type === 2 || type === 4) {
           if (this.#ended || !this.#configured || size <= 48 || body.readUInt32BE(28) !== (type === 2 ? 1 : 2) || body.readUInt32BE(24) > 1
               || body.readUInt32BE(32) !== 1 || body.readUInt32BE(36) !== 1000000) { throw new Error(); }
@@ -188,8 +235,13 @@ export class PrivateMediaWorker {
           this.#codecQueue.push({ pts: body.readBigInt64BE(0), dts: body.readBigInt64BE(8), duration: body.readBigInt64BE(16),
             stream: type === 2 ? 1 : 2, keyframe: body.readUInt32BE(24) === 1, skipStart: body.readUInt32BE(40), skipEnd: body.readUInt32BE(44), data: body.subarray(48) });
           void this.#consume();
-        } else if (type === 1) { if (size !== 8 || body.readUInt32BE(0) !== 1 || body.readUInt32BE(4) < 1 || body.readUInt32BE(4) > 30) { throw new Error(); } }
-        else if (type === 3) { if (size || this.#ended || !this.#inputEnded) { throw new Error(); } this.#ended = true; }
+        } else if (type === 1) {
+          if (size !== 8 || !this.#configured || this.#ready || body.readUInt32BE(0) !== 2 || this.#fps < 1 || this.#fps > 30 || body.readUInt32BE(4) !== this.#fps) { throw new Error(); }
+          this.#ready = true; globalThis.clearTimeout(this.#readyTimer); this.#resolveReady();
+        } else if (type === 3) {
+          if (size || this.#ended || !this.#inputEnded) { throw new Error(); }
+          this.#ended = true; this.#mediaDrained();
+        }
         else if (type === 5) {
           if (size < 20 || body.readUInt32BE(16) !== size - 20 || ![1, 2, 3].includes(body.readUInt32BE(0))
               || body.readUInt32BE(8) !== 1 || ![8000, 16000, 24000].includes(body.readUInt32BE(4))) { throw new Error(); }
@@ -209,7 +261,7 @@ export class PrivateMediaWorker {
         signal: this.#cancel.signal, deadline: Date.now() + MEDIA_WORKER_LIMITS.requestMs,
       });
     } catch { this.#fail(); }
-    finally { this.#codecBytes -= packet.data.length + 48; this.#consuming = false; void this.#consume(); }
+    finally { this.#codecBytes -= packet.data.length + 48; this.#consuming = false; void this.#consume(); this.#mediaDrained(); }
   }
   stop(): Promise<void> {
     if (!this.#stopping && !this.#closed) {

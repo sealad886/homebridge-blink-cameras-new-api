@@ -1,5 +1,6 @@
 """Behavioral private-pipe worker tests; no provider traffic or FFmpeg CLI."""
 import os
+import re
 from pathlib import Path
 import struct
 import shutil
@@ -8,14 +9,17 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKER = ROOT / 'build/blink-codec-worker'
+def binary(name):
+    return ROOT / 'build' / (name + ('.exe' if os.name=='nt' else ''))
+WORKER = binary('blink-codec-worker')
 def frame(kind, payload=b''):
     return b'BMI1' + struct.pack('!II', kind, len(payload)) + payload
 
 def config(**changes):
-    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, reserved=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0)
+    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, reserved=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0)
     values.update(changes)
-    return frame(1, struct.pack('!10I', *values.values()))
+    if values['audio_codec']==1 and 'audio_packet_ms' not in changes:values['audio_packet_ms']=20
+    return frame(1, struct.pack('!13I', *values.values()))
 
 def messages(data):
     result = []
@@ -32,7 +36,7 @@ def messages(data):
 class WorkerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.media = subprocess.check_output([str(ROOT / 'build/fixture')], timeout=5)
+        cls.media = subprocess.check_output([str(binary('fixture'))], timeout=5)
     def run_worker(self, data):
         return subprocess.run([str(WORKER)], input=data, capture_output=True, timeout=5)
     def test_srtp_and_srtcp_published_vectors_and_correlation(self):
@@ -138,7 +142,7 @@ class WorkerTests(unittest.TestCase):
         result = self.run_worker(data)
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = messages(result.stdout)
-        self.assertEqual(rows[0], (1, struct.pack('!II', 1, 15)))
+        self.assertEqual(rows[0], (1, struct.pack('!II', 2, 15)))
         packets = [body for kind, body in rows if kind == 2]
         self.assertEqual(len(packets), 4)
         pts=[struct.unpack('!q',p[:8])[0] for p in packets]
@@ -146,10 +150,33 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(all(len(p) > 48 and p[48:52] == b'\x00\x00\x00\x01' for p in packets))
         self.assertEqual(rows[-1], (3, b''))
         self.assertEqual(result.stderr, b'')
-        decoded=subprocess.run([str(ROOT / 'build/check-output')],input=result.stdout,capture_output=True,timeout=5)
+        decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
         self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_media_consumption_credits_exactly_cover_demuxer_input(self):
+        result=self.run_worker(config()+frame(2,self.media)+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        credits=[struct.unpack('!I',body)[0] for kind,body in messages(result.stdout) if kind==6]
+        self.assertGreater(len(credits),0)
+        self.assertTrue(all(0<b-a<=32768 for a,b in zip([0]+credits,credits)))
+        self.assertEqual(credits[-1],len(self.media))
+    def test_latm_input_produces_decodable_supported_audio(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio-latm'],timeout=5)
+        for codec,rate in [(1,16000),(1,24000),(2,8000),(3,8000)]:
+            with self.subTest(codec=codec,rate=rate):
+                result=self.run_worker(config(audio_codec=codec,audio_rate=rate,audio_channels=1,audio_bitrate=24000)+frame(2,media)+frame(3))
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertTrue(any(kind==4 for kind,_ in messages(result.stdout)))
+                decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
+                self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_excessive_source_geometry_fails_closed(self):
+        for width,height in [(4098,16),(4096,2050)]:
+            with self.subTest(width=width,height=height):
+                media=subprocess.check_output([str(binary('fixture')),'video',str(width),str(height),'15','1'],timeout=10)
+                result=self.run_worker(config()+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                self.assertEqual(result.returncode,2)
+                self.assertNotIn((3,b''),messages(result.stdout))
     def test_supported_audio_packets_decode_and_preserve_source_offset(self):
-        media=subprocess.check_output([str(ROOT/'build/fixture'),'audio'],timeout=5)
+        media=subprocess.check_output([str(binary('fixture')),'audio'],timeout=5)
         for codec,rate in [(1,16000),(1,24000),(2,8000),(3,8000)]:
             with self.subTest(codec=codec,rate=rate):
                 result=self.run_worker(config(audio_codec=codec,audio_rate=rate,audio_channels=1,audio_bitrate=24000)+frame(2,media)+frame(3))
@@ -171,8 +198,48 @@ class WorkerTests(unittest.TestCase):
                 for body in encoded:
                     self.assertEqual(struct.unpack('!3I',body[28:40]),(2,1,1000000))
                     self.assertGreater(struct.unpack('!q',body[16:24])[0],0)
-                decoded=subprocess.run([str(ROOT/'build/check-output')],input=result.stdout,capture_output=True,timeout=5)
+                decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
                 self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_source_geometry_preserves_aspect_and_accepts_2k_and_square(self):
+        for width,height,inner_width,inner_height in [(2560,1440,640,360),(1920,1920,360,360),(640,480,480,360),(640,360,480,270)]:
+            with self.subTest(width=width,height=height):
+                out_width,out_height=(640,360) if width!=640 or height!=360 else (480,360)
+                media=subprocess.check_output([str(binary('fixture')),'video',str(width),str(height),'15','4'],timeout=10)
+                data=config(width=out_width,height=out_height)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
+                result=self.run_worker(data)
+                self.assertEqual(result.returncode,0,result.stderr)
+                decoded=subprocess.run([str(binary('check-output')),str(out_width),str(out_height),'4',str(inner_width),str(inner_height)],input=result.stdout,capture_output=True,timeout=5)
+                self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_output_fps_selects_source_frames_without_resetting_timestamps(self):
+        media=subprocess.check_output([str(binary('fixture')),'video','16','16','30','60','42'],timeout=5)
+        outputs=[]
+        for fps in [30,15]:
+            result=self.run_worker(config(fps=fps,max_frames=60)+frame(2,media)+frame(3))
+            self.assertEqual(result.returncode,0,result.stderr)
+            outputs.append([struct.unpack('!q',body[:8])[0] for kind,body in messages(result.stdout) if kind==2])
+        source,selected=outputs
+        self.assertEqual(len(source),60)
+        self.assertEqual(selected,source[::2])
+        self.assertGreater(source[0],0)
+    def test_negotiated_h264_profile_and_level_are_encoded(self):
+        for profile,profile_id,level,level_id in [(0,66,0,31),(1,77,1,32),(2,100,2,40)]:
+            with self.subTest(profile=profile,level=level):
+                result=self.run_worker(config(video_profile=profile,video_level=level)+frame(2,self.media)+frame(3))
+                self.assertEqual(result.returncode,0,result.stderr)
+                packet=next(body[48:] for kind,body in messages(result.stdout) if kind==2)
+                sps=re.search(b'\x00\x00(?:\x00)?\x01\x67(.{3})',packet,re.DOTALL)
+                self.assertIsNotNone(sps)
+                self.assertEqual((sps[1][0],sps[1][2]),(profile_id,level_id))
+    def test_opus_packet_duration_matches_negotiated_selection(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio'],timeout=5)
+        for rate in [16000,24000]:
+            for duration in [10,20,40,60]:
+                with self.subTest(rate=rate,duration=duration):
+                    result=self.run_worker(config(audio_codec=1,audio_rate=rate,audio_channels=1,audio_bitrate=24000,audio_packet_ms=duration)+frame(2,media)+frame(3))
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    packets=[body for kind,body in messages(result.stdout) if kind==4]
+                    self.assertGreater(len(packets),1)
+                    self.assertTrue(all(struct.unpack('!q',body[16:24])[0]==duration*1000 for body in packets[:-1]))
     def test_unsupported_audio_config_is_fatal(self):
         for changes in [dict(audio_codec=4),dict(audio_codec=1,audio_rate=8000,audio_channels=1,audio_bitrate=24000),dict(audio_codec=2,audio_rate=16000,audio_channels=1,audio_bitrate=24000),dict(audio_codec=1,audio_rate=16000,audio_channels=2,audio_bitrate=24000)]:
             self.assertEqual(self.run_worker(config(**changes)).returncode,2)
@@ -181,7 +248,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertFalse(any(kind in (4,5) for kind,_ in messages(result.stdout)))
     def test_audio_discontinuity_fails_closed(self):
-        media=subprocess.check_output([str(ROOT/'build/fixture'),'audio'],timeout=5)
+        media=subprocess.check_output([str(binary('fixture')),'audio'],timeout=5)
         result=self.run_worker(config(audio_codec=1,audio_rate=16000,audio_channels=1,audio_bitrate=24000)+frame(2,media+media)+frame(3))
         self.assertEqual(result.returncode,2)
         self.assertNotIn((3,b''),messages(result.stdout))

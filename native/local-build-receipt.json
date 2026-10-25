@@ -9,7 +9,8 @@
   "historical_receipts": [
     "receipts/video-only-local-build.json",
     "receipts/audio-srtp-homebrew-local-build.json",
-    "receipts/pre-pr50-gcc-format-local-build.json"
+    "receipts/pre-pr50-gcc-format-local-build.json",
+    "receipts/pre-protocol2-local-build.json"
   ],
   "installed_header_sha256": {
     "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
@@ -33,44 +34,55 @@
   "installed_prefix_label": "build/deps/local-eor2xuvi/prefix",
   "output_sha256": {
     "audio-capabilities": "0339571d98f14bb87f74993937a74e7f18884cc40a58e98ff8e129a95ff5802f",
-    "blink-codec-worker": "66eff29dbad2bf4d41551f532420021814ad93d8ec2ad4c6fad1ed7229388f8b",
-    "check-output": "a7981fc91708da811c53338c053f9ce174a0f1a8945808c2a0dc7a8a009f3a68",
-    "fixture": "dd52d95ea178e47e23d71c085fb98b1caef9475eb7e37e523a0c27121c5322d9"
+    "blink-codec-worker": "adfa2b42b883e539628d64c9e37657a3d10f979604405ca717d8c5cd7999d41d",
+    "check-output": "7641d47da6cc7c427a39ca45c8ad13c38cfb5e32d601932e607c883f37dcf839",
+    "fixture": "01f28b1cc7ef4d78f684ed955c4079e3ab73892d680157161c9b5af7bf318c16"
   },
+  "parent_source_sha256": {
+    "__tests__/media-worker.test.ts": "54ee2ef0270af5b41f162aef6d70ad73fc7b43b3eef709de778f022e1a550b05",
+    "docs/audits/private-media-worker-client-prototype.md": "5337b00902161d4923ca88962a954ae4d58ea53da2ac312aaf529172f625e9bc",
+    "src/accessories/media-worker.ts": "274eb2ad5b81510a321e789bb60f3f07099762f06aed29f5422ce81b122e0376"
+  },
+  "protocol_version": 2,
   "prototype_source_sha256": {
-    "AUDIO-OUTPUT-GATES.md": "a82602969bf0f8caeed2fdcbf37f71b70cdbc238bcc5d5b5ed5400534bbc8f93",
+    "AUDIO-OUTPUT-GATES.md": "60dee9b277fa2988c144d6c1f03bd5990cbcf009ab45c199710590e3d2fb82df",
     "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-    "Makefile": "94cc9c9183aa36cbfe7870d595694e0a5796e4c93d19bf4c1670e5e677fedc61",
-    "README.md": "6d9330a44582ffbfa2b23ab8245cac3c5e1a082beee236690eea9bd053c63f90",
-    "RTSP-ALTERNATIVES.md": "3b85475293c9e3b4fb541fb7bcdafa1e984c4eb4ee38e9558a9e742b909f1df9",
-    "audio.inc": "73c0639264d9e3acdfb25a57593069ffc8c1a112ea41fe8aa744a1f48b9d6660",
+    "Makefile": "6876315005eda581feb9c0821cbbe385385adda4d357243f214c6489a066b627",
+    "README.md": "33f3053941b79d6201aeeb64b58ac94911f1158e2fdcb0be7575c85be87813dd",
+    "RTSP-ALTERNATIVES.md": "5422068eb8545682f362634981fec1cc1be2a0d9fdf93165dd2e6b3988b34d77",
+    "audio.inc": "b1bcf87e9ba25e42d853e837b698f39bf2f7a39d5041bef2c30110b0a16f1d73",
     "dependencies/licenses/libsrtp-LICENSE": "6254b8adcb68109dc150f3b7243c771478360cd64f22860e715e7265b7b3bb78",
     "output.inc": "bd62b142324b9730af57e9ae12ee15276be42ce71b0956fc72a21511f28e893b",
     "protection.inc": "79afb10696448af99fe6cf44fda83cd76cfc5bda4daac90be55b116b34bd03d1",
-    "protocol.h": "e5a0bc85fe2c34c4e6ab3c5466d6fb1e03312180b53fb34e1310fa48a5da1380",
+    "protocol.h": "1c2f6ca902aec4ceab275d204c2f71d2bfbf32c9e99d40c4a9f6a5fca9e9b45a",
     "receipts/pr50-gcc-indentation-review.md": "969cef9c914cd5681f7b349ba2f979cb4657c7b621cb14913e8d2574e4c44bc8",
     "tests/audio-capabilities.c": "2eaa868a8b6f0f268402eb88c3fab2ad289033a0d6edda13f685898a96ce3d29",
-    "tests/check-output.c": "d6987e0e62b79ea66ac2bf7e8492867ca2beda0162d6ec7af17e0e7be79105d4",
-    "tests/fixture.c": "2675e620e55bb0ab1e7b84a68ca6826280ece63ce9ab077cc2e2940261a5deeb",
-    "tests/test_worker.py": "8d66725d699a47e9882321923ac5859add5c90780c215e8d3f9d464746517974",
-    "worker.c": "02db1d217bf5ee4130fda999791d84e684e810d2eeb934a608fed5cefd85ce67"
+    "tests/check-output.c": "07046206711d6726dc1192015b176fabd9c1b32840332190d3fdcfa540cc1ca6",
+    "tests/fixture.c": "d102d03d1e041fda795a8425d72e10de847f142f1eb9f174d8f4c586b82aa4da",
+    "tests/test_worker.py": "8a4fcedadc8ec8b1d6e27e27d6c8e763a398062a9f976bd9bcbbc6c5d219b001",
+    "worker.c": "908fc57e64aa00a19cd9852eb0aefb8054e1bad6591763e6534bb009fda1a886"
   },
+  "recorded_at": "2026-10-25T22:52:06.171784+00:00",
   "scope": "local macOS arm64 static worker development build; not a distribution receipt",
   "upstream_source_commit": "FFmpeg commit unverified; verified release archive identity recorded below",
   "validation": {
     "audio_capability_probe": "Opus/PCMA/PCMU opened; AAC-ELD rejected with -22",
     "checker": "same verified static prefix as worker, fixture and capability probe",
+    "checks": "TypeScript noEmit; focused media-worker ESLint; strict GCC14/GCC16 C11 syntax checks; scoped diff check",
     "command": "make -B -C native FFMPEG_PREFIX=<verified static prefix> SRTP_PREFIX=<verified static prefix> test",
     "crash_limit": "POSIX worker runtime sets/verifies own RLIMIT_CORE soft/hard=0; no secret-bearing crash triggered; Windows error-mode source-only",
+    "dependency_recipe_scope": "Retained verified local-eor2xuvi prefix from earlier source build; newly extended cross-target dependency recipe and Windows target are not proved by this local receipt",
     "gcc_syntax_checks": [
       "GCC14.4.0 strict syntax-only all owned native translation units/includes/C helpers",
       "GCC16.2.0 strict syntax-only all owned native translation units/includes/C helpers"
     ],
+    "parent_client": "35 worker/client tests and 32 owned-LAN-output tests passed, including native fragmented MPEGTS, same-pipe protection and graceful drain/closure",
     "pattern_gate": "eight CI diagnostic sites corrected; local/regional/native-wide direct fallback; relevant Codanna included helper symbols not indexed",
     "process_surface_check": "owned synthetic child ps argv/environment, INIT reply, fixed malformed-frame diagnostics; tests run outside sandbox because sandbox blocks ps",
+    "protocol_2": "2K/square aspect padding and SAR; source-clock 30-to-15 selection; H264 SPS profiles/levels; AAC and LATM input; Opus packet duration; cumulative media consumption credits",
     "scope": "macOS arm64 only; no physical runtime/distribution proof",
     "srtp": "published RTP/SRTCP vectors through IPC, post-codec-END protection, stdout deadline and independent STOP",
-    "tests_passed": 19
+    "tests_passed": 26
   },
   "verified_source_inputs": {
     "ffmpeg_signature": {

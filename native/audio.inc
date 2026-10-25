@@ -59,7 +59,10 @@ static void audio_open(AVCodecParameters *params,AVRational time_base) {
     codec=avcodec_find_encoder_by_name(name);audio_encoder=avcodec_alloc_context3(codec);if(!audio_encoder)fatal("AUDIO_ENCODER");
     audio_encoder->sample_fmt=AV_SAMPLE_FMT_S16;audio_encoder->sample_rate=(int)config[7];audio_encoder->bit_rate=config[9];audio_encoder->thread_count=1;
     av_channel_layout_default(&audio_encoder->ch_layout,1);audio_encoder->time_base=(AVRational){1,(int)config[7]};
-    if(avcodec_open2(audio_encoder,codec,NULL)<0)fatal("AUDIO_ENCODER");
+    AVDictionary *options=NULL;
+    if(config[6]==1 && av_dict_set_int(&options,"frame_duration",config[12],0)<0)fatal("MEMORY");
+    if(avcodec_open2(audio_encoder,codec,&options)<0)fatal("AUDIO_ENCODER");
+    av_dict_free(&options);
     if(audio_encoder->extradata_size<0 || audio_encoder->extradata_size>4096)fatal("AUDIO_LIMIT");
     uint8_t info[4116];put32(info,config[6]);put32(info+4,config[7]);put32(info+8,1);put32(info+12,(uint32_t)audio_encoder->initial_padding);put32(info+16,(uint32_t)audio_encoder->extradata_size);
     if(audio_encoder->extradata_size) {

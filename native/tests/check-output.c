@@ -2,10 +2,17 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <libavcodec/avcodec.h>
 static uint32_t u32(const uint8_t *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static void quiet(void *p,int n,const char *f,va_list a){(void)p;(void)n;(void)f;(void)a;}
-int main(void){
+int main(int argc,char **argv){
+    int width=16,height=16,expected_count=4,inner_width=16,inner_height=16;
+    if(argc!=1){
+        if(argc!=6)return 2;
+        width=atoi(argv[1]);height=atoi(argv[2]);expected_count=atoi(argv[3]);inner_width=atoi(argv[4]);inner_height=atoi(argv[5]);
+        if(width<2 || height<2 || expected_count<1 || inner_width<2 || inner_height<2 || inner_width>width || inner_height>height)return 2;
+    }
     av_log_set_callback(quiet);
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);AVCodecContext *decoder=avcodec_alloc_context3(codec);
     if(!decoder || avcodec_open2(decoder,codec,NULL)<0)return 2;
@@ -44,14 +51,17 @@ int main(void){
             memmove(packet->data,packet->data+48,length-48);packet->size=(int)length-48;
             if(avcodec_send_packet(decoder,packet)<0)return 2;
             while(avcodec_receive_frame(decoder,frame)>=0){
-                if(frame->width!=16 || frame->height!=16 || count>=4)return 2;
-                int expected=32+count*32,actual=frame->data[0][0];
+                if(frame->width!=width || frame->height!=height || count>=expected_count)return 2;
+                if(frame->sample_aspect_ratio.num && frame->sample_aspect_ratio.num!=frame->sample_aspect_ratio.den)return 2;
+                int expected=32+(count%4)*32,actual=frame->data[0][(height/2)*frame->linesize[0]+width/2];
                 if(actual<expected-3 || actual>expected+3)return 2;
+                if(inner_width<width && (frame->data[0][(height/2)*frame->linesize[0]]>19 || frame->data[0][(height/2)*frame->linesize[0]+width-1]>19))return 2;
+                if(inner_height<height && (frame->data[0][width/2]>19 || frame->data[0][(height-1)*frame->linesize[0]+width/2]>19))return 2;
                 count++;av_frame_unref(frame);
             }
         }else if(type==3)ended=1;
         av_packet_unref(packet);
     }
     av_frame_free(&frame);av_packet_free(&packet);avcodec_free_context(&decoder);int good_audio=!audio || (audio_count>0 && energy>1);avcodec_free_context(&audio);
-    return ended && count==4 && good_audio?0:2;
+    return ended && count==expected_count && good_audio?0:2;
 }

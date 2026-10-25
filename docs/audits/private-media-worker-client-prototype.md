@@ -39,3 +39,35 @@ Physical provider/HomeKit, audiovisual playback, RTCP cadence, all five native t
 R2 corrected chunk-size aggregate admission into per-frame incremental parse. R3 corrected natural closure accounting so dropping accepted codec work cannot report success. R4 confirmed shared write admission rejected legitimate protection during pending MEDIA and retired worker; corrected one reserved bounded control slot with priority and cancellation. Local/regional/global pattern gate plus Codanna/source confirmation appended to `/tmp/blink-media-worker-pattern.md` before edits. Five regressions prove maximum frame+next fragmented payload, undrained vs drained natural closure, protection behind held MEDIA, and STOP fencing reserved control plus late MEDIA callback. Final two suites46/46 pass including real pinned worker RTP/SRTCP vectors,1.083s; TypeScript/focused ESLint pass. Scope remains prototype client/tests/evidence only.
 
 R4 sequential follow-up: native control dispatch precedes prior MEDIA await continuation, so sequential producer must be admitted behind active CONTROL. Added exactly one producer slot (MEDIA/END), copying at most64KiB, while additional producers reject. State/quota changes occur after admission; rejected END leaves EOF retryable. Three new regressions prove sequential MEDIA and END behind held protection, bounded extra-producer rejection, and STOP/latecontrolcompletion fencing. Final bothmedia suites49/49 pass including published native RTP/SRTCP vectors; TypeScript/focused ESLint pass. Pattern scope confirmed before edits in same gate record.
+
+
+## 25 October 2026: protocol 2 codec milestone
+
+The earlier protocol-1 receipts above are historical. Current worker/client use a
+52-byte CONFIG with thirteen u32 fields: the previous ten fields followed by
+H264 profile (Baseline/Main/High = 0/1/2), level (3.1/3.2/4.0 = 0/1/2), and Opus
+packet duration (10/20/40/60 ms, zero for other codecs). STATUS reports version 2
+and must uniquely match configured fps. Native level validation checks geometry
+and macroblock rate before accepting configuration.
+
+Output type 6 carries a strictly increasing u32 cumulative media-consumption
+count. The native demuxer emits progress only when bytes leave its bounded ring.
+Client `media()` permits one chunk of at most 64 KiB and waits, within two seconds,
+for both pipe-write completion and credits covering that chunk. Duplicate,
+backwards, excessive or unsolicited credit retires the worker. Reserved
+protection/control admission and independent STOP remain intact.
+
+`whenReady` resolves after validated STATUS, bounded from accepted CONFIG.
+`whenMediaDrained` resolves after output END and all active/queued packet callbacks
+complete, bounded from accepted input END. Failure and STOP reject both observers;
+internal rejection handlers avoid unhandled rejections for stop-only clients.
+Callers await media drain and final protection work, then `finishInput()` for actual
+process/pipe closure. These observations do not establish network or Home playback.
+
+Fresh macOS arm64 evidence: native suite 26/26 including metadata inspection
+outside the sandbox; worker/client plus LAN-output suites 67/67, including actual
+37-byte MPEG-TS fragmentation, same-pipe RTP protection from codec callbacks and
+graceful drain/closure. Strict C11 builds, GCC 14/16 syntax checks, TypeScript and
+focused ESLint pass. See `native/local-build-receipt.json` for exact local binary
+and source identities. Five-target execution, runtime integration, supported
+crash-output secrecy, physical acceptance and F05/F06 closure remain unproved.
