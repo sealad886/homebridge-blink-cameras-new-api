@@ -1,8 +1,10 @@
 """Offline source-fetch invariants; no provider traffic or build execution."""
 import importlib.util
 import io
+import json
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch, Mock
 import urllib.request
@@ -73,6 +75,90 @@ class DownloadTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Checksum mismatch: ffmpeg'):
                     prepare.fetch()
                 run.assert_not_called()
+
+
+class BuildHostTests(unittest.TestCase):
+    def test_windows_requires_ucrt64_before_any_build_side_effect(self):
+        with patch.dict(prepare.os.environ, {'MSYSTEM': 'MSYS'}, clear=True):
+            with self.assertRaisesRegex(ValueError, 'UCRT64'):
+                prepare.build_environment(Path('/private/prefix'), 'Windows')
+
+    def test_windows_environment_keeps_process_runtime_but_drops_ambient_build_flags(self):
+        with patch.dict(prepare.os.environ, {'MSYSTEM': 'UCRT64', 'PATH': 'compiler-path',
+                'SystemRoot': 'C:/Windows', 'TEMP': 'C:/Temp', 'CFLAGS': 'hostile',
+                'PKG_CONFIG_PATH': 'ambient', 'HTTP_PROXY': 'secret'}, clear=True):
+            env = prepare.build_environment(Path('/private/prefix'), 'Windows')
+        self.assertEqual(env['SystemRoot'], 'C:/Windows')
+        self.assertEqual(env['MSYSTEM'], 'UCRT64')
+        self.assertEqual(env['CC'], 'gcc')
+        self.assertIn('-static', env['LDFLAGS'])
+        self.assertEqual(env['PKG_CONFIG_PATH'], '')
+        self.assertNotIn('hostile', env['CFLAGS'])
+        self.assertNotIn('HTTP_PROXY', env)
+
+    def test_posix_environment_does_not_inherit_windows_or_compiler_overrides(self):
+        with patch.dict(prepare.os.environ, {'PATH': '/tools', 'CC': 'ambient',
+                'MSYSTEM': 'UCRT64', 'SystemRoot': 'C:/Windows'}, clear=True):
+            env = prepare.build_environment(Path('/private/prefix'), 'Linux')
+        self.assertNotIn('CC', env)
+        self.assertNotIn('MSYSTEM', env)
+        self.assertNotIn('SystemRoot', env)
+        self.assertEqual(env['PKG_CONFIG_LIBDIR'], '/private/prefix/lib/pkgconfig')
+
+    def test_unsupported_build_host_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported native build host'):
+            prepare.build_environment(Path('/private/prefix'), 'FreeBSD')
+
+    def test_windows_configure_uses_bash_and_converted_script_path(self):
+        with patch.object(prepare.subprocess, 'check_output', return_value='/c/work/configure\n'):
+            command = prepare.configure_command(Path('C:/work/configure'), ['--disable-network'], 'Windows')
+        self.assertEqual(command, ['bash', '/c/work/configure', '--disable-network'])
+
+    def test_posix_configure_needs_no_shell(self):
+        self.assertEqual(prepare.configure_command(Path('/work/configure'), ['--disable-network'], 'Linux'),
+                         ['/work/configure', '--disable-network'])
+
+
+class WorkerArtifactTests(unittest.TestCase):
+    def test_archive_carries_exact_worker_hash_and_dependency_receipt_without_release_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            build = Path(directory)
+            prefix = build / 'deps' / 'local-test' / 'prefix'
+            prefix.mkdir(parents=True)
+            dependency = {'recipe_sha256': prepare.RECIPE_SHA256, 'distribution_ready': False,
+                          'source_inputs': prepare.MANIFEST}
+            (prefix.parent / 'normalized-build-receipt.json').write_text(json.dumps(dependency))
+            worker = build / 'blink-codec-worker'
+            worker.write_bytes(b'synthetic worker, never executed')
+            output = build / 'worker.tar.gz'
+            with patch.object(prepare, 'ROOT', build / 'deps'), patch.object(prepare.platform, 'system', return_value='Linux'), \
+                    patch.object(prepare.platform, 'machine', return_value='x86_64'), \
+                    patch.object(prepare, 'audit_dependencies', return_value='system libraries'):
+                prepare.write_worker_artifact(prefix, worker, output, 'a' * 40)
+                with self.assertRaises(FileExistsError):
+                    prepare.write_worker_artifact(prefix, worker, output, 'a' * 40)
+            with tarfile.open(output) as archive:
+                receipt = json.load(archive.extractfile('worker-receipt.json'))
+                self.assertEqual(receipt['target'], 'linux-x64')
+                self.assertEqual(receipt['source_sha'], 'a' * 40)
+                self.assertEqual(receipt['sha256'], prepare.hashlib.sha256(worker.read_bytes()).hexdigest())
+                self.assertEqual(receipt['dependencies'], dependency)
+                self.assertFalse(receipt['distribution_ready'])
+                self.assertEqual(archive.extractfile('blink-codec-worker').read(), worker.read_bytes())
+                self.assertEqual(archive.getmember('blink-codec-worker').mode, 0o755)
+
+    def test_windows_import_audit_rejects_toolchain_runtime_dlls(self):
+        with patch.object(prepare.subprocess, 'check_output', return_value='DLL Name: libwinpthread-1.dll\n'):
+            with self.assertRaisesRegex(ValueError, 'Non-system Windows dependency'):
+                prepare.audit_dependencies(Path('worker.exe'), 'Windows', {})
+
+    def test_windows_import_audit_accepts_only_system_imports_and_requires_evidence(self):
+        system_imports = 'DLL Name: KERNEL32.dll\nDLL Name: api-ms-win-crt-runtime-l1-1-0.dll\n'
+        with patch.object(prepare.subprocess, 'check_output', return_value=system_imports):
+            self.assertEqual(prepare.audit_dependencies(Path('worker.exe'), 'Windows', {}), system_imports)
+        with patch.object(prepare.subprocess, 'check_output', return_value='not a PE import dump'):
+            with self.assertRaises(ValueError):
+                prepare.audit_dependencies(Path('worker.exe'), 'Windows', {})
 
 
 if __name__ == '__main__':

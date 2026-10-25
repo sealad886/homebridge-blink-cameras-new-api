@@ -16,9 +16,11 @@ Run with the repository's existing Python environment:
 First command downloads into ignored `native/build/deps/downloads`, verifies all
 four archive SHA-256 values in `source-inputs.json`, and verifies FFmpeg's detached
 signature against its exact pinned release-key fingerprint using a fresh temporary
-keyring. It never reads or changes the user's GnuPG keyring. Temporary keyring lives
-under unique `/tmp/blink-gpg-*` because long project paths can exceed agent socket
-limits. Existing downloads are verified before use; checksum failures stop without
+keyring. It never reads or changes the user's GnuPG keyring. GnuPG agent autostart
+is disabled: public-key signature verification needs no private-key service. Temporary keyring lives
+under unique `/tmp/blink-gpg-*` on POSIX because long project paths can exceed agent
+socket limits; Windows uses its process temporary directory. Existing downloads
+are verified before use; checksum failures stop without
 extracting or building. Build command extracts authenticated archives into a fresh
 ignored `native/build/deps/local-*`, builds into that directory, and installs only
 into its own `prefix`. Earlier local build directories are preserved.
@@ -28,8 +30,10 @@ only its library/header/pkg-config files into prefix; Opus/libSRTP CMake install
 uses supplied CMAKE_INSTALL_PREFIX; FFmpeg installation uses explicit --prefix.
 No package manager, system installation, sudo, remote execution, or publishing
 occurs. Upstream configure/compiler probes and local archive creation are expected.
-Build commands inherit PATH and locale/temp settings only; dependency pkg-config
-resolution points exclusively at isolated prefix, with autodetection disabled.
+POSIX build commands inherit PATH and locale/temp settings only. Windows additionally
+retains required process runtime paths and the explicit UCRT64 selector; ambient
+compiler flags, proxy settings and pkg-config paths are excluded. Dependency
+pkg-config resolution points exclusively at isolated prefix, with autodetection disabled.
 
 ## Provenance
 
@@ -66,23 +70,45 @@ Source archives, precise recipe, compiler/toolchain identification, complete not
 and target artifacts must accompany any future corresponding-source distribution.
 This directory alone is not a distribution compliance or release approval claim.
 
-Local recipe currently supports Darwin/Linux native hosts; macOS deployment target
-13.0 is requested. Linux baseline glibc, Windows toolchain recipe, macOS x64,
-Linux arm64/x64, all target audits and independent verification remain gates.
-No cross-target support is inferred from portable C source or a successful arm64 build.
+Recipe supports Darwin/Linux native hosts and a native Windows MSYS2 UCRT64 candidate.
+Windows refuses the MSYS/Cygwin compiler environment: it requires `MSYSTEM=UCRT64`
+and a GCC target of `x86_64-w64-mingw32`. POSIX configure scripts are launched through
+MSYS2 Bash, with their script paths converted by `cygpath`; installation and native
+compiler paths use forward-slash Windows paths. CMake uses the native MinGW build
+and explicit Ninja generator. Static MinGW runtime flags and Winsock linkage are
+explicit. This follows [FFmpeg's native Windows guidance](https://ffmpeg.org/platform.html#Windows),
+[MSYS2 environments](https://www.msys2.org/docs/environments/) and
+[MSYS2 CMake guidance](https://www.msys2.org/docs/cmake/).
 
-## Prototype CI validation
+macOS deployment target13.0 remains requested. Linux glibc/kernel baseline, actual
+macOS13 execution, Windows minimum-version execution, all target clean-host audits
+and independent verification remain release gates. The native Windows recipe and
+new CI lanes have not yet supplied hosted execution evidence. No cross-target
+support is inferred from portable C source or a successful arm64 build.
 
-Existing Test workflow now defines separate native-validation job for Ubuntu22.04
-x64 and macOS15 arm64. These labels/architectures were checked against current
+## Native candidate CI validation
+
+Test workflow defines five native source-build candidates: `linux-x64` on
+`ubuntu-22.04`, `linux-arm64` on `ubuntu-22.04-arm`, `darwin-arm64` on `macos-15`,
+`darwin-x64` on `macos-15-intel`, and `win32-x64` on `windows-2022`. Labels and
+architectures were checked against the current
 [GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Current [Ubuntu22.04 image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2204-Readme.md)
-and [macOS15 arm64 inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)
-were consulted. Job verifies available tools before use, selects Python3.12 through
-setup-python v7.0.0 at checked tag commit `5fda3b95a4ea91299a34e894583c3862153e4b97`,
-and installs no native packages. Source-build/test job uploads or publishes no binaries.
+Each lane verifies actual native architecture before building. POSIX selects
+Python3.12 using the existing pinned setup-python action. Windows uses the native
+UCRT64 Python package and requires Python3.12 or newer.
 
-`--disable-assembly` disables x264/FFmpeg assembly explicitly for prototype CI,
+Windows installs its build tools only in the ephemeral CI job through
+`msys2/setup-msys2` v2.29.0, pinned to verified tag commit
+`fb197b72ce45fb24f17bf3f807a388985654d1f2`. Its
+[checked action inputs](https://github.com/msys2/setup-msys2/blob/fb197b72ce45fb24f17bf3f807a388985654d1f2/action.yml)
+select UCRT64, disabled action cache and explicit GNU Make/GnuPG/diffutils plus
+native GCC/CMake/Ninja/pkgconf/Python packages. MSYS2's signed package workflow
+supplies tools, not prebuilt codec libraries. All four codec/security libraries
+still build from the unchanged verified source pins. Actual package inventory is
+retained in the dependency receipt; compiler/tool versions are not claimed fixed
+by the action pin. No local package installation or service change is involved.
+
+`--disable-assembly` disables x264/FFmpeg assembly explicitly for candidate CI,
 avoiding assembler installation. This sacrifices performance and does not establish
 production real-time behavior. Opus may still use compiler-supported intrinsics.
 Verification decoders for Opus/PCMA/PCMU are selected to independently decode worker
@@ -94,7 +120,28 @@ subdirectory is used. Existing/outside paths are rejected before fetching; raw b
 receipts stay ignored. A normalized-build-receipt.json replaces checkout root with
 `<checkout>` for portable evidence, without changing hashes or verification facts.
 Recipe hash is captured at process startup; receipts identify executed recipe even
-if another agent edits source while long build runs.
+if another agent edits source while long build runs. Existing historical receipts
+remain historical; their hashes do not imply acceptance of the new recipe.
+
+Dependency smoke executables and final workers receive native dependency audits:
+`readelf -d` on Linux, `otool -L` on Darwin, and `objdump -p` on Windows. Windows
+fails for missing PE import evidence or imports outside the explicit system DLL
+set, including MinGW/MSYS runtime DLLs. This is a bounded dependency gate; it does
+not establish Windows crash-policy or minimum-OS behavior.
+
+Only after native behavioral, parent IPC and actual LAN output integration tests
+pass (`BLINK_MEDIA_NETWORK_TEST=1`), the job creates one tar
+containing the worker with executable mode and a receipt binding source SHA,
+worker SHA256, actual dependency/source recipe receipt and dynamic imports.
+The existing pinned upload-artifact action retains that candidate for seven days.
+`distribution_ready` remains false. No package file list, publish workflow or
+runtime loader is changed here. These temporary CI artifacts omit complete
+corresponding source and are not the permanent source distribution required for
+release. Exact npm tarball verification, all five successful hosted results,
+fresh-host tests and license/source closure remain mandatory before publication.
+Local network filtering can prevent the opt-in LAN test from receiving packets;
+such failures are retained as environment evidence and do not waive the hosted
+network gate. A passing unit suite does not replace actual socket reception.
 
 Downloads require HTTPS including redirects, fixed archive64MiB/key1MiB/signature64KiB
 actual-byte limits, and unique partial files renamed atomically only on completion.
@@ -102,6 +149,9 @@ Interruption/overflow removes only owned temporary file. Offline checks cover ex
 limit, limit+1, false/missing Content-Length, interrupted cleanup, HTTPS rejection,
 and cached checksum failure before signature/build execution.
 
-The Ubuntu x64 and macOS arm64 prototype jobs have run successfully in release-source CI, including the RC.19 validation recorded in [PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79). This verifies source-build/test scope, not production artifact distribution or installed media integration.
-Windows/macOS x64/Linux arm64 and all five baseline/runtime/artifact acceptance
-remain open. macOS15 CI does not prove macOS13 runtime compatibility.
+The prior Ubuntu x64/macOS arm64 prototype jobs ran successfully in release-source
+CI, including RC.19 validation recorded in [PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79).
+That historical source-build/test evidence does not prove this changed recipe or
+the added Windows/macOS x64/Linux arm64 lanes. All five final baseline/runtime/
+artifact acceptance gates remain open. macOS15 CI does not prove macOS13 runtime
+compatibility; Windows Server2022 CI does not prove a Windows10 minimum baseline.
