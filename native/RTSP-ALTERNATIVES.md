@@ -113,7 +113,9 @@ input and fences later callbacks; partial EOF fails with fixed diagnostics.
 Focused tests cover fragmented/coalesced frames, valid TS extraction, session
 and control escape rejection, framing/size/source failures and cancellation.
 They neither establish numeric socket enforcement nor close F05/F06.
-The production destination helper still admits only IMMIS. Do not add an RTSP
-dialer, expand its allowlist or claim TLS identity/port completeness from these
-fixtures. Actual RTSPS authority/auth evidence, owned numerical connection and
-TLS tests, full packet/timing behavior and runtime cutover remain gates.
+The shared destination helper now admits a conservative RTSPS/332 descriptor
+using the source-backed TLS mechanism above, alongside IMMIS/443. This does not
+open a socket or change camera playback. Do not expand ports/authority or claim
+provider interoperability from fixtures. Owned numerical connection and TLS
+tests, actual provider-valid flow, full packet/timing behavior and runtime
+cutover remain gates.
