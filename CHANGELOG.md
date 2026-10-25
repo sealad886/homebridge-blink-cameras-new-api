@@ -15,7 +15,7 @@ owns subsequent acceptance and finding dispositions.
 - Update the development-only URI parser to fast-uri 3.1.9, addressing its URI parsing and normalization advisories.
 
 ### Beta scope and acceptance
-- Plugin runtime behavior, saved configuration and production dependencies are unchanged from 0.10.0. Superseded branch implementations are not restored by repository consolidation.
+- Plugin runtime behavior, saved configuration and production dependencies are unchanged from 0.10.0.
 - F05/F06 remain open with the existing runtime controls and limitations. The native worker remains a development prototype; talkback remains disabled.
 - Follow the [release guide](docs/RELEASE.md) for installation and beta acceptance. Automated checks do not establish physical hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta.
 
