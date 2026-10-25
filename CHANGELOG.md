@@ -7,6 +7,17 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [0.10.1-beta.0] - 2026-10-25
+
+### Development tooling
+- Validate complete pull-request and push commit ranges with pinned commitlint 20.5.3. Generated dependency-update messages with long URLs now pass the upstream URL exception; malformed subjects and oversized non-URL prose remain rejected.
+- Update the pinned Python setup action to 7.1.0 for native prototype validation.
+
+### Beta scope and acceptance
+- Plugin runtime behavior, saved configuration and production dependencies are unchanged from 0.10.0. Superseded branch implementations are not restored by repository consolidation.
+- F05/F06 remain open with the existing runtime controls and limitations. The native worker remains a development prototype; talkback remains disabled.
+- Follow the [release guide](docs/RELEASE.md) for installation and beta acceptance. Automated checks do not establish physical hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta.
+
 ## [0.10.0] - 2026-10-23
 
 ### Added
