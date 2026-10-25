@@ -90,6 +90,12 @@
         "minimum": 0,
         "maximum": 300
       },
+      "exposeTemperature": {
+        "title": "Expose Camera Temperature",
+        "type": "boolean",
+        "default": false,
+        "description": "Expose reported temperature for supported traditional Blink cameras. Adds one metadata request per enabled camera per state poll; does not wake the camera. Restart the child bridge after saving."
+      },
       "persistSnapshotCache": {
         "title": "Persist Snapshot Cache Until Manual Refresh",
         "description": "Keep the last successful snapshot indefinitely instead of expiring by TTL. When enabled, each camera exposes a 'Refresh Snapshot' switch in Home to fetch a new thumbnail on demand.",
@@ -292,6 +298,11 @@
               ],
               "description": "Per-camera Blink source quality. Automatic preserves existing quality and remembers first observed input. Explicit selection changes Blink camera configuration and recordings too; dimensions depend on camera model and subscription."
             },
+            "exposeTemperature": {
+              "title": "Expose Temperature",
+              "type": "boolean",
+              "description": "Override the global temperature setting for this camera. Leave unset to inherit."
+            },
             "motionTimeout": {
               "title": "Motion Timeout (seconds)",
               "type": "integer",
@@ -332,7 +343,8 @@
         "motionTimeout",
         "enableMotionPolling",
         "snapshotCacheTTL",
-        "persistSnapshotCache"
+        "persistSnapshotCache",
+        "exposeTemperature"
       ]
     },
     {
@@ -392,6 +404,7 @@
           "items": [
             "deviceSettingOverrides[].deviceIdentifier",
             "deviceSettingOverrides[].motionTimeout",
+            "deviceSettingOverrides[].exposeTemperature",
             "deviceSettingOverrides[].inputQuality"
           ]
         }

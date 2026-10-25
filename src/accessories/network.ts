@@ -87,12 +87,12 @@ export class NetworkAccessory {
   }
 
   /**
-   * Get target arm state (same as current for Blink)
+   * Preserve the latest unresolved intent independently of confirmed state.
    */
   private getTargetState(): CharacteristicValue {
     const { SecuritySystemTargetState } = this.platform.Characteristic;
 
-    return this.device.armed
+    return (this.failedTarget ?? this.device.armed)
       ? SecuritySystemTargetState.AWAY_ARM
       : SecuritySystemTargetState.DISARM;
   }
@@ -109,6 +109,9 @@ export class NetworkAccessory {
 
     // Skip if already in desired state
     if (this.pendingOperations === 0 && shouldArm === this.device.armed) {
+      this.failedTarget = undefined;
+      this.operationFault = false;
+      this.updateAvailability();
       return;
     }
 
@@ -180,7 +183,7 @@ export class NetworkAccessory {
           device.armed ? SecuritySystemCurrentState.AWAY_ARM : SecuritySystemCurrentState.DISARMED,
         );
 
-      if (this.pendingOperations === 0) {
+      if (this.pendingOperations === 0 && this.failedTarget === undefined) {
         this.service
           .getCharacteristic(SecuritySystemTargetState)
           .updateValue(

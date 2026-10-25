@@ -129,6 +129,41 @@ describe('BlinkApi', () => {
     await expect((api as unknown as BlinkApi).completeCommand(5, 7)).resolves.toBeNull();
   });
 
+  describe('camera temperature metadata', () => {
+    it.each([{}, { signals: null }, { signals: {} }, { signals: { temp: null } }])(
+      'does not fabricate missing temperature from %j', async body => {
+        const { api, http } = createApi(); api.accountId = 10;
+        http.get.mockResolvedValue(body);
+        await expect((api as unknown as BlinkApi).getCameraTemperature(5, 7)).resolves.toBeUndefined();
+      },
+    );
+    it.each([null, [], { signals: [] }, { signals: '68' }, ...['68', false, NaN, Infinity, -Infinity, -455, 213]
+      .map(temp => ({ signals: { temp } }))])('rejects invalid temperature metadata %j', async body => {
+      const { api, http } = createApi(); api.accountId = 10;
+      http.get.mockResolvedValue(body);
+      await expect((api as unknown as BlinkApi).getCameraTemperature(5, 7)).rejects.toThrow(/temperature metadata/);
+    });
+    it('validates identifiers and deadline before metadata transport', async () => {
+      const { api, http } = createApi(); api.accountId = 10;
+      const client = api as unknown as BlinkApi;
+      await expect(client.getCameraTemperature(0, 7)).rejects.toThrow(/identifier/);
+      await expect(client.getCameraTemperature(5, -1)).rejects.toThrow(/identifier/);
+      await expect(client.getCameraTemperature(5, 7, { deadline: Date.now() - 1 })).rejects.toBeInstanceOf(OperationTimeoutError);
+      expect(http.get).not.toHaveBeenCalled();
+    });
+    it.each([[68, 20], [32, 0], [0, -17.8], [-4, -20], [212, 100]])(
+      'converts config temperature %s Fahrenheit to %s Celsius without camera commands', async (raw, expected) => {
+        const { api, http } = createApi(); api.accountId = 10;
+        // Config signals are top-level; the camera array is unrelated to this decoder.
+        http.get.mockResolvedValue({ camera: [], signals: { temp: raw } });
+        const options = { deadline: Date.now() + 5000 };
+        await expect((api as unknown as BlinkApi).getCameraTemperature(5, 7, options)).resolves.toBeCloseTo(expected, 1);
+        expect(http.get).toHaveBeenCalledWith('v2/accounts/10/networks/5/cameras/7/config', options);
+        expect(http.post).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   describe('vendor input quality', () => {
     const createQualityApi = () => {
       const result = createApi();

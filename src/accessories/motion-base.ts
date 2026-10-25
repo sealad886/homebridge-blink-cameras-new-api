@@ -44,7 +44,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   private failedMotionTarget?: boolean;
   private inputQualityObservationPending = false;
 
-  private isDeviceAvailable(): boolean {
+  protected isDeviceAvailable(): boolean {
     const status = this.device.status?.trim().toLowerCase();
     if (!status) {
       return true;
