@@ -18,6 +18,41 @@ artifact through the [release guide](../RELEASE.md) and
 Implementation and review assignments remain unassigned for ongoing maintenance.
 Maintainer owns architecture/release decisions; operator owns physical acceptance.
 
+## 25 October 2026: beta publication blocked on F05 and F06
+
+The maintainer explicitly chose **Block the beta until both are fixed** when
+asked whether to accept F05/F06 specifically for the prepared `0.11.0-beta.0`.
+No fresh residual-risk acceptance was granted. This decision controls the next
+beta publication; the historical stable `0.10.0` acceptance remains limited to
+that release and does not waive this hold.
+
+The beta version/changelog preparation is retained on
+`codex/release-0.11.0-beta.0`. Publication has not been dispatched. Passing local
+or hosted tests, release preparation, a prototype build, or changing disclosure
+wording cannot satisfy this hold. Reassess the appropriate unused version after
+the remediation source is integrated; do not reuse any published version.
+
+- **F05 remains open (AC-08):** the production path must keep vendor credentials,
+  secret-bearing URLs and SRTP key material out of argv, environment, logs,
+  errors and crash output. Verify with dummy secrets across the integrated
+  runtime and supported distribution targets; redaction alone is insufficient.
+- **F06 remains open (AC-07):** enforce policy at every actual numeric connection
+  and destination-bearing datagram, including DNS alternatives, redirects,
+  reconnects, SDP/control and secondary RTSP routes. Prove zero forbidden
+  connection attempts while preserving TLS identity and legitimate media.
+
+Continue the [accepted owned-transport/private-worker design](../adr/005-secure-media-network-feasibility.md)
+and [existing bounded RTSP proof](../../native/RTSP-ALTERNATIVES.md#smallest-next-executable-proof)
+without treating the prototype as production integration. Existing TLS,
+destination, resource, diagnostic and generation-ownership guards remain
+mandatory; unsupported talkback stays disabled. The remaining native integration,
+distribution and physical acceptance requirements are unchanged.
+
+Issue #48's source correction is merged through PR #86, but its immutable
+registry-version criterion remains unsatisfied while publication is blocked.
+Keep #48 open. No package publication, host installation, restart, pairing or
+finding closure is claimed by this preparation or decision record.
+
 ## Delivery checklist
 
 - [x] Refresh baseline and preserve unrelated work (WI-01).

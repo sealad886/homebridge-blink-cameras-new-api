@@ -23,6 +23,7 @@ owns subsequent acceptance and finding dispositions.
 - Update the development-only URI parser to fast-uri 3.1.9, addressing its URI parsing and normalization advisories.
 
 ### Beta scope and acceptance
+- Publication is blocked by the maintainer's 25 October decision until F05 and F06 are both fixed and their closure criteria verified. The prepared version and passing source tests do not authorize publication while this hold remains active.
 - This minor beta includes the reviewed runtime changes in PR #86 and supersedes the unpublished 0.10.1-beta.0 preparation. Production dependencies and stored-data formats are unchanged. Temperature sensing is opt-in; other existing settings remain in effect.
 - F05/F06 remain open: FFmpeg process arguments can contain media secrets, and complete RTSP secondary/control/redirect destination enforcement is unproved. Retain all implemented TLS, destination, resource and diagnostic guards. The 0.10.0 stable-specific disposition is not a claim of closure or acceptance for a future stable release. The native worker remains a development prototype; talkback remains disabled.
 - Follow the [release guide](docs/RELEASE.md) for exact-registry installation and beta acceptance. Local and hosted tests cover target-state regressions, metadata conversion, sensor lifecycle and fault isolation; they do not establish physical temperature accuracy, Home display, hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta. No Homebridge installation, restart or pairing is included in publication.
