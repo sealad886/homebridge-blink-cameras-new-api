@@ -96,3 +96,14 @@ test('bind deadline closes admission even if the socket never completes', async 
     await jest.advanceTimersByTimeAsync(1000); await check; expect(raw.close).toHaveBeenCalledTimes(1);
   } finally { jest.useRealTimers(); }
 });
+test('failed startup retains ownership until actual socket closure is observed', async () => {
+  const raw = socket(); raw.close.mockImplementation(() => {}); raw.connect.mockImplementation(() => {});
+  const owner = new globalThis.AbortController();
+  let retired = false;
+  const pending = openMediaSocket(options(), 6000, owner.signal).catch(error => { retired = true; throw error; });
+  const checked = expect(pending).rejects.toThrow('Media socket unavailable');
+  await Promise.resolve(); owner.abort();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  expect(retired).toBe(false);
+  raw.emit('close'); await checked; expect(retired).toBe(true);
+});

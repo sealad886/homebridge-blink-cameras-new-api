@@ -38,7 +38,7 @@ export async function openMediaSocket(options: MediaOutputOptions, localPort: nu
         catch { failed(); }
       });
     }), { signal, deadline: Date.now() + 1000 });
-  } catch { close(); throw new Error('Media socket unavailable'); }
+  } catch { close(); await whenClosed; throw new Error('Media socket unavailable'); }
   return {
     whenClosed, close,
     send(packet: Buffer, destination: string, destinationPort: number, operationSignal: globalThis.AbortSignal): Promise<void> {
