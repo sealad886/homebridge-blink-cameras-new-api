@@ -9,7 +9,11 @@
   PR creation, review requests/replies, gated merge and eligible branch cleanup.
 - No publication, installation, restarts, pairing, new worktrees or credential
   mutation. Existing `codex/pi-evidence-monitoring` branch preserved.
-- Round budget: ten. Current phase: local implementation; no PR or requests yet.
+- [PR #86](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/86),
+  head repository/ref as above; base `839f0faa321aec813945ab5a493011e764caaf50`.
+- Round budget: ten. Round one completed clean for all available review sources.
+  Current phase: documentation-only handoff checkpoint, then final independent
+  coverage/CI readback and gated merge. PR conversation owns subsequent receipts.
 - Main rules read back: signed commits, squash PR merge, resolved review threads,
   strict current-base checks `commitlint`, `test (20)`, `test (22)`, `test (24)`;
   zero mandatory approving reviews. Native prototype CI is additional evidence.
@@ -55,17 +59,46 @@
 
 | Source | Status / planned trigger | Evidence limits |
 | --- | --- | --- |
-| Independent Codex code review | Fresh read-only reviewer after implementation | Exact final head/base required |
-| Independent security/reliability review | Fresh read-only context for network/metadata boundaries | Scoped review; not full security assurance |
-| GitHub Copilot | Inspect automatic request before supported request | Explicit outcome or attributable unavailability required |
-| Other configured sources | Preflight current PR events/integration before requests | Do not infer configured service from old receipts |
+| Independent Codex code review | Clean; fresh read-only code-reviewer context | Full base-to-head `9713fddf773273d9c06499fd64191eb17fad24a9`; no actionable findings |
+| Independent security/reliability review | Clean; fresh read-only security-reviewer context | Same head/base; 234 focused tests independently passed; no actionable findings |
+| Hosted Codex code review | Retired clean, automatically started on PR creation | Comment 6403714718: completed 21:44:04 UTC, exact head `9713fdd`, has_any_findings=false, has_unresolved_findings=false |
+| Hosted Codex security review | Retired clean, automatically started on PR creation | Same comment/head; completed 21:46:06 UTC, both finding flags false; no full-system assurance |
+| GitHub Copilot | Explicit unavailable; retire requests for this PR | Account has no code review access; no Copilot review coverage |
+| Other configured sources | No additional hosted reviewer detected | Installed CodeRabbit CLI/auth is not evidence of a configured PR review source; no new external review service introduced |
+
+Copilot preflight/request attempts used the connector's documented bot identity,
+then the documented CLI path because no request event or reviewer persisted.
+The provider UI, inspected read-only on 25 October at
+[repository Copilot code review settings](https://github.com/sealad886/homebridge-blink-cameras-new-api/settings/copilot/code_review),
+explicitly displayed **No Copilot code review access** and stated that code review
+is not enabled for this account. Attempted head:
+`9713fddf773273d9c06499fd64191eb17fad24a9`. This is attributable integration
+unavailability, not a clean review or a timeout inference. Copilot is not an
+explicit repository/human requirement; preserve this disposition across head
+changes without retrying or changing settings.
 
 ## Findings and revision state
 
-No local implementation review or hosted review round has started. All outcomes,
-CI failures, revision invalidations, final coverage and merge readback must be
-added when observed. Temperature physical acceptance and #48 registry delivery
-remain separate from passing source checks.
+Round one had no actionable findings, no repair commits and no unresolved review
+threads. All seven checks on the implementation head passed: Node 20/22/24,
+commitlint, macOS/Linux native prototype jobs, and GitGuardian. Actions run
+40236768302 (tests/native) and 40236768300 (commitlint) are PR-triggered. The
+workflow checks out `github.sha`, so PR test-merge evidence must not be relabeled
+as head-only execution. Current PR test-merge at that checkpoint was
+`7312a11ce407e9b58314a32c3fd3325f2b5c09e1`.
+
+The final documentation checkpoint changes only this ledger and plan. Prior
+review coverage remains attributed to `9713fdd`; do not manually re-request
+retired providers. Require a separate fresh independent final-head/base review
+and fresh applicable CI before merge. Record that exact final coverage, expected-
+head squash request, actual merge commit and destination readback in the PR
+conversation. No merge is claimed by this source checkpoint.
+
+Package contents/loadability was also verified on committed `9713fdd`; the
+temporary package verifier deletes its own scratch artifact. It was not
+published. Temperature physical acceptance and #48 registry delivery remain
+separate from passing source checks. #25's deferred disposition was posted and
+read back as issue comment 6403727074; #54 is linked for closure by PR #86.
 
 ## Cleanup
 

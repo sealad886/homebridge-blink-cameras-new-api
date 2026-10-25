@@ -24,8 +24,12 @@ accessory/platform suites: 114 tests passed. No unknown blocks local source work
 - [x] M1: Inventory every open issue/PR, requirements and minimal design.
 - [x] M2: Network target reads and reconciliation regressions.
 - [x] M3: Optional real camera temperature, configuration, regression tests and user docs.
-- [ ] M4: Full local validation, independent review and conventional milestone commits. **Active.**
-- [ ] M5: PR review rounds, current-head CI, gated main integration, tracker reconciliation and cleanup.
+- [x] M4: Full local validation, independent review and conventional milestone commits.
+- [ ] M5: PR review rounds, current-head CI, gated main integration, tracker reconciliation and cleanup. **Active.**
+
+This is the final source-plan checkpoint before integration. [PR #86](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/86)
+owns subsequent final-head checks, merge readback and cleanup receipts; do not
+interpret this pre-merge checkbox as live provider state.
 
 One active milestone at a time. Primary implementer owns source and integration;
 fresh reviewer contexts own independent assessment. External acceptance stays
