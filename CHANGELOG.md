@@ -12,6 +12,7 @@ owns subsequent acceptance and finding dispositions.
 ### Development tooling
 - Validate complete pull-request and push commit ranges with pinned commitlint 20.5.3. Generated dependency-update messages with long URLs now pass the upstream URL exception; malformed subjects and oversized non-URL prose remain rejected.
 - Update the pinned Python setup action to 7.1.0 for native prototype validation.
+- Update the development-only URI parser to fast-uri 3.1.9, addressing its URI parsing and normalization advisories.
 
 ### Beta scope and acceptance
 - Plugin runtime behavior, saved configuration and production dependencies are unchanged from 0.10.0. Superseded branch implementations are not restored by repository consolidation.
