@@ -23,6 +23,8 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 - **Switch** for enabling/disabling motion detection per device
 - **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
 - **Connection monitor and retry control** for provider outages
+- **Optional TemperatureSensor** for traditional cameras reporting temperature;
+  default off, with global and per-device settings
 
 The current static API catalog is recovered from Blink Android 59.2
 (`versionCode` 29823413), with Android 57.1 retained as the comparison and
@@ -57,13 +59,20 @@ change these private interfaces without notice.
 | Blink Device | HomeKit Service | Features |
 | ------------ | --------------- | -------- |
 | **Network** | SecuritySystem | Arm/disarm all cameras in network |
-| **Camera** | Switch + MotionSensor | Enable/disable motion, motion events |
+| **Camera** | Switch + MotionSensor + optional TemperatureSensor | Enable/disable motion, motion events, reported temperature where available |
 | **Doorbell** | Doorbell + Switch + MotionSensor | Enable/disable motion, motion events; automatic ring delivery unavailable |
 | **Owl (Mini)** | Switch + MotionSensor | Enable/disable motion, motion events |
 
 Doorbell devices expose a HomeKit Doorbell service, but the current runtime does
 not connect incoming Blink ring events to it. Its presence does not establish
 automatic ring notifications; use the official Blink app for those alerts.
+
+Temperature sensing uses Blink's cached camera configuration metadata and does
+not force a new physical measurement. Enabling it adds one bounded metadata read
+per camera per normal state poll. Missing/offline readings produce a sensor fault;
+Owl/Mini and doorbell temperature are not supported. See
+[temperature configuration](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#camera-temperature)
+for global/per-device controls and sampling limitations.
 
 #### SecuritySystem modes
 

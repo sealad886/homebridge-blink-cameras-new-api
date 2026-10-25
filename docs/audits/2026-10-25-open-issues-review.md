@@ -28,10 +28,28 @@
   minimal owner fix, accessory suite passed 84 tests and production lint passed.
   Added reconciliation and explicit confirmed-state replacement coverage.
 - #54: read-only architect verified actual config field/unit in recovered Android
-  source. Proposed sensor design avoids unsupported homescreen assumptions.
+  source. Implemented bounded opt-in config reads, temperature sensor lifecycle,
+  per-device settings, cached-startup faults and canonical user documentation.
 - Context7 unavailable due monthly quota; installed HAP 0.14.0 source and official
   primary provider documentation are fallback evidence.
 - Independent planner reviewed the complete design/plan with no blocking findings.
+- Feature worktree verification on Node 24.15.0: 41 suites passed; 1,062 tests
+  passed, one existing optional native-worker vector test skipped because no
+  worker path was supplied. Coverage: statements 89.88%, branches 83.03%,
+  functions 89.25%, lines 91.27%.
+- Lint/build, API contract validation (347 endpoints/677 models), 39 release-safety
+  tests, schema boolean/default/override validation, package contents/loadability
+  and synthetic media smoke passed. Package verification identifies the base
+  plus feature worktree; it is not a published artifact or immutable receipt.
+- Full test failures were classified before retry: sandbox socket EPERM required
+  an outside-sandbox run; the locked FFmpeg 2.1.7 package lacked its binary and
+  was restored through its inspected official installer without manifest changes.
+  An added integration test required the real API's updatePlatformAccessories
+  method in its double and the established direct poll seam because captured
+  native intervals predate Jest's fake clock. Independent debugger verified the
+  clock cause. Final full run above passed after those environment/fixture repairs.
+- AST-only graph update completed; derived graph files are ignored by repository
+  policy. No LLM graph labeling or unrelated graph commits.
 
 ## Review source state
 

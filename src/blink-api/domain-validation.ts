@@ -4,6 +4,28 @@ export function isBlinkVideoQuality(value: unknown): value is BlinkVideoQuality 
   return value === 'saver' || value === 'standard' || value === 'best';
 }
 
+/** Android camera config signals.temp is Fahrenheit; HAP CurrentTemperature is Celsius. */
+export function validateCameraTemperature(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Blink returned invalid temperature metadata.');
+  }
+  const signals = (value as Record<string, unknown>).signals;
+  if (signals === undefined || signals === null) return undefined;
+  if (typeof signals !== 'object' || Array.isArray(signals)) {
+    throw new Error('Blink returned invalid temperature metadata.');
+  }
+  const fahrenheit = (signals as Record<string, unknown>).temp;
+  if (fahrenheit === undefined || fahrenheit === null) return undefined;
+  if (typeof fahrenheit !== 'number' || !Number.isFinite(fahrenheit)) {
+    throw new Error('Blink returned invalid temperature metadata.');
+  }
+  const celsius = (fahrenheit - 32) * 5 / 9;
+  if (celsius < -270 || celsius > 100) {
+    throw new Error('Blink returned out-of-range temperature metadata.');
+  }
+  return Math.round(celsius * 10) / 10;
+}
+
 /** Decode only the documented config owner, never traverse arbitrary provider data. */
 export function validateVideoQualityState(value: unknown, kind: BlinkCameraKind): BlinkVideoQualityState {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

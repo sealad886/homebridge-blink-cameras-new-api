@@ -20,6 +20,7 @@ export const createHap = () => ({
     Switch: 'Switch',
     SecuritySystem: 'SecuritySystem',
     MotionSensor: 'MotionSensor',
+    TemperatureSensor: 'TemperatureSensor',
     ContactSensor: 'ContactSensor',
     Doorbell: 'Doorbell',
   },
@@ -44,6 +45,7 @@ export const createHap = () => ({
       DISARM: 3,
     },
     MotionDetected: 'MotionDetected',
+    CurrentTemperature: 'CurrentTemperature',
     StatusActive: 'StatusActive',
     StatusFault: Object.assign(() => 'StatusFault', {
       NO_FAULT: 0,
@@ -197,6 +199,7 @@ export const createApi = (hap = createHap()) => {
     hap,
     platformAccessory,
     registerPlatformAccessories: jest.fn(),
+    updatePlatformAccessories: jest.fn(),
     unregisterPlatformAccessories: jest.fn(),
     on: jest.fn((event: string, callback: () => void) => {
       listeners[event] = listeners[event] ?? [];

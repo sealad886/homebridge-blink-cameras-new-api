@@ -60,6 +60,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
+| `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required only for streaming) |
 | `ffmpegPath` | No | `ffmpeg` | Operator-managed executable path; required capabilities are described in [streaming requirements](streaming.md#ffmpeg-requirements) |
 | `ffmpegDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
@@ -78,7 +79,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
-| `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout }` (legacy `deviceSettings` is still accepted; `motionTimeout` and `inputQuality` are supported runtime overrides; see [input quality](streaming.md#input-and-output-quality)) |
+| `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout, exposeTemperature }` (legacy `deviceSettings` is still accepted for motion timeout; see [input quality](streaming.md#input-and-output-quality)) |
 
 Use **Excluded Networks** in the plugin settings to select systems this instance
 should not expose. Save and restart the Blink child bridge. Clearing a selection
@@ -92,6 +93,45 @@ motion control; per-device `motionTimeout` remains supported.
 
 For stored-session validation, recovery and legacy credential migration, see
 [authentication](authentication.md).
+
+## Camera temperature
+
+Set `exposeTemperature` to `true` to expose Blink's reported temperature for
+traditional cameras that supply it. It is disabled by default. An optional
+`exposeTemperature` boolean in `deviceSettingOverrides` overrides the global
+setting for a matching camera serial, numeric ID or exact Blink name. Omit the
+per-device field to inherit; explicit `false` disables it even when globally on.
+
+```json
+{
+  "exposeTemperature": false,
+  "deviceSettingOverrides": [
+    { "deviceIdentifier": "CAMERA-SERIAL", "exposeTemperature": true }
+  ]
+}
+```
+
+Save and apply through the normal child-bridge restart workflow. Each enabled
+traditional camera adds at most one bounded config metadata GET at discovery and
+each normal state poll, with overlapping reads coalesced. HomeKit reads make no
+cloud requests. This reads the camera's last reported measurement; it does not
+wake the camera, force a new measurement or change its calibration. Frequent
+state polling also increases these optional metadata requests.
+
+Blink's camera config `signals.temp` is Fahrenheit; the plugin converts to
+Celsius for HomeKit, which uses the Home app's preferred display units. A sensor
+appears after the first valid sample. Missing/invalid data, a failed metadata
+read or an offline camera/bridge makes an existing sensor unavailable with a
+fault instead of reporting zero. A later valid sample restores it. Restored
+sensors wait for fresh metadata; disabling the option removes them when the
+camera is restored during discovery.
+
+Owl/Mini and doorbell inventory are excluded from this implementation. It does
+not assume that an unverified homescreen temperature field supplies a reading.
+Real camera measurement accuracy and Home display require physical acceptance;
+automated contract and lifecycle tests alone do not establish those outcomes.
+
+## Snapshot cache
 
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to request a fresh thumbnail capture.

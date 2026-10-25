@@ -34,7 +34,7 @@ jest.mock('node:child_process', () => {
 });
 
 type PlatformStub = Pick<BlinkCamerasPlatform,
-  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality'>;
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled'>;
 type CameraSourceFfmpegAccess = {
   buildFfmpegArgs: (input: string, request: unknown, session: unknown) => string[];
 };
@@ -363,6 +363,7 @@ describe('Accessory handlers', () => {
       disarmNetwork: jest.fn().mockResolvedValue({ command_id: 124 }),
       pollCommand: jest.fn().mockResolvedValue({ complete: true }),
       getDeviceVideoQuality: jest.fn().mockResolvedValue({ quality: 'standard' }),
+      getCameraTemperature: jest.fn().mockResolvedValue(20),
       setDeviceVideoQuality: jest.fn().mockResolvedValue({ quality: 'best' }),
       startCameraLiveview: jest.fn().mockResolvedValue({}),
       enableCameraMotion: jest.fn(),
@@ -385,10 +386,155 @@ describe('Accessory handlers', () => {
       streamingConfig: resolveStreamingConfig({ enabled: false, ...streamingConfigOverrides }),
       isOperational: () => true,
       getDeviceInputQuality: jest.fn().mockReturnValue('auto'),
+      isTemperatureEnabled: jest.fn().mockReturnValue(false),
     };
 
     return { hap, apiClient, platform, log };
   };
+
+  it('exposes opted-in camera temperature from bounded metadata reads without motion or quality writes', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    jest.mocked(platform.isTemperatureEnabled).mockReturnValue(true);
+    const accessory = new MockAccessory('Garden', 'temperature-camera', hap);
+    const device = { id: 2, network_id: 1, name: 'Camera', enabled: false };
+    const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    await nextTurn();
+    const sensor = accessory.getServiceById(hap.Service.TemperatureSensor, 'temperature');
+    expect(sensor).toBeDefined();
+    expect(sensor?.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.()).toBe(20);
+    expect(sensor?.getCharacteristic(hap.Characteristic.StatusActive).value).toBe(true);
+    expect(sensor?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(0);
+    expect(apiClient.getCameraTemperature).toHaveBeenCalledWith(1, 2, expect.objectContaining({ deadline: expect.any(Number) }));
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([accessory]);
+    apiClient.getCameraTemperature.mockResolvedValue(-5);
+    camera.updateState(device);
+    await nextTurn();
+    expect(sensor?.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.()).toBe(-5);
+    expect(apiClient.getCameraTemperature).toHaveBeenCalledTimes(2);
+    expect(apiClient.setDeviceVideoQuality).not.toHaveBeenCalled();
+    expect(apiClient.enableCameraMotion).not.toHaveBeenCalled();
+  });
+
+  it.each([CameraAccessory, OwlAccessory, DoorbellAccessory])('makes no default temperature requests for %p', async Handler => {
+    const { hap, apiClient, platform } = buildPlatform();
+    const accessory = new MockAccessory('Camera', 'no-temperature', hap);
+    new Handler(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+      { id: 2, network_id: 1, name: 'Camera', enabled: true });
+    await nextTurn();
+    expect(apiClient.getCameraTemperature).not.toHaveBeenCalled();
+    expect(accessory.getService(hap.Service.TemperatureSensor)).toBeUndefined();
+  });
+
+  it.each([false, true])('removes a restored sensor when disabled or unsupported (owl: %s)', async owl => {
+    const { hap, apiClient, platform } = buildPlatform();
+    jest.mocked(platform.isTemperatureEnabled).mockReturnValue(owl);
+    const accessory = new MockAccessory('Camera', 'restored-temperature', hap);
+    accessory.addService(hap.Service.TemperatureSensor, 'Temperature', 'temperature');
+    new CameraAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+      { id: 2, network_id: 1, name: 'Camera', enabled: true, type: owl ? 'owl' : 'camera' });
+    await nextTurn();
+    expect(accessory.getService(hap.Service.TemperatureSensor)).toBeUndefined();
+    expect(apiClient.getCameraTemperature).not.toHaveBeenCalled();
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([accessory]);
+  });
+
+  it('reuses a restored temperature sensor only after fresh metadata and coalesces poll reads', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    jest.mocked(platform.isTemperatureEnabled).mockReturnValue(true);
+    let finish!: (sample: number) => void;
+    apiClient.getCameraTemperature.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const accessory = new MockAccessory('Camera', 'temperature-camera', hap);
+    const sensor = accessory.addService(hap.Service.TemperatureSensor, 'Temperature', 'temperature');
+    sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).updateValue(99);
+    const device = { id: 2, network_id: 1, name: 'Camera', enabled: true };
+    const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    expect(() => sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.())
+      .toThrow(expect.objectContaining({ hapStatus: -70402 }));
+    camera.updateState(device);
+    camera.updateState(device);
+    await nextTurn();
+    expect(apiClient.getCameraTemperature).toHaveBeenCalledTimes(1);
+    finish(0);
+    await nextTurn();
+    expect(accessory.getServiceById(hap.Service.TemperatureSensor, 'temperature')).toBe(sensor);
+    expect(sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.()).toBe(0);
+    expect(apiClient.getCameraTemperature).toHaveBeenCalledTimes(1);
+    expect(platform.api.updatePlatformAccessories).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'failed', 'offline', 'bridge outage'])('faults temperature independently and recovers after %s', async reason => {
+    const { hap, apiClient, platform } = buildPlatform();
+    jest.mocked(platform.isTemperatureEnabled).mockReturnValue(true);
+    const accessory = new MockAccessory('Camera', 'temperature-camera', hap);
+    const device = { id: 2, network_id: 1, name: 'Camera', enabled: false };
+    const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    await nextTurn();
+    const sensor = accessory.getServiceById(hap.Service.TemperatureSensor, 'temperature')!;
+    if (reason === 'missing') apiClient.getCameraTemperature.mockResolvedValueOnce(undefined as never);
+    if (reason === 'failed') apiClient.getCameraTemperature.mockRejectedValueOnce(new Error('private provider detail'));
+    if (reason === 'bridge outage') platform.isOperational = () => false;
+    camera.updateState({ ...device, status: reason === 'offline' ? 'offline' : 'online' });
+    await nextTurn();
+    expect(sensor.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(1);
+    expect(sensor.getCharacteristic(hap.Characteristic.StatusActive).value).toBe(false);
+    expect(() => sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.())
+      .toThrow(expect.objectContaining({ hapStatus: -70402 }));
+    expect(apiClient.getCameraTemperature).toHaveBeenCalledTimes(reason === 'offline' || reason === 'bridge outage' ? 1 : 2);
+    if (reason === 'missing' || reason === 'failed') {
+      expect(accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')
+        ?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(0);
+    }
+    platform.isOperational = () => true;
+    apiClient.getCameraTemperature.mockResolvedValue(5);
+    camera.updateState({ ...device, status: 'online' });
+    await nextTurn();
+    expect(sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.()).toBe(5);
+    expect(sensor.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(0);
+    expect(sensor.getCharacteristic(hap.Characteristic.StatusActive).value).toBe(true);
+  });
+
+  it('does not create a temperature sensor until metadata first becomes available', async () => {
+    const { hap, apiClient, platform } = buildPlatform();
+    jest.mocked(platform.isTemperatureEnabled).mockReturnValue(true);
+    apiClient.getCameraTemperature.mockResolvedValueOnce(undefined as never);
+    const accessory = new MockAccessory('Camera', 'temperature-camera', hap);
+    const device = { id: 2, network_id: 1, name: 'Camera', enabled: true };
+    const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+      accessory as unknown as PlatformAccessory, device);
+    await nextTurn();
+    expect(accessory.getService(hap.Service.TemperatureSensor)).toBeUndefined();
+    camera.updateState(device);
+    await nextTurn();
+    expect(accessory.getService(hap.Service.TemperatureSensor)).toBeDefined();
+  });
+
+  it('bounds a hung temperature read and ignores its late sample after a newer read', async () => {
+    jest.useFakeTimers();
+    try {
+      const { hap, apiClient, platform } = buildPlatform();
+      jest.mocked(platform.isTemperatureEnabled).mockReturnValue(true);
+      let finish!: (sample: number) => void;
+      apiClient.getCameraTemperature.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+      const accessory = new MockAccessory('Camera', 'temperature-camera', hap);
+      const device = { id: 2, network_id: 1, name: 'Camera', enabled: true };
+      const camera = new CameraAccessory(platform as unknown as BlinkCamerasPlatform,
+        accessory as unknown as PlatformAccessory, device);
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(accessory.getService(hap.Service.TemperatureSensor)).toBeUndefined();
+      apiClient.getCameraTemperature.mockResolvedValue(5);
+      camera.updateState(device);
+      await jest.advanceTimersByTimeAsync(0);
+      const sensor = accessory.getService(hap.Service.TemperatureSensor)!;
+      expect(sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.()).toBe(5);
+      finish(99);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(sensor.getCharacteristic(hap.Characteristic.CurrentTemperature).onGetHandler?.()).toBe(5);
+      expect(apiClient.getCameraTemperature).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
 
   it.each(['metadata', 'unavailable'])('auto input quality uses observation only when settings are %s', async (outcome) => {
     const { hap, apiClient, platform } = buildPlatform({ enabled: true });

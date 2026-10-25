@@ -1,4 +1,4 @@
-import { isBlinkVideoQuality, requireRemoteId, validateHomescreen, validateVideoQualityState } from './domain-validation';
+import { isBlinkVideoQuality, requireRemoteId, validateCameraTemperature, validateHomescreen, validateVideoQualityState } from './domain-validation';
 /**
  * Blink API Client
  *
@@ -654,22 +654,31 @@ export class BlinkApi {
   }
 
   /** Config endpoints and quality wire values recovered from Blink Android 59.2. */
-  private videoQualityPath(type: BlinkCameraKind, accountId: number, networkId: number, deviceId: number): string {
+  private deviceConfigPath(type: BlinkCameraKind, accountId: number, networkId: number, deviceId: number): string {
     if (type !== 'camera' && type !== 'owl' && type !== 'doorbell') throw new Error('Invalid Blink camera kind.');
     const kind = type === 'camera' ? 'cameras' : type === 'owl' ? 'owls' : 'doorbells';
     return `v${type === 'camera' ? 2 : 1}/accounts/${accountId}/networks/${networkId}/${kind}/${deviceId}/config`;
   }
 
-  async getDeviceVideoQuality(type: BlinkCameraKind, networkId: number, deviceId: number,
-    options: RequestOptions = {}): Promise<BlinkVideoQualityState> {
+  private async getDeviceConfig(type: BlinkCameraKind, networkId: number, deviceId: number,
+    options: RequestOptions): Promise<unknown> {
     requireRemoteId(networkId);
     requireRemoteId(deviceId);
     // Validate the kind before authentication, alongside the path identifiers.
-    this.videoQualityPath(type, 1, networkId, deviceId);
+    this.deviceConfigPath(type, 1, networkId, deviceId);
     const accountId = await withinRequestBudget(this.ensureAccountId(), options);
     checkRequestBudget(options);
-    const response = await this.sharedHttp.get<unknown>(this.videoQualityPath(type, accountId, networkId, deviceId), options);
-    return validateVideoQualityState(response, type);
+    return this.sharedHttp.get<unknown>(this.deviceConfigPath(type, accountId, networkId, deviceId), options);
+  }
+
+  /** Read cached server-side metadata; never wake or calibrate the camera. */
+  async getCameraTemperature(networkId: number, deviceId: number, options: RequestOptions = {}): Promise<number | undefined> {
+    return validateCameraTemperature(await this.getDeviceConfig('camera', networkId, deviceId, options));
+  }
+
+  async getDeviceVideoQuality(type: BlinkCameraKind, networkId: number, deviceId: number,
+    options: RequestOptions = {}): Promise<BlinkVideoQualityState> {
+    return validateVideoQualityState(await this.getDeviceConfig(type, networkId, deviceId, options), type);
   }
 
   /** Auto preserves vendor state. Explicit capture quality changes also affect Blink recordings. */
@@ -677,7 +686,7 @@ export class BlinkApi {
     quality: BlinkInputQuality, options: RequestOptions = {}): Promise<BlinkVideoQualityState> {
     requireRemoteId(networkId);
     requireRemoteId(deviceId);
-    this.videoQualityPath(type, 1, networkId, deviceId);
+    this.deviceConfigPath(type, 1, networkId, deviceId);
     if (quality !== 'auto' && !isBlinkVideoQuality(quality)) throw new Error('Invalid Blink input quality.');
     if (quality === 'auto') return this.getDeviceVideoQuality(type, networkId, deviceId, options);
     return this.queueStateCommand('Quality', async execution => {
@@ -688,7 +697,7 @@ export class BlinkApi {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       checkRequestBudget(execution);
       const response = await this.sharedHttp.post<BlinkCommandResponse>(
-        this.videoQualityPath(type, accountId, networkId, deviceId), { video_quality: quality }, [409],
+        this.deviceConfigPath(type, accountId, networkId, deviceId), { video_quality: quality }, [409],
         { ...execution, retryServerErrors: false },
       );
       await this.completeRemoteCommand(networkId, response, execution);

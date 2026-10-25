@@ -69,11 +69,13 @@ interface DeviceNameOverride {
 
 interface DeviceSettingOverride {
   deviceIdentifier: string;
+  exposeTemperature?: boolean;
   inputQuality?: BlinkInputQuality;
   motionTimeout?: number;
 }
 
 interface BlinkPlatformConfig extends PlatformConfig {
+  exposeTemperature?: boolean;
   username?: string;
   password?: string;
   deviceId?: string;
@@ -250,7 +252,13 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private validateConfig(): void {
+    if (this.config.exposeTemperature !== undefined && typeof this.config.exposeTemperature !== 'boolean') {
+      throw new Error('Invalid temperature setting');
+    }
     for (const override of this.config.deviceSettingOverrides ?? []) {
+      if (override.exposeTemperature !== undefined && typeof override.exposeTemperature !== 'boolean') {
+        throw new Error('Invalid per-camera temperature setting');
+      }
       if (override.inputQuality !== undefined && !['auto', 'saver', 'standard', 'best'].includes(override.inputQuality)) {
         throw new Error('Invalid per-camera input quality');
       }
@@ -336,12 +344,19 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return device.name;
   }
 
-  public getDeviceInputQuality(device: { id: number; name?: string; serial?: string }): BlinkInputQuality {
-    const override = this.config.deviceSettingOverrides?.find(entry =>
+  private getDeviceSettingOverride(device: { id: number; name?: string; serial?: string }): DeviceSettingOverride | undefined {
+    return this.config.deviceSettingOverrides?.find(entry =>
       entry.deviceIdentifier === `${device.id}` ||
       (device.serial !== undefined && entry.deviceIdentifier === device.serial) ||
       (device.name !== undefined && entry.deviceIdentifier === device.name));
-    return override?.inputQuality ?? 'auto';
+  }
+
+  public getDeviceInputQuality(device: { id: number; name?: string; serial?: string }): BlinkInputQuality {
+    return this.getDeviceSettingOverride(device)?.inputQuality ?? 'auto';
+  }
+
+  public isTemperatureEnabled(device: { id: number; name?: string; serial?: string }): boolean {
+    return this.getDeviceSettingOverride(device)?.exposeTemperature ?? this.config.exposeTemperature ?? false;
   }
 
   public getDeviceMotionTimeout(device: { id: number; name?: string; serial?: string }): number {
@@ -392,6 +407,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       for (const service of accessory.services) {
         setHapServiceName(service, this.Characteristic.Name, service.displayName, displayName);
       }
+    }
+    // Restored samples are not fresh metadata, including before failed discovery.
+    const temperature = accessory.getServiceById(this.Service.TemperatureSensor, 'temperature');
+    if (temperature) {
+      temperature.getCharacteristic(this.Characteristic.StatusFault).updateValue(1);
+      temperature.getCharacteristic(this.Characteristic.StatusActive).updateValue(false);
+      temperature.getCharacteristic(this.Characteristic.CurrentTemperature).onGet(() => {
+        throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+      });
     }
     this.accessories.push(accessory);
   }
@@ -759,6 +783,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.Service.SecuritySystem,
       this.Service.MotionSensor,
       this.Service.Doorbell,
+      this.Service.TemperatureSensor,
     ];
 
     for (const accessory of this.accessories) {
