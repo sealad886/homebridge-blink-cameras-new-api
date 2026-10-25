@@ -38,7 +38,9 @@ class DownloadTests(unittest.TestCase):
                 else:
                     prepare.download(response.url, output, limit)
                     self.assertEqual(output.read_bytes(), data)
-                    self.assertEqual(list(Path(directory).iterdir()), [output])
+                    entries = list(Path(directory).iterdir())
+                    self.assertEqual(len(entries), 1)
+                    self.assertTrue(entries[0].samefile(output))
 
     def test_exact_limit_is_admitted(self):
         self.download(b'abcd', 4)
@@ -88,7 +90,7 @@ class BuildHostTests(unittest.TestCase):
                 'SystemRoot': 'C:/Windows', 'TEMP': 'C:/Temp', 'CFLAGS': 'hostile',
                 'PKG_CONFIG_PATH': 'ambient', 'HTTP_PROXY': 'secret'}, clear=True):
             env = prepare.build_environment(Path('/private/prefix'), 'Windows')
-        self.assertEqual(env['SystemRoot'], 'C:/Windows')
+        self.assertEqual({key.upper(): value for key, value in env.items()}['SYSTEMROOT'], 'C:/Windows')
         self.assertEqual(env['MSYSTEM'], 'UCRT64')
         self.assertEqual(env['CC'], 'gcc')
         self.assertIn('-static', env['LDFLAGS'])
