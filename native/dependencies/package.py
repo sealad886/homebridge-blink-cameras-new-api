@@ -102,7 +102,8 @@ def source_files(root: Path, source_sha: str) -> dict[str, bytes]:
     required = {'native/worker.c', 'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
                 'native/dependencies/package.py', 'native/dependencies/source-inputs.json', '.github/workflows/test.yml',
                 'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/libsrtp-LICENSE',
-                'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING'}
+                'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING',
+                'native/dependencies/licenses/mingw-w64-runtime-COPYING', 'native/dependencies/licenses/gcc-COPYING.RUNTIME'}
     if not required.issubset(result):
         raise ValueError('Required corresponding source missing from exact commit')
     return result
@@ -238,6 +239,10 @@ def stage_package(root: Path, artifacts: Path, source_sha: str) -> dict:
               'Selected FFmpeg configuration: GPL-3.0-or-later; x264: GPL-2.0-or-later.\n'
               'Opus and libSRTP: BSD-3-Clause. Full notices and source inputs accompany this\n'
               'package in corresponding-source.tar.gz; GPLv3 text is in COPYING.\n'
+              'Windows MinGW-w64 CRT: ZPL-2.1 and third-party notices in\n'
+              'project/native/dependencies/licenses/mingw-w64-runtime-COPYING inside that source bundle.\n'
+              'GCC runtime library exception: project/native/dependencies/licenses/gcc-COPYING.RUNTIME\n'
+              'inside that source bundle; compiler/runtime system-library source is not added.\n'
               'The JavaScript plugin retains its MIT license in the package root.\n'
               'Final target acceptance and linked-runtime license review remain release gates.\n').encode()
     build = native / 'build'

@@ -1,4 +1,4 @@
 # Native build/source identities use the exact committed bytes on every host.
 /native/** text eol=lf
 # Preserve upstream license notices verbatim, including their original line endings.
-/native/dependencies/licenses/** -text
+/native/dependencies/licenses/** -text -whitespace

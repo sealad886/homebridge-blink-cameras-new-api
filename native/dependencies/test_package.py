@@ -51,6 +51,8 @@ class PackageTests(unittest.TestCase):
             'native/dependencies/licenses/x264-COPYING': b'synthetic notice',
             'native/dependencies/licenses/libsrtp-LICENSE': b'synthetic notice',
             'native/dependencies/licenses/ffmpeg-LICENSE.md': b'synthetic notice',
+            'native/dependencies/licenses/mingw-w64-runtime-COPYING': b'synthetic CRT notice',
+            'native/dependencies/licenses/gcc-COPYING.RUNTIME': b'synthetic runtime exception',
             '.github/workflows/test.yml': b'synthetic build workflow',
         }
         for target in TARGETS:
@@ -119,6 +121,9 @@ class PackageTests(unittest.TestCase):
             for pinned in self.pins['sources']:
                 self.assertEqual(archive.extractfile('dependencies/' + pinned['filename']).read(),
                                  (self.downloads / pinned['filename']).read_bytes())
+            for name in ('mingw-w64-runtime-COPYING', 'gcc-COPYING.RUNTIME'):
+                path = 'native/dependencies/licenses/' + name
+                self.assertEqual(archive.extractfile('project/' + path).read(), self.snapshot[path])
 
     def test_rejects_missing_or_extra_target_archives(self):
         path = self.inputs / 'native-linux-x64.tar.gz'
@@ -280,6 +285,8 @@ class SourceSnapshotTests(unittest.TestCase):
             'native/dependencies/licenses/libsrtp-LICENSE': b'notice',
             'native/dependencies/licenses/opus-COPYING': b'notice',
             'native/dependencies/licenses/x264-COPYING': b'notice',
+            'native/dependencies/licenses/mingw-w64-runtime-COPYING': b'notice',
+            'native/dependencies/licenses/gcc-COPYING.RUNTIME': b'notice',
             'native/tests/check-rtp.c': b'future committed receiver helper',
         }
         listing = b''.join(f'100644 blob {"b" * 40} {len(data)}\t{name}\0'.encode() for name, data in expected.items())
@@ -295,6 +302,27 @@ class SourceSnapshotTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     package.source_files(Path('/synthetic/project'), SHA)
                 self.assertEqual(git.call_count, 1)
+
+    def test_refuses_each_missing_windows_runtime_notice_in_exact_source(self):
+        names = ('native/worker.c', 'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
+                 'native/dependencies/package.py', 'native/dependencies/source-inputs.json', '.github/workflows/test.yml',
+                 'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/libsrtp-LICENSE',
+                 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING',
+                 'native/dependencies/licenses/mingw-w64-runtime-COPYING', 'native/dependencies/licenses/gcc-COPYING.RUNTIME')
+        for missing in names[-2:]:
+            with self.subTest(missing=missing):
+                expected = {name: b'notice' for name in names if name != missing}
+                listing = b''.join(f'100644 blob {"b" * 40} {len(data)}\t{name}\0'.encode() for name, data in expected.items())
+                with patch.object(package.subprocess, 'check_output', side_effect=[listing, *expected.values()]):
+                    with self.assertRaisesRegex(ValueError, 'Required corresponding source missing'):
+                        package.source_files(Path('/synthetic/project'), SHA)
+
+    def test_runtime_notices_preserve_exact_verified_upstream_bytes(self):
+        hashes = {'mingw-w64-runtime-COPYING': '1db8da07b436c68833c0673ffee3d9fcb2526047f3820b81661865dfedc79a1f',
+                  'gcc-COPYING.RUNTIME': '9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74'}
+        for name, expected in hashes.items():
+            with self.subTest(name=name):
+                self.assertEqual(hashlib.sha256((Path(__file__).parent / 'licenses' / name).read_bytes()).hexdigest(), expected)
 
 
 if __name__ == '__main__':

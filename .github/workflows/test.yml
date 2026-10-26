@@ -112,8 +112,9 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             test "$MSYSTEM" = UCRT64
             test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
-            for tool in bash cygpath ninja objdump; do command -v "$tool"; done
+            for tool in bash cygpath ninja objdump cmp; do command -v "$tool"; done
             pacman -Q
+            cmp -- /ucrt64/share/licenses/crt/COPYING.MinGW-w64-runtime.txt native/dependencies/licenses/mingw-w64-runtime-COPYING
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             command -v readelf
           fi

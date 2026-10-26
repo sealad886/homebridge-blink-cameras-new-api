@@ -2,6 +2,46 @@
 
 See the [private media worker overview](../README.md) for scope and navigation.
 
+## Windows system runtime notices
+
+The Windows candidate toolchain inventory reported MinGW-w64 CRT
+`14.0.0.r536.g7ce22f663-1` and GCC `16.2.0-6` (CI job `121350561757`).
+Static linking does not remove the runtime's binary-redistribution notice
+requirements. These unedited upstream documents are mandatory members of
+`corresponding-source.tar.gz`, under `project/native/dependencies/licenses/`;
+the generated package `native/NOTICE` points to both documents.
+
+| Retained file | Immutable upstream source | SHA-256 |
+| --- | --- | --- |
+| `licenses/mingw-w64-runtime-COPYING` | [MinGW-w64 runtime notice at `7ce22f6637cc93fd2eb37c8a645908c92bb80bbd`](https://raw.githubusercontent.com/mingw-w64/mingw-w64/7ce22f6637cc93fd2eb37c8a645908c92bb80bbd/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt) | `1db8da07b436c68833c0673ffee3d9fcb2526047f3820b81661865dfedc79a1f` |
+| `licenses/gcc-COPYING.RUNTIME` | [GCC 16.2.0 runtime exception at `78d4ac73dd391005b895a6148cd9831e28e1208b`](https://raw.githubusercontent.com/gcc-mirror/gcc/78d4ac73dd391005b895a6148cd9831e28e1208b/COPYING.RUNTIME) | `9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74` |
+
+The GCC release tag `releases/gcc-16.2.0` resolves through annotated tag object
+`1831ac03fd08e3400c16b29f21762e6b326a618d` to the source commit above. The
+MinGW notice includes ZPL-2.1 and the runtime's third-party notices; the package's
+aggregate SPDX expression includes `AND ZPL-2.1`. The GCC Runtime Library Exception
+3.1 supplies the additional permission for eligible compilation of independent
+modules, as confirmed by the [GCC 16.2.0 libgcc source grant](https://raw.githubusercontent.com/gcc-mirror/gcc/78d4ac73dd391005b895a6148cd9831e28e1208b/libgcc/libgcc2.c);
+its exact text accompanies the existing GPLv3 text in `native/COPYING`.
+This system-runtime attribution adds no fifth codec/security source archive and
+does not bundle the GCC compiler or claim full compiler-source distribution.
+
+Before building a Windows candidate, compare the installed CRT notice with the
+retained upstream bytes. The [MSYS2 CRT package file listing](https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-crt)
+and [official package recipe](https://github.com/msys2/MINGW-packages/blob/master/mingw-w64-crt/PKGBUILD)
+identify this installed notice path:
+
+```sh
+cmp -- /ucrt64/share/licenses/crt/COPYING.MinGW-w64-runtime.txt \
+  native/dependencies/licenses/mingw-w64-runtime-COPYING
+```
+
+A mismatch blocks that build until its actual toolchain notice/provenance is
+reconciled. The package source inventory and verifier require both notices and
+bind their bytes to the exact source revision; offline tests retain their
+upstream hashes. This notice correction supplies no binary, platform, performance
+or physical acceptance result.
+
 This directory prepares source inputs and local static libraries for the codec-only
 worker. It does not enable worker loading, install anything globally, publish a
 binary, or prove five-target distribution acceptance.

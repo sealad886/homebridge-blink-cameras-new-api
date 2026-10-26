@@ -8,6 +8,7 @@ import { Buffer } from 'node:buffer';
 import process from 'node:process';
 
 export const TARGETS = Object.freeze(['linux-arm64', 'linux-x64', 'darwin-arm64', 'darwin-x64', 'win32-x64']);
+const WINDOWS_RUNTIME_NOTICES = ['native/dependencies/licenses/mingw-w64-runtime-COPYING', 'native/dependencies/licenses/gcc-COPYING.RUNTIME'];
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const keys = (value, expected) => {
   assert(value && typeof value === 'object' && !Array.isArray(value), 'Expected an object');
@@ -83,11 +84,13 @@ export function collectSourceProof(root, sourceSha) {
     if (path === 'native/dependencies/source-inputs.json') pins = JSON.parse(data);
   }
   for (const path of ['native/worker.c', 'native/Makefile', 'native/COPYING', 'native/dependencies/package.py', '.github/workflows/test.yml',
-    'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING', 'native/dependencies/licenses/libsrtp-LICENSE']) assert(sources[path], 'Missing exact corresponding source');
+    'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING', 'native/dependencies/licenses/libsrtp-LICENSE',
+    ...WINDOWS_RUNTIME_NOTICES]) assert(sources[path], 'Missing exact corresponding source');
   assert(recipeSha && pins?.sources?.length === 4); return { sourceSha, recipeSha, pins, sources };
 }
 
 export function verifyNativePackage(root, proof) {
+  for (const path of WINDOWS_RUNTIME_NOTICES) assert(proof.sources[path], 'Missing Windows runtime notice provenance');
   const read = (path, limit) => regularFile(root, path, limit);
   const manifestBytes = read('native/runtime/manifest.json', 65536); const manifest = JSON.parse(manifestBytes);
   const distribution = JSON.parse(read('native/runtime/distribution-receipt.json', 2 * 1024 * 1024));

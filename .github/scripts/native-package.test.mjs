@@ -25,10 +25,13 @@ function fixture() {
   const sha = 'a'.repeat(40); const recipe = Buffer.from('recipe'); const copying = Buffer.from('GPL');
   const inputs = { sources: ['ffmpeg', 'opus', 'x264', 'libsrtp'].map(name => ({ name, filename: `${name}.tar.gz`, sha256: sha256(Buffer.from(name)) })) };
   const sources = { 'native/dependencies/prepare.py': sha256(recipe), 'native/dependencies/source-inputs.json': sha256(json(inputs)), 'native/COPYING': sha256(copying) };
+  const runtimeNotices = ['mingw-w64-runtime-COPYING', 'gcc-COPYING.RUNTIME'].map(name => [`native/dependencies/licenses/${name}`, Buffer.from(`synthetic ${name}`)]);
+  for (const [name, data] of runtimeNotices) sources[name] = sha256(data);
   const proof = { sourceSha: sha, recipeSha: sha256(recipe), pins: inputs, sources };
   const entries = [['README.md', Buffer.from('rebuild')], ['dependencies/ffmpeg-9.0.2.tar.xz.asc', Buffer.from('signature')], ['dependencies/ffmpeg-devel.asc', Buffer.from('key')],
     ['project/native/dependencies/prepare.py', recipe], ['project/native/dependencies/source-inputs.json', json(inputs)], ['project/native/COPYING', copying],
     ...inputs.sources.map(input => [`dependencies/${input.filename}`, Buffer.from(input.name)])];
+  entries.push(...runtimeNotices.map(([name, data]) => ['project/' + name, data]));
   const manifest = { schemaVersion: 1, targets: {} }; const receipts = {};
   const write = (name, bytes) => { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, bytes, { mode: 0o755 }); };
   for (const target of TARGETS) {
@@ -86,6 +89,19 @@ test('source tar decompression is bounded and hidden trailing entries are refuse
   assert.throws(() => readSourceArchive(gzipSync(Buffer.alloc(4096)), 1024));
   const bytes = tar([['safe', Buffer.from('data')]]); assert.equal(readSourceArchive(bytes).get('safe').toString(), 'data');
 });
+for (const name of ['mingw-w64-runtime-COPYING', 'gcc-COPYING.RUNTIME']) {
+  for (const mutation of ['missing', 'tampered']) test(`${mutation} ${name} blocks distribution despite recomputed bundle hash`, () => {
+    const f = fixture(); try {
+      const path = `native/dependencies/licenses/${name}`;
+      const index = f.entries.findIndex(([name]) => name === 'project/' + path);
+      if (mutation === 'missing') { delete f.proof.sources[path]; f.entries.splice(index, 1); }
+      else f.entries[index][1] = Buffer.from('changed notice');
+      const bundle = tar(f.entries); f.distribution.source_bundle_sha256 = sha256(bundle);
+      f.write('native/corresponding-source.tar.gz', bundle); f.write('native/runtime/distribution-receipt.json', json(f.distribution));
+      assert.throws(() => verifyNativePackage(f.root, f.proof));
+    } finally { f.cleanup(); }
+  });
+}
 test('qualification checks exact final npm bytes before any install or launch', () => {
   const f = fixture(); try {
     const path = join(f.root, 'release.tgz'); writeFileSync(path, 'immutable');
