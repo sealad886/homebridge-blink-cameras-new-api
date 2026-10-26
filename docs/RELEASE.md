@@ -74,7 +74,9 @@ the resulting squash commit. Wrap body prose to 100 characters or fewer.
 ## Gates and publication
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
-build, and package contents. Use a dedicated clean clone when the working checkout
+build, and package contents. Full native package verification requires all five
+verified workers and corresponding sources staged by the canonical package job;
+an ordinary source checkout cannot substitute JavaScript-only smoke for it. Use a dedicated clean clone when the working checkout
 contains unrelated user files; never stash or delete those files to satisfy it.
 
 Publication requires an explicit dispatch on main with the exact version input.
@@ -142,6 +144,11 @@ exact Git commit. It verifies the bundled archives and licenses, stamps `gitHead
 and records the final immutable npm integrity. Ordinary JavaScript matrix smoke
 may explicitly set `VERIFY_PACKAGE_JAVASCRIPT_ONLY=1` before native artifacts exist;
 this mode refuses release output and supplies no native acceptance evidence.
+
+Native candidate jobs also retain separate worker-hash-bound resource receipts:
+per-worker OS memory observations, native consumption high water, and actual
+recorder byte/queue bounds. Missing observations fail their job. These receipts
+are evidence for bounded synthetic workloads, not universal memory budgets.
 
 Five separate clean-host jobs download that same npm tarball and their matching
 validation artifact. They install the exact tarball into a fresh temporary npm

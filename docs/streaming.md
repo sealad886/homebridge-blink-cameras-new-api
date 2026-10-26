@@ -1,81 +1,97 @@
 # Live streaming and quality
 
-Last reviewed: 23 October 2026.
+Last reviewed: 26 October 2026. Secure runtime implementation is under review;
+beta publication remains blocked until its security and release gates pass.
 
-This guide owns FFmpeg requirements, stream compatibility, quality and talkback
-behavior. See [configuration](configuration.md) for settings and
-[diagnostics](debug_logging_spec.md) for log policy.
+This guide owns packaged codec requirements, transport, quality and talkback.
+See [configuration](configuration.md) for saving settings and
+[diagnostics](debug_logging_spec.md) for the logging policy.
 
-## FFmpeg requirements
+## Packaged codec requirements
 
-For the core HomeKit features (arm/disarm, motion and snapshots), no extra binaries are required. For **HomeKit live streaming**, install `ffmpeg` and make sure the **homebridge** user can execute it. Set `ffmpegPath` to the executable when it is outside PATH.
+Core HomeKit features and live streaming use the installed npm package. Streaming
+requires its matching, hash-verified private worker for Linux x64/arm64, macOS
+x64/arm64 or Windows x64. Missing, unsupported or modified workers refuse streaming
+before requesting vendor media. There is no startup download or executable-path
+fallback. Final tested OS baselines and package evidence belong in the
+[release guide](RELEASE.md); source compilation does not establish them.
 
-The selected executable's RTP SSRC option is checked during discovery, including when a video encoder is selected manually. Signed and unsigned muxer options receive equivalent representations of the same 32-bit stream identifier. This is an automatic runtime capability, not a saved setting or a version-based guess. If the bounded check fails or reports an unknown contract, live streaming is disabled for that runtime while discovery and core accessories continue. See the [SSRC compatibility audit](audits/2026-10-22-rtp-ssrc-compatibility.md) for evidence and reproduction.
+The worker directly calls pinned codec libraries through private pipes. Session
+URLs, credentials and SRTP keys are never worker command-line options or environment
+variables. The parent owns vendor TLS and HomeKit output sockets. Keys and media
+still exist in process memory; this does not isolate a compromised Homebridge host.
 
-Home may retain a previously advertised AAC-ELD offer after an encoder change. The plugin fingerprints each actual audio offer in HAP characteristic metadata and signals a normal configuration update when it changes, preserving accessory and stream identities. See the [capability-invalidation audit](audits/2026-10-22-audio-capability-invalidation.md). AAC-ELD requires verified `libfdk_aac` RTP output. The plugin probes a bounded dummy tone at 16/24 kHz with global codec headers before advertising AAC-ELD alongside Opus. It uses the negotiated codec and flushes each AAC access unit to avoid long packet batches. An executable without FDK AAC may refuse Home's AAC-ELD selection before requesting vendor media; inspect encoder capabilities rather than resetting pairing or disabling security checks. Runtime executables are operator-managed; the plugin does not download or install FFmpeg at startup.
+Audio supports mono Opus at 16/24 kHz, PCMA and PCMU at 8 kHz. Opus uses
+10/20/40/60 ms packets and a 48 kHz RTP clock. AAC-ELD is removed from the offer;
+a controller retaining an old selection is refused before vendor allocation.
+The normal HAP configuration update advertises changed capabilities while
+preserving accessory identities. Do not reset pairing to recover a refused codec.
 
+### Upgrade configuration
+
+Retired settings fail validation with migration guidance: `ffmpegPath`,
+`ffmpegDebug`, `rtpSsrcMode`, `rtspTransport`, `verifyImmisTls`, `twoWayAudio`,
+`videoEncoder`. `audioCodec: aac-eld` also needs migration.
+The private worker uses software x264; hardware encoder selection is removed.
+
+Before the operator restarts Homebridge, run the installed migration script against
+an explicit configuration path on a POSIX host:
+
+```sh
+node /absolute/plugin/path/scripts/migrate-secure-media-config.cjs /absolute/homebridge/config.json
+```
+
+It writes an owner-only backup beside the file before replacing it atomically,
+removes retired Blink settings, maps AAC-ELD to Opus and renames `ffmpegDebug` to
+`mediaDebug`. An existing `mediaDebug` value wins. It also removes legacy nested
+`audio.aacEldEncoder`, `audio.twoWay` and `video.encoder` fields, and maps nested
+`audio.codec: aac-eld` to Opus when present. It preserves other platforms.
+Keep the backup private: it contains the original configuration. Windows operators
+must back up their configuration using their normal private storage and remove the
+listed keys manually; the script refuses hosts without POSIX permission semantics.
+Publication does not run this script or restart an installed bridge.
 
 ## Encoding and transport
 
-Live streaming converts Blink IMMIS/RTSPS media to HomeKit RTP/SRTP.
+Live streaming converts H.264/AAC or AAC-LATM in owned MPEG-TS input into negotiated
+H.264 plus optional supported audio. Video preserves aspect ratio with black padding,
+uses the negotiated profile/level and bitrate ceiling, and selects source frames at
+no more than the output FPS. Slower sources are not duplicated.
 
-Set `videoEncoder` to `auto` for the safest default across mixed installations. On macOS it prefers
-`h264_videotoolbox`, on Linux ARM it probes `h264_v4l2m2m`, and it falls back
-to `libx264` if the hardware encoder cannot be started.
+IMMIS admits the checked public `immedia-semi.com` family or canonical public IPv4
+on TLS port 443. The owned RTSPS broker admits the same family on port 332 and
+requires the source-backed `blinkRTSP=true`/`1` TCP-interleaved MPEG-TS flow.
+It refuses redirects, UDP transport, unapproved control/SDP authorities and other
+RTSP flows. Every numeric connection candidate and reconnect receives fresh policy
+checks; TLS verification retains the original server identity. The shared vendor
+trust anchors apply only to these media transports. No setting bypasses TLS.
+Provider endpoint completeness and physical playback remain operator acceptance;
+synthetic protocol tests do not prove every live camera is supported.
 
-Hardware availability depends on the host, drivers and executable. A compiled
-encoder name alone does not prove usable acceleration. When reporting fallback
-or choppy output, include the selected encoder and sanitized diagnostic receipts;
-do not attach full process arguments or media.
+Queues, input/output byte ceilings, consumption credits, independent STOP and
+bounded cleanup remain enforced. A retiring generation keeps its ports reserved
+until actual worker/socket closure. Command polling starts immediately and follows
+the vendor interval independently of Continue timing.
 
-IMMIS live streams always verify the upstream TLS certificate and hostname, using
-Node bundled public roots plus the official Blink vendor anchors only for IMMIS. The former
-`verifyImmisTls` bypass is removed from the UI and ignored in existing configuration. IMMIS
-admits only `immedia-semi.com` hosts or canonical public IPv4 authorities on port 443; a refused
-endpoint disables that stream. Provider acceptance is bounded to the recorded real-device evidence; it is not
-a universal destination-policy acceptance claim. Full RTSP destination control and secret-free FFmpeg execution
-remain open security work. For stable 0.10.0, these are accepted, disclosed
-residual risks under the [release disposition](plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition),
-not resolved vulnerabilities: users able to inspect FFmpeg process arguments on
-the host may obtain session secrets, and enforcement of the intended policy for every RTSP secondary connection
-is not yet verified. Existing runtime guards remain
-mandatory. For diagnostic redaction and finite log allowances, see the
-[logging specification](debug_logging_spec.md#streaming-diagnostics). Debug recordings are written under
-`<debugStreamPath>/blink-stream-recordings/`, use hashed camera identifiers in filenames, and are
-created with owner-only file permissions where the filesystem supports POSIX modes. Existing
-recordings from older versions under `<debugStreamPath>/blink-stream-*.ts` are not moved or
-re-permissioned automatically; delete them or migrate them into a private directory if they contain
-sensitive footage.
+`mediaDebug` enables bounded, redacted diagnostics. IMMIS debug recordings remain
+under `<debugStreamPath>/blink-stream-recordings/`, with hashed camera identifiers
+and owner-only POSIX permissions. They contain sensitive footage. Older recordings
+are not moved or re-permissioned automatically. RTSPS debug recording is not
+implemented. See the [logging specification](debug_logging_spec.md#streaming-diagnostics).
 
 ### Two-way talk status
 
-Two-way talk is temporarily disabled. The HomeKit microphone/talk UI is hidden and the plugin forces `twoWayAudio` off until IMMIS uplink framing is validated. Even if you previously enabled talkback, the setting is ignored for now. Re-enabling it requires validated payload sequencing and ACK handling; it is not a supported current feature.
+Talkback remains disabled and the HomeKit microphone UI stays hidden. Removed
+`twoWayAudio` settings need migration; the secure runtime does not implement uplink.
 
 ### Software encoding on smaller hosts
 
-`softwareEncodingPreset` defaults to `veryfast` (Balanced), preserving existing
-quality behavior. The optional `ultrafast` (Low CPU) setting uses ultrafast for
-libx264 and software fallback, plus Opus compression level 3. It reduces encoding
-work at the cost of compression efficiency: at the same bitrate, video/audio
-quality may decrease. Hardware video encoders retain their own settings; Opus
-still uses the selected audio complexity. Select it through the existing Streaming settings after
-installation and compare actual Home playback on the same host and settings.
-Publication does not change installed configuration.
-
-This option still transcodes video. Automatic H.264 passthrough is not enabled:
-source codec/profile/level, dimensions, frame rate and bitrate must first be
-verified against HomeKit negotiation. Audio conversion may remain necessary.
-
-Audio is decoded from the source container and converted to the negotiated
-HomeKit codec, sample rate, channels, bitrate and packet duration. Opus supports
-10/20/40/60 ms packets. AAC-ELD is advertised only after a bounded local encoding
-and RTP capability probe; when AAC-ELD is unavailable, it is not advertised. A controller selecting an
-unavailable codec is refused rather than silently receiving another codec.
-Video and audio use separate negotiated RTP/SRTP outputs. IMMIS retains the
-initial probed keyframe, and video encoding uses a bitrate/VBV ceiling. Existing
-private-pipe backpressure and bounded session cleanup still apply.
-
-IMMIS streaming pauses vendor input while the private encoder pipe is backpressured and resumes after drain. Input/output ceilings and the two-second stall deadline remain enforced. Command liveness polling starts immediately and follows the vendor polling interval; its Continue-button timer does not control polling. Fixed authentication and first-media receipts distinguish a connected transport from delivered source media. Release acceptance and the evidence required after a runtime change are owned by the [release guide](RELEASE.md).
+`softwareEncodingPreset` defaults to `veryfast` (Balanced). Optional `ultrafast`
+(Low CPU) selects x264 ultrafast and Opus compression level 3. Reduced compression
+work can reduce quality at the same bitrate. Compare actual Home playback on the
+same host and settings after operator installation. Automatic H.264 passthrough
+is not enabled. Resource and latency acceptance require matched measurements;
+passing codec tests alone does not prove real-time performance.
 
 ### Input and output quality
 
@@ -94,7 +110,7 @@ Dimensions remain exactly selected; unsupported dimensions still fail before
 vendor media work. Output receipts distinguish requested and effective FPS.
 Lower resolution/frame rate reduces encoding work, but improved playback is
 not established until measured on the installed release. 1080p/30 increases work.
-Audio remains independently negotiated and transcoded, including Opus/AAC-ELD
+Audio remains independently negotiated and transcoded, including Opus
 packet duration, sample rate and separate RTP/SRTP packaging. Software encoding
 preset and bitrate remain separate controls.
 

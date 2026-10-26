@@ -37,10 +37,10 @@ ADR-005 specifies; it cannot be claimed from synthetic tests.
 ## Dependency-ordered checklist
 
 - [x] Reconcile current runtime, native prototype, provider and packaging gaps.
-- [ ] Implement and verify bounded codec/transport/output primitives (active).
-- [ ] Integrate the secure worker into camera generations and remove unsafe media
-      CLI paths, preserving snapshots/recording and command coordination.
-- [ ] Build and verify all five packaged native targets, corresponding sources,
+- [x] Implement and verify bounded codec/transport/output primitives.
+- [x] Integrate the secure worker into camera generations and remove unsafe media
+      CLI paths, preserving snapshots, IMMIS recording and command coordination.
+- [ ] Build and verify all five packaged native targets, corresponding sources (active),
       licensing, executable identity and exact tarball load/codec/security gates.
 - [ ] Complete integrated secret-surface, forbidden-connection, receiver,
       cancellation/stress/resource tests and independent reviews; close F05/F06
@@ -73,15 +73,35 @@ independent review. Conventional commits record coherent verified milestones.
 Do not commit another agent's unfinished slice. Integration waits on its actual
 dependencies, not on a passing isolated prototype.
 
-## Current evidence gaps and disposition
+## Evidence stages and remaining gates
 
-- Linux arm64, macOS x64 and Windows production workers have no build acceptance;
-  Linux libc/Windows baseline and macOS minimum-OS execution need explicit proof.
-- Windows crash/process-surface evidence is absent; error-mode flags alone do not
-  establish the bounded secrecy claim.
-- Actual provider RTSPS authority/port/auth captures are absent. The official
-  client establishes protocol capabilities, including default secure port 332,
-  but does not by itself prove every production endpoint.
-- Source jitter/reconnect/long-duration and performance acceptance remain open.
-- All of these remain release blockers until resolved. The current beta version
-  is preparation only; re-evaluate cumulative SemVer before publication.
+Prepublication gates remain mandatory: integrated F05 canary/diagnostic checks on
+all supported targets, actual-network F06 enforcement, five-target clean-host
+qualification of one final npm tarball, corresponding source/license identity,
+synthetic queue/recorder/codec-memory bounds, independent review and normal CI.
+The local [resource audit](../audits/2026-10-26-secure-media-performance.md) records
+latency, CPU/RSS and retirement observations. It establishes no CPU parity.
+
+Windows build, CIM argv/executable inspection, supported diagnostic/error policy
+and final installed package remain unverified. Empty launch-environment assertions
+establish controlled process creation; CIM does not inspect environment memory.
+Default Windows error reporting and fixed application diagnostics are the scoped
+crash-output boundary. Administratively configured memory dumps and privileged
+process-memory inspection remain outside ADR-005's metadata secrecy claim.
+
+Accepted ADR-005 places live installation and physical/provider acceptance after
+CI publication. Official retained client evidence supports the admitted RTSPS
+scheme/port/TLS mechanism; unknown authorities and protocol flows fail closed.
+Exhaustive provider endpoint compatibility, real source jitter/drift/reconnect,
+physical Home playback, device resource calibration and beta observation remain
+operator acceptance. No camera activation, installation, restart or pairing is
+implied by source or synthetic checks.
+
+Runtime baselines must name the hosts actually qualified: Ubuntu 22.04, macOS 15
+and Windows Server 2022. A deployment target or successful build does not prove
+an older operating system. AAC-ELD and talkback remain unsupported.
+
+This sequencing follows the independent architecture gate review on 26 October;
+it does not waive F05/F06. Both findings remain open until their prepublication
+proof passes. Issue #48 remains open until publication and independent artifact
+verification satisfy its immutable-release criteria.

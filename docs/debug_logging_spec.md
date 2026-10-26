@@ -1,13 +1,13 @@
 # Blink Debug Logging Specification
 
-Last reviewed: 23 October 2026.
+Last reviewed: 26 October 2026.
 
 This spec defines how the Homebridge Blink plugin should log diagnostic information for authentication, HTTP, and streaming while protecting sensitive data.
 
 ## Logging Controls
 
 - `debugAuth` (config): Enables verbose auth + HTTP diagnostics in `src/blink-api/auth.ts` and `src/blink-api/http.ts`.
-- `ffmpegDebug` (config): Enables bounded, redacted streaming detail in `src/accessories/camera-source.ts`.
+- `mediaDebug` (config): Enables bounded, redacted streaming detail in `src/accessories/camera-source.ts`.
 - `logger` (internal API): `BlinkLogger` interface used by auth + HTTP layers (defaults to no-op when absent); this is not a JSON configuration field.
 
 ## Required Log Levels
@@ -16,7 +16,7 @@ This spec defines how the Homebridge Blink plugin should log diagnostic informat
 - **warn**: Non-fatal but actionable events (configuration warnings, degraded retries).
 - **error**: Unexpected HTTP failures and camera/stream failures. HTTP diagnostics
   retain method, redacted URL, numeric status, and a bounded failure category.
-- **debug**: Device-level events (motion detection toggles, accessory state changes) and FFmpeg debug output when enabled.
+- **debug**: Device-level events (motion detection toggles, accessory state changes) and bounded media detail when enabled.
 
 ## HTTP Diagnostics (debugAuth only)
 
@@ -84,15 +84,15 @@ across diagnostic bundles.
 Operator settings, recording locations and codec behavior are owned by the
 [streaming guide](streaming.md).
 
-- FFmpeg runs at `info` loglevel. `ffmpegDebug` controls bounded diagnostic
-  emission; it does not enable packet/NAL traces or unbounded FFmpeg debug output.
+- `mediaDebug` controls bounded parent diagnostic emission. Private worker stderr
+  is drained and discarded; raw native/library errors never cross the public error surface.
 - Each media child/proxy has finite detail and error allowances, bounded line
   lengths and suppression reporting. Operational failure receipts remain visible.
   Input-format observation continues after the detail allowance is exhausted.
 - Streaming logs must not include raw stream tokens, liveview URLs, SRTP keys, or device serials unless redacted.
 - Debug stream recordings must avoid raw camera serials in filenames and use owner-only file permissions.
 - Camera and proxy failures use Homebridge's error level even when debug is off.
-  Routine traces and FFmpeg stderr remain debug output.
+  Routine parent traces remain debug output; worker stderr is never logged.
 - Authenticated thumbnails are restricted to HTTPS regional Blink REST hosts,
   without userinfo or nonstandard ports; redirects are rejected. Their transport
   and body failures use safe messages.
