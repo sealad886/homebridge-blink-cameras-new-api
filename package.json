@@ -94,7 +94,7 @@
         "blink-api:validate": "node scripts/blink-api-contract/index.cjs validate --input docs/api-contract/blink-59.2-29823413.json --schema docs/api-contract/schema.json",
         "preuninstall": "node scripts/preuninstall.js",
         "build": "tsc && npm run copy-ui-assets",
-        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
+        "copy-ui-assets": "node .github/scripts/copy-ui-assets.mjs",
         "watch": "npm run build && nodemon",
         "watch:homebridge": "npm run watch",
         "watch:ts": "tsc --watch",
