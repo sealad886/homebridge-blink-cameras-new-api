@@ -166,17 +166,20 @@ camera/HomeKit gates.
 Qualification runner baselines are Ubuntu 22.04 (x64/arm64), macOS 15 (arm64/x64)
 and Windows Server 2022 (x64). A pass establishes only its observed runner/runtime
 baseline. A macOS deployment target of 13 does not prove macOS 13 acceptance;
-Windows Server 2022 does not establish Windows 10 acceptance. Hosted qualification
-is pending until a run for the exact final source and npm integrity succeeds.
+Windows Server 2022 does not establish Windows 10 acceptance. Every release needs
+a successful run for its exact final source and npm integrity. The
+[26 October beta checkpoint](plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
+records the observed five-host qualification for `0.11.0-beta.0`.
 
 The privileged main-only OIDC job requires all five jobs and independently checks
 their receipts against the exact publication tarball, source SHA, source-bundle
 hash and target worker hashes before publishing. It neither rebuilds nor repacks
 the qualified tarball. Candidate/distribution build receipts retain
 `distribution_ready: false`; separate qualification receipts record the observed
-target results without changing the immutable product bytes. Those results do
-not close F05/F06 or record physical acceptance. Preserve the beta hold until the
-remaining release gates are verified. Registry publication and subsequent
+target results without changing the immutable product bytes. Qualification alone
+does not close findings or record physical acceptance; the hardening ledger owns
+the combined F05/F06 remediation evidence and disposition. Preserve any release
+hold until its remaining gates are verified. Registry publication and subsequent
 authorized Homebridge installation/physical acceptance remain distinct stages.
 
 ## Homebridge upgrade and acceptance
@@ -241,11 +244,13 @@ gh workflow run npm-prerelease-cleanup.yml --ref main \
 
 The [18 October stable-release disposition](plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
 accepts F05/F06 as disclosed residual risks specifically for stable 0.10.0.
-Both findings remain open. Their closure and native-worker acceptance criteria
-are unchanged; the retained runtime guards are mandatory. Do not request the
-same risk decision again unless the exposure or release scope changes.
+That historical acceptance does not repair the older stable artifact or waive
+the new runtime's acceptance criteria. The
+[26 October checkpoint](plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
+owns current finding status; retained runtime guards remain mandatory. Do not
+request the same stable-release risk decision again unless its exposure or scope changes.
 
-Current functional acceptance is recorded in the
+Functional acceptance for stable 0.10.0 is recorded in the
 [hardening ledger](plans/security-hardening.md#23-october-2026-rc19-acceptance-and-stable-readiness).
 Release acceptance follows the evidence requirements above; a new RC number,
 label or documentation change does not create a waiting period. Hardware failures

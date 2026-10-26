@@ -2,7 +2,7 @@
 
 See the [documentation map](../docs/README.md) for scope and navigation.
 
-This is the codec-only worker for the secure media cutover under review. It
+This is the codec-only worker shipped in the `0.11.0-beta.0` secure media runtime. It
 accepts H.264 plus optional AAC/AAC-LATM in MPEG-TS through private stdin and emits
 bounded H.264/Opus/PCMA/PCMU packets through framed stdout. Maintained libsrtp
 2.8.1 protects parent-provided RTP/RTCP through the same private protocol. The
@@ -10,14 +10,14 @@ parent owns verified vendor TLS, paired-controller sockets and generation lifeti
 the worker has no vendor URL, TLS, socket output, media/configuration file or
 FFmpeg CLI path. AAC-ELD is excluded from the approved runtime offer.
 
-Local macOS arm64 codec/session/receiver checks pass. Four POSIX source-build CI
-lanes have passed on an earlier head; Windows and the final five-target npm
-qualification remain gates. These facts do not establish this release's clean-host,
-physical camera, performance or distribution acceptance. See [dependency and CI
-evidence](dependencies/README.md#native-candidate-ci-validation), the
-[implementation checklist](../docs/plans/2026-10-25-secure-media-runtime.md) and the
-[release guide](../docs/RELEASE.md). Beta publication remains blocked until the
-required security and artifact evidence passes.
+The [26 October release checkpoint](../docs/plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
+records the published source, package integrity and verified five-target artifact.
+All five source-build/native lanes and eight installed-package codec/receiver
+selections per target passed on Ubuntu 22.04 x64/arm64, macOS 15 x64/arm64 and
+Windows Server 2022 x64. These results do not establish older OS baselines or
+physical camera/Home playback. See [dependency and CI evidence](dependencies/README.md#native-candidate-ci-validation)
+and the [release guide](../docs/RELEASE.md). Historical local receipts below retain
+their original scope; current finding and artifact status belongs to the checkpoint.
 
 ## Build and checks
 
@@ -28,7 +28,7 @@ make -C native test FFMPEG_PREFIX=/absolute/pinned/ffmpeg-9.0.2 SRTP_PREFIX=/abs
 
 `FFMPEG_PREFIX` and `SRTP_PREFIX` are required; no dependency installation or implicit prefix discovery occurs. `PYTHON` defaults to the existing repository `.venv/bin/python` and can be supplied explicitly for a target test environment. `PKG_CONFIG_LIBDIR` explicitly selects that prefix; do not rely on an ambient pkg-config installation selecting the pinned version. Compiler uses C11, warnings as errors, and public libavformat/libavcodec/libavutil/libswscale/libswresample. `PKG_CONFIG_FLAGS` defaults to `--static` to include the declared static dependency closure. The libsrtp archive is linked explicitly. POSIX builds use pthreads because the installed macOS compiler has no C11 `threads.h`; Windows uses Win32 threads/condition variables and binary stdin/stdout. Windows uses explicit `.exe` targets and links Winsock for the static dependency closure. Tests select those executable names on Windows. Windows requires a target toolchain and supplied pkg-config files; the Makefile does not produce or prove a clean Windows distribution.
 
-The worker accepts no command-line options. Start with executable argv only, private piped stdin/stdout/stderr, and a scrubbed environment. Runtime rejects libavformat/libavcodec versions other than 63.1.102 and libavutil other than 61.1.102. This prevents observed major-version drift, but exact artifact/source/dependency identity still needs distribution receipts. The current worker statically links the verified local FFmpeg/Opus/x264/libsrtp archives and dynamically links only Apple system libraries/frameworks. This is local evidence, not a five-target distribution artifact.
+The worker accepts no command-line options. Start with executable argv only, private piped stdin/stdout/stderr, and a scrubbed environment. Runtime rejects libavformat/libavcodec versions other than 63.1.102 and libavutil other than 61.1.102. This prevents observed major-version drift; distribution receipts bind exact artifact/source/dependency identity. The recorded local macOS worker statically linked the verified FFmpeg/Opus/x264/libsrtp archives and dynamically linked only Apple system libraries/frameworks. That local import result is not a claim about Linux or Windows imports; the published five-target artifacts pass their separate native dependency audits.
 
 ## Protocol version 2
 
@@ -61,21 +61,21 @@ STOP executes `_Exit(0)` in the input reader thread, independent of synchronous 
 
 ## Bounds and trust boundary
 
-Media queue: fixed 1 MiB ring; overfill is fatal, not an unbounded backlog. Input message: 64 KiB. Lifetime media input: 128 MiB; encoded output: 64 MiB. Decoded source dimensions: at most 4096 on either axis and 8,388,608 pixels, independently from the maximum 1920x1080 negotiated output. Decoder `max_pixels` enforces the total-pixel bound before decoding; known initial dimensions and delivered frames are also checked. Demuxer streams: at most eight; MPEG-TS packet option: 256 KiB; resynchronization scan: 64 KiB. These are prototype limits requiring valid-traffic calibration. Audio input: 8..48 kHz, at most two channels and 8192 samples per decoded frame; two-second mono output FIFO, 32768 converted samples per batch and 300 seconds lifetime audio sample budget. Source rate/format/channel-count changes fail closed. One decoder/encoder thread per codec. Input/config wait timeout: 15 seconds; output queue: 1 MiB including the in-flight writer frame, independent two-second oldest-frame watchdog; process watchdog: 300 seconds. Frames: configured cap, maximum 9000.
+Media queue: fixed 1 MiB ring; overfill is fatal, not an unbounded backlog. Input message: 64 KiB. Lifetime media input: 128 MiB; encoded output: 64 MiB. Decoded source dimensions: at most 4096 on either axis and 8,388,608 pixels, independently from the maximum 1920x1080 negotiated output. Decoder `max_pixels` enforces the total-pixel bound before decoding; known initial dimensions and delivered frames are also checked. Demuxer streams: at most eight; MPEG-TS packet option: 256 KiB; resynchronization scan: 64 KiB. These bounds still require valid-provider traffic calibration. Audio input: 8..48 kHz, at most two channels and 8192 samples per decoded frame; two-second mono output FIFO, 32768 converted samples per batch and 300 seconds lifetime audio sample budget. Source rate/format/channel-count changes fail closed. One decoder/encoder thread per codec. Input/config wait timeout: 15 seconds; output queue: 1 MiB including the in-flight writer frame, independent two-second oldest-frame watchdog; process watchdog: 300 seconds. Frames: configured cap, maximum 9000.
 
 The reader does not wait for queue space, so STOP remains readable until a protocol violation or overflow ends the process. The client admits at most one MEDIA chunk of 64 KiB and awaits consumption credits for every admitted byte before the next MEDIA or END. Credits describe ring consumption, not decoding or presentation completion. Control and STOP retain independent admission; a missing credit expires after two seconds. Integrations must split larger vendor frames and honor this contract to avoid overflowing the native ring. Decoder/demuxer internal allocations are not measured RSS ceilings, and a separate process is not an OS sandbox. Missing MPEG-TS demuxer fails closed rather than falling back to auto-probing. An empty protocol allowlist and rejecting `io_open` callback deny secondary public library I/O. Explicit MPEG-TS format allowlist and memory AVIO avoid URL/protocol input selection; no RTSP or general libav URL-opening entrypoint is exposed.
 
-Libav logging is discarded and own diagnostics use fixed codes, with no input interpolation. This is source-backed narrowing, not completed F05 proof: the SRTP INIT key buffer is explicitly erased after library initialization, but library-owned key memory is reclaimed on process exit without a completed crash-dump/zeroization proof. Real vendor credentials, parent environment and talkback remain untested. F06 remains a parent-owned transport gate, including DNS/redirect/reconnect/SDP/control/secondary endpoints and original TLS identity.
+Libav logging is discarded and own diagnostics use fixed codes, with no input interpolation. The SRTP INIT key buffer is explicitly erased after library initialization; library-owned key memory is reclaimed on process exit without a general memory-zeroization proof. The release checkpoint records integrated F05 dummy-secret/process-metadata/default-crash-policy verification and its privileged-memory/dump exclusions. It also records F06 verification at the parent-owned DNS/redirect/reconnect/SDP/control/secondary transport boundary with original TLS identity. Unsupported talkback remains disabled.
 
-## Local evidence
+## Historical local prototype evidence
 
 `make -C native FFMPEG_PREFIX=<verified prefix> SRTP_PREFIX=<verified prefix> test`: twenty-eight behavioral tests passed on macOS arm64 after the protocol-2 codec slice. Tests include valid fragmented MPEG-TS, complete framed packet EOF, malformed/partial input, invalid config and duplicate config, frame budget, media-free failure, STOP before config/during media wait/with stdout unread, and withheld secret-like malformed payload. Native fixture generator and independent H.264 output checker use public libraries, without FFmpeg CLI. The checker decodes four output frames and validates dimensions/pixels; audio tests decode audible output for each supported codec/rate from AAC and explicit AAC-LATM MPEG-TS fixtures, preserve the fixture source offset, verify all supported Opus packet durations and reject unsupported audio config/discontinuity. Additional fixtures verify 2K/square source bounds, aspect padding, source-timestamp-preserving 30-to-15 fps selection, negotiated H264 SPS profile/level and exact media consumption credits. The capability executable demonstrates native AAC-ELD open failure (-22) rather than mislabeling AAC-LC.
 
-The stdout-stall STOP test sends repeated fixture media without consuming stdout; it demonstrates prompt process exit in that scenario, but does not prove an exact queue/RSS high-water measurement. Exact queue overflow, long watchdog, multi-platform launch, real-media calibration, provider-valid synchronized audio, broader SRTP wire parity and physical integrated STOP acceptance remain follow-up gates.
+The stdout-stall STOP test sends repeated fixture media without consuming stdout; it demonstrates prompt process exit in that scenario, but did not itself prove an exact queue/RSS high-water measurement. Later synthetic resource and multi-platform evidence belongs to the release checkpoint. Real-media calibration, provider-valid synchronized audio, broader SRTP wire parity and physical integrated STOP acceptance remain operator gates.
 
 ## License and source distribution
 
-Worker and fixture/checker sources are `GPL-3.0-or-later`, with GPLv3 text in `COPYING`. Linking the selected FFmpeg/libx264 GPL configuration prevents treating this worker as an LGPL-only binary. Do not publish binaries until the exact license/dependency inventory, notices and corresponding source/build inputs are provided for every target. The local recipe and verified dependency-source manifest establish actual build inputs; complete corresponding-source distribution and target-specific notices remain release gates.
+Worker and fixture/checker sources are `GPL-3.0-or-later`, with GPLv3 text in `COPYING`. Linking the selected FFmpeg/libx264 GPL configuration prevents treating this worker as an LGPL-only binary. Every publication requires exact license/dependency inventory, notices and corresponding source/build inputs for every target. The published beta includes the verified source bundle and target-specific notices identified by the release checkpoint; future changed artifacts require their own evidence.
 
 Public API references: [FFmpeg custom AVIO](https://ffmpeg.org/doxygen/trunk/structAVIOContext.html), [codec send/receive](https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html), [FFmpeg license](https://ffmpeg.org/legal.html). Installed 9.0.2 headers/source are authoritative for this local prototype; current documentation alone does not prove version or runtime portability.
 
@@ -85,7 +85,7 @@ Input 10 INIT is 42 bytes: u32 stream ID (1 video / 2 audio), u32 SSRC, u32 suit
 
 The reader performs bounded protection work and only enqueues output; a separate writer owns stdout. Queue overflow is fatal and a watchdog exits after two seconds without draining the oldest frame. STOP remains independent of both writer and codec. Codec END emits output END but keeps the protection reader available. After codec completion, fifteen seconds without reader activity is fatal; the lifetime watchdog still caps the process at 300 seconds. Protection requests reset the final idle wait. Clean input EOF after media END stops acceptance, deallocates SRTP sessions and drains queued replies before process exit. STOP exits immediately. The post-END protection/STOP test establishes that final encoded packets can still be protected; full production generation teardown ordering remains a gate.
 
-The [published pinned libsrtp `srtp_validate` RTP and SRTCP ciphertext vectors](https://github.com/cisco/libsrtp/blob/6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa/test/srtp_driver.c#L1862) are matched through the actual worker pipe, including correlated IDs. The tests also reject uninitialized/mismatched/duplicate sessions and establish the stdout deadline. Source/license evidence for the linked archive comes from the independently verified dependency build receipt. `dependencies/licenses/libsrtp-LICENSE` preserves its actual source notice; full transitive distribution closure remains pending.
+The [published pinned libsrtp `srtp_validate` RTP and SRTCP ciphertext vectors](https://github.com/cisco/libsrtp/blob/6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa/test/srtp_driver.c#L1862) are matched through the actual worker pipe, including correlated IDs. The tests also reject uninitialized/mismatched/duplicate sessions and establish the stdout deadline. Source/license evidence for the linked archive comes from the independently verified dependency build receipt. `dependencies/licenses/libsrtp-LICENSE` preserves its actual source notice; the release checkpoint identifies the published corresponding-source and notice inventory.
 
 The final local verification uses the same verified source-built static prefix for worker, fixture, checker and capability probe. That prefix includes Opus/PCMA/PCMU decoders for output verification; the worker still accepts only explicitly selected H264/AAC input. `CHECKER_FFMPEG_PREFIX` permits an independently built verifier when necessary, but the final receipt uses its default shared prefix.
 
