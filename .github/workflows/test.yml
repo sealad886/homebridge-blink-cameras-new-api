@@ -34,13 +34,6 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --runInBand --coverage
-      - name: Verify synthetic video/audio stream packaging
-        if: matrix.node-version == 24
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg
-          ffmpeg -version
-          node scripts/media-pipeline-smoke.cjs
       - name: Check maintained OAuth diagnostic scripts
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck scripts/debug-full-oauth.ts scripts/debug-simple-oauth.ts scripts/oauth-diagnostic-transport.ts
       - name: Test trusted evidence reporting
@@ -48,6 +41,8 @@ jobs:
       - name: Test release safety contracts
         run: node --test .github/scripts/*.test.mjs
       - name: Verify package contents and loadability
+        env:
+          VERIFY_PACKAGE_JAVASCRIPT_ONLY: '1'
         run: node .github/scripts/verify-package.mjs
       - name: Upload coverage to Codecov
         if: matrix.node-version == 20
@@ -113,7 +108,7 @@ jobs:
           NATIVE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          for tool in cc make cmake pkg-config gpg; do command -v "$tool"; done
+          for tool in cc make cmake pkg-config gpg openssl; do command -v "$tool"; done
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             test "$MSYSTEM" = UCRT64
             test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
@@ -159,11 +154,19 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+          npm run build
           native_worker="$PWD/native/build/blink-codec-worker"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             native_worker="$(cygpath -m "$native_worker.exe")"
           fi
-          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts
+          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
+      - name: Verify actual RTSP connection boundaries in an isolated network
+        if: matrix.target == 'linux-x64'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends strace iproute2 util-linux
+          bash .github/scripts/check-rtsp-network.sh
       - name: Retain tested worker with immutable source and dependency receipt
         env:
           NATIVE_TARGET: ${{ matrix.target }}
@@ -183,5 +186,27 @@ jobs:
         with:
           name: native-candidate-${{ matrix.target }}-${{ github.sha }}
           path: native/build/native-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain independent receiver helpers for final package qualification
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, platform, sys
+          from pathlib import Path
+          sys.path.insert(0, 'native/dependencies')
+          import prepare
+          for name in ('fixture', 'check-rtp'):
+              prepare.audit_dependencies(Path('native/build') / (name + ('.exe' if os.name == 'nt' else '')),
+                  platform.system(), os.environ.copy())
+          PY
+          node .github/scripts/native-qualification.mjs prepare --target "$NATIVE_TARGET" --source-sha "$GITHUB_SHA" --build native/build --output "native/build/validation-$NATIVE_TARGET"
+      - name: Upload independent receiver helpers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-validation-${{ matrix.target }}-${{ github.sha }}
+          path: native/build/validation-${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 7

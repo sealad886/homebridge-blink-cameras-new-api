@@ -40,7 +40,11 @@ def unix_path(path):
 
 def configure_command(script, flags, system):
     # Native Windows Python cannot directly execute a POSIX configure script.
-    return ['bash', unix_path(script), *flags] if system == 'Windows' else [argument(script), *flags]
+    if system == 'Windows':
+        # An unqualified bash can select Windows' WSL shim before the MSYS PATH.
+        bash = subprocess.check_output(['cygpath', '-m', '/usr/bin/bash.exe'], text=True).strip()
+        return [bash, unix_path(script), *flags]
+    return [argument(script), *flags]
 
 
 def build_environment(prefix, system):
@@ -71,6 +75,28 @@ def audit_dependencies(binary, system, env):
                                 r'api-ms-win-[a-z0-9-]+)\.dll$', re.IGNORECASE)
         if not imports or any(not system_dll.fullmatch(name) for name in imports):
             raise ValueError('Non-system Windows dependency or missing PE import evidence')
+    elif system == 'Darwin':
+        # Exact imports observed in the isolated static worker/helper build.
+        allowed = {'/usr/lib/libSystem.B.dylib', *(
+            f'/System/Library/Frameworks/{name}.framework/Versions/A/{name}'
+            for name in ('CoreFoundation', 'CoreVideo', 'CoreMedia'))}
+        lines = [line for line in result.splitlines()[1:] if line.strip()]
+        imports = [re.fullmatch(r'\s*(\S+) \(compatibility version [^,]+, current version [^)]+\)\s*',
+                                line) for line in lines]
+        if not imports or any(match is None or match[1] not in allowed for match in imports):
+            raise ValueError('Non-system Darwin dependency or missing Mach-O import evidence')
+        loads = subprocess.check_output(['otool', '-l', argument(binary)], env=env, text=True)
+        if (not re.search(r'^\s*cmd LC_LOAD_DYLIB\s*$', loads, re.MULTILINE) or
+                re.search(r'^\s*cmd LC_RPATH\s*$', loads, re.MULTILINE)):
+            raise ValueError('Darwin runtime search path or missing load-command evidence')
+    elif system == 'Linux':
+        allowed = {'libc.so.6', 'libm.so.6', 'libpthread.so.0', 'libdl.so.2', 'librt.so.1',
+                   'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1'}
+        imports = re.findall(r'^\s*0x[0-9a-fA-F]+\s+\(NEEDED\)\s+Shared library:\s*\[([^\]\r\n]+)\]\s*$',
+                             result, re.MULTILINE)
+        if (not imports or any(name not in allowed for name in imports) or
+                len(imports) != result.count('(NEEDED)') or re.search(r'\((?:RPATH|RUNPATH)\)', result)):
+            raise ValueError('Non-system Linux dependency, runtime search path or missing ELF import evidence')
     return result
 
 

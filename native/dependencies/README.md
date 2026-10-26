@@ -1,6 +1,6 @@
 # Pinned native source inputs
 
-See the [native prototype overview](../README.md) for scope and navigation.
+See the [private media worker overview](../README.md) for scope and navigation.
 
 This directory prepares source inputs and local static libraries for the codec-only
 worker. It does not enable worker loading, install anything globally, publish a
@@ -82,9 +82,21 @@ explicit. This follows [FFmpeg's native Windows guidance](https://ffmpeg.org/pla
 
 macOS deployment target13.0 remains requested. Linux glibc/kernel baseline, actual
 macOS13 execution, Windows minimum-version execution, all target clean-host audits
-and independent verification remain release gates. The native Windows recipe and
-new CI lanes have not yet supplied hosted execution evidence. No cross-target
-support is inferred from portable C source or a successful arm64 build.
+and independent verification remain release gates. Earlier POSIX CI source-build
+results do not establish the changed final package. Windows hosted execution and
+all final target qualifications remain unverified. No cross-target support is
+inferred from portable C source or a successful arm64 build.
+
+## Integrated distribution status
+
+The secure cutover now has an explicit five-candidate packager, a hash-verified
+runtime loader, complete corresponding source and clean-host exact-tar codec
+qualification in the release workflow. Candidate receipts deliberately remain
+`distribution_ready: false`; final qualification receipts carry separate evidence
+for the exact npm integrity. Implementation is not release acceptance: final
+five-host results, security checks and performance review are still required.
+The candidate-build description below is separate from the final package file
+list and runtime contract.
 
 ## Native candidate CI validation
 
@@ -124,18 +136,21 @@ if another agent edits source while long build runs. Existing historical receipt
 remain historical; their hashes do not imply acceptance of the new recipe.
 
 Dependency smoke executables and final workers receive native dependency audits:
-`readelf -d` on Linux, `otool -L` on Darwin, and `objdump -p` on Windows. Windows
-fails for missing PE import evidence or imports outside the explicit system DLL
-set, including MinGW/MSYS runtime DLLs. This is a bounded dependency gate; it does
-not establish Windows crash-policy or minimum-OS behavior.
+`readelf -d` on Linux, `otool -L` and `otool -l` on Darwin, and `objdump -p` on
+Windows. Each fails for missing import evidence or imports outside its closed
+system-library set. Darwin admits only the observed libSystem/CoreFoundation/
+CoreVideo/CoreMedia paths; Linux admits the baseline libc/libm/libpthread/libdl/
+librt and x64/arm64 loader names. No unobserved libgcc/libatomic import is admitted.
+Darwin LC_RPATH and Linux RPATH/RUNPATH are refused. Windows continues to reject
+MinGW/MSYS runtime DLLs. This bounded gate does not establish crash-policy or
+minimum-OS behavior; same-prefix historical receipts do not qualify a new recipe.
 
 Only after native behavioral, parent IPC and actual LAN output integration tests
 pass (`BLINK_MEDIA_NETWORK_TEST=1`), the job creates one tar
 containing the worker with executable mode and a receipt binding source SHA,
 worker SHA256, actual dependency/source recipe receipt and dynamic imports.
 The existing pinned upload-artifact action retains that candidate for seven days.
-`distribution_ready` remains false. No package file list, publish workflow or
-runtime loader is changed here. These temporary CI artifacts omit complete
+`distribution_ready` remains false. These temporary CI artifacts omit complete
 corresponding source and are not the permanent source distribution required for
 release. Exact npm tarball verification, all five successful hosted results,
 fresh-host tests and license/source closure remain mandatory before publication.

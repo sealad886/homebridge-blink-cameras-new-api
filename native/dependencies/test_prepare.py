@@ -205,9 +205,10 @@ class BuildHostTests(unittest.TestCase):
             prepare.build_environment(Path('/private/prefix'), 'FreeBSD')
 
     def test_windows_configure_uses_bash_and_converted_script_path(self):
-        with patch.object(prepare.subprocess, 'check_output', return_value='/c/work/configure\n'):
+        with patch.object(prepare.subprocess, 'check_output', side_effect=[
+                'C:/msys64/usr/bin/bash.exe\n', '/c/work/configure\n']):
             command = prepare.configure_command(Path('C:/work/configure'), ['--disable-network'], 'Windows')
-        self.assertEqual(command, ['bash', '/c/work/configure', '--disable-network'])
+        self.assertEqual(command, ['C:/msys64/usr/bin/bash.exe', '/c/work/configure', '--disable-network'])
 
     def test_posix_configure_needs_no_shell(self):
         self.assertEqual(prepare.configure_command(Path('/work/configure'), ['--disable-network'], 'Linux'),
@@ -246,6 +247,47 @@ class WorkerArtifactTests(unittest.TestCase):
         with patch.object(prepare.subprocess, 'check_output', return_value='DLL Name: libwinpthread-1.dll\n'):
             with self.assertRaisesRegex(ValueError, 'Non-system Windows dependency'):
                 prepare.audit_dependencies(Path('worker.exe'), 'Windows', {})
+
+    def test_linux_import_audit_accepts_baseline_system_libraries_only(self):
+        imports = ''.join(f' 0x0000000000000001 (NEEDED) Shared library: [{name}]\n' for name in
+                          ('libc.so.6', 'libm.so.6', 'libpthread.so.0', 'libdl.so.2', 'librt.so.1',
+                           'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1'))
+        with patch.object(prepare.subprocess, 'check_output', return_value=imports):
+            self.assertEqual(prepare.audit_dependencies(Path('worker'), 'Linux', {}), imports)
+        for extra in (' (NEEDED) Shared library: [libavcodec.so.63]\n',
+                      ' (NEEDED) Shared library: [libgcc_s.so.1]\n',
+                      ' (NEEDED) Shared library: [/private/libc.so.6]\n',
+                      ' 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]unexpected.so]\n',
+                      ' (RUNPATH) Library runpath: [/private/lib]\n',
+                      ' (RPATH) Library rpath: [$ORIGIN]\n'):
+            with self.subTest(extra=extra), patch.object(prepare.subprocess, 'check_output', return_value=imports + extra):
+                with self.assertRaises(ValueError):
+                    prepare.audit_dependencies(Path('worker'), 'Linux', {})
+        with patch.object(prepare.subprocess, 'check_output', return_value='not an ELF dependency dump'):
+            with self.assertRaises(ValueError):
+                prepare.audit_dependencies(Path('worker'), 'Linux', {})
+
+    def test_darwin_import_audit_accepts_observed_system_paths_and_rejects_search_paths(self):
+        paths = ['/usr/lib/libSystem.B.dylib', *[
+            f'/System/Library/Frameworks/{name}.framework/Versions/A/{name}'
+            for name in ('CoreFoundation', 'CoreVideo', 'CoreMedia')]]
+        imports = 'worker:\n' + ''.join(f'\t{path} (compatibility version 1.0.0, current version 1.0.0)\n'
+                                       for path in paths)
+        loads = 'worker:\nLoad command 0\n      cmd LC_LOAD_DYLIB\n'
+        with patch.object(prepare.subprocess, 'check_output', side_effect=[imports, loads]):
+            self.assertEqual(prepare.audit_dependencies(Path('worker'), 'Darwin', {}), imports)
+        for path in ('/opt/homebrew/lib/libavcodec.dylib', '@rpath/libavcodec.dylib',
+                     '@loader_path/libSystem.B.dylib', '/usr/lib/libunexpected.dylib'):
+            with self.subTest(path=path), patch.object(prepare.subprocess, 'check_output',
+                    side_effect=[imports + f'\t{path} (compatibility version 1.0.0, current version 1.0.0)\n', loads]):
+                with self.assertRaises(ValueError):
+                    prepare.audit_dependencies(Path('worker'), 'Darwin', {})
+        with patch.object(prepare.subprocess, 'check_output', side_effect=[imports, loads + '      cmd LC_RPATH\n']):
+            with self.assertRaises(ValueError):
+                prepare.audit_dependencies(Path('worker'), 'Darwin', {})
+        with patch.object(prepare.subprocess, 'check_output', return_value='not a Mach-O dependency dump'):
+            with self.assertRaises(ValueError):
+                prepare.audit_dependencies(Path('worker'), 'Darwin', {})
 
     def test_windows_import_audit_accepts_only_system_imports_and_requires_evidence(self):
         system_imports = 'DLL Name: KERNEL32.dll\nDLL Name: api-ms-win-crt-runtime-l1-1-0.dll\n'
