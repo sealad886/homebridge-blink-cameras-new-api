@@ -172,7 +172,9 @@ int main(int argc, char **argv) {
     (void)argv; if(argc!=1) fatal("ARGUMENTS");
 #ifdef _WIN32
     if (_setmode(_fileno(stdin),_O_BINARY)<0 || _setmode(_fileno(stdout),_O_BINARY)<0) fatal("IO_SETUP");
-    SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
+    const UINT error_mode=SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX;
+    SetErrorMode(error_mode);
+    if((GetErrorMode()&error_mode)!=error_mode)fatal("ERROR_MODE");
     InitializeCriticalSection(&mutex); InitializeConditionVariable(&changed);
 #else
     struct rlimit core_limit={0,0};
