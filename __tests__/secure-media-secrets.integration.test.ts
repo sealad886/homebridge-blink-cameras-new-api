@@ -106,6 +106,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
     const pipes: Buffer[] = []; const diagnostics: Buffer[] = []; const publicErrors: string[] = [];
     let child: ChildProcessWithoutNullStreams | undefined; let session: OwnedMediaSession | undefined;
     let bytesSeen = 0; let metadataInspected = false; let closeTransport!: () => void;
+    let metadataFailure: { reason: 'timeout' | 'inspection-failed'; elapsedMs: number; status: number | null } | undefined;
     const transport = Object.assign(new EventEmitter(), { whenClosed: new Promise<void>(done => { closeTransport = done; }),
       start: async () => 'pipe:0', attachConsumer: jest.fn(), retire: () => closeTransport(), stop: () => closeTransport() });
     const launch: WorkerSpawner = (path, args, options) => {
@@ -135,7 +136,20 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
       });
       return session;
     });
-    const metadata = (): void => { diagnostics.push(childMetadata(child!, worker)); metadataInspected = true; };
+    const metadata = (): void => {
+      const started = globalThis.performance.now();
+      try { diagnostics.push(childMetadata(child!, worker)); metadataInspected = true; }
+      catch (error) {
+        // The vendor-start-error path intentionally absorbs provider exceptions.
+        // Retain only fixed categories and numbers so an inspection failure is
+        // reported independently without echoing command output or credentials.
+        const failure = error as { code?: unknown; status?: unknown };
+        metadataFailure = { reason: failure.code === 'ETIMEDOUT' ? 'timeout' : 'inspection-failed',
+          elapsedMs: Math.round(globalThis.performance.now() - started),
+          status: Number.isInteger(failure.status) ? failure.status as number : null };
+        throw new Error('Native child metadata inspection failed');
+      }
+    };
     const privateFailure = Buffer.concat(forms).toString('utf8');
     const api = { startCameraLiveview: jest.fn(async () => {
       if (failure === 'vendor-start-error') { metadata(); throw new Error(privateFailure); }
@@ -177,6 +191,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
       } else expect(callback.mock.calls[0][0]).toBeInstanceOf(Error);
       await session!.whenClosed; await stop();
       expect(callback).toHaveBeenCalledTimes(1); expect(bytesSeen <= 65536).toBe(true);
+      expect(metadataFailure).toBeUndefined();
       expect(metadataInspected).toBe(true);
       assertSecretFree(Buffer.concat([...diagnostics, Buffer.from(publicErrors.join('\n'))]));
     } finally {
