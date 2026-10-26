@@ -1,5 +1,6 @@
 import { cpSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import process from 'node:process';
 
 const source = join(process.cwd(), 'src/homebridge-ui/public');
 const destination = join(process.cwd(), 'dist/homebridge-ui/public');
