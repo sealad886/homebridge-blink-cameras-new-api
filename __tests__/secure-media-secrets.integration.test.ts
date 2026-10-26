@@ -48,6 +48,32 @@ test('secrecy detector refuses raw, hexadecimal and base64 key/capability leaks'
   expect(() => assertSecretFree(Buffer.from('Media session unavailable'))).not.toThrow();
 });
 
+test.each(['video-key', 'video-salt', 'audio-key', 'audio-salt'] as const)(
+  'stream preparation withholds malformed %s material from logs and callbacks', async field => {
+    const diagnostics: Buffer[] = [];
+    const log = (text: string) => diagnostics.push(Buffer.from(text));
+    const api = { startCameraLiveview: jest.fn() };
+    const source = new BlinkCameraSource(api as unknown as BlinkApi, createHap() as unknown as HAP,
+      1, 2, 'camera', 'synthetic-serial', () => undefined, () => true, log,
+      { audio: { enabled: true } }, log);
+    const request = { sessionID: `malformed-${field}`, targetAddress: '192.168.1.5', addressVersion: 'ipv4',
+      video: { port: 5000, srtpCryptoSuite: 0, srtp_key: videoKey, srtp_salt: videoSalt },
+      audio: { port: 5002, srtpCryptoSuite: 0, srtp_key: audioKey, srtp_salt: audioSalt } };
+    const selected = field.startsWith('video') ? request.video : request.audio;
+    const key = field.endsWith('key') ? 'srtp_key' : 'srtp_salt';
+    (selected as unknown as Record<string, unknown>)[key] = selected[key].toString('utf8');
+    try {
+      const error = await new Promise<Error | undefined>(done => source.prepareStream(
+        request as unknown as PrepareStreamRequest, failure => done(failure)));
+      expect(error !== undefined && typeof error.message === 'string').toBe(true);
+      expect(api.startCameraLiveview).not.toHaveBeenCalled();
+      assertSecretFree(Buffer.concat([...diagnostics, Buffer.from(error?.message ?? '')]));
+    } finally {
+      for (const bytes of diagnostics) bytes.fill(0);
+    }
+  },
+);
+
 function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): Buffer {
   const pid = child.pid;
   if (!Number.isSafeInteger(pid) || !pid || pid < 1) throw new Error('Native child PID unavailable');
@@ -79,7 +105,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
     process.env.BLINK_MEDIA_INHERITED_SECRET_CANARY = vendorUrl;
     const pipes: Buffer[] = []; const diagnostics: Buffer[] = []; const publicErrors: string[] = [];
     let child: ChildProcessWithoutNullStreams | undefined; let session: OwnedMediaSession | undefined;
-    let bytesSeen = 0; let closeTransport!: () => void;
+    let bytesSeen = 0; let metadataInspected = false; let closeTransport!: () => void;
     const transport = Object.assign(new EventEmitter(), { whenClosed: new Promise<void>(done => { closeTransport = done; }),
       start: async () => 'pipe:0', attachConsumer: jest.fn(), retire: () => closeTransport(), stop: () => closeTransport() });
     const launch: WorkerSpawner = (path, args, options) => {
@@ -109,7 +135,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
       });
       return session;
     });
-    const metadata = (): void => { diagnostics.push(childMetadata(child!, worker)); };
+    const metadata = (): void => { diagnostics.push(childMetadata(child!, worker)); metadataInspected = true; };
     const privateFailure = Buffer.concat(forms).toString('utf8');
     const api = { startCameraLiveview: jest.fn(async () => {
       if (failure === 'vendor-start-error') { metadata(); throw new Error(privateFailure); }
@@ -151,6 +177,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
       } else expect(callback.mock.calls[0][0]).toBeInstanceOf(Error);
       await session!.whenClosed; await stop();
       expect(callback).toHaveBeenCalledTimes(1); expect(bytesSeen <= 65536).toBe(true);
+      expect(metadataInspected).toBe(true);
       assertSecretFree(Buffer.concat([...diagnostics, Buffer.from(publicErrors.join('\n'))]));
     } finally {
       await stop(); await session?.stop(); child?.kill('SIGKILL');

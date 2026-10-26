@@ -540,12 +540,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       this.logNegotiation('Stream prepared');
       callback(undefined, response);
-    } catch (error) {
+    } catch {
+      const message = owner.abort.signal.aborted ? 'Streaming preparation cancelled' : 'Stream preparation failed';
       owner.preparing = false;
       owner.retirement = undefined;
       await this.stopStream(sessionId);
-      this.logError(`Stream preparation failed: ${error}`);
-      callback(error as Error);
+      this.logError(message);
+      callback(new Error(message));
     }
   }
 
@@ -738,13 +739,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           .catch(() => undefined);
       }
 
-    } catch (error) {
+    } catch {
       // Home may immediately resubmit START after a refusal. Keep remote POSTs bounded
       // while the previous vendor command retires; STOP cancellation is not a failure.
       this.markStreamFailure(sessionId, active);
       this.logError('Private streaming startup failed');
       await this.stopStream(sessionId, owner);
-      callback(error as Error);
+      callback(new Error('Private streaming startup failed'));
     }
   }
 
