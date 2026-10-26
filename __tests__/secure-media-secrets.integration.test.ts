@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import process from 'node:process';
-import { test } from '@jest/globals';
+import { beforeAll, test } from '@jest/globals';
 import type { HAP, PrepareStreamRequest, StreamingRequest } from 'homebridge';
 import { BlinkCameraSource } from '../src/accessories/camera-source';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
@@ -29,6 +29,21 @@ jest.mock('node:dgram', () => {
 
 const realSession = jest.requireActual<typeof import('../src/accessories/media-session')>('../src/accessories/media-session').createOwnedMediaSession;
 const configuredWorker = process.env.BLINK_MEDIA_TEST_WORKER_PATH;
+beforeAll(() => {
+  if (!configuredWorker || process.platform !== 'win32') return;
+  const windowsRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
+  if (!windowsRoot) throw new Error('Windows metadata tool unavailable');
+  // Cold CIM initialization can exceed the live inspection's five-second
+  // budget. Initialize that test observer before any private worker starts;
+  // inspect only this Node process's numeric PID, never its argv or environment.
+  const command = `$p=Get-CimInstance Win32_Process -Filter 'ProcessId = ${process.pid}'; if ($null -eq $p) { throw 'Missing test observer' }; $p.ProcessId | ConvertTo-Json -Compress`;
+  let bytes: Buffer;
+  try {
+    bytes = execFileSync(join(windowsRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { timeout: 15000, maxBuffer: 65536 });
+  } catch { throw new Error('Windows metadata observer initialization failed'); }
+  expect(JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, '')) === process.pid).toBe(true);
+}, 20000);
 const vendorCanary = 'F05_VENDOR_CAPABILITY_CANARY';
 const vendorUrl = `immis://8.8.8.8:443/private?client_id=1&token=${vendorCanary}`;
 const videoKey = Buffer.from('F05VideoKey12345');
