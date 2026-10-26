@@ -297,6 +297,18 @@ class WorkerArtifactTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 prepare.audit_dependencies(Path('worker.exe'), 'Windows', {})
 
+    def test_windows_import_evidence_excludes_pe_tables_but_checks_every_import(self):
+        imports = 'DLL Name: KERNEL32.dll\nDLL Name: api-ms-win-crt-runtime-l1-1-0.dll\n'
+        # objdump -p includes large unwind/relocation tables unrelated to DLL policy.
+        dump = 'PE32+\n' + imports[:imports.index('DLL Name: api')]
+        dump += '0000000000001000 unwind/relocation entry\n' * 80000
+        dump += imports[imports.index('DLL Name: api'):]
+        with patch.object(prepare.subprocess, 'check_output', return_value=dump):
+            self.assertEqual(prepare.audit_dependencies(Path('worker.exe'), 'Windows', {}), imports)
+        with patch.object(prepare.subprocess, 'check_output', return_value=dump + 'DLL Name: libwinpthread-1.dll\n'):
+            with self.assertRaisesRegex(ValueError, 'Non-system Windows dependency'):
+                prepare.audit_dependencies(Path('worker.exe'), 'Windows', {})
+
 
 if __name__ == '__main__':
     unittest.main()
