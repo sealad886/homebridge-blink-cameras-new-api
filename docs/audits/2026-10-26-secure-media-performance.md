@@ -61,3 +61,38 @@ unattributed; no general leak-free claim follows.
 
 Raw reports remain in ignored `native/build/` as named and hashed by the receipt.
 The benchmark accepts only synthetic local media; it does not activate a camera.
+
+## Final cadence-fix worker recheck
+
+The same reviewed script was rerun after the cumulative source-frame schedule fix
+in `418be70381b02913c81f36590968e26e2b7a5f46`. Worker SHA-256 is
+`9db6e516affceeab72822786e9b6757678b43b5a9d9fe83d67cde40b9e70c047`.
+The structured receipt retains both historical reports and this final report's
+source fingerprints, configuration, summary and raw-report hash.
+
+| p95 metric | Veryfast historical → native | Ultrafast historical → native |
+|---|---:|---:|
+| First video RTP marker | 1349.39 → 565.95 ms | 1383.55 → 606.02 ms |
+| First audio RTP packet | 1343.04 → 491.79 ms | 1380.05 → 653.43 ms |
+| STOP to confirmed closure | 20.51 → 12.14 ms | 36.43 → 35.08 ms |
+| Combined parent/child CPU | 992.33 → 1669.17 ms | 809.36 → 1080.73 ms |
+| Child maximum RSS | 68.83 → 37.62 MB | 60.00 → 31.29 MB |
+
+All 48 measured timing runs, 100 discarded lifecycle warmups and 100 measured
+STOP cycles completed. Both presets meet the bounded synthetic latency criterion.
+Combined CPU increased 68.21%/33.53%; maximum samples used about 40.6%/26.0% of
+one core versus 24.5%/20.0% historically. All earlier workload and parity limits
+still apply.
+
+Controlled ownership-object counts remain 0→0 and every measured worker closed.
+First/last ten-cycle aggregate means rose by 573,440 bytes RSS (0.60%), 44,713
+bytes heap (0.17%) and 99 bytes external memory. Heap slopes were +699/+168/+346
+bytes per cycle for the first 50, second 50 and final 30 cycles. The small aggregate
+increase remains unattributed: this run proves no accumulation of the counted
+media objects, without establishing flat aggregate memory or general leak freedom.
+
+The first attempt stopped after 25 timing rows when the harness could not parse a
+local reaper resource JSON receipt. The native session had produced video/audio
+and reported no failure. Its partial receipt is retained and excluded from
+acceptance; one exact retry completed. The parse failure did not recur and its
+cause remains unproved. No production behavior or measurement timeout was changed.

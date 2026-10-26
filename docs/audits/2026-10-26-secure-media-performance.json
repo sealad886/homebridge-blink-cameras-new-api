@@ -426,6 +426,361 @@
           "ProtectedRtpStream": 0
         }
       }
+    },
+    "secure-media-performance-final.json": {
+      "sha256": "96527052474d43f78d2d0f08351188406ebcce169c34d0718664057ad3e28bc6",
+      "configuration": {
+        "pairs": 12,
+        "cycles": 100,
+        "lifecycleWarmup": 100,
+        "seconds": 4,
+        "width": 1280,
+        "height": 720,
+        "fps": 15,
+        "bitrate": 500000,
+        "profile": "baseline",
+        "level": "3.1",
+        "audio": "opus/16000/mono/32000/20ms",
+        "presets": "veryfast,ultrafast"
+      },
+      "fingerprints": {
+        "historicalCameraSource": "28f94b063eebaba2432f9323712fa8738c8b363f97dd72c6ea62fd5f62f86c8d",
+        "historicalQuality": "cdd475ffe028219b722790d755709adff24633ee83e5214b970e38f7c4a43526",
+        "worker": {
+          "sha256": "9db6e516affceeab72822786e9b6757678b43b5a9d9fe83d67cde40b9e70c047",
+          "bytes": 5965072
+        },
+        "ffmpeg": {
+          "sha256": "f405cf9cb41cd8d015833d4ad671fad2ddfc9a78336e029e09d681704877775c",
+          "bytes": 492560
+        },
+        "ffmpegVersion": [
+          "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+          "libavutil      61.  1.102 / 61.  1.102",
+          "libavcodec     63.  1.102 / 63.  1.102",
+          "libavformat    63.  1.102 / 63.  1.102",
+          "libavdevice    63.  1.102 / 63.  1.102",
+          "libavfilter    12.  1.102 / 12.  1.102",
+          "libswscale     10.  1.102 / 10.  1.102",
+          "libswresample   7.  1.102 /  7.  1.102"
+        ],
+        "currentSources": {
+          "src/accessories/media-session.ts": "a90404e81be6f4ade0245b2db9b517735195fc423b2b85fe9941fae1722099b1",
+          "src/accessories/media-worker.ts": "2efd63ae9312ad93be5f4fc3a00762ab9ae03362f2c1520f71968d7d805ecac1",
+          "native/worker.c": "bfea4024d64ce1a62d95b62b29ed7409bda54fef38a5113c3b30742fc876e0b1",
+          "native/audio.inc": "61cbd69abf91b511f27c7dc85c5422f63f6d1ee7dbdc53825948b1d41be1bfe1"
+        }
+      },
+      "summary": {
+        "veryfast": {
+          "firstVideoFromStartMs": {
+            "legacy": {
+              "p50": 1340.8015829999931,
+              "p95": 1349.387999999999
+            },
+            "native": {
+              "p50": 522.3368749999936,
+              "p95": 565.9452920000003
+            },
+            "p95DeltaPercent": -58.0591133165553
+          },
+          "firstVideoFromInputMs": {
+            "legacy": {
+              "p50": 1339.6065839999974,
+              "p95": 1347.5866249999963
+            },
+            "native": {
+              "p50": 468.21391599999333,
+              "p95": 482.29912499999773
+            },
+            "p95DeltaPercent": -64.2101579184196
+          },
+          "firstAudioFromStartMs": {
+            "legacy": {
+              "p50": 1337.0772500000003,
+              "p95": 1343.0367499999993
+            },
+            "native": {
+              "p50": 449.6468329999916,
+              "p95": 491.7922920000019
+            },
+            "p95DeltaPercent": -63.38206739316685
+          },
+          "firstAudioFromInputMs": {
+            "legacy": {
+              "p50": 1335.7756249999984,
+              "p95": 1341.2353749999966
+            },
+            "native": {
+              "p50": 394.25824999999895,
+              "p95": 408.98966699999437
+            },
+            "p95DeltaPercent": -69.50649568126732
+          },
+          "stopMs": {
+            "legacy": {
+              "p50": 14.999125000002095,
+              "p95": 20.506415999989258
+            },
+            "native": {
+              "p50": 7.871666999999434,
+              "p95": 12.142207999997481
+            },
+            "p95DeltaPercent": -40.788248907055035
+          },
+          "parentCpuMs": {
+            "legacy": {
+              "p50": 71.696,
+              "p95": 107.768
+            },
+            "native": {
+              "p50": 236.437,
+              "p95": 377.59
+            },
+            "p95DeltaPercent": 250.37302353203174
+          },
+          "childCpuMs": {
+            "legacy": {
+              "p50": 735.651,
+              "p95": 904.811
+            },
+            "native": {
+              "p50": 984.687,
+              "p95": 1349.1100000000001
+            },
+            "p95DeltaPercent": 49.104067037204466
+          },
+          "totalCpuMs": {
+            "legacy": {
+              "p50": 807.347,
+              "p95": 992.33
+            },
+            "native": {
+              "p50": 1221.355,
+              "p95": 1669.169
+            },
+            "p95DeltaPercent": 68.20704805860953
+          },
+          "childMaxRssBytes": {
+            "legacy": {
+              "p50": 66617344,
+              "p95": 68829184
+            },
+            "native": {
+              "p50": 37339136,
+              "p95": 37617664
+            },
+            "p95DeltaPercent": -45.346346108069504
+          },
+          "readinessDescriptiveOnly": {
+            "legacyWrapperSpawnMs": [
+              0.9699579999996786,
+              1.79108400000041,
+              0.9543750000011642,
+              1.801208000004408,
+              2.282459000001836,
+              1.0056659999972908,
+              1.0882910000000265,
+              1.7012499999982538,
+              0.7739169999986188,
+              0.8600000000005821,
+              0.9687919999996666,
+              0.5073330000013812
+            ],
+            "nativeConfigReadyMs": [
+              58.086457999999766,
+              92.3005000000012,
+              59.231292000000394,
+              71.97083399999974,
+              42.80933399999776,
+              29.307375000003958,
+              49.800709000002826,
+              39.59479200000351,
+              52.308041999989655,
+              59.25058399999398,
+              57.56166599999415,
+              41.85295800000313
+            ]
+          },
+          "coarseLatencyGate": "PASS_SYNTHETIC_COARSE_ONLY"
+        },
+        "ultrafast": {
+          "firstVideoFromStartMs": {
+            "legacy": {
+              "p50": 1341.6515420000069,
+              "p95": 1383.5478330000187
+            },
+            "native": {
+              "p50": 538.4855410000018,
+              "p95": 606.0190419999999
+            },
+            "p95DeltaPercent": -56.19818646342445
+          },
+          "firstVideoFromInputMs": {
+            "legacy": {
+              "p50": 1341.078749999986,
+              "p95": 1376.5415409999841
+            },
+            "native": {
+              "p50": 456.85579200001666,
+              "p95": 493.0307089999842
+            },
+            "p95DeltaPercent": -64.18337592327046
+          },
+          "firstAudioFromStartMs": {
+            "legacy": {
+              "p50": 1338.3678340000042,
+              "p95": 1380.0496670000139
+            },
+            "native": {
+              "p50": 465.41024999998626,
+              "p95": 653.4277500000026
+            },
+            "p95DeltaPercent": -52.65186713022872
+          },
+          "firstAudioFromInputMs": {
+            "legacy": {
+              "p50": 1337.7950419999834,
+              "p95": 1372.5140409999876
+            },
+            "native": {
+              "p50": 386.2911250000179,
+              "p95": 500.6411660000158
+            },
+            "p95DeltaPercent": -63.52378547360738
+          },
+          "stopMs": {
+            "legacy": {
+              "p50": 16.57104199999594,
+              "p95": 36.43362499997602
+            },
+            "native": {
+              "p50": 9.741249999991851,
+              "p95": 35.08045900001889
+            },
+            "p95DeltaPercent": -3.7140580986877336
+          },
+          "parentCpuMs": {
+            "legacy": {
+              "p50": 91.678,
+              "p95": 158.646
+            },
+            "native": {
+              "p50": 279.142,
+              "p95": 380.871
+            },
+            "p95DeltaPercent": 140.0760183049053
+          },
+          "childCpuMs": {
+            "legacy": {
+              "p50": 585.253,
+              "p95": 696.3119999999999
+            },
+            "native": {
+              "p50": 555.346,
+              "p95": 699.8599999999999
+            },
+            "p95DeltaPercent": 0.5095416996978352
+          },
+          "totalCpuMs": {
+            "legacy": {
+              "p50": 682.148,
+              "p95": 809.3620000000001
+            },
+            "native": {
+              "p50": 808.477,
+              "p95": 1080.7309999999998
+            },
+            "p95DeltaPercent": 33.52875474756656
+          },
+          "childMaxRssBytes": {
+            "legacy": {
+              "p50": 59834368,
+              "p95": 59998208
+            },
+            "native": {
+              "p50": 30982144,
+              "p95": 31293440
+            },
+            "p95DeltaPercent": -47.84270890223922
+          },
+          "readinessDescriptiveOnly": {
+            "legacyWrapperSpawnMs": [
+              0.7977079999982379,
+              1.1724580000009155,
+              1.3533750000060536,
+              0.49812499998370185,
+              0.5726670000003651,
+              35.736292000015965,
+              0.7809999999881256,
+              0.981792000005953,
+              1.1680000000051223,
+              3.6357499999867287,
+              4.750040999992052,
+              1.0875830000150017
+            ],
+            "nativeConfigReadyMs": [
+              34.44937499999651,
+              57.44337500000256,
+              63.089082999998936,
+              48.2766249999986,
+              78.86708299999009,
+              48.25762499999837,
+              152.7858750000014,
+              112.98729200000525,
+              95.12720800001989,
+              146.82149999999092,
+              111.61170900001889,
+              84.34537500000442
+            ]
+          },
+          "coarseLatencyGate": "PASS_SYNTHETIC_COARSE_ONLY"
+        }
+      },
+      "lifecycle": {
+        "cycles": 100,
+        "window": 10,
+        "gcEnabled": true,
+        "trend": {
+          "postStopParentRssBytes": {
+            "firstWindowMean": 94874828.8,
+            "lastWindowMean": 95448268.8,
+            "deltaBytes": 573440
+          },
+          "postStopHeapUsedBytes": {
+            "firstWindowMean": 26337877.6,
+            "lastWindowMean": 26382590.4,
+            "deltaBytes": 44712.79999999702
+          },
+          "postStopExternalBytes": {
+            "firstWindowMean": 2743076.5,
+            "lastWindowMean": 2743175.9,
+            "deltaBytes": 99.39999999990687
+          }
+        },
+        "verdict": "RAW_TREND_REQUIRES_REVIEW_NO_AUTOMATIC_NO_LEAK_CLAIM"
+      },
+      "ownedObjectCounts": {
+        "protocol": "v8.queryObjects format=count after full GC; controlled constructors only; no object summaries or heap dump",
+        "before": {
+          "Session": 0,
+          "PrivateMediaWorker": 0,
+          "ProtectedRtpStream": 0
+        },
+        "after": {
+          "Session": 0,
+          "PrivateMediaWorker": 0,
+          "ProtectedRtpStream": 0
+        }
+      },
+      "limitations": [
+        "Fresh final-worker synthetic evidence; CPU parity and flat aggregate memory are not claimed.",
+        "The first bounded attempt stopped on a resource-receipt JSON parse failure; exact retry completed. Cause remains unproved."
+      ]
+    },
+    "secure-media-performance-final-attempt1-failure.json": {
+      "sha256": "4036a4be931ceaede80873d5c8eb551b1e4de3af7a3c57f713860998aabb7a5f",
+      "disposition": "Partial harness resource-receipt JSON parse failure; retained, not counted as acceptance; exact single retry completed."
     }
   }
 }
