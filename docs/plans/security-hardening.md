@@ -6,19 +6,90 @@ Manifest SHA-256: `0c970d21f83f14912e1e7c6dd343ba3b79419aa3c4b99c0c9b241e8bb033c
 Approved design: scan supplemental `hardening/hardening.md`, artifact
 `a531f35a81c4ac522960f23f6b95f1ecab85e75280fe513c00f5e1968145c363`.
 
-Current published candidate: **0.10.0-rc.19**, source
-`6f88a4b120ef415db62c83522238e5b2fd1820f8`, delivered through
-[PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79).
-The [current acceptance checkpoint](#23-october-2026-rc19-acceptance-and-stable-readiness)
-supersedes the historical candidate/branch and pending-release statements below.
-Stable **0.10.0** promotes this accepted runtime with version/release metadata
-and the documentation audit. Verify its publication source and exact registry
-artifact through the [release guide](../RELEASE.md) and
-[release receipt](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v0.10.0).
+Current published beta: **0.11.0-beta.0**, source
+`6bbc95f67c85caa47e48f5d9cf185577a3efac8e`, delivered through
+[PR #87](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/87)
+and [PR #88](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/88).
+The [26 October checkpoint](#26-october-2026-secure-media-beta-publication)
+owns current remediation and artifact status. Stable `latest` remains **0.10.0**;
+its [release-specific residual-risk acceptance](#18-october-2026-delegated-stable-release-residual-risk-disposition)
+and the dated checkpoints below remain historical evidence, not verification of
+the new runtime or a claim that the older stable artifact was repaired.
 Implementation and review assignments remain unassigned for ongoing maintenance.
 Maintainer owns architecture/release decisions; operator owns physical acceptance.
 
+## 26 October 2026: secure media beta publication
+
+The [main-only publication workflow](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/40262353338)
+completed successfully at 03:25:34 UTC. npm exposed the new immutable
+[`0.11.0-beta.0`](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api/v/0.11.0-beta.0)
+at 03:25:12 UTC. The matching
+[GitHub prerelease](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v0.11.0-beta.0)
+was published at 03:25:30 UTC with its
+[release receipt](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/download/v0.11.0-beta.0/release-receipt.json).
+Registry `gitHead`, release tag and receipt identify source `6bbc95f`; the `beta`
+tag selects this version. `latest`, `alpha` and `rc` retain `0.10.0`,
+`0.10.0-alpha.2` and `0.10.0-rc.19` respectively.
+
+The package integrity and native identities are:
+
+```text
+npm integrity: sha512-dZap9khIcJMzOTFaDX5tmnvLYLjmFqxTLXlzPvO2kz0HuqnrE/SNG23LxMQp0NWVhuRZBvKw+g/yvD5LcvtVfg==
+native manifest SHA-256: a11b4d0f9367d3b8778ce4ba326b3295f99b1ae547703a344b3ee97a68796fb8
+source bundle SHA-256: cc8bb1dd656e3508c954ec6d1e0d283f3618e6ecc8d18e20ed721ce72ff5c117
+```
+
+All source/native and Node gates passed. Five clean-host jobs installed the same
+final npm tarball with lifecycle scripts disabled and passed all eight
+codec/independent SRTP receiver selections per target. The observed baselines are
+Ubuntu 22.04 x64/arm64, macOS 15 x64/arm64 and Windows Server 2022 x64.
+Independent artifact inspection matched all five worker identities, 32 committed
+project source/build/notice files, four hash-verified pinned dependency archives and full
+license notices, including the Windows runtime notices. The OIDC job published
+those qualified bytes without rebuilding or repacking them.
+
+- **F05 remediated and verified for this beta (AC-08):** the integrated codec
+  worker receives private framed input with executable-only argv and an empty
+  environment. Dummy-secret checks cover actual process metadata, supported
+  errors/diagnostics and the default crash-policy boundary on supported targets.
+  This does not establish secrecy against privileged memory inspection or
+  administrator-configured parent/worker dump collectors.
+- **F06 remediated and verified for this beta (AC-07):** the parent owns numeric
+  vendor connections and preserves verified TLS identity. Actual isolated-network
+  tracing covers mixed DNS answers, admitted IPv4/IPv6, alternates, reconnects,
+  redirects, control/SDP and UDP rejection without forbidden connection or
+  datagram escapes. The codec worker has no network or unrestricted CLI fallback.
+
+The 25 October hold was satisfied through remediation and verification, without
+a residual-risk waiver. This does not alter the historical 0.10.0 disposition.
+The [performance](../audits/2026-10-26-secure-media-performance.md) and
+[resource](../audits/2026-10-26-secure-media-resources.md) audits retain bounded
+synthetic evidence: latency checks passed, CPU increased, and small aggregate
+memory growth remains unattributed. No general leak-free or CPU-parity claim follows.
+
+One authorized provider observation returned IMMIS/IPv4/443. The RTSPS-only
+probe refused it before any TLS attempt; it supplies no RTSPS handshake or
+physical playback evidence. No second activation, installation, settings change,
+restart or pairing was performed. Provider compatibility, source jitter/drift,
+physical Home playback, device resource calibration and beta observation remain
+operator acceptance under ADR-005.
+
+Independent post-registry verification downloaded the canonical 38,960,119-byte
+tarball and matched it byte-for-byte to the qualified CI artifact. A fresh macOS
+arm64 installation passed all eight installed codec/SRTP receiver cases. Four
+existing regressions ran against the published network/camera JavaScript and
+passed: unresolved network targets survive older completion and queue expiry,
+while current/motion state remains confirmed and fault behavior remains correct.
+[Issue #48's closure receipt](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/48#issuecomment-6407651349)
+records those results and its completed state. Historical `0.10.0-rc.2` was not
+overwritten. Initial registry/CDN visibility lag resolved through bounded read-only
+checks without republishing or mutating the version.
+
 ## 25 October 2026: beta publication blocked on F05 and F06
+
+This is the historical pre-remediation decision. The
+[26 October checkpoint](#26-october-2026-secure-media-beta-publication)
+records its subsequent verification and publication outcome.
 
 The maintainer explicitly chose **Block the beta until both are fixed** when
 asked whether to accept F05/F06 specifically for the prepared `0.11.0-beta.0`.
@@ -59,8 +130,8 @@ finding closure is claimed by this preparation or decision record.
 - [x] Implement local bounded-input, session, private-IMMIS and diagnostic candidates (WI-02/03/04/06).
 - [x] Independent local review and verification receipt (WI-09 local slice).
 - [x] Revised media-network design approved on 2026-10-03: private worker IPC and owned transport feeding codec-only processing.
-- [ ] Native worker and five-target distribution (WI-05/07/08 implementation and enforcement proof pending).
-- [ ] Full native/integrated physical acceptance, resource stress and five-target artifact proof (WI-09 final slice). RC.19 bounded registry/physical/refresh acceptance is recorded in the current checkpoint below.
+- [x] Native worker, actual connection enforcement and five-target distribution (WI-05/07/08); verified for `0.11.0-beta.0` in the 26 October checkpoint.
+- [ ] Full native/integrated physical acceptance (WI-09 final slice). Synthetic resource/stress and five-target artifact checks passed; physical and operator acceptance remain outstanding. Historical RC.19 acceptance applies to its older runtime.
 
 ## Work items and dependencies
 
@@ -76,13 +147,14 @@ finding closure is claimed by this preparation or decision record.
 | WI-08 | Five-target artifacts, migration, immutable verification | WI-07 | release prerequisites | AC-11 |
 | WI-09 | Independent review, regression, physical acceptance | completed slices; final WI-08 | all | AC-12 |
 
-WI-05 source inspection disproved public I/O interception for stock FFmpeg 9.0.2
+The historical WI-05 source inspection disproved public I/O interception for stock FFmpeg 9.0.2
 RTSP. See [native feasibility receipt](../audits/security-hardening-native-feasibility.md).
-The original WI-07 callback-based design stopped as prescribed. The approved
-owned-transport continuation now has a codec-only development prototype; it is
-not wired into the plugin or included in npm artifacts. No unconstrained native
+The original WI-07 callback-based design stopped as prescribed. At that checkpoint,
+the approved owned-transport continuation had a codec-only development prototype;
+it was not wired into the plugin or included in npm artifacts. No unconstrained native
 worker or hostname-only substitution is accepted.
-F05 and F06 remain open. Existing FFmpeg execution still contains those exposures.
+F05 and F06 remained open at that prototype checkpoint. The integrated beta's
+subsequent verification is recorded in the 26 October checkpoint above.
 
 ## Baseline acceptance requirements
 

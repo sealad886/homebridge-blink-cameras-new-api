@@ -107,8 +107,9 @@ Selected linked worker configuration is GPL-3.0-or-later; x264 headers explicitl
 say GPL-2.0-or-later. Opus and libSRTP carry BSD-style three-clause licenses. Checked
 upstream notices are retained in licenses/. Worker GPLv3 text exists in ../COPYING.
 Source archives, precise recipe, compiler/toolchain identification, complete notices,
-and target artifacts must accompany any future corresponding-source distribution.
-This directory alone is not a distribution compliance or release approval claim.
+and target artifacts accompany the published beta's corresponding-source bundle;
+each future changed distribution requires the same evidence. This directory alone
+is not a distribution compliance or release approval claim.
 
 Recipe supports Darwin/Linux native hosts and a native Windows MSYS2 UCRT64 candidate.
 Windows refuses the MSYS/Cygwin compiler environment: it requires `MSYSTEM=UCRT64`
@@ -120,23 +121,26 @@ explicit. This follows [FFmpeg's native Windows guidance](https://ffmpeg.org/pla
 [MSYS2 environments](https://www.msys2.org/docs/environments/) and
 [MSYS2 CMake guidance](https://www.msys2.org/docs/cmake/).
 
-macOS deployment target13.0 remains requested. Linux glibc/kernel baseline, actual
-macOS13 execution, Windows minimum-version execution, all target clean-host audits
-and independent verification remain release gates. Earlier POSIX CI source-build
-results do not establish the changed final package. Windows hosted execution and
-all final target qualifications remain unverified. No cross-target support is
-inferred from portable C source or a successful arm64 build.
+macOS deployment target13.0 remains requested. The published beta's observed
+clean-host baselines are Ubuntu 22.04 x64/arm64, macOS 15 x64/arm64 and Windows
+Server 2022 x64. The successful source/native and final-package qualifications
+establish those observed hosts, not macOS 13, Windows 10 or an inferred older
+Linux glibc/kernel baseline. Portable C source or a successful arm64 build alone
+does not establish cross-target support.
 
 ## Integrated distribution status
 
-The secure cutover now has an explicit five-candidate packager, a hash-verified
+The secure cutover has an explicit five-candidate packager, a hash-verified
 runtime loader, complete corresponding source and clean-host exact-tar codec
 qualification in the release workflow. Candidate receipts deliberately remain
 `distribution_ready: false`; final qualification receipts carry separate evidence
-for the exact npm integrity. Implementation is not release acceptance: final
-five-host results, security checks and performance review are still required.
-The candidate-build description below is separate from the final package file
-list and runtime contract.
+for the exact npm integrity. The
+[26 October release checkpoint](../../docs/plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
+records successful five-host exact-tar qualification, security verification,
+performance limits and corresponding-source/license inspection for `0.11.0-beta.0`.
+Future changed artifacts need fresh results. Physical/provider acceptance remains
+separate. The candidate-build description below is separate from the final
+package file list and runtime contract.
 
 ## Native candidate CI validation
 
@@ -206,7 +210,8 @@ and cached checksum failure before signature/build execution.
 
 The prior Ubuntu x64/macOS arm64 prototype jobs ran successfully in release-source
 CI, including RC.19 validation recorded in [PR #79](https://github.com/sealad886/homebridge-blink-cameras-new-api/pull/79).
-That historical source-build/test evidence does not prove this changed recipe or
-the added Windows/macOS x64/Linux arm64 lanes. All five final baseline/runtime/
-artifact acceptance gates remain open. macOS15 CI does not prove macOS13 runtime
-compatibility; Windows Server2022 CI does not prove a Windows10 minimum baseline.
+That historical source-build/test evidence did not prove the changed recipe or
+the added Windows/macOS x64/Linux arm64 lanes. Their subsequent five-target
+qualification belongs to the 26 October checkpoint above. macOS15 CI does not
+prove macOS13 runtime compatibility; Windows Server2022 CI does not prove a
+Windows10 minimum baseline.
