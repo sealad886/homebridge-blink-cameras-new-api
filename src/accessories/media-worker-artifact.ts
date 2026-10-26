@@ -86,3 +86,31 @@ export function resolveMediaWorkerArtifact(packageRoot: string, manifest: unknow
     if (descriptor !== undefined) closeSync(descriptor);
   }
 }
+
+/** Load bounded installed metadata; runtime selection never accepts a configured executable. */
+export function loadPackagedMediaWorker(packageRoot: string): string {
+  let descriptor: number | undefined;
+  try {
+    if (!isAbsolute(packageRoot) || !lstatSync(packageRoot).isDirectory()) throw unavailable();
+    let path = realpathSync(packageRoot);
+    for (const part of ['native', 'runtime']) {
+      path = join(path, part);
+      if (!lstatSync(path).isDirectory()) throw unavailable();
+    }
+    path = join(path, 'manifest.json');
+    if (!lstatSync(path).isFile()) throw unavailable();
+    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.size < 1 || metadata.size > 16384) throw unavailable();
+    const bytes = Buffer.alloc(metadata.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(descriptor, bytes, offset, bytes.length - offset, offset);
+      if (!count) throw unavailable();
+      offset += count;
+    }
+    if (fstatSync(descriptor).size !== bytes.length) throw unavailable();
+    return resolveMediaWorkerArtifact(packageRoot, JSON.parse(bytes.toString('utf8')));
+  } catch { throw unavailable(); }
+  finally { if (descriptor !== undefined) closeSync(descriptor); }
+}

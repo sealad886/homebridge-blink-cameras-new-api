@@ -16,7 +16,7 @@ def frame(kind, payload=b''):
     return b'BMI1' + struct.pack('!II', kind, len(payload)) + payload
 
 def config(**changes):
-    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, reserved=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0)
+    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, software_preset=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0)
     values.update(changes)
     if values['audio_codec']==1 and 'audio_packet_ms' not in changes:values['audio_packet_ms']=20
     return frame(1, struct.pack('!13I', *values.values()))
@@ -32,6 +32,22 @@ def messages(data):
         result.append((kind, data[12:12+length]))
         data = data[12+length:]
     return result
+
+def audio_pes_headers(media):
+    """Locate synthetic MPEG-TS audio PES headers without changing AAC bytes."""
+    result=[]
+    for offset in range(0,len(media),188):
+        if media[offset]!=0x47 or not media[offset+1]&0x40 or not media[offset+3]&0x10:continue
+        start=offset+4
+        if media[offset+3]&0x20:start+=1+media[start]
+        if media[start:start+3]==b'\0\0\1' and media[start+3]&0xe0==0xc0:result.append(start)
+    return result
+
+def shift_pes_pts(media,start,ticks):
+    pts=media[start+9:start+14]
+    value=(((pts[0]>>1)&7)<<30)|(pts[1]<<22)|((pts[2]>>1)<<15)|(pts[3]<<7)|(pts[4]>>1)
+    value=(value+ticks)&((1<<33)-1)
+    media[start+9:start+14]=bytes([0x21|((value>>30)<<1),(value>>22)&255,((value>>15)&127)*2+1,(value>>7)&255,(value&127)*2+1])
 
 class WorkerTests(unittest.TestCase):
     @classmethod
@@ -168,6 +184,47 @@ class WorkerTests(unittest.TestCase):
                 self.assertTrue(any(kind==4 for kind,_ in messages(result.stdout)))
                 decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
                 self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_bundled_latm_preserves_sample_clock_and_shared_source_offset(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio-latm-bundled'],timeout=5)
+        for codec,rate in [(1,16000),(1,24000),(2,8000),(3,8000)]:
+            with self.subTest(codec=codec,rate=rate):
+                result=self.run_worker(config(max_frames=30,audio_codec=codec,audio_rate=rate,audio_channels=1,audio_bitrate=24000)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                self.assertEqual(result.returncode,0,result.stderr)
+                rows=messages(result.stdout)
+                info=next(body for kind,body in rows if kind==5)
+                padding=struct.unpack('!5I',info[:20])[3]
+                audio=[body for kind,body in rows if kind==4]
+                video=[body for kind,body in rows if kind==2]
+                self.assertEqual(len(video),30)
+                self.assertGreater(len(audio),90)
+                pts=[struct.unpack('!q',body[:8])[0] for body in audio]
+                self.assertTrue(all(b-a==20000 for a,b in zip(pts,pts[1:])))
+                video_start=struct.unpack('!q',video[0][:8])[0]
+                self.assertAlmostEqual(video_start-(pts[0]+padding*1000000/rate),64000,delta=1)
+                # The independent decoder verifies all video colors and audible output.
+                decoded=subprocess.run([str(binary('check-output')),'16','16','30','16','16'],input=result.stdout,capture_output=True,timeout=5)
+                self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_bundled_latm_missing_initial_timestamp_fails_closed(self):
+        media=bytearray(subprocess.check_output([str(binary('fixture')),'audio-latm-bundled'],timeout=5))
+        headers=audio_pes_headers(media)
+        self.assertGreater(len(headers),1)
+        # Clear only the first PES PTS/DTS flags; keep its AAC payload intact.
+        media[headers[0]+7]&=0x3f
+        result=self.run_worker(config(max_frames=30,audio_codec=1,audio_rate=16000,audio_channels=1,audio_bitrate=24000)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual((result.returncode,result.stderr),(2,b'BLINK_WORKER_AUDIO_TIMESTAMP\n'))
+        self.assertNotIn((3,b''),messages(result.stdout))
+    def test_bundled_latm_known_timestamp_retains_two_ms_discontinuity_boundary(self):
+        source=subprocess.check_output([str(binary('fixture')),'audio-latm-bundled'],timeout=5)
+        headers=audio_pes_headers(source)
+        self.assertGreater(len(headers),1)
+        for ticks,code in [(180,0),(181,2),(-181,2)]:
+            with self.subTest(ticks=ticks):
+                media=bytearray(source)
+                shift_pes_pts(media,headers[1],ticks)
+                result=self.run_worker(config(max_frames=30,audio_codec=1,audio_rate=16000,audio_channels=1,audio_bitrate=24000)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                self.assertEqual(result.returncode,code,result.stderr)
+                self.assertEqual(result.stderr,b'' if code==0 else b'BLINK_WORKER_AUDIO_DISCONTINUITY\n')
+                self.assertEqual((3,b'') in messages(result.stdout),code==0)
     def test_excessive_source_geometry_fails_closed(self):
         for width,height in [(4098,16),(4096,2050)]:
             with self.subTest(width=width,height=height):
@@ -208,6 +265,11 @@ class WorkerTests(unittest.TestCase):
                 data=config(width=out_width,height=out_height)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
                 result=self.run_worker(data)
                 self.assertEqual(result.returncode,0,result.stderr)
+                source=[struct.unpack('!4I',body) for kind,body in messages(result.stdout) if kind==7]
+                self.assertEqual(len(source),1)
+                self.assertEqual(source[0][:2],(width,height))
+                self.assertGreater(source[0][3],0)
+                self.assertLessEqual(source[0][2],120*source[0][3])
                 decoded=subprocess.run([str(binary('check-output')),str(out_width),str(out_height),'4',str(inner_width),str(inner_height)],input=result.stdout,capture_output=True,timeout=5)
                 self.assertEqual(decoded.returncode,0,decoded.stderr)
     def test_output_fps_selects_source_frames_without_resetting_timestamps(self):
@@ -221,15 +283,41 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(source),60)
         self.assertEqual(selected,source[::2])
         self.assertGreater(source[0],0)
-    def test_negotiated_h264_profile_and_level_are_encoded(self):
-        for profile,profile_id,level,level_id in [(0,66,0,31),(1,77,1,32),(2,100,2,40)]:
-            with self.subTest(profile=profile,level=level):
-                result=self.run_worker(config(video_profile=profile,video_level=level)+frame(2,self.media)+frame(3))
+    def test_negotiated_h264_profile_and_level_are_encoded_across_presets(self):
+        for preset in [0,1]:
+            for profile,profile_id,level,level_id in [(0,66,0,31),(1,77,1,32),(2,100,2,40)]:
+                with self.subTest(preset=preset,profile=profile,level=level):
+                    result=self.run_worker(config(software_preset=preset,video_profile=profile,video_level=level)+frame(2,self.media)+frame(3))
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    packet=next(body[48:] for kind,body in messages(result.stdout) if kind==2)
+                    sps=re.search(b'\x00\x00(?:\x00)?\x01\x67(.{3})',packet,re.DOTALL)
+                    self.assertIsNotNone(sps)
+                    self.assertEqual((sps[1][0],sps[1][2]),(profile_id,level_id))
+                    decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
+                    self.assertEqual(decoded.returncode,0,decoded.stderr)
+    def test_ultrafast_software_preset_encodes_and_unknown_preset_fails_closed(self):
+        result=self.run_worker(config(software_preset=1)+frame(2,self.media)+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
+        self.assertEqual(decoded.returncode,0,decoded.stderr)
+        self.assertEqual(self.run_worker(config(software_preset=2)).returncode,2)
+    def test_eight_megabit_contract_preserves_profile_vbv_and_decode(self):
+        for preset in [0,1]:
+            with self.subTest(preset=preset):
+                result=self.run_worker(config(bitrate=8000000,software_preset=preset,video_profile=2,video_level=0)+frame(2,self.media)+frame(3))
                 self.assertEqual(result.returncode,0,result.stderr)
-                packet=next(body[48:] for kind,body in messages(result.stdout) if kind==2)
-                sps=re.search(b'\x00\x00(?:\x00)?\x01\x67(.{3})',packet,re.DOTALL)
+                encoded=b''.join(body[48:] for kind,body in messages(result.stdout) if kind==2)
+                sps=re.search(b'\x00\x00(?:\x00)?\x01\x67(.{3})',encoded,re.DOTALL)
                 self.assertIsNotNone(sps)
-                self.assertEqual((sps[1][0],sps[1][2]),(profile_id,level_id))
+                self.assertEqual((sps[1][0],sps[1][2]),(100,31))
+                # The pinned encoder reports its effective VBV settings in its public bitstream SEI.
+                for setting in [b'bitrate',b'vbv_maxrate',b'vbv_bufsize']:
+                    match=re.search(rb'\b'+setting+rb'=(\d+)\b',encoded)
+                    self.assertIsNotNone(match)
+                    self.assertEqual(int(match[1]),8000)
+                decoded=subprocess.run([str(binary('check-output'))],input=result.stdout,capture_output=True,timeout=5)
+                self.assertEqual(decoded.returncode,0,decoded.stderr)
+        self.assertEqual(self.run_worker(config(bitrate=8000001)).returncode,2)
     def test_opus_packet_duration_matches_negotiated_selection(self):
         media=subprocess.check_output([str(binary('fixture')),'audio'],timeout=5)
         for rate in [16000,24000]:
@@ -258,7 +346,7 @@ class WorkerTests(unittest.TestCase):
             with self.subTest(data_length=len(data)):
                 self.assertEqual(self.run_worker(data).returncode, 2)
     def test_config_validation_and_duplicate_config(self):
-        for values in [dict(width=0), dict(width=1922), dict(height=1082), dict(width=17), dict(fps=31), dict(bitrate=0), dict(max_frames=9001), dict(reserved=1)]:
+        for values in [dict(width=0), dict(width=1922), dict(height=1082), dict(width=17), dict(fps=31), dict(bitrate=0), dict(max_frames=9001), dict(software_preset=2)]:
             self.assertEqual(self.run_worker(config(**values)).returncode, 2)
         self.assertEqual(self.run_worker(config()+config()).returncode, 2)
     def test_unknown_frame_and_oversized_frame_are_fatal(self):

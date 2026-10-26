@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
-import { resolveMediaWorkerArtifact, validateMediaWorkerManifest, type MediaWorkerManifest } from '../src/accessories/media-worker-artifact';
+import { loadPackagedMediaWorker, resolveMediaWorkerArtifact, validateMediaWorkerManifest, type MediaWorkerManifest } from '../src/accessories/media-worker-artifact';
 
 // Synthetic bytes exercise package integrity, never target launch or codec acceptance.
 const targets = ['linux-arm64', 'linux-x64', 'darwin-arm64', 'darwin-x64', 'win32-x64'] as const;
@@ -24,6 +24,28 @@ beforeEach(() => {
 });
 
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+it('loads only the shipped manifest and selects the current platform worker', () => {
+  mkdirSync(join(root, 'native', 'runtime'));
+  writeFileSync(join(root, 'native', 'runtime', 'manifest.json'), JSON.stringify(manifest));
+  const target = `${process.platform}-${process.arch}` as keyof MediaWorkerManifest['targets'];
+  expect(loadPackagedMediaWorker(root)).toBe(join(root, manifest.targets[target].path));
+});
+it.each([{ label: 'empty', text: '' }, { label: 'malformed', text: '{' }, { label: 'oversized', text: 'x'.repeat(16385) }])(
+  'refuses $label installed metadata without raw diagnostics', ({ text }) => {
+  mkdirSync(join(root, 'native', 'runtime'));
+  writeFileSync(join(root, 'native', 'runtime', 'manifest.json'), text);
+  expect(() => loadPackagedMediaWorker(root)).toThrow('Packaged media worker unavailable');
+  });
+it('refuses absent metadata, a directory manifest and symlinked runtime roots', () => {
+  expect(() => loadPackagedMediaWorker(root)).toThrow();
+  mkdirSync(join(root, 'native', 'runtime', 'manifest.json'), { recursive: true });
+  expect(() => loadPackagedMediaWorker(root)).toThrow();
+  rmSync(join(root, 'native', 'runtime'), { recursive: true });
+  mkdirSync(join(root, 'elsewhere')); writeFileSync(join(root, 'elsewhere', 'manifest.json'), JSON.stringify(manifest));
+  symlinkSync(join(root, 'elsewhere'), join(root, 'native', 'runtime'), 'junction');
+  expect(() => loadPackagedMediaWorker(root)).toThrow();
+});
 
 it.each(targets)('selects exact packaged target %s by verified bytes', target => {
   const [platform, architecture] = target.split('-');

@@ -21,3 +21,39 @@ The native-runtime contract now selects only Opus, PCMA and PCMU; AAC-ELD is not
 Protocol 2 provides actual media-consumption credits and bounded parent readiness/drain promises. These preserve control/STOP independence and permit final same-pipe protection before graceful input closure.
 
 Still pending: integrated packetization/RTCP/SRTP behavior, generation retirement and output drain, audiovisual duration and jitter parity, source/license closure, all five target runtime builds, physical provider/HomeKit acceptance and supported talkback. No native artifact is enabled in npm runtime by this prototype.
+
+
+## 25 October: owned session receiver proof
+
+The owned session bridge now uses a bounded common A/V startup/pacing queue,
+serial protection and periodic/final RTCP reports. Its independent native
+receiver authenticates captured ciphertext with pinned libsrtp, decodes H264
+(including FU-A) and all four supported codec/rate combinations, and checks final
+counters plus the source fixture's audible 64 ms A/V offset. Initial padding and
+skip metadata are retained numerically; no independent timestamp reset or double
+padding adjustment is applied. Ultrafast/veryfast operator choices remain explicit
+in CONFIG field 5, with no new preset or hardware path.
+
+The local synthetic receipt includes 102 focused worker/output/socket/session
+tests and 27 native behavioral tests. Actual UDP, source jitter/reconnects,
+long-duration calibration, camera integration, five-target execution and physical
+acceptance remain separate gates. F05/F06 remain open.
+
+
+Exact H264 profile is now verified across both veryfast and ultrafast. The worker
+restores CABAC for Main/High and the 8x8 transform for High using pinned public
+FFmpeg AVOptions after preset application. Six preset/profile cases check actual
+SPS profile and selected level plus decoded pixels. This corrects ultrafast's
+previous Baseline output for Main/High; enabling required tools changes CPU work,
+so device performance/resource acceptance remains unproved.
+
+
+The bitrate follow-on preserves the existing 8000 kbps UI/operator ceiling in
+native and session validation. Both preset fixtures verify 8 Mbps admission,
+exact High/level-3.1 SPS, independent decode and effective 8000 kbps/kbits bitrate
+and VBV settings; values above the ceiling are rejected. No packet, queue or
+lifetime cap was increased. Native tests now pass 28/28 and focused
+worker/session/output/socket tests 103/103. Repository-wide TypeScript checking
+encountered concurrent parent-owned camera/platform cutover changes; the session
+dependency closure and scoped lint remain independently checkable. No runtime
+performance or release acceptance follows from this small synthetic fixture.

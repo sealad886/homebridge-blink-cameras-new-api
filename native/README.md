@@ -1,10 +1,23 @@
-# Codec-only private-pipe prototype
+# Private-pipe media worker
 
 See the [documentation map](../docs/README.md) for scope and navigation.
 
-This is a bounded prototype for the approved owned-vendor-transport architecture. It accepts H.264 video in MPEG-TS through standard input and emits length-framed H.264 and configured audio packets through standard output. Supported optional audio outputs are mono Opus at 16/24 kHz and PCMA/PCMU at 8 kHz. AAC-ELD fails closed because the pinned native AAC encoder rejects that profile. Maintained libsrtp 2.8.1 protects parent-provided RTP/RTCP packets through private IPC. No vendor URL, TLS operation, socket output, filesystem media/configuration, FFmpeg CLI, or provider connection is implemented. The parent retains vendor networking and will eventually own HomeKit transport. This directory does not integrate or enable a worker in the plugin.
+This is the codec-only worker for the secure media cutover under review. It
+accepts H.264 plus optional AAC/AAC-LATM in MPEG-TS through private stdin and emits
+bounded H.264/Opus/PCMA/PCMU packets through framed stdout. Maintained libsrtp
+2.8.1 protects parent-provided RTP/RTCP through the same private protocol. The
+parent owns verified vendor TLS, paired-controller sockets and generation lifetime;
+the worker has no vendor URL, TLS, socket output, media/configuration file or
+FFmpeg CLI path. AAC-ELD is excluded from the approved runtime offer.
 
-Verified prototype scope includes local macOS arm64 and Ubuntu 22.04 x64/macOS arm64 CI source-build tests with pinned FFmpeg 9.0.2 libraries and libx264. See [dependency and CI evidence](dependencies/README.md#native-candidate-ci-validation). Linux arm64, macOS x64, Windows x64, five-target clean-host artifacts, minimum supported OS compatibility, distribution and physical integrated camera acceptance remain unverified. Win32/POSIX thread adapters are source only on untested targets.
+Local macOS arm64 codec/session/receiver checks pass. Four POSIX source-build CI
+lanes have passed on an earlier head; Windows and the final five-target npm
+qualification remain gates. These facts do not establish this release's clean-host,
+physical camera, performance or distribution acceptance. See [dependency and CI
+evidence](dependencies/README.md#native-candidate-ci-validation), the
+[implementation checklist](../docs/plans/2026-10-25-secure-media-runtime.md) and the
+[release guide](../docs/RELEASE.md). Beta publication remains blocked until the
+required security and artifact evidence passes.
 
 ## Build and checks
 
@@ -19,16 +32,16 @@ The worker accepts no command-line options. Start with executable argv only, pri
 
 ## Protocol version 2
 
-All integers are big-endian. Input frame header: ASCII `BMI1`, u32 type, u32 payload length. Output header substitutes `BMO1`. Partial I/O is accumulated; partial header/body at EOF is fatal. Every input payload is capped at 65,536 bytes. Unknown type, duplicate CONFIG, media before CONFIG, media after END, invalid lengths or unknown reserved fields are fatal.
+All integers are big-endian. Input frame header: ASCII `BMI1`, u32 type, u32 payload length. Output header substitutes `BMO1`. Partial I/O is accumulated; partial header/body at EOF is fatal. Every input payload is capped at 65,536 bytes. Unknown type, duplicate CONFIG, media before CONFIG, media after END, invalid lengths or unknown enum values are fatal.
 
 | Input type | Payload |
 |---|---|
-| 1 CONFIG | Thirteen u32: width, height, fps, bitrate, maximum decoded video frames, reserved zero, audio codec, audio rate, audio channels, audio bitrate, H264 profile, H264 level, Opus packet duration in ms |
+| 1 CONFIG | Thirteen u32: width, height, fps, bitrate, maximum decoded video frames, software preset, audio codec, audio rate, audio channels, audio bitrate, H264 profile, H264 level, Opus packet duration in ms |
 | 2 MEDIA | Nonempty fragment of the owned MPEG-TS byte stream; input frame boundaries need not align with TS packets |
 | 3 END | Empty; declares media EOF. Protection remains available after codec END; parent closes stdin after final protection replies or sends STOP |
 | 4 STOP | Empty; allowed before CONFIG and after END, terminates process immediately |
 
-CONFIG allows even dimensions 2..1920 by 2..1080, fps 1..30, video bitrate 20,000..4,000,000, and maximum video frames 1..9000. Audio codec enum: 0 disabled (all audio fields zero), 1 Opus (rate 16000 or 24000), 2 PCMA/3 PCMU (rate 8000). Enabled audio requires one channel and bitrate 8000..128000. Opus packet duration must be 10, 20, 40 or 60 ms; other codecs require zero in that field. H264 profile IDs 0/1/2 select Baseline/Main/High and level IDs 0/1/2 select 3.1/3.2/4.0. Geometry and fps must fit the selected level’s macroblock/frame and macroblock/second limits. Encoding uses the veryfast/zerolatency policy and configured bitrate as both maximum rate and VBV buffer size; no hardware encoder or configurable software preset is exposed by this protocol. PCM wire bitrate is fixed by codec/rate; configured bitrate does not change that. Enum 4 AAC-ELD is rejected rather than substituted with AAC-LC.
+CONFIG allows even dimensions 2..1920 by 2..1080, fps 1..30, video bitrate 20,000..8,000,000, and maximum video frames 1..9000. Audio codec enum: 0 disabled (all audio fields zero), 1 Opus (rate 16000 or 24000), 2 PCMA/3 PCMU (rate 8000). Enabled audio requires one channel and bitrate 8000..128000. Opus packet duration must be 10, 20, 40 or 60 ms; other codecs require zero in that field. H264 profile IDs 0/1/2 select Baseline/Main/High and level IDs 0/1/2 select 3.1/3.2/4.0. Geometry and fps must fit the selected level’s macroblock/frame and macroblock/second limits. Software preset IDs 0/1 select the existing veryfast/ultrafast choices, both with zerolatency. Configured bitrate supplies both maximum rate and VBV buffer size. Ultrafast also selects Opus compression level 3, matching the existing operator choice. No hardware encoder or additional preset choice is exposed. PCM wire bitrate is fixed by codec/rate; configured bitrate does not change that. Enum 4 AAC-ELD is rejected rather than substituted with AAC-LC.
 
 Only first H.264 video and optional first AAC/AAC-LATM audio stream are processed. Missing optional audio produces no invented stream or packet. Video PTS/DTS and audio timing use the original shared MPEG-TS timestamp domain, reported as signed microseconds. Audio resampling and encoder initial/discard padding are explicit. No timeline normalization independently resets streams to zero. Video selects existing frames at no more than requested fps using source timestamps before scaling; it does not duplicate slower input. Aspect-preserving scaling uses even inner dimensions, centered black padding and square output SAR. Independent low-rate-source upconversion parity remains unverified. Source timestamp discontinuity beyond 2 ms in audio fails closed; broad real-provider jitter/wrap/reorder calibration remains pending.
 
@@ -39,9 +52,10 @@ Only first H.264 video and optional first AAC/AAC-LATM audio stream are processe
 | 4 AUDIO PACKET | Same 48-byte metadata as video, stream ID 2, then encoded audio bytes |
 | 5 AUDIO INFO | u32 codec/rate/channels/initial-padding/extradata-size, followed by bounded codec extradata |
 | 3 END | Empty; emitted only after successful media EOF and decoder/encoder draining |
+| 7 SOURCE INFO | Four u32: actual decoded source width/height and frame-rate numerator/denominator. Emitted once after validated decoding, with unknown rate encoded as 0/1 |
 | 6 MEDIA CONSUMED | Strictly increasing u32 cumulative count of media bytes removed from the native ring into the demuxer AVIO buffer; repeated/backwards or unadmitted progress is fatal in the parent |
 
-Only owned keyframe flag 1 is emitted; other library flags are withheld. Every complete output frame, including header and metadata, is at most 1 MiB. Audio skip/padding values are sample counts in configured audio sample rate. Opus RTP clock remains 48 kHz independently of configured encoder input rate; a later RTP layer must perform explicit clock conversion. Audio extradata is at most 4096 bytes. Parent must cap header lengths before allocation, retain complete frame boundaries, and route packet data into a maintained RTP/SRTP implementation. No claim that private IPC alone resolves SRTP output secret handling.
+Only owned keyframe flag 1 is emitted; other library flags are withheld. Every complete output frame, including header and metadata, is at most 1 MiB. Audio skip/padding values are sample counts in configured audio sample rate. Opus RTP clock remains 48 kHz independently of configured encoder input rate; the parent RTP layer performs explicit clock conversion. Audio extradata is at most 4096 bytes. Parent must cap header lengths before allocation, retain complete frame boundaries, and route packet data into a maintained RTP/SRTP implementation. No claim that private IPC alone resolves SRTP output secret handling.
 
 STOP executes `_Exit(0)` in the input reader thread, independent of synchronous codec work, a stalled media reader, or a blocked stdout consumer. It intentionally does not flush codec/output queues or emit END. Parent must discard partial output and confirm process/pipe closure before retiring its generation. Fatal malformed framing and queue overflow similarly exit with status 2. Ordinary EOF without END is fatal. Clean media END drains codec output; with incomplete TS payload, EOF acceptance remains subject to decoder parsing rather than byte-exact container integrity.
 
@@ -55,7 +69,7 @@ Libav logging is discarded and own diagnostics use fixed codes, with no input in
 
 ## Local evidence
 
-`make -C native FFMPEG_PREFIX=<verified prefix> SRTP_PREFIX=<verified prefix> test`: twenty-six behavioral tests passed on macOS arm64 after the protocol-2 codec slice. Tests include valid fragmented MPEG-TS, complete framed packet EOF, malformed/partial input, invalid config and duplicate config, frame budget, media-free failure, STOP before config/during media wait/with stdout unread, and withheld secret-like malformed payload. Native fixture generator and independent H.264 output checker use public libraries, without FFmpeg CLI. The checker decodes four output frames and validates dimensions/pixels; audio tests decode audible output for each supported codec/rate from AAC and explicit AAC-LATM MPEG-TS fixtures, preserve the fixture source offset, verify all supported Opus packet durations and reject unsupported audio config/discontinuity. Additional fixtures verify 2K/square source bounds, aspect padding, source-timestamp-preserving 30-to-15 fps selection, negotiated H264 SPS profile/level and exact media consumption credits. The capability executable demonstrates native AAC-ELD open failure (-22) rather than mislabeling AAC-LC.
+`make -C native FFMPEG_PREFIX=<verified prefix> SRTP_PREFIX=<verified prefix> test`: twenty-eight behavioral tests passed on macOS arm64 after the protocol-2 codec slice. Tests include valid fragmented MPEG-TS, complete framed packet EOF, malformed/partial input, invalid config and duplicate config, frame budget, media-free failure, STOP before config/during media wait/with stdout unread, and withheld secret-like malformed payload. Native fixture generator and independent H.264 output checker use public libraries, without FFmpeg CLI. The checker decodes four output frames and validates dimensions/pixels; audio tests decode audible output for each supported codec/rate from AAC and explicit AAC-LATM MPEG-TS fixtures, preserve the fixture source offset, verify all supported Opus packet durations and reject unsupported audio config/discontinuity. Additional fixtures verify 2K/square source bounds, aspect padding, source-timestamp-preserving 30-to-15 fps selection, negotiated H264 SPS profile/level and exact media consumption credits. The capability executable demonstrates native AAC-ELD open failure (-22) rather than mislabeling AAC-LC.
 
 The stdout-stall STOP test sends repeated fixture media without consuming stdout; it demonstrates prompt process exit in that scenario, but does not prove an exact queue/RSS high-water measurement. Exact queue overflow, long watchdog, multi-platform launch, real-media calibration, provider-valid synchronized audio, broader SRTP wire parity and physical integrated STOP acceptance remain follow-up gates.
 
@@ -80,3 +94,57 @@ Before reading private configuration, POSIX builds set and verify the worker's o
 ## Parent readiness and drain
 
 `PrivateMediaWorker.whenReady` resolves only after a unique protocol-2 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a two-second deadline from accepted input END. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
+
+## Owned session and independent synthetic receiver
+
+`src/accessories/media-session.ts` composes the private worker, `ProtectedRtpStream`
+and generation-owned numeric sockets. It configures both SRTP contexts before
+media admission, chunks one bounded vendor frame into 64 KiB credit-controlled
+writes, and buffers at most 256 encoded packets/1 MiB including active output.
+Codec callbacks enqueue bounded copies; admission waits for space with one
+absolute two-second deadline. A fixed 100 ms startup window collects both streams
+before choosing their earliest shared PTS. Monotonic pacing and one serial
+RTP/RTCP pump preserve common clock mapping without independently resetting audio
+or video. Packet skip/padding counts remain numerical audit metadata; RTP carries
+the original encoded PTS rather than applying a second padding correction.
+
+Session END waits for native END/callback drain, paced output and final reports,
+then actual worker and socket closure. Generation cancellation aborts pending
+admission/pacing/sends and fences late work. Structured source metadata forwards
+only validated dimensions and a bounded rational frame rate to the owner.
+
+`build/check-rtp` (`.exe` on Windows) is a separate validation helper, never the
+product worker. It receives synthetic keys and captured ciphertext through private
+stdin framing, uses pinned libsrtp to authenticate/decrypt, reassembles H264 FU-A
+and decodes through libavcodec. Four native session cases cover Opus 16/24 kHz and
+PCMA/PCMU 8 kHz, with decoded video pixels/audio energy, stream identity, clock
+steps, final RTCP counters and the fixture's 64 ms audible A/V offset. A tampered
+authentication tag fails verification. These cases use an injected datagram sink;
+they prove private-pipe/codec/protection/session behavior, not actual UDP delivery,
+provider interoperability, Home playback or five-target acceptance.
+
+## Exact profile with the selected preset
+
+The worker's profile selection is exact across both allowed presets. The pinned
+x264 ultrafast preset disables CABAC and 8x8 transforms, which otherwise causes
+Main/High requests to emit a Baseline SPS despite the profile restriction. The
+worker supplies the supported FFmpeg `coder` and `8x8dct` AVOptions through the
+public codec-open dictionary: CAVLC/no 8x8 for Baseline, CABAC/no 8x8 for Main, and
+CABAC/8x8 for High. Pinned FFmpeg applies these options after the base preset and
+before profile restrictions; pinned x264 selects SPS profile from those tools.
+No private ABI or additional encoder path is involved.
+
+The regression first failed for ultrafast Main/High, then passed all six
+preset/profile combinations with exact SPS profile/selected level and independent
+four-frame pixel decoding. The rest of the ultrafast policy remains selected, but
+restoring these coding tools can increase CPU work. Small synthetic frames do not
+establish Pi throughput or resource acceptance; those gates remain open.
+
+The video bitrate ceiling preserves the existing operator setting of 8000 kbps:
+CONFIG and session preflight admit at most 8,000,000 bits/s. Both presets pass an
+8 Mbps fixture with exact High/level-3.1 SPS and independent pixel decoding; the
+pinned encoder's bitstream SEI confirms effective bitrate, VBV maximum rate and
+VBV buffer size of 8000 kbps/kbits. Pinned x264's level-3.1 table permits 14000
+kbps, above this ceiling. Values above 8,000,000 are rejected. This verifies
+admission and encoder configuration, not sustained-rate, device CPU or RSS
+acceptance. Packet, queue and lifetime limits remain unchanged.

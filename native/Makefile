@@ -28,7 +28,7 @@ else
 LDLIBS += -pthread
 endif
 .PHONY: all test
-all: build/blink-codec-worker$(EXEEXT) build/fixture$(EXEEXT) build/check-output$(EXEEXT) build/audio-capabilities$(EXEEXT)
+all: build/blink-codec-worker$(EXEEXT) build/fixture$(EXEEXT) build/check-output$(EXEEXT) build/audio-capabilities$(EXEEXT) build/check-rtp$(EXEEXT)
 build:
 	mkdir -p build
 build/blink-codec-worker$(EXEEXT): worker.c protocol.h audio.inc output.inc protection.inc | build
@@ -42,4 +42,7 @@ build/check-output$(EXEEXT): tests/check-output.c | build
 	$(CC) $(CHECKER_CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(CHECKER_LDLIBS)
 
 build/audio-capabilities$(EXEEXT): tests/audio-capabilities.c | build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
+
+build/check-rtp$(EXEEXT): tests/check-rtp.c | build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)

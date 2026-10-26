@@ -1,0 +1,154 @@
+{
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "dependency_receipt": {
+    "relative_label": "build/deps/local-eor2xuvi/build-receipt.json",
+    "sha256": "f6f1d306dcfdaa5521d6cdc15ad80544e3e8deef02d4467aa4095cd6e0b55eba"
+  },
+  "distribution_ready": false,
+  "exact_profile_primary_source_sha256": {
+    "ffmpeg-9.0.2/libavcodec/libx264.c": "d118d19748c33cd616d39375021c6dfd32a9ab2baa47827cbc0b976c7679bff3",
+    "x264-0480cb05/common/base.c": "b5c9cc2a672c1103ff50f37e0e5482904dd230a431b47806c10cd4ac0510cc4f",
+    "x264-0480cb05/encoder/set.c": "09a03e4996e23aba0b02cba244497d91a80d3836bcfd7a6e0956f216088caf40"
+  },
+  "ffmpeg_version": "9.0.2",
+  "historical_receipts": [
+    "receipts/video-only-local-build.json",
+    "receipts/audio-srtp-homebrew-local-build.json",
+    "receipts/pre-pr50-gcc-format-local-build.json",
+    "receipts/pre-protocol2-local-build.json",
+    "receipts/pre-session-local-build.json",
+    "receipts/pre-exact-profile-local-build.json"
+  ],
+  "installed_header_sha256": {
+    "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
+    "libavformat/avformat.h": "694da025f30497481f4703e06de106bd417a5718f8fdcdf5e09e34f4b5f21114",
+    "libavformat/avio.h": "30312971fc299e65bc69cf1beddb76f50394e044d9c71fe32fec3ae9c13bd1af",
+    "libavutil/avutil.h": "01a511d927eaab20cf57076611ff5649bc6089d2d766c4b20c9d11c3da095efd",
+    "libswresample/swresample.h": "b23e625ab295d57a3d1ae0142c937b485dc386a36e4ed63f4b99ed886dc905e1",
+    "libswscale/swscale.h": "3c3c7c2aec2494f4881e8fed8baf01ef0db8c08e7c01a3300946ea3bb102a162",
+    "srtp2/srtp.h": "e4ac6bbeb78f9101e2e7c9397a4acd9e31d1e5288c22d2106e77d1b2dfe7a3c5"
+  },
+  "installed_library_sha256": {
+    "libavcodec.a": "a7125b766b7eea5d5da35778c961af2aca3e61111a23ac51e576b14fdbc5b26b",
+    "libavformat.a": "9662da0cf98293b0426bbee652cc5700c60e31f321690b365eba5a31f2bd45fd",
+    "libavutil.a": "29d389dd37014562b18bc96c68910bd777a18f38a2888e31cb528629937a615f",
+    "libopus.a": "d59af669016930b649a213bbf160f63b81806bd063935407642b94b45e878e91",
+    "libsrtp2.a": "b0aaec96a0698d57efd8f7296682272a8e8984617c1f3afd17346708fc784768",
+    "libswresample.a": "6da99a1db585e7be0ddafda4cf1a54fead8f6091a983f754b3aa92ffb0ed7afa",
+    "libswscale.a": "29214fe80e10610bac753af60349e03ace60b77dee8e32ce19211c4dcac855df",
+    "libx264.a": "da757324efa0f65f682449160d13c06400291e2193d508f304707c52975d98c1"
+  },
+  "installed_prefix_label": "build/deps/local-eor2xuvi/prefix",
+  "output_sha256": {
+    "audio-capabilities": "0339571d98f14bb87f74993937a74e7f18884cc40a58e98ff8e129a95ff5802f",
+    "blink-codec-worker": "3676de796a5a8099f24a5864473a404b1da6a5b21eebd8867a11dfeefc9090d7",
+    "check-output": "7641d47da6cc7c427a39ca45c8ad13c38cfb5e32d601932e607c883f37dcf839",
+    "check-rtp": "a0ee74256f360f7796909e8ba71262ad77ac2ee6b1764edf4b2bbc6ef561006c",
+    "fixture": "01f28b1cc7ef4d78f684ed955c4079e3ab73892d680157161c9b5af7bf318c16"
+  },
+  "parent_source_sha256": {
+    "__tests__/media-session.test.ts": "110e82e6a9e2b832b0df340c0b2e59dbce88e99f0f68a71db299b660faa40f16",
+    "__tests__/media-worker.test.ts": "527ff1ba0d1a7da4748978bac1b9718e8224f5c9b90fe8ac47624125a2938455",
+    "docs/audits/private-media-worker-client-prototype.md": "0b413aae11b353782df378a0d97a3bc57099acc3d1b7101297966bcfb89ad418",
+    "src/accessories/media-session.ts": "abbe9908c7adc878a91d263774838e2e8a7265f38cfabdfb158888b894afdd61",
+    "src/accessories/media-worker.ts": "35f214cc3c1de94586c4fcc2e52e28bd1d17b7fa464f45d2be9d0cfd3eb9de8e"
+  },
+  "protocol_version": 2,
+  "prototype_source_sha256": {
+    "AUDIO-OUTPUT-GATES.md": "c963e1d50f0adb4c0ba67eaf4c3a66a5c01cb1d1906370a8545ef78bb4a44d80",
+    "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "Makefile": "19d1fa498edabe109d387075375371260d39aeb0a1b958d4c97a65752f6e1c22",
+    "README.md": "706eb1ca309c2dac405887b98074f6140841658886e4706fee14b3f88f774fcb",
+    "RTSP-ALTERNATIVES.md": "5422068eb8545682f362634981fec1cc1be2a0d9fdf93165dd2e6b3988b34d77",
+    "audio.inc": "20b3e501e1bea24c75e0cc7cdbba276d40476355cd8f245c6c3337e9377d57cf",
+    "dependencies/licenses/libsrtp-LICENSE": "6254b8adcb68109dc150f3b7243c771478360cd64f22860e715e7265b7b3bb78",
+    "output.inc": "bd62b142324b9730af57e9ae12ee15276be42ce71b0956fc72a21511f28e893b",
+    "protection.inc": "79afb10696448af99fe6cf44fda83cd76cfc5bda4daac90be55b116b34bd03d1",
+    "protocol.h": "6f521c08f9cbfaae6766b30aef9b19191dc802daeb10cdee28746be2285257e1",
+    "receipts/pr50-gcc-indentation-review.md": "969cef9c914cd5681f7b349ba2f979cb4657c7b621cb14913e8d2574e4c44bc8",
+    "tests/audio-capabilities.c": "2eaa868a8b6f0f268402eb88c3fab2ad289033a0d6edda13f685898a96ce3d29",
+    "tests/check-output.c": "07046206711d6726dc1192015b176fabd9c1b32840332190d3fdcfa540cc1ca6",
+    "tests/check-rtp.c": "3ecdce1b26f99390dd855928882c707934fe27690dfb43d8484fefd9b2acb7a8",
+    "tests/fixture.c": "d102d03d1e041fda795a8425d72e10de847f142f1eb9f174d8f4c586b82aa4da",
+    "tests/test_worker.py": "bdbf7314a3cd760b9a45307021b6ed078f8c8781feedd62b208e936556ed9ac8",
+    "worker.c": "8c22154df9ea0a6ad96abc173fc8c5b0fca5971b099049f6d1efbcf90920a28e"
+  },
+  "recorded_at": "2026-10-25T23:39:10.439831+00:00",
+  "scope": "local macOS arm64 static worker development build; not a distribution receipt",
+  "upstream_source_commit": "FFmpeg commit unverified; verified release archive identity recorded below",
+  "validation": {
+    "audio_capability_probe": "Opus/PCMA/PCMU opened; AAC-ELD rejected with -22",
+    "checker": "same verified static prefix as worker, fixture and capability probe",
+    "checks": "TypeScript noEmit; focused worker/session ESLint including tests; strict GCC14/GCC16 C11 syntax checks of all five helpers/worker; scoped diff check",
+    "command": "make -B -C native FFMPEG_PREFIX=<verified static prefix> SRTP_PREFIX=<verified static prefix> test",
+    "crash_limit": "POSIX worker runtime sets/verifies own RLIMIT_CORE soft/hard=0; no secret-bearing crash triggered; Windows error-mode source-only",
+    "dependency_recipe_scope": "Retained verified local-eor2xuvi prefix from earlier source build; newly extended cross-target dependency recipe and Windows target are not proved by this local receipt",
+    "exact_h264_profile": "RED ultrafast Main/High emitted SPS66; GREEN all6 veryfast/ultrafast xBaseline/Main/High SPS66/77/100 and selected levels31/32/40, each independently decoded4frames/pixels; public coder/8x8dct options restore required tools; Pi CPU/resource gate remains open",
+    "gcc_syntax_checks": [
+      "GCC14.4.0 strict syntax-only all owned native translation units/includes/C helpers",
+      "GCC16.2.0 strict syntax-only all owned native translation units/includes/C helpers"
+    ],
+    "parent_client": "102 worker/session/output/socket tests passed: 42 worker,14 session,32 output,14 socket; includes actual worker and independent SRTP receiver",
+    "pattern_gate": "eight CI diagnostic sites corrected; local/regional/native-wide direct fallback; relevant Codanna included helper symbols not indexed",
+    "process_surface_check": "owned synthetic child ps argv/environment, INIT reply, fixed malformed-frame diagnostics; tests run outside sandbox because sandbox blocks ps",
+    "protocol_2": "13u32/52B CONFIG with preset0veryfast/1ultrafast in field5; source info output7 width,height,fps numerator/denominator; original geometry/FPS/profile/Opus/cumulative-credit proof retained",
+    "scope": "macOS arm64 only; no physical runtime/distribution proof",
+    "session_receiver": "Four real LATM->worker->paced RTP/SRTCP->libsrtp unprotect/libavcodec decode cases: Opus16/24kHz and PCMA/PCMU8kHz, FU-A at128-byte videoMTU, stream identity/clocks/final SR counters/64ms audible offset, forged authentication-tag rejection; injected datagram sink, not actual UDP",
+    "srtp": "published RTP/SRTCP vectors through IPC, post-codec-END protection, stdout deadline and independent STOP",
+    "tests_passed": 27
+  },
+  "verified_source_inputs": {
+    "ffmpeg_signature": {
+      "fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+      "key_url": "https://ffmpeg.org/ffmpeg-devel.asc",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc"
+    },
+    "libsrtp_tag_commit": "6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+    "schema_version": 1,
+    "sources": [
+      {
+        "filename": "ffmpeg-9.0.2.tar.xz",
+        "license": "GPL-3.0-or-later selected configuration",
+        "name": "ffmpeg",
+        "root": "ffmpeg-9.0.2",
+        "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+        "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+        "version": "9.0.2"
+      },
+      {
+        "filename": "opus-1.6.1.tar.gz",
+        "license": "BSD-3-Clause",
+        "name": "opus",
+        "root": "opus-1.6.1",
+        "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+        "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+        "version": "1.6.1"
+      },
+      {
+        "filename": "libsrtp-2.8.1.tar.gz",
+        "license": "BSD-3-Clause",
+        "name": "libsrtp",
+        "root": "libsrtp-6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+        "sha256": "1ef3e6315e0ea3cd05f4980c8b5f7a9df369e3d586f5e0616e6cc4c778401d4c",
+        "url": "https://codeload.github.com/cisco/libsrtp/tar.gz/6ff02afa8d2dc3f2e8896af391d137c1c66ff6fa",
+        "version": "2.8.1"
+      },
+      {
+        "filename": "x264-0480cb05.tar.gz",
+        "license": "GPL-2.0-or-later",
+        "name": "x264",
+        "root": "x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee",
+        "sha256": "d0967a1348c85dfde363bb52610403be898171493100561efa0dd05d5fd1ae50",
+        "url": "https://code.videolan.org/videolan/x264/-/archive/0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz",
+        "version": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee"
+      }
+    ],
+    "x264_commit": "0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee"
+  },
+  "worker_dynamic_dependency_labels": [
+    "Apple libSystem.B.dylib",
+    "Apple CoreFoundation.framework/Versions/A/CoreFoundation",
+    "Apple CoreVideo.framework/Versions/A/CoreVideo",
+    "Apple CoreMedia.framework/Versions/A/CoreMedia"
+  ]
+}

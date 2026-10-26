@@ -21,6 +21,27 @@ function fixture(stalled = false) {
 const flush = async () => { for (let i = 0; i < 4; i++) { await Promise.resolve(); } };
 function consumptionAck(bytes: number): Buffer { const body = Buffer.alloc(4); body.writeUInt32BE(bytes); return output(6, body); }
 function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(2); body.writeUInt32BE(fps, 4); return output(1, body); }
+function sourceInfo(width: number, height: number, numerator = 0, denominator = 1): Buffer {
+  const body = Buffer.alloc(16); [width, height, numerator, denominator].forEach((n, i) => body.writeUInt32BE(n, i * 4)); return output(7, body);
+}
+test('source info delivers bounded non-sensitive actual geometry once, including unknown source fps', async () => {
+  const f = fixture(); const info = jest.fn(); const worker = new PrivateMediaWorker('/verified/worker', { sourceInfo: info }, f.launch);
+  await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  f.child.stdout.write(sourceInfo(2560, 1440)); expect(info).toHaveBeenCalledWith({ width: 2560, height: 1440, fpsNumerator: 0, fpsDenominator: 1 });
+  f.child.stdout.write(sourceInfo(2560, 1440)); await worker.whenClosed; expect(worker.failed).toBe(true); expect(info).toHaveBeenCalledTimes(1);
+});
+test.each([[4097, 16, 0, 1], [4096, 2050, 0, 1], [1920, 1080, 121, 1], [16, 16, 0, 0], [16, 16, 0, 2]])('invalid source info %p retires owner', async (width, height, numerator, denominator) => {
+  const f = fixture(); const info = jest.fn(); const worker = new PrivateMediaWorker('/verified/worker', { sourceInfo: info }, f.launch);
+  await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0]); f.child.stdout.write(sourceInfo(width, height, numerator, denominator));
+  await worker.whenClosed; expect(worker.failed).toBe(true); expect(info).not.toHaveBeenCalled();
+});
+test('source observer exception retires owner after validated rational frame rate', async () => {
+  const f = fixture(); const info = jest.fn(() => { throw new Error('dummy-private-hook-value'); });
+  const worker = new PrivateMediaWorker('/verified/worker', { sourceInfo: info }, f.launch);
+  await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0]); f.child.stdout.write(sourceInfo(1920, 1080, 30000, 1001));
+  await worker.whenClosed; expect(worker.failed).toBe(true);
+  expect(info).toHaveBeenCalledWith({ width: 1920, height: 1080, fpsNumerator: 30000, fpsDenominator: 1001 });
+});
 test('ready observes validated STATUS and media drain waits for codec callbacks after END', async () => {
   const f = fixture(); let release!: () => void;
   const worker = new PrivateMediaWorker('/verified/worker', { packet: () => new Promise<void>(resolve => { release = resolve; }) }, f.launch);

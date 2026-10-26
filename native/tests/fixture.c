@@ -10,9 +10,11 @@
 static void quiet(void *p,int n,const char *f,va_list a){(void)p;(void)n;(void)f;(void)a;}
 static int write_bytes(void *unused,const uint8_t *data,int length){(void)unused; return fwrite(data,1,(size_t)length,stdout)==(size_t)length?length:AVERROR(EIO);}
 int main(int argc,char **argv){
-    int latm=argc>1 && strcmp(argv[1],"audio-latm")==0;
+    int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
+    int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
     int with_audio=latm || (argc>1 && strcmp(argv[1],"audio")==0);
     int width=16,height=16,fps=15,count=4,offset=0;
+    if(bundled)count=30;
     if(argc>1 && !with_audio) {
         if((argc!=6 && argc!=7) || strcmp(argv[1],"video"))return 2;
         width=atoi(argv[2]);height=atoi(argv[3]);fps=atoi(argv[4]);count=atoi(argv[5]);
@@ -30,6 +32,8 @@ int main(int argc,char **argv){
     av_dict_free(&options);
     AVFormatContext *format=NULL;
     if(avformat_alloc_output_context2(&format,NULL,"mpegts",NULL)<0)return 2;
+    // Match the CLI's normal mux delay: several AAC access units share one PES.
+    if(bundled)format->max_delay=700000;
     format->pb=avio_alloc_context(av_malloc(32768),32768,1,NULL,NULL,write_bytes,NULL);
     if(!format->pb)return 2;
     AVStream *stream=avformat_new_stream(format,NULL);
@@ -48,6 +52,7 @@ int main(int argc,char **argv){
         if(av_channel_layout_copy(&audio_frame->ch_layout,&audio->ch_layout)<0 || av_frame_get_buffer(audio_frame,0)<0)return 2;
     }
     if(latm && av_dict_set(&options,"mpegts_flags","latm",0)<0)return 2;
+    if(bundled && av_dict_set(&options,"muxrate","1200000",0)<0)return 2;
     if(avformat_write_header(format,&options)<0)return 2;
     av_dict_free(&options);
     AVFrame *frame=av_frame_alloc();AVPacket *packet=av_packet_alloc();

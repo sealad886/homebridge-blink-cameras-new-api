@@ -1,4 +1,4 @@
-/** Prototype only: externally verified executable; no discovery or runtime fallback. */
+/** Private codec IPC for a verified executable; no discovery or runtime fallback. */
 import { Buffer } from 'node:buffer';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { isAbsolute } from 'node:path';
@@ -14,7 +14,9 @@ export interface CodecPacket {
 export interface MediaWorkerCallbacks {
   packet?: (packet: CodecPacket, signal: globalThis.AbortSignal) => Promise<void>;
   audioInfo?: (info: { codec: number; rate: number; channels: number; padding: number; extradata: Buffer }) => void;
+  sourceInfo?: (info: SourceVideoInfo) => void;
 }
+export interface SourceVideoInfo { width: number; height: number; fpsNumerator: number; fpsDenominator: number; }
 export type WorkerSpawner = (path: string, args: string[], options: { env: Record<string, string>; stdio: ['pipe', 'pipe', 'pipe']; shell: false }) => ChildProcessWithoutNullStreams;
 interface QueuedWrite { type: number; payload: Buffer; resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof globalThis.setTimeout>; }
 interface Pending { type: number; stream: number; resolve: (data: Buffer) => void; reject: (error: Error) => void;
@@ -37,6 +39,7 @@ export class PrivateMediaWorker {
   #writingType = 0; #control?: QueuedWrite; #producer?: QueuedWrite;
   #mediaConsumption?: MediaConsumption; #consumedBytes = 0;
   #ready = false; #fps = 0;
+  #sourceSeen = false;
   #resolveReady!: () => void; #rejectReady!: (error: Error) => void;
   #resolveDrained!: () => void; #rejectDrained!: (error: Error) => void;
   #readyTimer?: ReturnType<typeof globalThis.setTimeout>; #drainTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -211,7 +214,7 @@ export class PrivateMediaWorker {
         if (this.#buffer.toString('ascii', 0, 4) !== 'BMO1') { throw new Error(); }
         const type = this.#buffer.readUInt32BE(4); const size = this.#buffer.readUInt32BE(8);
         const maximum = ({ 1: 8, 2: MEDIA_WORKER_LIMITS.frameBytes - 12, 3: 0, 4: MEDIA_WORKER_LIMITS.frameBytes - 12,
-          5: 4116, 6: 4, 10: 4, 11: 2066, 12: 2070 } as Record<number, number>)[type];
+          5: 4116, 6: 4, 7: 16, 10: 4, 11: 2066, 12: 2070 } as Record<number, number>)[type];
         if (maximum === undefined || size > maximum) { throw new Error(); }
         if (this.#buffer.length < 12 + size) { break; }
         globalThis.clearTimeout(this.#frameTimer); this.#frameTimer = undefined;
@@ -227,6 +230,12 @@ export class PrivateMediaWorker {
           const bytes = total - this.#consumedBytes;
           if (!pending?.dispatched || bytes <= 0 || bytes > pending.remaining || total > this.#inputBytes) { throw new Error(); }
           this.#consumedBytes = total; pending.remaining -= bytes; if (!pending.remaining) { pending.resolve(); }
+        } else if (type === 7) {
+          if (size !== 16 || !this.#configured || this.#ended || this.#sourceSeen) { throw new Error(); }
+          const width = body.readUInt32BE(0), height = body.readUInt32BE(4), fpsNumerator = body.readUInt32BE(8), fpsDenominator = body.readUInt32BE(12);
+          if (!width || !height || width > 4096 || height > 4096 || width * height > 8388608 || !fpsDenominator ||
+              fpsNumerator > 0x7fffffff || fpsDenominator > 0x7fffffff || fpsNumerator > 120 * fpsDenominator || (!fpsNumerator && fpsDenominator !== 1)) { throw new Error(); }
+          this.#sourceSeen = true; this.callbacks.sourceInfo?.({ width, height, fpsNumerator, fpsDenominator });
         } else if (type === 2 || type === 4) {
           if (this.#ended || !this.#configured || size <= 48 || body.readUInt32BE(28) !== (type === 2 ? 1 : 2) || body.readUInt32BE(24) > 1
               || body.readUInt32BE(32) !== 1 || body.readUInt32BE(36) !== 1000000) { throw new Error(); }

@@ -86,7 +86,7 @@ static void read_messages(void) {
             for(int i=0;i<13;i++) config[i]=u32(payload+4*i);
             if(!config[0] || !config[1] || config[0]>1920 || config[1]>1080 ||
                (config[0]&1) || (config[1]&1) || config[2]<1 || config[2]>30 ||
-               config[3]<20000 || config[3]>4000000 || config[4]<1 || config[4]>9000 || config[5]) fatal("CONFIG");
+               config[3]<20000 || config[3]>8000000 || config[4]<1 || config[4]>9000 || config[5]>1) fatal("CONFIG");
             if(config[10]>2 || config[11]>2)fatal("CONFIG");
             uint32_t blocks=((config[0]+15)/16)*((config[1]+15)/16);
             const uint32_t max_blocks[]={3600,5120,8192},max_block_rate[]={108000,216000,245760};
@@ -217,14 +217,19 @@ int main(int argc, char **argv) {
     const int profiles[]={AV_PROFILE_H264_BASELINE,AV_PROFILE_H264_MAIN,AV_PROFILE_H264_HIGH},levels[]={31,32,40};
     encoder->profile=profiles[config[10]];encoder->level=levels[config[11]];
     encoder->rc_max_rate=config[3];encoder->rc_buffer_size=(int)config[3];
-    av_dict_set(&options,"preset","veryfast",0); av_dict_set(&options,"tune","zerolatency",0);
+    /* Profiles are exact: libx264 applies these public options after the preset.
+     * CABAC distinguishes Main; the 8x8 transform distinguishes High. */
+    if(av_dict_set(&options,"preset",config[5]?"ultrafast":"veryfast",0)<0 ||
+       av_dict_set(&options,"tune","zerolatency",0)<0 ||
+       av_dict_set(&options,"coder",config[10]?"cabac":"cavlc",0)<0 ||
+       av_dict_set_int(&options,"8x8dct",config[10]==2,0)<0)fatal("MEMORY");
     if(avcodec_open2(encoder,codec,&options)<0) { fatal("ENCODER"); }
     av_dict_free(&options);
     AVFrame *decoded=av_frame_alloc(), *scaled=av_frame_alloc(); AVPacket *packet=av_packet_alloc(), *encoded=av_packet_alloc();
     if(!decoded || !scaled || !packet || !encoded) fatal("MEMORY");
     scaled->format=AV_PIX_FMT_YUV420P; scaled->width=encoder->width; scaled->height=encoder->height;scaled->sample_aspect_ratio=(AVRational){1,1};
     if(av_frame_get_buffer(scaled,32)<0) fatal("MEMORY");
-    struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result;int64_t last_selected_pts=AV_NOPTS_VALUE;
+    struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;int64_t last_selected_pts=AV_NOPTS_VALUE;
     for (;;) {
         result=av_read_frame(input,packet);
         if(result<0 && result!=AVERROR_EOF) fatal("MEDIA");
@@ -251,6 +256,12 @@ int main(int argc, char **argv) {
         int received;
         while((received=avcodec_receive_frame(decoder,decoded))>=0) {
             if(++frames>config[4] || decoded->width<=0 || decoded->height<=0 || decoded->width>MAX_INPUT_DIMENSION || decoded->height>MAX_INPUT_DIMENSION || (int64_t)decoded->width*decoded->height>MAX_INPUT_PIXELS || interrupted(NULL)) fatal("FRAME_LIMIT");
+            if(!source_reported) {
+                AVRational rate=av_guess_frame_rate(input,input->streams[video],decoded);
+                if(rate.num<=0 || rate.den<=0 || (int64_t)rate.num>120LL*rate.den)rate=(AVRational){0,1};
+                uint8_t info[16];put32(info,(uint32_t)decoded->width);put32(info+4,(uint32_t)decoded->height);put32(info+8,(uint32_t)rate.num);put32(info+12,(uint32_t)rate.den);
+                output(BLINK_SOURCE_INFO,info,sizeof(info));source_reported=1;
+            }
             if(decoded->best_effort_timestamp==AV_NOPTS_VALUE)fatal("VIDEO_TIMESTAMP");
             int64_t pts=av_rescale_q(decoded->best_effort_timestamp,input->streams[video]->time_base,AV_TIME_BASE_Q);
             /* Select existing frames before expensive scaling. Preserve the source clock. */
