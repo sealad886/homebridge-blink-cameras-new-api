@@ -231,7 +231,8 @@ int main(int argc, char **argv) {
     if(!decoded || !scaled || !packet || !encoded) fatal("MEMORY");
     scaled->format=AV_PIX_FMT_YUV420P; scaled->width=encoder->width; scaled->height=encoder->height;scaled->sample_aspect_ratio=(AVRational){1,1};
     if(av_frame_get_buffer(scaled,32)<0) fatal("MEMORY");
-    struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;int64_t last_selected_pts=AV_NOPTS_VALUE;
+    struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;
+    int64_t first_video_pts=AV_NOPTS_VALUE,last_selected_pts=AV_NOPTS_VALUE,next_output_frame=0;
     for (;;) {
         result=av_read_frame(input,packet);
         if(result<0 && result!=AVERROR_EOF) fatal("MEDIA");
@@ -266,8 +267,15 @@ int main(int argc, char **argv) {
             }
             if(decoded->best_effort_timestamp==AV_NOPTS_VALUE)fatal("VIDEO_TIMESTAMP");
             int64_t pts=av_rescale_q(decoded->best_effort_timestamp,input->streams[video]->time_base,AV_TIME_BASE_Q);
-            /* Select existing frames before expensive scaling. Preserve the source clock. */
-            if(last_selected_pts!=AV_NOPTS_VALUE && (pts<last_selected_pts || (uint64_t)pts-(uint64_t)last_selected_pts<999999u/config[2])) { av_frame_unref(decoded);continue; }
+            /* Keep rational output deadlines anchored to the source clock, not each selected frame. */
+            if(last_selected_pts!=AV_NOPTS_VALUE && pts<=last_selected_pts) { av_frame_unref(decoded);continue; }
+            if(first_video_pts==AV_NOPTS_VALUE)first_video_pts=pts;
+            uint64_t elapsed=(uint64_t)pts-(uint64_t)first_video_pts;
+            if(elapsed>INT64_MAX)fatal("VIDEO_TIMESTAMP");
+            /* One microsecond covers rounding the source and output clocks to AV_TIME_BASE. */
+            if(elapsed+1<(uint64_t)av_rescale(next_output_frame,1000000,config[2])) { av_frame_unref(decoded);continue; }
+            int64_t after_source=av_rescale_rnd((int64_t)elapsed,config[2],1000000,AV_ROUND_DOWN)+1;
+            next_output_frame=FFMAX(next_output_frame+1,after_source);
             last_selected_pts=pts;
             int inner_width=encoder->width,inner_height=encoder->height;
             if((int64_t)decoded->width*encoder->height>(int64_t)decoded->height*encoder->width)

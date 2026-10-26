@@ -14,9 +14,10 @@ int main(int argc,char **argv){
 #ifdef _WIN32
     if(_setmode(_fileno(stdin),_O_BINARY)<0)return 2;
 #endif
-    int width=16,height=16,expected_count=4,inner_width=16,inner_height=16;
+    int width=16,height=16,expected_count=4,inner_width=16,inner_height=16,selected_source_frames=0;
     if(argc!=1){
-        if(argc!=6)return 2;
+        if(argc!=6 && argc!=7)return 2;
+        if(argc==7){if(strcmp(argv[6],"selected-source-frames"))return 2;selected_source_frames=1;}
         width=atoi(argv[1]);height=atoi(argv[2]);expected_count=atoi(argv[3]);inner_width=atoi(argv[4]);inner_height=atoi(argv[5]);
         if(width<2 || height<2 || expected_count<1 || inner_width<2 || inner_height<2 || inner_width>width || inner_height>height)return 2;
     }
@@ -61,6 +62,11 @@ int main(int argc,char **argv){
                 if(frame->width!=width || frame->height!=height || count>=expected_count)return 2;
                 if(frame->sample_aspect_ratio.num && frame->sample_aspect_ratio.num!=frame->sample_aspect_ratio.den)return 2;
                 int expected=32+(count%4)*32,actual=frame->data[0][(height/2)*frame->linesize[0]+width/2];
+                /* Frame selection preserves source frames but can skip their fixture color sequence. */
+                if(selected_source_frames){
+                    int matches=0;for(int color=32;color<=128;color+=32)if(actual>=color-3 && actual<=color+3)matches=1;
+                    if(!matches)return 2;
+                }else
                 if(actual<expected-3 || actual>expected+3)return 2;
                 if(inner_width<width && (frame->data[0][(height/2)*frame->linesize[0]]>19 || frame->data[0][(height/2)*frame->linesize[0]+width-1]>19))return 2;
                 if(inner_height<height && (frame->data[0][width/2]>19 || frame->data[0][(height-1)*frame->linesize[0]+width/2]>19))return 2;

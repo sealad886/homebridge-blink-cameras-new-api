@@ -293,6 +293,26 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(source),60)
         self.assertEqual(selected,source[::2])
         self.assertGreater(source[0],0)
+    def test_output_fps_retains_negotiated_cadence_for_noninteger_source_ratios(self):
+        for source_fps,expected_count in [(20,90),(25,72)]:
+            with self.subTest(source_fps=source_fps):
+                media=subprocess.check_output([str(binary('fixture')),'video','16','16',str(source_fps),'120','42'],timeout=5)
+                original=self.run_worker(config(fps=source_fps,max_frames=120)+frame(2,media)+frame(3))
+                result=self.run_worker(config(fps=15,max_frames=120)+frame(2,media)+frame(3))
+                self.assertEqual(original.returncode,0,original.stderr)
+                self.assertEqual(result.returncode,0,result.stderr)
+                source=[struct.unpack('!q',body[:8])[0] for kind,body in messages(original.stdout) if kind==2]
+                selected=[struct.unpack('!q',body[:8])[0] for kind,body in messages(result.stdout) if kind==2]
+                self.assertEqual(len(selected),expected_count)
+                self.assertEqual(selected[0],source[0])
+                self.assertTrue(all(pts in source for pts in selected))
+                # Each output deadline selects an existing source frame without accumulating lateness.
+                for index,pts in enumerate(selected):
+                    offset=pts-source[0]-index*1000000/15
+                    self.assertGreaterEqual(offset,-1)
+                    self.assertLess(offset,1000000/source_fps+1)
+                decoded=subprocess.run([str(binary('check-output')),'16','16',str(expected_count),'16','16','selected-source-frames'],input=result.stdout,capture_output=True,timeout=5)
+                self.assertEqual(decoded.returncode,0,decoded.stderr)
     def test_negotiated_h264_profile_and_level_are_encoded_across_presets(self):
         for preset in [0,1]:
             for profile,profile_id,level,level_id in [(0,66,0,31),(1,77,1,32),(2,100,2,40)]:
