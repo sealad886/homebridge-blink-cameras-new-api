@@ -7,7 +7,20 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
-## [0.10.1-beta.0] - 2026-10-25
+## [0.11.0-beta.0] - 2026-10-25
+
+### Added
+- Expose optional HomeKit temperature sensors for traditional Blink cameras that report temperature. The global `exposeTemperature` setting defaults to false; existing per-device overrides can enable or disable it for individual cameras.
+- Read the camera's cached configuration temperature in Fahrenheit and convert it to Celsius for HomeKit. Enabled cameras add at most one bounded metadata read per normal state poll; HomeKit reads do not contact Blink or wake/calibrate the camera.
+- Keep temperature faults local, wait for valid metadata before adding a sensor, reuse restored sensors, and report missing, invalid or offline readings as unavailable rather than inventing a value. Owl/Mini and doorbell temperature are not supported.
+
+### Fixed
+- Preserve the latest unresolved network arm/disarm target on HomeKit reads through older command completion and queue expiration. Current security state and motion reads still report confirmed device state; reconciliation or an explicit already-confirmed replacement resolves the intent without replaying a command. This prepares the source correction for issue #48; immutable registry delivery remains pending.
+
+### Secure media implementation
+- Replace the media CLI with a pinned private-pipe codec worker, parent-owned TLS and separate generation-owned SRTP sockets. Bound codec input/output, preserve shared A/V timing, and retain reservations until actual closure.
+- Admit only verified IMMIS and the source-backed RTSPS TCP-interleaved subset; reject redirects, secondary authorities and UDP transport.
+- Supply an explicit configuration migrator that backs up locally before removing retired CLI controls and mapping AAC-ELD to Opus.
 
 ### Development tooling
 - Validate complete pull-request and push commit ranges with pinned commitlint 20.5.3. Generated dependency-update messages with long URLs now pass the upstream URL exception; malformed subjects and oversized non-URL prose remain rejected.
@@ -15,9 +28,10 @@ owns subsequent acceptance and finding dispositions.
 - Update the development-only URI parser to fast-uri 3.1.9, addressing its URI parsing and normalization advisories.
 
 ### Beta scope and acceptance
-- Plugin runtime behavior, saved configuration and production dependencies are unchanged from 0.10.0.
-- F05/F06 remain open with the existing runtime controls and limitations. The native worker remains a development prototype; talkback remains disabled.
-- Follow the [release guide](docs/RELEASE.md) for installation and beta acceptance. Automated checks do not establish physical hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta.
+- Publication is blocked by the maintainer's 25 October decision until F05 and F06 are both fixed and their closure criteria verified. The prepared version and passing source tests do not authorize publication while this hold remains active.
+- This minor beta includes the reviewed runtime changes in PR #86 and supersedes the unpublished 0.10.1-beta.0 preparation. Temperature sensing is opt-in. Secure media replaces the external FFmpeg executable and requires explicit migration of retired settings; see the [upgrade guide](docs/streaming.md#upgrade-configuration).
+- F05/F06 closure remains gated on the final native distribution, integrated secret/connection checks and independent review. The private worker removes media CLI arguments, and the parent enforces the admitted RTSPS subset without a fallback. Opus, PCMA and PCMU replace the former AAC-ELD offer; hardware encoder selection is removed. Talkback remains disabled. The 0.10.0 stable-specific risk disposition does not apply to this beta.
+- Follow the [release guide](docs/RELEASE.md) for exact-registry installation and beta acceptance. Local and hosted tests cover target-state regressions, metadata conversion, sensor lifecycle and fault isolation; they do not establish physical temperature accuracy, Home display, hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta. No Homebridge installation, restart or pairing is included in publication.
 
 ## [0.10.0] - 2026-10-23
 

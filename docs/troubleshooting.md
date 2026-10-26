@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Last reviewed: 23 October 2026.
+Last reviewed: 26 October 2026.
 
 Start with the checks below. For safe collection/redaction use the
 [diagnostic specification](debug_logging_spec.md) and the
@@ -53,13 +53,12 @@ alone is not proof of changing video or audible audio. Battery depletion and
 provider outages need separate evidence; a disconnect message alone does not
 identify their cause.
 
-Check the selected executable and negotiated codec in the bounded startup and
-stream receipts. The executable must be runnable by the Homebridge service
-account, not merely your interactive shell. See [FFmpeg requirements](streaming.md#ffmpeg-requirements)
-for codec probing, audio-offer updates and signed/unsigned RTP SSRC handling.
-An unavailable AAC-ELD selection or failed SSRC capability check should be
-investigated against the actual executable; do not reset pairing, replace a
-working binary blindly, or disable certificate verification to bypass it.
+Check the installed package's verified worker and negotiated codec in bounded
+startup receipts. A missing or modified worker needs a verified package reinstall,
+not an executable-path override. See [packaged codec requirements](streaming.md#packaged-codec-requirements)
+and the [upgrade migration](streaming.md#upgrade-configuration). AAC-ELD is no longer
+offered; Home receives the supported codec update through normal HAP metadata.
+Do not reset pairing or disable certificate verification to bypass a refused stream.
 
 For stutter, compare the same camera and scene with the same network conditions.
 The [quality guide](streaming.md#input-and-output-quality) describes lower output
@@ -74,7 +73,7 @@ response or timeout, new stream start, first media and final cleanup. Bounded
 reconnect exhaustion is a failure receipt, not proof of successful recovery.
 HTTP 406 may be transient provider behavior; an eligible command GET has one
 bounded retry, while liveview/completion POSTs are not ambiguously replayed.
-Never include their capability URLs, command identifiers or full FFmpeg argv in
+Never include their capability URLs, command identifiers, process arguments or media in
 an issue. Use the [diagnostic policy](debug_logging_spec.md) and
 [release acceptance guidance](RELEASE.md) to record proof and limitations.
 

@@ -34,13 +34,6 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --runInBand --coverage
-      - name: Verify synthetic video/audio stream packaging
-        if: matrix.node-version == 24
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg
-          ffmpeg -version
-          node scripts/media-pipeline-smoke.cjs
       - name: Check maintained OAuth diagnostic scripts
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck scripts/debug-full-oauth.ts scripts/debug-simple-oauth.ts scripts/oauth-diagnostic-transport.ts
       - name: Test trusted evidence reporting
@@ -48,6 +41,8 @@ jobs:
       - name: Test release safety contracts
         run: node --test .github/scripts/*.test.mjs
       - name: Verify package contents and loadability
+        env:
+          VERIFY_PACKAGE_JAVASCRIPT_ONLY: '1'
         run: node .github/scripts/verify-package.mjs
       - name: Upload coverage to Codecov
         if: matrix.node-version == 20
@@ -57,60 +52,175 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
-  # Prototype evidence only: Windows/macOS x64/Linux arm64 and five-target gate remain open.
+  # Source-build/test candidates only; clean-host baselines and npm distribution remain gated.
   native-validation:
-    name: Native prototype (${{ matrix.runner }})
+    name: Native candidate (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-22.04
-            architecture: x86_64
+            target: linux-x64
+            shell: bash
+          - runner: ubuntu-22.04-arm
+            target: linux-arm64
+            shell: bash
           - runner: macos-15
-            architecture: arm64
+            target: darwin-arm64
+            shell: bash
+          - runner: macos-15-intel
+            target: darwin-x64
+            shell: bash
+          - runner: windows-2022
+            target: win32-x64
+            shell: msys2 {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: runner.os != 'Windows'
         with:
           python-version: '3.12'
+      - name: Set up isolated Windows native toolchain
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@fb197b72ce45fb24f17bf3f807a388985654d1f2 # v2.29.0
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          update: true
+          cache: false
+          install: >-
+            make gnupg diffutils
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-python
       - name: Check runner tools and architecture
-        shell: bash
         env:
-          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+          NATIVE_TARGET: ${{ matrix.target }}
         run: |
-          for tool in cc make cmake pkg-config gpg; do command -v "$tool"; done
+          set -euo pipefail
+          for tool in cc make cmake pkg-config gpg openssl; do command -v "$tool"; done
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            test "$MSYSTEM" = UCRT64
+            test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
+            for tool in bash cygpath ninja objdump cmp; do command -v "$tool"; done
+            pacman -Q
+            cmp -- /ucrt64/share/licenses/crt/COPYING.MinGW-w64-runtime.txt native/dependencies/licenses/mingw-w64-runtime-COPYING
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            command -v readelf
+          fi
           python - <<'PY'
           import os, platform, sys
-          assert sys.version_info[:2] == (3, 12)
-          assert platform.machine().lower() == os.environ['NATIVE_ARCHITECTURE']
+          assert sys.version_info >= (3, 12)
+          machine = platform.machine().lower()
+          arch = {'x86_64': 'x64', 'amd64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}[machine]
+          name = {'Darwin': 'darwin', 'Linux': 'linux', 'Windows': 'win32'}[platform.system()]
+          assert name + '-' + arch == os.environ['NATIVE_TARGET']
           PY
       - name: Check offline source-fetch boundaries
         run: python -m unittest discover -s native/dependencies -p 'test_*.py' -v
       - name: Verify pinned sources and build private static prefix
-        shell: bash
         run: |
+          set -euo pipefail
           # Assembly disabled explicitly for prototype CI; performance is not release evidence.
           python native/dependencies/prepare.py --build-local --jobs 3 --disable-assembly --prefix-file native/build/deps/ci-prefix.txt
       - name: Build and test private-pipe native prototype
-        shell: bash
         run: |
+          set -euo pipefail
           IFS= read -r native_prefix < native/build/deps/ci-prefix.txt
           native_cc=cc
+          native_ldflags=
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             native_cc=/usr/bin/clang
             export MACOSX_DEPLOYMENT_TARGET=13.0
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            native_cc=gcc
+            native_ldflags='-static -static-libgcc'
           fi
-          make -C native test FFMPEG_PREFIX="$native_prefix" SRTP_PREFIX="$native_prefix" PKG_CONFIG_FLAGS=--static CC="$native_cc" PYTHON=python
+          make -C native test FFMPEG_PREFIX="$native_prefix" SRTP_PREFIX="$native_prefix" PKG_CONFIG_FLAGS=--static CC="$native_cc" LDFLAGS="$native_ldflags" PYTHON=python
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
       - name: Test parent IPC against the built worker
-        shell: bash
         run: |
+          set -euo pipefail
           npm ci
-          BLINK_MEDIA_TEST_WORKER_PATH="$PWD/native/build/blink-codec-worker" npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts
+          npm run build
+          native_worker="$PWD/native/build/blink-codec-worker"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            native_worker="$(cygpath -m "$native_worker.exe")"
+          fi
+          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-resource-bounds.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
+      - name: Verify actual RTSP connection boundaries in an isolated network
+        if: matrix.target == 'linux-x64'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends strace iproute2 util-linux
+          bash .github/scripts/check-rtsp-network.sh
+      - name: Retain tested worker with immutable source and dependency receipt
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'native/dependencies')
+          import prepare
+          prefix = Path('native/build/deps/ci-prefix.txt').read_text().strip()
+          worker = Path('native/build/blink-codec-worker' + ('.exe' if os.name == 'nt' else ''))
+          prepare.write_worker_artifact(Path(prefix), worker,
+              Path('native/build/native-' + os.environ['NATIVE_TARGET'] + '.tar.gz'), os.environ['GITHUB_SHA'])
+          PY
+      - name: Verify resource observations were produced
+        run: |
+          test -s native/build/resource-receipt.json
+          test -s native/build/queue-recording-receipt.json
+      - name: Upload bounded resource observations
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-resources-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            native/build/resource-receipt.json
+            native/build/queue-recording-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload source-build candidate evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-candidate-${{ matrix.target }}-${{ github.sha }}
+          path: native/build/native-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain independent receiver helpers for final package qualification
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, platform, sys
+          from pathlib import Path
+          sys.path.insert(0, 'native/dependencies')
+          import prepare
+          for name in ('fixture', 'check-rtp'):
+              prepare.audit_dependencies(Path('native/build') / (name + ('.exe' if os.name == 'nt' else '')),
+                  platform.system(), os.environ.copy())
+          PY
+          node .github/scripts/native-qualification.mjs prepare --target "$NATIVE_TARGET" --source-sha "$GITHUB_SHA" --build native/build --output "native/build/validation-$NATIVE_TARGET"
+      - name: Upload independent receiver helpers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-validation-${{ matrix.target }}-${{ github.sha }}
+          path: native/build/validation-${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 7

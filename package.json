@@ -1,13 +1,13 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.10.1-beta.0",
+    "version": "0.11.0-beta.0",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
         "email": "dev@andrewcox.doctor"
     },
-    "license": "MIT",
+    "license": "(MIT AND GPL-3.0-or-later AND BSD-3-Clause AND ZPL-2.1)",
     "type": "commonjs",
     "homepage": "https://github.com/sealad886/homebridge-blink-cameras-new-api",
     "bugs": {
@@ -39,7 +39,12 @@
         "dist",
         "CHANGELOG.md",
         "config.schema.json",
-        "scripts/preuninstall.js"
+        "scripts/preuninstall.js",
+        "scripts/migrate-secure-media-config.cjs",
+        "native/runtime",
+        "native/corresponding-source.tar.gz",
+        "native/COPYING",
+        "native/NOTICE"
     ],
     "homebridge": {
         "pluginAlias": "BlinkCameras",
@@ -74,7 +79,6 @@
         "@typescript-eslint/parser": "^8.53.1",
         "ajv": "^8.20.0",
         "eslint": "^9.39.2",
-        "ffmpeg-for-homebridge": "2.1.7",
         "homebridge": "^1.11.1",
         "jest": "^30.2.0",
         "nodemon": "^3.1.11",
@@ -90,7 +94,7 @@
         "blink-api:validate": "node scripts/blink-api-contract/index.cjs validate --input docs/api-contract/blink-59.2-29823413.json --schema docs/api-contract/schema.json",
         "preuninstall": "node scripts/preuninstall.js",
         "build": "tsc && npm run copy-ui-assets",
-        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
+        "copy-ui-assets": "node .github/scripts/copy-ui-assets.mjs",
         "watch": "npm run build && nodemon",
         "watch:homebridge": "npm run watch",
         "watch:ts": "tsc --watch",
@@ -101,8 +105,5 @@
         "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
         "update": "ncu -u && npm update && npm install"
-    },
-    "allowScripts": {
-        "ffmpeg-for-homebridge@2.1.7": true
     }
 }

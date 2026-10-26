@@ -74,7 +74,9 @@ the resulting squash commit. Wrap body prose to 100 characters or fewer.
 ## Gates and publication
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
-build, and package contents. Use a dedicated clean clone when the working checkout
+build, and package contents. Full native package verification requires all five
+verified workers and corresponding sources staged by the canonical package job;
+an ordinary source checkout cannot substitute JavaScript-only smoke for it. Use a dedicated clean clone when the working checkout
 contains unrelated user files; never stash or delete those files to satisfy it.
 
 Publication requires an explicit dispatch on main with the exact version input.
@@ -110,6 +112,72 @@ Prereleases use `alpha`, `beta`, or `rc`; stable uses `latest`. Verify exact reg
 version, integrity, source identity, GitHub release, and dist-tags before installing.
 A prerelease must leave the previous stable `latest` unchanged. Stable publication
 must not move `latest` backwards.
+
+## Native artifact preparation and qualification
+
+The secure media release pipeline is `gates → package → qualify (five targets) → publish`.
+The version remains blocked until the matching reviewed source and all required
+automated, security, performance and operator gates have supporting evidence.
+Adding these jobs does not supply a pass or authorize workflow dispatch.
+
+The reusable source gates build Linux x64/arm64, macOS arm64/x64 and Windows x64
+candidates. Each `native-candidate-TARGET-SHA` artifact contains one worker and its
+receipt. A separate `native-validation-TARGET-SHA` artifact contains the synthetic
+fixture generator, independent SRTP receiver and a receipt binding their hashes
+to the same source SHA and worker hash. The helper binaries are validation tools;
+they are excluded from the product tarball. Their dependency audit must pass before
+the source job uploads them.
+
+The read-only package job downloads all five candidates from the same workflow
+run. `native/dependencies/package.py` rejects incomplete or mismatched inputs and
+uses the exact committed native source, build scripts, tests, full license notices
+and four authenticated pinned dependency archives. It stages
+`native/runtime/TARGET/worker[.exe]`, the closed five-target manifest and distribution
+receipt, `native/corresponding-source.tar.gz`, `native/COPYING` and `native/NOTICE`
+before npm packing. Existing output roots are refused. Source download verification
+includes the pinned FFmpeg GPG fingerprint; a URL-only source offer is insufficient.
+
+`.github/scripts/verify-package.mjs` checks the final package's complete native
+inventory, every worker hash, manifest and distribution hashes, recipe/pinned-input
+identity, corresponding-source member inventory and content hashes against the
+exact Git commit. It verifies the bundled archives and licenses, stamps `gitHead`
+and records the final immutable npm integrity. Ordinary JavaScript matrix smoke
+may explicitly set `VERIFY_PACKAGE_JAVASCRIPT_ONLY=1` before native artifacts exist;
+this mode refuses release output and supplies no native acceptance evidence.
+
+Native candidate jobs also retain separate worker-hash-bound resource receipts:
+per-worker OS memory observations, native consumption high water, and actual
+recorder byte/queue bounds. Missing observations fail their job. These receipts
+are evidence for bounded synthetic workloads, not universal memory budgets.
+
+Five separate clean-host jobs download that same npm tarball and their matching
+validation artifact. They install the exact tarball into a fresh temporary npm
+prefix with lifecycle scripts disabled, without a source dependency installation,
+native build, compiler setup, MSYS2 setup or private dependency prefix. They verify
+the installed native inventory and resolve the installed worker using the shipped
+resolver. The installed media-session implementation launches that worker and
+exercises Opus at 16/24 kHz, PCMA and PCMU against both short and bundled LATM
+fixtures. The independent receiver must authenticate/decrypt SRTP/SRTCP, decode
+video pixels and nonzero audio energy, verify shared timing/counters and refuse forged
+SRTP. Protected output is captured through an isolated owned output; this proof
+does not substitute for the separate actual UDP, performance, security or physical
+camera/HomeKit gates.
+
+Qualification runner baselines are Ubuntu 22.04 (x64/arm64), macOS 15 (arm64/x64)
+and Windows Server 2022 (x64). A pass establishes only its observed runner/runtime
+baseline. A macOS deployment target of 13 does not prove macOS 13 acceptance;
+Windows Server 2022 does not establish Windows 10 acceptance. Hosted qualification
+is pending until a run for the exact final source and npm integrity succeeds.
+
+The privileged main-only OIDC job requires all five jobs and independently checks
+their receipts against the exact publication tarball, source SHA, source-bundle
+hash and target worker hashes before publishing. It neither rebuilds nor repacks
+the qualified tarball. Candidate/distribution build receipts retain
+`distribution_ready: false`; separate qualification receipts record the observed
+target results without changing the immutable product bytes. Those results do
+not close F05/F06 or record physical acceptance. Preserve the beta hold until the
+remaining release gates are verified. Registry publication and subsequent
+authorized Homebridge installation/physical acceptance remain distinct stages.
 
 ## Homebridge upgrade and acceptance
 

@@ -11,6 +11,17 @@
     "required": [
       "name"
     ],
+    "not": {
+      "anyOf": [
+        { "required": ["ffmpegPath"] },
+        { "required": ["ffmpegDebug"] },
+        { "required": ["rtpSsrcMode"] },
+        { "required": ["rtspTransport"] },
+        { "required": ["videoEncoder"] },
+        { "required": ["twoWayAudio"] },
+        { "required": ["verifyImmisTls"] }
+      ]
+    },
     "properties": {
       "name": {
         "title": "Platform Name",
@@ -104,18 +115,12 @@
       },
       "enableStreaming": {
         "title": "Enable Live Streaming",
-        "description": "Enable HomeKit live video streaming via FFmpeg.",
+        "description": "Enable HomeKit live video streaming.",
         "type": "boolean",
         "default": true
       },
-      "ffmpegPath": {
-        "title": "FFmpeg Path",
-        "description": "Path to the FFmpeg binary. Defaults to ffmpeg in PATH.",
-        "type": "string",
-        "default": "ffmpeg"
-      },
-      "ffmpegDebug": {
-        "title": "FFmpeg Debug Logging",
+      "mediaDebug": {
+        "title": "Streaming Diagnostics",
         "description": "Enable bounded, redacted streaming diagnostics. Per-packet and NAL traces are omitted.",
         "type": "boolean",
         "default": false
@@ -125,16 +130,6 @@
         "description": "Path to save raw MPEG-TS stream recordings for debugging. Leave empty to disable.",
         "type": "string",
         "placeholder": "/tmp/blink-streams"
-      },
-      "rtspTransport": {
-        "title": "RTSP Transport",
-        "description": "RTSP transport mode for Blink live view input.",
-        "type": "string",
-        "default": "tcp",
-        "oneOf": [
-          { "title": "TCP (recommended)", "enum": ["tcp"] },
-          { "title": "UDP", "enum": ["udp"] }
-        ]
       },
       "maxStreams": {
         "title": "Max Concurrent Streams per Camera",
@@ -150,12 +145,6 @@
         "type": "boolean",
         "default": true
       },
-      "twoWayAudio": {
-        "title": "Enable Two-Way Audio",
-        "description": "Temporarily disabled: talkback UI is hidden until uplink framing is finalized.",
-        "type": "boolean",
-        "default": false
-      },
       "audioCodec": {
         "title": "Audio Codec",
         "description": "Preferred audio codec for HomeKit streaming.",
@@ -163,7 +152,6 @@
         "default": "opus",
         "oneOf": [
           { "title": "Opus (recommended)", "enum": ["opus"] },
-          { "title": "AAC-ELD", "enum": ["aac-eld"] },
           { "title": "PCMA", "enum": ["pcma"] },
           { "title": "PCMU", "enum": ["pcmu"] }
         ]
@@ -203,27 +191,12 @@
       },
       "softwareEncodingPreset": {
         "title": "Software Stream Encoding",
-        "description": "Low CPU uses ultrafast for libx264 (including software fallback) and lower Opus encoding complexity. It may reduce video/audio quality at the same bitrate. Hardware video encoders keep their own settings.",
+        "description": "Low CPU uses faster video encoding and lower Opus encoding complexity. It may reduce video/audio quality at the same bitrate.",
         "type": "string",
         "default": "veryfast",
         "oneOf": [
           { "title": "Balanced (current default)", "enum": ["veryfast"] },
           { "title": "Low CPU", "enum": ["ultrafast"] }
-        ]
-      },
-      "videoEncoder": {
-        "title": "Video Encoder",
-        "description": "Preferred FFmpeg video encoder. Auto probes available hardware encoders at startup (dry-run test) and selects the first working one; falls back to software libx264 if none found.",
-        "type": "string",
-        "default": "auto",
-        "oneOf": [
-          { "title": "Auto (prefer hardware, fallback to software)", "enum": ["auto"] },
-          { "title": "Software (libx264)", "enum": ["libx264"] },
-          { "title": "Raspberry Pi / Linux ARM (h264_v4l2m2m)", "enum": ["h264_v4l2m2m"] },
-          { "title": "macOS VideoToolbox (h264_videotoolbox)", "enum": ["h264_videotoolbox"] },
-          { "title": "Intel Quick Sync (h264_qsv)", "enum": ["h264_qsv"] },
-          { "title": "NVIDIA NVENC (h264_nvenc)", "enum": ["h264_nvenc"] },
-          { "title": "Linux VAAPI (advanced)", "enum": ["h264_vaapi"] }
         ]
       },
       "excludedNetworks": {
@@ -354,17 +327,14 @@
       "expanded": false,
       "items": [
         "enableStreaming",
-        "ffmpegPath",
         "maxStreams",
         "enableAudio",
         "audioCodec",
         "audioBitrate",
         "outputQuality",
         "videoBitrate",
-        "videoEncoder",
         "softwareEncodingPreset",
-        "rtspTransport",
-        "ffmpegDebug",
+        "mediaDebug",
         "debugStreamPath"
       ]
     },

@@ -1,5 +1,10 @@
 # RTP SSRC compatibility — 22 October 2026
 
+Historical CLI receipt. The secure-media cutover retires the CLI smoke script
+below. Current receiver evidence comes from `native/tests/check-rtp.c` and the
+actual-worker `media-session.test.ts` cases in five-target native CI, including
+authenticated RTP/SRTCP, SSRC identity, fragmentation, decoding and A/V clocks.
+
 ## Observed failure and cause
 
 Installed RC.18 source `d72346e952d74adb4d6a8ca4af2f52e64585b6d1` selects Opus with the unchanged operator-managed Homebrew FFmpeg 8.1.3 binary. Eight Home encoder starts establish TLS and receive source media, then fail at RTP header initialization. The plugin unconditionally converts upper-half uint32 SSRC values into negative numbers; the actual binary declares an unsigned RTP SSRC option. One captured failure includes 4254621614 converted to -40345682. Opus negotiation is a separate, verified boundary; this is not evidence of an outage or WiFi cause.

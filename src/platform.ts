@@ -36,10 +36,9 @@ import {
   BlinkMediaClip,
 } from './types';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
-import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
+import { AudioCodecPreference, BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
 import { OutputQualityProfile } from './accessories/stream-quality';
 import { BlinkInputQuality } from './types';
-import { probeAacEldEncoder, probeRtpSsrcMode, probeVideoEncoder } from './accessories/encoder-probe';
 import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { withResponseBudget } from './operation-budget';
@@ -99,19 +98,14 @@ interface BlinkPlatformConfig extends PlatformConfig {
   deviceNameOverrides?: DeviceNameOverride[];
   deviceSettingOverrides?: DeviceSettingOverride[];
   enableStreaming?: boolean;
-  ffmpegPath?: string;
-  ffmpegDebug?: boolean;
-  rtspTransport?: 'tcp' | 'udp';
+  mediaDebug?: boolean;
   maxStreams?: number;
   enableAudio?: boolean;
-  twoWayAudio?: boolean;
-  audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
+  audioCodec?: AudioCodecPreference;
   audioBitrate?: number;
   videoBitrate?: number;
   outputQuality?: OutputQualityProfile;
-  videoEncoder?: VideoEncoderPreference;
   softwareEncodingPreset?: 'veryfast' | 'ultrafast';
-  verifyImmisTls?: boolean;
   debugAuth?: boolean;
   authLocked?: boolean;
   debugStreamPath?: string;
@@ -174,31 +168,22 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     this.streamingConfig = resolveStreamingConfig({
       enabled: this.config.enableStreaming ?? true,
-      ffmpegPath: this.config.ffmpegPath,
-      ffmpegDebug: this.config.ffmpegDebug,
-      rtspTransport: this.config.rtspTransport,
+      mediaDebug: this.config.mediaDebug,
       maxStreams: this.config.maxStreams,
       debugStreamPath: this.config.debugStreamPath,
-      verifyImmisTls: this.config.verifyImmisTls,
       snapshotCacheTTL: this.config.snapshotCacheTTL,
       persistSnapshotCache: this.config.persistSnapshotCache,
       audio: {
         enabled: this.config.enableAudio,
-        twoWay: this.config.twoWayAudio,
         codec: this.config.audioCodec,
         bitrate: this.config.audioBitrate,
       },
       video: {
         maxBitrate: this.config.videoBitrate,
         outputQuality: this.config.outputQuality,
-        encoder: this.config.videoEncoder,
         softwarePreset: this.config.softwareEncodingPreset,
       },
     });
-
-    if (this.config.twoWayAudio) {
-      this.log.warn('Two-way talk UI is disabled until uplink framing is verified; ignoring twoWayAudio setting.');
-    }
 
     if (this.streamingConfig.persistSnapshotCache) {
       this.log.info(
@@ -252,6 +237,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private validateConfig(): void {
+    const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
+    if (retired.some(key => Object.hasOwn(this.config, key))) {
+      throw new Error('Retired streaming settings require the explicit scripts/migrate-secure-media-config.cjs migration');
+    }
+    for (const key of ['mediaDebug', 'enableAudio', 'enableStreaming', 'persistSnapshotCache']) {
+      if (this.config[key] !== undefined && typeof this.config[key] !== 'boolean') throw new Error('Invalid streaming boolean setting');
+    }
+    if (this.config.softwareEncodingPreset !== undefined && !['ultrafast', 'veryfast'].includes(this.config.softwareEncodingPreset)) {
+      throw new Error('Invalid software encoding preset');
+    }
     if (this.config.exposeTemperature !== undefined && typeof this.config.exposeTemperature !== 'boolean') {
       throw new Error('Invalid temperature setting');
     }
@@ -449,37 +444,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private async performDiscovery(): Promise<boolean> {
     try {
-      if (this.streamingConfig.enabled) {
-        const mode = await probeRtpSsrcMode(this.streamingConfig.ffmpegPath);
-        if (mode) {
-          this.streamingConfig.rtpSsrcMode = mode;
-          this.log.info(`RTP SSRC option resolved to: ${mode}`);
-        } else {
-          this.streamingConfig.enabled = false;
-          this.log.warn('RTP SSRC capability could not be verified; live streaming disabled for this runtime.');
-        }
-      }
-
-      if (this.streamingConfig.video.encoder === 'auto') {
-        const probe = await probeVideoEncoder(
-          this.streamingConfig.ffmpegPath,
-          (msg) => this.log.info(`[EncoderProbe] ${msg}`),
-        );
-        (this.streamingConfig.video as { encoder: VideoEncoderPreference }).encoder = probe.selected;
-        this.log.info(`Video encoder resolved to: ${probe.selected}`);
-      }
-
-      if (this.streamingConfig.enabled && this.streamingConfig.audio.enabled) {
-        if (await probeAacEldEncoder(this.streamingConfig.ffmpegPath)) {
-          this.streamingConfig.audio.aacEldEncoder = 'libfdk_aac';
-        } else {
-          if (this.streamingConfig.audio.codec === 'aac-eld') {
-            this.streamingConfig.audio.codec = 'opus';
-            this.log.warn('AAC-ELD encoding is unavailable; advertising Opus audio instead.');
-          }
-        }
-      }
-
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       this.registerDevices(homescreen);

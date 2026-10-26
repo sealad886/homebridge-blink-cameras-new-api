@@ -2,7 +2,7 @@
  * Blink Camera Source
  *
  * Implements CameraStreamingDelegate for HomeKit camera snapshot + live streaming support.
- * Live streaming uses Blink RTSPS URLs and FFmpeg to transcode to HomeKit SRTP.
+ * Live streaming uses owned vendor transports and a private codec worker for HomeKit SRTP.
  *
  * Source: API Dossier Sections 3.3, 3.4, 3.5 (Thumbnail endpoints)
  * Source: API Dossier Section 4.2 (LiveVideoResponse)
@@ -36,47 +36,34 @@ import { redactDiagnosticText } from '../blink-api/redaction';
 import { StreamDiagnosticBudget } from '../blink-api/stream-diagnostics';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { effectiveOutputFps, isSupportedOutputVideo, outputH264Levels, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
-import { InputVideoObservation, InputVideoObserver } from './input-video-observation';
+import { createOwnedMediaSession, type OwnedMediaSession, type MediaSessionOptions } from './media-session';
+import { loadPackagedMediaWorker } from './media-worker-artifact';
+import { OwnedRtspBroker } from '../blink-api/rtsp-broker';
+import { Writable } from 'node:stream';
+import { resolve } from 'node:path';
 import { Buffer } from 'node:buffer';
-import { ChildProcess, ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import * as dgram from 'node:dgram';
 
 import { URL } from 'node:url';
 
 export type DeviceType = 'camera' | 'owl' | 'doorbell';
-export type AudioCodecPreference = 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
-export type VideoEncoderPreference =
-  | 'auto'
-  | 'libx264'
-  | 'h264_v4l2m2m'
-  | 'h264_videotoolbox'
-  | 'h264_qsv'
-  | 'h264_nvenc'
-  | 'h264_vaapi';
-
+export type AudioCodecPreference = 'opus' | 'pcma' | 'pcmu';
+export interface InputVideoObservation { width: number; height: number; fps?: number; }
 export interface BlinkCameraStreamingConfig {
   enabled: boolean;
-  ffmpegPath: string;
-  ffmpegDebug: boolean;
-  /** Internal capability of the selected executable; never persisted. */
-  rtpSsrcMode: 'signed' | 'unsigned';
-  rtspTransport: 'tcp' | 'udp';
+  mediaDebug: boolean;
   maxStreams: number;
   audio: {
     enabled: boolean;
-    twoWay: boolean;
     codec: AudioCodecPreference;
     bitrate: number;
-    aacEldEncoder?: 'libfdk_aac';
   };
   video: {
     outputQuality: OutputQualityProfile;
     maxBitrate?: number;
-    encoder: VideoEncoderPreference;
     softwarePreset?: 'veryfast' | 'ultrafast';
   };
-  verifyImmisTls: boolean;
   /** Path to save debug stream recordings (MPEG-TS files) */
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds (0 = always request fresh, default 60) */
@@ -93,28 +80,20 @@ export type BlinkCameraStreamingConfigInput = Omit<
   video?: Partial<BlinkCameraStreamingConfig['video']>;
 };
 
-const SOFTWARE_VIDEO_ENCODER: VideoEncoderPreference = 'libx264';
-const MAX_FFMPEG_STDERR_BUFFER_CHARS = 64 * 1024;
 
 const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
-  ffmpegPath: 'ffmpeg',
-  ffmpegDebug: false,
-  rtpSsrcMode: 'unsigned',
-  rtspTransport: 'tcp',
+  mediaDebug: false,
   maxStreams: 1,
   audio: {
     enabled: true,
-    twoWay: false,
     codec: 'opus',
     bitrate: 32,
   },
   video: {
     outputQuality: 'auto',
-    encoder: 'auto',
     softwarePreset: 'veryfast',
   },
-  verifyImmisTls: true,
   snapshotCacheTTL: 60,
   persistSnapshotCache: false,
 };
@@ -124,31 +103,25 @@ export const resolveStreamingConfig = (
 ): BlinkCameraStreamingConfig => {
   const audio: Partial<BlinkCameraStreamingConfig['audio']> = config?.audio ?? {};
   const video: Partial<BlinkCameraStreamingConfig['video']> = config?.video ?? {};
-  // Two-way talkback is intentionally disabled until uplink framing is validated.
-  const twoWay = false;
+  if (audio.codec !== undefined && !['opus', 'pcma', 'pcmu'].includes(audio.codec)) {
+    throw new Error('Unsupported audio codec; run the secure media configuration migration');
+  }
 
   return {
     enabled: config?.enabled ?? DEFAULT_STREAMING_CONFIG.enabled,
-    ffmpegPath: config?.ffmpegPath ?? DEFAULT_STREAMING_CONFIG.ffmpegPath,
-    ffmpegDebug: config?.ffmpegDebug ?? DEFAULT_STREAMING_CONFIG.ffmpegDebug,
-    rtpSsrcMode: config?.rtpSsrcMode ?? DEFAULT_STREAMING_CONFIG.rtpSsrcMode,
-    rtspTransport: config?.rtspTransport ?? DEFAULT_STREAMING_CONFIG.rtspTransport,
+    mediaDebug: config?.mediaDebug ?? DEFAULT_STREAMING_CONFIG.mediaDebug,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
-    verifyImmisTls: true,
-    snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
+      snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
     audio: {
       enabled: audio.enabled ?? DEFAULT_STREAMING_CONFIG.audio.enabled,
-      twoWay,
       codec: audio.codec ?? DEFAULT_STREAMING_CONFIG.audio.codec,
       bitrate: audio.bitrate ?? DEFAULT_STREAMING_CONFIG.audio.bitrate,
-      aacEldEncoder: audio.aacEldEncoder,
     },
     video: {
       outputQuality: resolveOutputQuality(video.outputQuality),
       maxBitrate: video.maxBitrate ?? DEFAULT_STREAMING_CONFIG.video.maxBitrate,
-      encoder: video.encoder ?? DEFAULT_STREAMING_CONFIG.video.encoder,
       softwarePreset: video.softwarePreset === 'ultrafast' ? 'ultrafast' : 'veryfast',
     },
   };
@@ -162,7 +135,7 @@ interface SessionOwner {
   abort: globalThis.AbortController;
   expiry?: ReturnType<typeof setTimeout>;
   retirement?: Promise<void>;
-  children: Set<ChildProcess>;
+  mediaClosed?: boolean;
   cancelStart?: () => void;
   localStarting?: boolean;
   transportClosed?: boolean;
@@ -176,83 +149,28 @@ interface PendingStreamSession {
   sessionId: string;
   videoPort: number;
   localVideoPort: number;
-  localVideoRtcpPort?: number;
   videoCryptoSuite: number;
   videoSRTP: Buffer;
   videoSSRC: number;
   audioPort?: number;
   localAudioPort?: number;
-  localAudioRtcpPort?: number;
   audioCryptoSuite?: number;
   audioSRTP?: Buffer;
   audioSSRC?: number;
 }
 
 interface ActiveStreamSession extends PendingStreamSession {
-  ffmpeg?: ChildProcessWithoutNullStreams;
-  talkback?: ChildProcess;
+  media?: OwnedMediaSession;
+  broker?: OwnedRtspBroker;
+  consumer?: Writable;
   commandId?: number;
-  liveviewUrl?: string;
   keepAliveTimer?: ReturnType<typeof setTimeout> | null;
   stopped?: boolean;
   immisProxy?: ImmisProxyServer;
-  selectedVideoEncoder?: VideoEncoderPreference;
-  fallbackVideoEncoderTried?: boolean;
   readyNotified?: boolean;
 }
 
-interface FfmpegStderrState {
-  diagnosticBudget?: StreamDiagnosticBudget;
-  inputVideoObserver?: InputVideoObserver;
-  ffmpegStderrBuffer?: string;
-  ffmpegStderrBufferTruncated?: boolean;
-}
-
 const usedPorts = new Set<number>();
-
-/** Preserve SSRC bits while matching the selected RTP muxer's option type. */
-const formatRtpSsrc = (ssrc: number, mode: BlinkCameraStreamingConfig['rtpSsrcMode']): number =>
-  mode === 'signed' && ssrc > 0x7FFFFFFF ? ssrc - 0x100000000 : ssrc;
-
-const redactFfmpegArgs = (args: string[]): string[] => {
-  const redacted = [...args];
-  for (let i = 0; i < redacted.length; i++) {
-    const flag = redacted[i];
-    if (flag === '-srtp_out_params' || flag === '-srtp_in_params') {
-      if (i + 1 < redacted.length) {
-        redacted[i + 1] = '<redacted>';
-      }
-    } else {
-      redacted[i] = redactStreamUrl(redacted[i]);
-    }
-  }
-  return redacted;
-};
-
-const redactFfmpegOutput = (value: string): string => {
-  // FFmpeg debug option dumps separate the option name from its argument.
-  // Suppress the whole record instead of guessing where a secret ends.
-  if (/\bsrtp_(?:out|in)_params\b/i.test(value) && /\b(?:Reading|Applying) option\b/i.test(value)) {
-    return '<SRTP parameter diagnostic omitted>';
-  }
-  return value
-    .replace(/\b(?:immis|rtsps?):\/\/[^\s'"]+/gi, (url) => redactStreamUrl(url))
-    .replace(/(-srtp_(?:out|in)_params\s+)(\S+)/gi, '$1<redacted>')
-    .replace(/(\bsrtp_(?:out|in)_params[=:])(\S+)/gi, '$1<redacted>')
-    .replace(/(\binline:)([^\s|]+)/gi, '$1<redacted>');
-};
-
-const redactStreamUrl = (value: string): string => {
-  try {
-    const parsed = new URL(value);
-    if (!['immis:', 'rtsp:', 'rtsps:'].includes(parsed.protocol)) {
-      return value;
-    }
-    return `${parsed.protocol}//${parsed.host}/<redacted>`;
-  } catch {
-    return value;
-  }
-};
 
 const allocatePort = async (): Promise<number> => {
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -288,39 +206,6 @@ const releasePort = (port?: number): void => {
     usedPorts.delete(port);
   }
 };
-
-const formatAddress = (address: string): string => {
-  if (address.includes(':') && !address.startsWith('[')) {
-    return `[${address}]`;
-  }
-  return address;
-};
-
-const buildRtpUrl = (
-  address: string,
-  port: number,
-  localRtpPort?: number,
-  localRtcpPort?: number,
-  mtu?: number,
-  useSrtp = true,
-): string => {
-  const scheme = useSrtp ? 'srtp' : 'rtp';
-  const params = new URLSearchParams();
-  params.set('rtcpport', `${port}`);
-  if (localRtpPort) {
-    params.set('localrtpport', `${localRtpPort}`);
-  }
-  if (localRtcpPort) {
-    params.set('localrtcpport', `${localRtcpPort}`);
-  }
-  if (mtu) {
-    params.set('pkt_size', `${mtu}`);
-  }
-  return `${scheme}://${formatAddress(address)}:${port}?${params.toString()}`;
-};
-
-const toSrtpParams = (srtp: Buffer): string => srtp.toString('base64');
-
 
 // HomeKit may ask for the same camera snapshot several times within a few
 // seconds. Keep transport failures from turning that retry burst into an
@@ -374,7 +259,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   }
 
   private logError(message: string): void {
-    this.errorLog(redactDiagnosticText(redactFfmpegOutput(message)));
+    this.errorLog(redactDiagnosticText(message));
   }
 
   /**
@@ -591,7 +476,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       callback(new Error('Streaming preparation capacity reached or session already owned'));
       return;
     }
-    const owner: SessionOwner = { phase: 'PREPARING', preparing: true, ports: new Set(), abort: new globalThis.AbortController(), children: new Set() };
+    const owner: SessionOwner = { phase: 'PREPARING', preparing: true, ports: new Set(), abort: new globalThis.AbortController() };
     this.sessionOwners.set(sessionId, owner);
     const allocateOwned = async (): Promise<number> => {
       const port = await allocatePort();
@@ -606,7 +491,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     owner.expiry = setTimeout(() => { void this.stopStream(sessionId); }, 30_000);
     owner.expiry.unref?.();
     try {
-      const videoSSRC = randomBytes(4).readUInt32BE(0);
+      const videoSSRC = randomBytes(4).readUInt32BE(0) || 1;
       const localVideoPort = await allocateOwned();
 
       const session: PendingStreamSession = {
@@ -616,19 +501,16 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         sessionId,
         videoPort: request.video.port,
         localVideoPort,
-        localVideoRtcpPort: await allocateOwned(),
         videoCryptoSuite: request.video.srtpCryptoSuite,
         videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
         videoSSRC,
       };
 
       if (this.streamingConfig.audio.enabled) {
-        const audioSSRC = randomBytes(4).readUInt32BE(0);
+        const audioSSRC = randomBytes(4).readUInt32BE(0) || 1;
         const localAudioPort = await allocateOwned();
-        const localAudioRtcpPort = await allocateOwned();
         session.audioPort = request.audio.port;
         session.localAudioPort = localAudioPort;
-        session.localAudioRtcpPort = localAudioRtcpPort;
         session.audioCryptoSuite = request.audio.srtpCryptoSuite;
         session.audioSRTP = Buffer.concat([request.audio.srtp_key, request.audio.srtp_salt]);
         session.audioSSRC = audioSSRC;
@@ -658,17 +540,18 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       this.logNegotiation('Stream prepared');
       callback(undefined, response);
-    } catch (error) {
+    } catch {
+      const message = owner.abort.signal.aborted ? 'Streaming preparation cancelled' : 'Stream preparation failed';
       owner.preparing = false;
       owner.retirement = undefined;
       await this.stopStream(sessionId);
-      this.logError(`Stream preparation failed: ${error}`);
-      callback(error as Error);
+      this.logError(message);
+      callback(new Error(message));
     }
   }
 
   /**
-   * Handle stream request - start/stop streaming via FFmpeg.
+   * Handle generation-owned private media streaming.
    */
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
     if (!this.streamingConfig.enabled) {
@@ -751,9 +634,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     this.ongoingSessions.set(sessionId, active);
 
     try {
-      // Validate the selected codec before allocating a remote liveview. Home
-      // may retain a previously advertised codec across an accessory update.
-      if (this.streamingConfig.audio.enabled && request.audio) this.buildAudioEncoderArgs(request.audio);
+      // Resolve shipped bytes and validate negotiation before acquiring a vendor capability.
+      const mediaOptions = this.buildNativeMediaOptions(request, active);
       if (this.beforeLiveview) {
         const options = { signal: owner.abort.signal, deadline: Date.now() + 12_000 };
         await withinRequestBudget(this.beforeLiveview(options), options);
@@ -764,6 +646,24 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       await withinRequestBudget(Promise.all([this.remoteRetirement, ...this.remoteAllocations]),
         { signal: owner.abort.signal, deadline: Date.now() + 4000 });
       if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
+      owner.localStarting = true;
+      owner.mediaClosed = false;
+      try {
+        const media = await createOwnedMediaSession(mediaOptions, owner.abort.signal);
+        active.media = media;
+        void media.whenClosed.then(() => {
+          owner.mediaClosed = true; owner.release?.();
+          if (this.ownsSession(sessionId, active)) {
+            if (media.failed) this.markStreamFailure(sessionId, active);
+            void this.stopStream(sessionId, owner);
+          }
+        });
+        if (!this.ownsSession(sessionId, active)) { void media.stop(); throw new Error('Streaming startup cancelled'); }
+      } finally {
+        owner.localStarting = false;
+        if (!active.media) owner.mediaClosed = true;
+        owner.release?.();
+      }
       const allocation = this.requestLiveView().then(async liveview => {
         active.commandId = liveview.command_id ?? liveview.id;
         if (!this.ownsSession(sessionId, active)) {
@@ -786,67 +686,51 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
       const commandId = liveview.command_id ?? liveview.id;
       active.commandId = commandId;
-      active.liveviewUrl = originalUrl;
 
-      let ffmpegInputUrl: string;
-      // IMMIS playback starts from the liveview response; command completion is
-      // terminal monitoring state, not permission to open the media connection.
       const readiness = commandId && !originalUrl.startsWith('immis://')
         ? this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5, 6, owner)
         : Promise.resolve();
       readiness.catch(() => undefined);
-
-      // Handle immis:// protocol using our proxy server
-      if (originalUrl.startsWith('immis://')) {
-        this.log(`Starting IMMIS proxy for proprietary stream protocol`);
-
-        const immisProxy = new ImmisProxyServer({
-          immisUrl: originalUrl,
-          serial: this.serial,
-          log: (msg) => this.log(msg),
-          errorLog: (msg) => this.logError(msg),
-          debug: this.streamingConfig.ffmpegDebug,
-          saveStreamPath: this.streamingConfig.debugStreamPath,
-          verifyTls: this.streamingConfig.verifyImmisTls,
-        });
-
-        immisProxy.on('error', (error) => {
-          if (active.immisProxy !== immisProxy || active.stopped) {
-            return;
-          }
-
-          this.logError(`IMMIS proxy error for session ${sessionId}: ${error.message}`);
-          this.markStreamFailure(sessionId, active);
-          if (!active.readyNotified) {
-            active.readyNotified = true;
-            callback(error);
-          }
-          void this.stopStream(sessionId, owner);
-        });
-
-        active.immisProxy = immisProxy;
-        owner.localStarting = true;
-        try { ffmpegInputUrl = await immisProxy.start(); }
-        finally {
-          owner.localStarting = false;
-          if (owner.abort.signal.aborted) {
-            immisProxy.stop();
-            void immisProxy.whenClosed.then(() => { owner.transportClosed = true; owner.release?.(); });
-          }
+      const failed = (): void => {
+        if (!this.ownsSession(sessionId, active)) return;
+        this.logError('Private media transport failed'); this.markStreamFailure(sessionId, active);
+        void this.stopStream(sessionId, owner);
+      };
+      owner.localStarting = true;
+      try {
+        if (originalUrl.startsWith('immis://')) {
+          const proxy = new ImmisProxyServer({ immisUrl: originalUrl, serial: this.serial,
+            log: message => this.log(message), errorLog: message => this.logError(message),
+            debug: this.streamingConfig.mediaDebug, saveStreamPath: this.streamingConfig.debugStreamPath, verifyTls: true });
+          active.immisProxy = proxy; proxy.on('error', failed);
+          const media = active.media!;
+          active.consumer = new Writable({ write(bytes: Buffer, _encoding, done) {
+            void media.write(bytes).then(() => done(), () => done(new Error('Private media unavailable')));
+          } });
+          active.consumer.on('error', failed);
+          await proxy.start();
+          if (!this.ownsSession(sessionId, active)) { proxy.stop(); throw new Error('Streaming startup cancelled'); }
+          proxy.attachConsumer(active.consumer);
+        } else {
+          const media = active.media!;
+          const broker = new OwnedRtspBroker(originalUrl, { write: bytes => media.write(bytes), close: () => media.stop() },
+            { error: failed }, owner.abort.signal);
+          active.broker = broker;
+          await broker.start();
+          if (!this.ownsSession(sessionId, active)) { void broker.stop(); throw new Error('Streaming startup cancelled'); }
         }
-        if (!this.ownsSession(sessionId, active)) { immisProxy.stop(); throw new Error('Streaming startup cancelled'); }
-        this.log(`IMMIS private transport ready`);
-      } else {
-        // Standard RTSPS URL - use directly
-        ffmpegInputUrl = originalUrl;
+      } finally {
+        owner.localStarting = false;
+        if (owner.abort.signal.aborted) {
+          const closed = Promise.all([active.immisProxy?.whenClosed, active.broker?.whenClosed]);
+          void closed.then(() => { owner.transportClosed = true; owner.release?.(); });
+        }
       }
-
       if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
-      this.startFfmpegStream(sessionId, ffmpegInputUrl, request, active, callback);
+      active.readyNotified = true; owner.phase = 'RUNNING'; callback();
 
       // Start keep-alive and liveview polling in the BACKGROUND (non-blocking)
-      // This must happen AFTER FFmpeg is spawned to avoid HomeKit timeout
-      const isImmisStream = originalUrl.startsWith('immis://');
+      // Start monitoring only after owned media startup is confirmed.
       if (commandId) {
         // IMMIS command monitoring is independent of media startup.
         // Other inputs retain their existing readiness polling owner.
@@ -855,23 +739,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           .catch(() => undefined);
       }
 
-      // Two-way audio handling
-      if (this.streamingConfig.audio.enabled && this.streamingConfig.audio.twoWay) {
-        if (!isImmisStream) {
-          // Standard RTSP talkback
-          this.startTalkback(sessionId, request, active);
-        } else if (isImmisStream && active.immisProxy) {
-          // IMMIS talkback via proxy using AAC-LATM uplink (experimental)
-          this.startImmisTalkback(sessionId, request, active);
-        }
-      }
-    } catch (error) {
+    } catch {
       // Home may immediately resubmit START after a refusal. Keep remote POSTs bounded
       // while the previous vendor command retires; STOP cancellation is not a failure.
       this.markStreamFailure(sessionId, active);
-      this.logError(`Failed to start stream ${sessionId}: ${error}`);
+      this.logError('Private streaming startup failed');
       await this.stopStream(sessionId, owner);
-      callback(error as Error);
+      callback(new Error('Private streaming startup failed'));
     }
   }
 
@@ -904,23 +778,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     return retirement;
   }
 
-  private async closeChild(child: ChildProcess): Promise<void> {
-    if (child.exitCode !== null && child.exitCode !== undefined) return;
-    await new Promise<void>((resolve) => {
-      let finished = false;
-      const finish = (): void => { if (!finished) { finished = true; globalThis.clearTimeout(force); globalThis.clearTimeout(limit); resolve(); } };
-      child.once('close', finish);
-      const force = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* Observe close. */ } }, 1000);
-      const limit = setTimeout(() => {
-        // An unconfirmed child keeps its port reservation until actual close.
-        recordSecurityBoundaryEvent('cleanup_timeout');
-        this.logError('Media child cleanup timeout; reservation retained');
-        finish();
-      }, 3000);
-      try { child.stdin?.end(); child.kill('SIGTERM'); } catch { /* Still observe closure. */ }
-    });
-  }
-
   private async stopStream(sessionId: string, expectedOwner?: SessionOwner): Promise<void> {
     const owner = this.sessionOwners.get(sessionId);
     const active = this.ongoingSessions.get(sessionId);
@@ -936,17 +793,21 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       active.stopped = true;
       if (active.keepAliveTimer) globalThis.clearTimeout(active.keepAliveTimer);
       active.keepAliveTimer = null;
-      try { active.immisProxy?.retire(); } catch { this.logError('Media transport cleanup failed'); }
+      try { active.immisProxy?.retire(); void active.broker?.stop(); void active.media?.stop(); active.consumer?.destroy(); }
+      catch { this.logError('Media transport cleanup failed'); }
     }
     if (pending) this.pendingSessions.delete(sessionId);
-    const transportClosure = active?.immisProxy?.whenClosed;
+    const transportClosure = active?.immisProxy || active?.broker
+      ? Promise.all([active.immisProxy?.whenClosed, active.broker?.whenClosed]).then(() => undefined)
+      : undefined;
     owner.transportClosed = !transportClosure;
     owner.retirement = (async () => {
-      await Promise.all([...owner.children].map(child => this.closeChild(child)));
       const release = (): void => {
-        if (owner.children.size || owner.preparing || owner.localStarting || owner.transportClosed === false) return;
+        if (owner.preparing || owner.localStarting || owner.mediaClosed === false || owner.transportClosed === false) return;
         for (const port of owner.ports) releasePort(port);
         owner.ports.clear(); owner.phase = 'CLOSED';
+        const session = active ?? pending;
+        session?.videoSRTP.fill(0); session?.audioSRTP?.fill(0);
         if (this.sessionOwners.get(sessionId) === owner) this.sessionOwners.delete(sessionId);
         if (this.ongoingSessions.get(sessionId) === active) this.ongoingSessions.delete(sessionId);
       };
@@ -955,7 +816,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         void transportClosure.then(() => { owner.transportClosed = true; release(); });
         await withResponseBudget(transportClosure, 3000).catch(() => { recordSecurityBoundaryEvent('cleanup_timeout'); this.logError('Media transport cleanup timeout; reservation retained'); });
       }
-      for (const child of owner.children) child.once('close', () => { owner.children.delete(child); release(); });
+      if (active?.media) {
+        await withResponseBudget(active.media.whenClosed, 3000).catch(() => {
+          recordSecurityBoundaryEvent('cleanup_timeout'); this.logError('Private media cleanup timeout; reservation retained');
+        });
+      }
       release();
       if (active?.commandId) void this.completeLiveview(active.commandId);
     })();
@@ -1016,627 +881,48 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     void poll();
   }
 
-  private buildTalkbackSdp(
-    audio: { codec: number | string; channel: number; sample_rate: number; pt: number },
-    session: ActiveStreamSession,
-  ): string | undefined {
-    const codec = typeof audio.codec === 'string' ? audio.codec.toUpperCase() : audio.codec;
-    const channels = audio.channel || 1;
-    const sampleRateKhz = this.getAudioSampleRate(audio.sample_rate);
-    const sampleRateHz = sampleRateKhz * 1000;
-    const suiteName = this.getSrtpSuiteName(
-      session.audioCryptoSuite ?? this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
-    );
-
-    if (!suiteName || !session.audioSRTP || !session.localAudioPort) {
-      return undefined;
+  private buildNativeMediaOptions(request: Extract<StreamingRequest, { type: 'start' }>, active: ActiveStreamSession): MediaSessionOptions {
+    // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
+    const workerPath = loadPackagedMediaWorker(resolve(__dirname, '../..'));
+    if (active.videoCryptoSuite !== this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80 || active.videoSRTP.length !== 30) {
+      throw new Error('Unsupported media cryptography');
     }
-
-    let rtpmap: string | undefined;
-    let fmtp: string | undefined;
-
-    switch (codec) {
-      case 'AAC-ELD':
-      case this.hap.AudioStreamingCodecType.AAC_ELD: {
-        if (sampleRateKhz !== 16) {
-          this.log(`Talkback AAC-ELD expected 16 kHz; got ${sampleRateKhz} kHz (using 16 kHz SDP).`);
-        }
-        rtpmap = `MPEG4-GENERIC/16000/${channels}`;
-        fmtp =
-          'profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=F8F0212C00BC00';
-        break;
-      }
-      case 'OPUS':
-      case this.hap.AudioStreamingCodecType.OPUS: {
-        rtpmap = `OPUS/48000/${channels}`;
-        fmtp = `minptime=10;useinbandfec=1;sprop-maxcapturerate=${sampleRateHz}`;
-        break;
-      }
-      case 'PCMA':
-      case this.hap.AudioStreamingCodecType.PCMA:
-        rtpmap = `PCMA/8000/${channels}`;
-        break;
-      case 'PCMU':
-      case this.hap.AudioStreamingCodecType.PCMU:
-        rtpmap = `PCMU/8000/${channels}`;
-        break;
-      default:
-        this.log(`Talkback codec not supported for SDP: ${audio.codec}`);
-        return undefined;
-    }
-
-    const ipVersion = session.addressVersion === 'ipv6' ? 'IP6' : 'IP4';
-    const ipAddress = session.addressVersion === 'ipv6' ? '::' : '0.0.0.0';
-
-    const lines = [
-      'v=0',
-      `o=- 0 0 IN ${ipVersion} ${ipAddress}`,
-      's=HomeKit Talkback',
-      `c=IN ${ipVersion} ${ipAddress}`,
-      't=0 0',
-      `m=audio ${session.localAudioPort} RTP/SAVP ${audio.pt}`,
-      `a=rtpmap:${audio.pt} ${rtpmap}`,
-      fmtp ? `a=fmtp:${audio.pt} ${fmtp}` : '',
-      'a=rtcp-mux',
-      `a=crypto:1 ${suiteName} inline:${toSrtpParams(session.audioSRTP)}`,
-    ].filter(Boolean);
-
-    return `${lines.join('\r\n')}\r\n`;
-  }
-
-  private startTalkback(
-    sessionId: string,
-    request: Extract<StreamingRequest, { type: 'start' }>,
-    active: ActiveStreamSession,
-  ): void {
-    if (!active.audioPort || !active.audioSRTP || !active.localAudioPort || !active.liveviewUrl) {
-      return;
-    }
-
-    const sdp = this.buildTalkbackSdp(request.audio, active);
-    if (!sdp) {
-      this.logError(`Talkback SDP generation failed for session ${sessionId}`);
-      return;
-    }
-
-    const audioArgs = this.buildAudioEncoderArgs(request.audio);
-    const ffmpegArgs = [
-      '-hide_banner',
-      '-loglevel', 'info',
-      '-protocol_whitelist', 'pipe,udp,rtp,srtp,crypto,file',
-      '-f', 'sdp',
-      '-i', 'pipe:0',
-      '-vn',
-      ...audioArgs,
-      '-rtsp_transport', this.streamingConfig.rtspTransport,
-      '-f', 'rtsp',
-      active.liveviewUrl,
-    ];
-
-    this.log(`Starting talkback audio for session ${sessionId}`);
-    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
-      stdio: ['pipe', 'ignore', 'pipe'],
+    const output = (port: number, ssrc: number, material: Buffer, pt: number, rtcpInterval = 0.5) => ({
+      address: active.address, addressVersion: active.addressVersion, port, ssrc, payloadType: pt,
+      suite: 'AES_CM_128_HMAC_SHA1_80' as const, key: material.subarray(0, 16), salt: material.subarray(16),
+      mtu: request.video.mtu, fps: effectiveOutputFps(this.streamingConfig.video.outputQuality, request.video.fps), rtcpInterval,
     });
-    const stderrState: FfmpegStderrState = {};
-    talkback.stdin?.on('error', () => { if (active.talkback === talkback && this.ownsSession(sessionId, active)) void this.stopStream(sessionId, active.owner); });
-    active.talkback = talkback;
-    active.owner?.children.add(talkback);
-    talkback.once('close', () => active.owner?.children.delete(talkback));
-    talkback.stdin?.end(sdp);
-
-    talkback.stderr.on('data', (data) => {
-      this.handleFfmpegStderr(sessionId, stderrState, data, 'FFmpeg-talkback');
-    });
-
-    talkback.on('error', (error) => {
-      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
-      this.logError(`Talkback FFmpeg error for session ${sessionId}: ${error.message}`);
-    });
-
-    talkback.on('exit', (code, signal) => {
-      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-talkback');
-      if (code !== 0) {
-        this.log(`Talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
-      }
-    });
-  }
-
-  private startImmisTalkback(
-    sessionId: string,
-    request: Extract<StreamingRequest, { type: 'start' }>,
-    active: ActiveStreamSession,
-  ): void {
-    if (!active.audioPort || !active.audioSRTP || !active.localAudioPort || !active.immisProxy) {
-      return;
-    }
-
-    const sdp = this.buildTalkbackSdp(request.audio, active);
-    if (!sdp) {
-      this.logError(`IMMIS talkback SDP generation failed for session ${sessionId}`);
-      return;
-    }
-
-    const latmArgs = this.buildLatmEncoderArgs(request.audio);
-    const ffmpegArgs = [
-      '-hide_banner',
-      '-loglevel', 'info',
-      '-protocol_whitelist', 'pipe,udp,rtp,srtp,crypto,file',
-      '-f', 'sdp',
-      '-i', 'pipe:0',
-      '-vn',
-      ...latmArgs,
-      '-f', 'latm',
-      '-muxdelay', '0',
-      '-muxpreload', '0',
-      'pipe:1',
-    ];
-
-    this.log(`Starting IMMIS talkback (LATM uplink) for session ${sessionId}`);
-    const talkback = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const stderrState: FfmpegStderrState = {};
-    talkback.stdin?.on('error', () => { if (active.talkback === talkback && this.ownsSession(sessionId, active)) void this.stopStream(sessionId, active.owner); });
-    active.talkback = talkback;
-    active.owner?.children.add(talkback);
-    talkback.once('close', () => active.owner?.children.delete(talkback));
-    talkback.stdin?.end(sdp);
-
-    // Attach FFmpeg stdout (LATM frames) to immis proxy
-    try {
-      active.immisProxy.attachAudioInput(talkback.stdout!);
-      active.immisProxy.startAudio();
-    } catch (error) {
-      this.logError(`Failed to attach IMMIS audio input: ${error}`);
-    }
-
-    talkback.stderr.on('data', (data) => {
-      this.handleFfmpegStderr(sessionId, stderrState, data, 'FFmpeg-immis-talkback');
-    });
-
-    talkback.on('error', (error) => {
-      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
-      this.logError(`IMMIS talkback FFmpeg error for session ${sessionId}: ${error.message}`);
-    });
-
-    talkback.on('exit', (code, signal) => {
-      this.flushFfmpegStderr(sessionId, stderrState, 'FFmpeg-immis-talkback');
-      if (code !== 0) {
-        this.log(`IMMIS talkback FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
-      }
-      try {
-        active.immisProxy?.stopAudio();
-      } catch (err) {
-        this.logError(`IMMIS stopAudio error for session ${sessionId}: ${err}`);
-      }
-    });
-  }
-
-  private buildLatmEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; }): string[] {
-    const channels = audio.channel || 1;
-    const sampleRateKhz = this.getAudioSampleRate(audio.sample_rate);
-    const bitrate = this.getAudioBitrate(audio.max_bit_rate);
-    const sampleRateHz = sampleRateKhz * 1000;
-    return [
-      '-acodec', 'aac',
-      '-ar', `${sampleRateHz}`,
-      '-ac', `${channels}`,
-      '-b:a', `${bitrate}k`,
-    ];
-  }
-
-  private startFfmpegStream(
-    sessionId: string,
-    liveviewUrl: string,
-    request: Extract<StreamingRequest, { type: 'start' }>,
-    active: ActiveStreamSession,
-    callback: StreamRequestCallback,
-    useSoftwareFallback = false,
-  ): void {
-    if (active.owner && !this.ownsSession(sessionId, active)) return;
-    const videoEncoder = useSoftwareFallback ? SOFTWARE_VIDEO_ENCODER : this.resolveVideoEncoder();
-    const ffmpegArgs = this.buildFfmpegArgs(liveviewUrl, request, active, videoEncoder);
-    active.selectedVideoEncoder = videoEncoder;
-
-    this.log(`Starting stream ${sessionId} via FFmpeg using ${videoEncoder} with URL: ${redactStreamUrl(liveviewUrl)}`);
-    if (this.streamingConfig.ffmpegDebug) {
-      const safeArgs = redactFfmpegArgs(ffmpegArgs);
-      this.log(`FFmpeg args: ${safeArgs.join(' ')}`);
-    }
-
-    const ffmpeg = spawn(this.streamingConfig.ffmpegPath, ffmpegArgs);
-    ffmpeg.stdin.on('error', () => {
-      if (active.ffmpeg === ffmpeg && this.ownsSession(sessionId, active)) {
-        this.markStreamFailure(sessionId, active);
-        void this.stopStream(sessionId, active.owner);
-      }
-    });
-    active.ffmpeg = ffmpeg;
-    const stderrState: FfmpegStderrState = { inputVideoObserver: new InputVideoObserver() };
-    ffmpeg.once('close', () => {
-      // Retired/replaced children may report a final partial line; never adopt their metadata.
-      if (active.stopped || active.ffmpeg !== ffmpeg || (active.owner && !this.ownsSession(sessionId, active))) {
-        stderrState.inputVideoObserver = undefined;
-      }
-      this.flushFfmpegStderr(sessionId, stderrState);
-    });
-    active.owner?.children.add(ffmpeg);
-    ffmpeg.once('close', () => active.owner?.children.delete(ffmpeg));
-    if (liveviewUrl === 'pipe:0') active.immisProxy?.attachConsumer(ffmpeg.stdin);
-
-    ffmpeg.on('spawn', () => {
-      if (active.ffmpeg !== ffmpeg || active.stopped || (active.owner && !this.ownsSession(sessionId, active))) {
-        return;
-      }
-      if (!active.readyNotified) {
-        active.readyNotified = true;
-        if (active.owner) active.owner.phase = 'RUNNING';
-        this.log(`FFmpeg spawned for session ${sessionId}, signaling stream ready`);
-        callback();
-      }
-    });
-
-    ffmpeg.stderr.on('data', (data) => {
-      if (active.stopped || active.ffmpeg !== ffmpeg || (active.owner && !this.ownsSession(sessionId, active))) return;
-      this.handleFfmpegStderr(sessionId, stderrState, data);
-    });
-
-    ffmpeg.on('error', (error) => {
-      if (active.ffmpeg !== ffmpeg || active.stopped || (active.owner && !this.ownsSession(sessionId, active))) {
-        return;
-      }
-      this.flushFfmpegStderr(sessionId, stderrState);
-
-      recordSecurityBoundaryEvent('worker_failure');
-      this.logError(`FFmpeg failed to start for session ${sessionId} using ${videoEncoder}: ${error.message}`);
-
-      if (!ffmpeg.pid && !useSoftwareFallback && videoEncoder !== SOFTWARE_VIDEO_ENCODER && !active.fallbackVideoEncoderTried) {
-        active.fallbackVideoEncoderTried = true;
-        this.log(`Retrying stream ${sessionId} with software encoder ${SOFTWARE_VIDEO_ENCODER}`);
-        this.startFfmpegStream(sessionId, liveviewUrl, request, active, callback, true);
-        return;
-      }
-
-      this.markStreamFailure(sessionId, active);
-      if (!active.readyNotified) {
-        callback(error);
-      }
-      void this.stopStream(sessionId, active.owner);
-    });
-
-    ffmpeg.on('close', (code, signal) => {
-      if (active.ffmpeg !== ffmpeg || active.stopped || (active.owner && !this.ownsSession(sessionId, active))) {
-        return;
-      }
-      this.flushFfmpegStderr(sessionId, stderrState);
-
-      if (
-        (code !== 0 || signal) &&
-        !useSoftwareFallback &&
-        videoEncoder !== SOFTWARE_VIDEO_ENCODER &&
-        !active.fallbackVideoEncoderTried &&
-        !active.stopped
-      ) {
-        active.fallbackVideoEncoderTried = true;
-        this.log(
-          `FFmpeg exited for session ${sessionId} using ${videoEncoder} (code=${code}, signal=${signal}); ` +
-          `retrying with ${SOFTWARE_VIDEO_ENCODER}`,
-        );
-        this.startFfmpegStream(sessionId, liveviewUrl, request, active, callback, true);
-        return;
-      }
-
-      if (!active.stopped && (code !== 0 || signal)) {
-        this.markStreamFailure(sessionId, active);
-        this.logError(`FFmpeg exited for session ${sessionId} (code=${code}, signal=${signal})`);
-      }
-      void this.stopStream(sessionId, active.owner);
-    });
-  }
-
-  private handleFfmpegStderr(
-    sessionId: string,
-    state: FfmpegStderrState,
-    data: Buffer,
-    label = 'FFmpeg',
-  ): void {
-    const chunk = data.toString('utf8');
-    let lineStart = 0;
-
-    for (let index = 0; index < chunk.length; index++) {
-      const char = chunk.charCodeAt(index);
-      if (char !== 10 && char !== 13) {
-        continue;
-      }
-
-      this.appendFfmpegStderrSegment(state, chunk.slice(lineStart, index));
-      this.flushFfmpegStderrLine(sessionId, state, label);
-
-      if (char === 13 && chunk.charCodeAt(index + 1) === 10) {
-        index++;
-      }
-      lineStart = index + 1;
-    }
-
-    this.appendFfmpegStderrSegment(state, chunk.slice(lineStart));
-  }
-
-  private flushFfmpegStderr(sessionId: string, state: FfmpegStderrState, label = 'FFmpeg'): void {
-    this.flushFfmpegStderrLine(sessionId, state, label);
-    const suppressed = state.diagnosticBudget?.takeSuppressed() ?? 0;
-    if (suppressed) this.log(`${label}: suppressed ${suppressed} diagnostic lines`);
-  }
-
-  private appendFfmpegStderrSegment(state: FfmpegStderrState, segment: string): void {
-    if (!segment || state.ffmpegStderrBufferTruncated) {
-      return;
-    }
-
-    const currentBuffer = state.ffmpegStderrBuffer ?? '';
-    if (currentBuffer.length + segment.length <= MAX_FFMPEG_STDERR_BUFFER_CHARS) {
-      state.ffmpegStderrBuffer = `${currentBuffer}${segment}`;
-      return;
-    }
-
-    state.ffmpegStderrBuffer = '';
-    state.ffmpegStderrBufferTruncated = true;
-  }
-
-  private flushFfmpegStderrLine(sessionId: string, state: FfmpegStderrState, label: string): void {
-    if (state.ffmpegStderrBufferTruncated) {
-      this.logRedactedFfmpegLine(state, `<stderr line omitted because it exceeded ${MAX_FFMPEG_STDERR_BUFFER_CHARS} characters>`, label);
-      state.ffmpegStderrBuffer = '';
-      state.ffmpegStderrBufferTruncated = false;
-      return;
-    }
-
-    if (!state.ffmpegStderrBuffer) {
-      return;
-    }
-
-    const observation = state.inputVideoObserver?.observe(state.ffmpegStderrBuffer);
-    if (observation && !this.inputVideoObserved) {
-      this.inputVideoObserved = true;
-      try { this.onInputObservation?.(observation); }
-      catch { this.logError('Input video observation could not be persisted'); }
-    }
-    this.logRedactedFfmpegLine(state, state.ffmpegStderrBuffer, label);
-    state.ffmpegStderrBuffer = '';
-  }
-
-  private logRedactedFfmpegLine(state: FfmpegStderrState, line: string, label = 'FFmpeg'): void {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    const error = /\b(error|failed|failure|invalid|unable|cannot|could not|denied)\b/i.test(trimmed);
-    if (!error && !this.streamingConfig.ffmpegDebug) return;
-    const budget = state.diagnosticBudget ??= new StreamDiagnosticBudget();
-    if (!budget.admit(error)) return;
-    const safe = `${label}: ${redactDiagnosticText(redactFfmpegOutput(trimmed)).slice(0, 1024)}`;
-    if (error) this.logError(safe); else this.log(safe);
-  }
-
-  private resolveVideoEncoder(): VideoEncoderPreference {
-    const configuredEncoder = this.streamingConfig.video.encoder;
-    if (configuredEncoder && configuredEncoder !== 'auto') {
-      return configuredEncoder;
-    }
-
-    // Fallback heuristic if probe did not run (should not happen in normal operation)
-    return SOFTWARE_VIDEO_ENCODER;
-  }
-
-  private buildVideoEncoderArgs(
-    videoEncoder: VideoEncoderPreference,
-    profileName: string,
-    levelName: string,
-  ): string[] {
-    switch (videoEncoder) {
-      case 'h264_videotoolbox':
-        return [
-          '-vcodec', videoEncoder,
-          '-pix_fmt', 'yuv420p',
-          '-profile:v', profileName,
-          '-level:v', levelName,
-          '-realtime', 'true',
-        ];
-      case 'h264_vaapi':
-        return [
-          '-vcodec', videoEncoder,
-          '-profile:v', profileName,
-          '-level:v', levelName,
-        ];
-      case 'h264_v4l2m2m':
-        return [
-          '-vcodec', videoEncoder,
-          '-pix_fmt', 'yuv420p',
-        ];
-      case 'h264_qsv':
-      case 'h264_nvenc':
-        return [
-          '-vcodec', videoEncoder,
-          '-pix_fmt', 'yuv420p',
-          '-profile:v', profileName,
-          '-level:v', levelName,
-        ];
-      case 'auto':
-      case 'libx264':
-      default:
-        return [
-          '-vcodec', SOFTWARE_VIDEO_ENCODER,
-          '-pix_fmt', 'yuv420p',
-          '-profile:v', profileName,
-          '-level:v', levelName,
-          '-preset', this.streamingConfig.video.softwarePreset ?? 'veryfast',
-          '-tune', 'zerolatency',
-        ];
-    }
-  }
-
-  private buildFfmpegArgs(
-    liveviewUrl: string,
-    request: Extract<StreamingRequest, { type: 'start' }>,
-    session: ActiveStreamSession,
-    videoEncoder: VideoEncoderPreference = this.resolveVideoEncoder(),
-  ): string[] {
-    const video = request.video;
-    const suiteName = this.getSrtpSuiteName(session.videoCryptoSuite);
-    const useSrtp = Boolean(suiteName);
-    const videoParams = suiteName ? toSrtpParams(session.videoSRTP) : undefined;
-    const bitrate = this.getVideoBitrate(video.max_bit_rate);
-
-    const profileName = this.getH264ProfileName(video.profile);
-    const levelName = this.getH264LevelName(video.level);
-    const videoEncoderArgs = this.buildVideoEncoderArgs(videoEncoder, profileName, levelName);
-    // Preserve square doorbell and other source aspect ratios within the exact
-    // HomeKit-negotiated frame. Hardware upload follows CPU scale/padding.
-    const videoFilter = [
-      // Select existing frames before scaling; unlike fps, select never creates
-      // duplicates for slower sources. Output -r handles any required upconversion.
-      `select='isnan(prev_selected_t)+gte(t-prev_selected_t,1/${effectiveOutputFps(this.streamingConfig.video.outputQuality, video.fps)}-0.000001)'`,
-      `scale=${video.width}:${video.height}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
-      `pad=${video.width}:${video.height}:(ow-iw)/2:(oh-ih)/2`,
-      'setsar=1',
-      ...(videoEncoder === 'h264_vaapi' ? ['format=nv12', 'hwupload'] : []),
-    ].join(',');
-
-    const args = [
-      '-hide_banner',
-      '-loglevel', 'info',
-    ];
-
-    // Configure input based on URL type
-    if (liveviewUrl === 'pipe:0') {
-      args.push(
-        // Bound live MPEG-TS analysis to one second of media timestamps; sparse
-        // multi-audio sources otherwise wait for FFmpeg's five-second default.
-        '-analyzeduration', '1000000',
-        // Retain demuxer probe packets: dropping the first IDR can leave
-        // short IMMIS sessions with audio but no decodable video.
-        '-flags', 'low_delay',
-        '-f', 'mpegts',
-        '-i', liveviewUrl,
-      );
-    } else {
-      args.push(
-        '-fflags', 'nobuffer',
-        '-flags', 'low_delay',
-        '-rtsp_transport', this.streamingConfig.rtspTransport,
-        '-i', liveviewUrl,
-      );
-    }
-
-    args.push(
-      '-map', '0:v:0',
-      ...videoEncoderArgs,
-      '-vf', videoFilter,
-      '-r', `${effectiveOutputFps(this.streamingConfig.video.outputQuality, video.fps)}`,
-      '-b:v', `${bitrate}k`,
-      '-maxrate', `${bitrate}k`,
-      '-bufsize', `${bitrate}k`,
-      '-payload_type', `${video.pt}`,
-      '-ssrc', `${formatRtpSsrc(session.videoSSRC, this.streamingConfig.rtpSsrcMode)}`,
-      '-f', 'rtp',
-    );
-
-    if (suiteName && videoParams) {
-      args.push('-srtp_out_suite', suiteName, '-srtp_out_params', videoParams);
-    }
-
-    args.push(buildRtpUrl(
-      session.address,
-      session.videoPort,
-      session.localVideoPort,
-      session.localVideoRtcpPort ?? session.localVideoPort,
-      video.mtu,
-      useSrtp,
-    ));
-
-    if (this.streamingConfig.audio.enabled && session.audioPort && session.audioSSRC && request.audio) {
+    const options: MediaSessionOptions = { workerPath, video: {
+      output: output(active.videoPort, active.videoSSRC, active.videoSRTP, request.video.pt, request.video.rtcp_interval),
+      localPort: active.localVideoPort, width: request.video.width, height: request.video.height,
+      bitrate: this.getVideoBitrate(request.video.max_bit_rate) * 1000, maxFrames: 9000,
+      profile: request.video.profile as 0 | 1 | 2, level: request.video.level as 0 | 1 | 2,
+      softwarePreset: this.streamingConfig.video.softwarePreset,
+    }, onSourceInfo: info => {
+      if (!this.ownsSession(active.sessionId, active)) return;
+      const observation = { width: info.width, height: info.height,
+        ...(info.fpsNumerator ? { fps: info.fpsNumerator / info.fpsDenominator } : {}) };
+      this.onInputObservation?.(observation);
+      if (!this.inputVideoObserved) { this.inputVideoObserved = true; this.logNegotiation(`Input video: ${info.width}x${info.height}`); }
+    } };
+    if (this.streamingConfig.audio.enabled && request.audio) {
       const audio = request.audio;
-      const audioSuiteName = this.getSrtpSuiteName(session.audioCryptoSuite ?? this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80);
-      const audioUseSrtp = Boolean(audioSuiteName);
-      const audioParams = audioSuiteName && session.audioSRTP ? toSrtpParams(session.audioSRTP) : undefined;
-      const audioArgs = this.buildAudioEncoderArgs(audio);
-
-      args.push(
-        '-map', '0:a:0?',
-        ...audioArgs,
-        '-payload_type', `${audio.pt}`,
-        '-ssrc', `${formatRtpSsrc(session.audioSSRC, this.streamingConfig.rtpSsrcMode)}`,
-        '-f', 'rtp',
-      );
-
-      if (audioSuiteName && audioParams) {
-        args.push('-srtp_out_suite', audioSuiteName, '-srtp_out_params', audioParams);
+      if (!active.audioPort || !active.localAudioPort || !active.audioSSRC || active.audioSRTP?.length !== 30 ||
+          active.audioCryptoSuite !== this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80 || (audio.channel && audio.channel !== 1)) {
+        throw new Error('Unsupported audio negotiation');
       }
-
-      args.push(buildRtpUrl(
-        session.address,
-        session.audioPort,
-        session.localAudioPort,
-        session.localAudioRtcpPort ?? session.localAudioPort,
-        video.mtu,
-        audioUseSrtp,
-      ));
+      const selected = typeof audio.codec === 'string' ? audio.codec.toUpperCase() : audio.codec;
+      const codec = selected === 'OPUS' || selected === this.hap.AudioStreamingCodecType.OPUS ? 'opus'
+        : selected === 'PCMA' || selected === this.hap.AudioStreamingCodecType.PCMA ? 'pcma'
+          : selected === 'PCMU' || selected === this.hap.AudioStreamingCodecType.PCMU ? 'pcmu' : undefined;
+      if (!codec) throw new Error('Unsupported selected audio codec');
+      const rate = codec === 'opus' ? this.getAudioSampleRate(audio.sample_rate) * 1000 : 8000;
+      options.audio = { output: output(active.audioPort, active.audioSSRC, active.audioSRTP, audio.pt, audio.rtcp_interval),
+        localPort: active.localAudioPort, codec, rate: rate as 8000 | 16000 | 24000,
+        bitrate: this.getAudioBitrate(audio.max_bit_rate) * 1000,
+        ...(codec === 'opus' ? { packetTime: (audio.packet_time ?? 20) as 10 | 20 | 40 | 60 } : {}) };
     }
-
-    return args;
-  }
-
-  private buildAudioEncoderArgs(audio: { codec: number | string; channel: number; sample_rate: number; max_bit_rate: number; packet_time?: number; }): string[] {
-    const codec = typeof audio.codec === 'string'
-      ? audio.codec.toUpperCase()
-      : audio.codec;
-    const channels = audio.channel || 1;
-    const sampleRate = this.getAudioSampleRate(audio.sample_rate);
-    const bitrate = this.getAudioBitrate(audio.max_bit_rate);
-
-    switch (codec) {
-      case 'AAC-ELD':
-      case this.hap.AudioStreamingCodecType.AAC_ELD:
-        if (!this.streamingConfig.audio.aacEldEncoder) throw new Error('AAC-ELD encoder is unavailable');
-        return [
-          '-acodec', this.streamingConfig.audio.aacEldEncoder,
-          '-profile:a', 'aac_eld',
-          '-flags:a', '+global_header',
-          // Flush each AAC access unit instead of batching until the RTP MTU.
-          '-max_delay', '0',
-          '-ar', `${sampleRate}k`,
-          '-ac', `${channels}`,
-          '-b:a', `${bitrate}k`,
-        ];
-      case 'PCMA':
-      case this.hap.AudioStreamingCodecType.PCMA:
-        return [
-          '-acodec', 'pcm_alaw',
-          '-ar', '8k',
-          '-ac', `${channels}`,
-          '-b:a', `${bitrate}k`,
-        ];
-      case 'PCMU':
-      case this.hap.AudioStreamingCodecType.PCMU:
-        return [
-          '-acodec', 'pcm_mulaw',
-          '-ar', '8k',
-          '-ac', `${channels}`,
-          '-b:a', `${bitrate}k`,
-        ];
-      case 'OPUS':
-      case this.hap.AudioStreamingCodecType.OPUS: {
-        const duration = audio.packet_time ?? 20;
-        if (![10, 20, 40, 60].includes(duration)) throw new Error('Unsupported Opus packet duration');
-        return [
-          '-acodec', 'libopus',
-          '-frame_duration', `${duration}`,
-          ...(this.streamingConfig.video.softwarePreset === 'ultrafast' ? ['-compression_level', '3'] : []),
-          '-ar', `${sampleRate * 1000}`,
-          '-ac', `${channels}`,
-          '-b:a', `${bitrate}k`,
-        ];
-      }
-      default:
-        throw new Error('Unsupported selected audio codec');
-    }
+    return options;
   }
 
   private getAudioSampleRate(sampleRate: number): number {
@@ -1666,36 +952,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     return requested || 3000;
   }
 
-  private getH264ProfileName(profile: number): string {
-    if (profile === this.hap.H264Profile.MAIN) {
-      return 'main';
-    }
-    if (profile === this.hap.H264Profile.HIGH) {
-      return 'high';
-    }
-    return 'baseline';
-  }
 
-  private getH264LevelName(level: number): string {
-    if (level === this.hap.H264Level.LEVEL3_2) {
-      return '3.2';
-    }
-    if (level === this.hap.H264Level.LEVEL4_0) {
-      return '4.0';
-    }
-    return '3.1';
-  }
-
-  private getSrtpSuiteName(suite: number): string | undefined {
-    switch (suite) {
-      case this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80:
-        return 'AES_CM_128_HMAC_SHA1_80';
-      case this.hap.SRTPCryptoSuites.AES_CM_256_HMAC_SHA1_80:
-        return 'AES_CM_256_HMAC_SHA1_80';
-      default:
-        return undefined;
-    }
-  }
 }
 
 /**
@@ -1716,24 +973,12 @@ export function createCameraControllerOptions(
   const audioEnabled = streamingEnabled && resolved.audio.enabled;
 
   const audioCodecs = audioEnabled ? [
-    resolved.audio.codec === 'aac-eld' && resolved.audio.aacEldEncoder
-      ? { type: hap.AudioStreamingCodecType.AAC_ELD, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] }
-      : resolved.audio.codec === 'pcma'
-        ? { type: hap.AudioStreamingCodecType.PCMA, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
-        : resolved.audio.codec === 'pcmu'
-          ? { type: hap.AudioStreamingCodecType.PCMU, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
-          : { type: hap.AudioStreamingCodecType.OPUS, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] },
+    resolved.audio.codec === 'pcma'
+      ? { type: hap.AudioStreamingCodecType.PCMA, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
+      : resolved.audio.codec === 'pcmu'
+        ? { type: hap.AudioStreamingCodecType.PCMU, samplerate: hap.AudioStreamingSamplerate.KHZ_8 }
+        : { type: hap.AudioStreamingCodecType.OPUS, samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24] },
   ] : [];
-
-  // Offer both HomeKit codecs only when the AAC-ELD encoder passed its RTP
-  // probe. Keep the configured preference first, without substituting payloads.
-  if (audioEnabled && resolved.audio.aacEldEncoder &&
-      (resolved.audio.codec === 'aac-eld' || resolved.audio.codec === 'opus')) {
-    audioCodecs.push({
-      type: resolved.audio.codec === 'aac-eld' ? hap.AudioStreamingCodecType.OPUS : hap.AudioStreamingCodecType.AAC_ELD,
-      samplerate: [hap.AudioStreamingSamplerate.KHZ_16, hap.AudioStreamingSamplerate.KHZ_24],
-    });
-  }
 
   return {
     cameraStreamCount: streamingEnabled ? resolved.maxStreams : 0,
@@ -1748,7 +993,7 @@ export function createCameraControllerOptions(
         },
       },
       audio: audioEnabled ? {
-        twoWayAudio: resolved.audio.twoWay,
+        twoWayAudio: false,
         codecs: audioCodecs,
       } : undefined,
     },

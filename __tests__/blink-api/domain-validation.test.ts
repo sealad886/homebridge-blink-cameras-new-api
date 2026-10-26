@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers';
 import { validateHomescreen } from '../../src/blink-api/domain-validation';
 import { BlinkCamerasPlatform } from '../../src/platform';
 import { BlinkApi } from '../../src/blink-api';
@@ -29,7 +30,7 @@ describe('canonical homescreen names', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => ({ login, getHomescreen }));
     const api = createApi();
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger,
-      { platform: 'BlinkCameras', persistAuth: false, enableStreaming: false, videoEncoder: 'libx264' }, api as unknown as API);
+      { platform: 'BlinkCameras', persistAuth: false, enableStreaming: false }, api as unknown as API);
     try {
       api.emit('didFinishLaunching');
       await new Promise(resolve => setImmediate(resolve));

@@ -1,6 +1,6 @@
 # Configuration reference
 
-Last reviewed: 23 October 2026.
+Last reviewed: 26 October 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -34,8 +34,6 @@ Add a platform entry to your Homebridge `config.json`:
       "motionTimeout": 30,
       "enableMotionPolling": true,
       "enableStreaming": true,
-      "ffmpegPath": "ffmpeg",
-      "videoEncoder": "auto",
       "enableAudio": true
     }
   ]
@@ -61,25 +59,23 @@ Add a platform entry to your Homebridge `config.json`:
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `enableMotionPolling` | No | `true` | Poll for motion events |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
-| `enableStreaming` | No | `true` | Enable HomeKit live streaming (FFmpeg required only for streaming) |
-| `ffmpegPath` | No | `ffmpeg` | Operator-managed executable path; required capabilities are described in [streaming requirements](streaming.md#ffmpeg-requirements) |
-| `ffmpegDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
-| `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
+| `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
+| `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
 | `enableAudio` | No | `true` | Enable audio streaming from camera |
-| `twoWayAudio` | No | `false` (forced off) | Talkback is currently disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
-| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
+| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `outputQuality` | No | `auto` | System-wide output profile; see [quality profiles](streaming.md#input-and-output-quality) |
 | `softwareEncodingPreset` | No | `veryfast` | Balanced or optional `ultrafast` software encoding |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
-| `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
-| `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging |
+| `debugStreamPath` | No | - | Save raw IMMIS MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging; RTSPS recording is not implemented |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` requests fresh snapshots, subject to capture coalescing, failure backoff and provider busy fallback |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
 | `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout, exposeTemperature }` (legacy `deviceSettings` is still accepted for motion timeout; see [input quality](streaming.md#input-and-output-quality)) |
+
+For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration) before restarting; retired CLI and AAC-ELD settings are rejected.
 
 Use **Excluded Networks** in the plugin settings to select systems this instance
 should not expose. Save and restart the Blink child bridge. Clearing a selection

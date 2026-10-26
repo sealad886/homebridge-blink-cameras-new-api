@@ -90,8 +90,7 @@ Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's 
 - Homebridge 1.11.1 or later
 - Node.js 20, 22 or 24 (see [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json))
 - A Blink account
-- For live streaming, an operator-managed FFmpeg executable with compatible
-  video/audio encoders; see [streaming requirements](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#ffmpeg-requirements).
+- For live streaming, the matching private codec worker supplied in the package; see [streaming requirements](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#packaged-codec-requirements).
 
 ## Installation
 
@@ -158,7 +157,7 @@ set a device-name override in the plugin for a consistent prefix throughout.
 
 ## Live streaming and quality
 
-Live video and audio require FFmpeg. Output quality is system-wide; input quality
+Live video and audio use the packaged private codec worker. Output quality is system-wide; input quality
 is per camera. The default preserves automatic selection. Optional 720p/15 and
 640×360/15 profiles reduce encoding work; 1080p/30 increases it. Smoothness depends
 on the installed host and source; synthetic tests do not establish playback.
@@ -170,8 +169,8 @@ See [streaming and quality](https://github.com/sealad886/homebridge-blink-camera
 
 Talkback remains disabled. See the [talkback guard](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#two-way-talk-status).
 
-Full RTSP destination enforcement and secret-free FFmpeg execution remain open
-security work. The [stable 0.10.0 residual-risk decision](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
+The next beta remains blocked until private-worker secret handling and owned RTSP
+destination enforcement are verified against its release artifacts. The [stable 0.10.0 residual-risk decision](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
 accepts these risks for that release only; it does not mark them fixed.
 
 ## Troubleshooting

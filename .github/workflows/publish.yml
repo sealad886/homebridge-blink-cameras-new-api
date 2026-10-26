@@ -35,6 +35,16 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-candidate-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-candidates
+          merge-multiple: true
+      - name: Stage all five workers and complete corresponding source
+        run: python native/dependencies/package.py --root "$GITHUB_WORKSPACE" --artifacts "${{ runner.temp }}/native-candidates" --source-sha "$GITHUB_SHA"
       - run: npm ci
       - run: npm run build
       - name: Build and verify the immutable npm artifact
@@ -51,9 +61,67 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
-  publish:
+  qualify:
+    name: Installed npm native qualification (${{ matrix.target }})
     if: github.ref == 'refs/heads/main'
     needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: linux-x64
+          - runner: ubuntu-22.04-arm
+            target: linux-arm64
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: windows-2022
+            target: win32-x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-package-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-artifact
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-validation-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-validation
+      - name: Install exact tar and prove actual codec and independent SRTP receiver
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/release-artifact
+          VALIDATION_DIR: ${{ runner.temp }}/native-validation
+          QUALIFICATION_RECEIPT: ${{ runner.temp }}/${{ matrix.target }}.json
+        run: >-
+          node .github/scripts/native-qualification.mjs run
+          --artifact-directory "$ARTIFACT_DIR" --validation "$VALIDATION_DIR"
+          --source-root "$GITHUB_WORKSPACE" --source-sha "$GITHUB_SHA"
+          --receipt "$QUALIFICATION_RECEIPT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-qualification-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [package, qualify]
     runs-on: ubuntu-24.04
     environment: npm-release
     permissions:
@@ -74,6 +142,19 @@ jobs:
         with:
           name: npm-package-${{ github.run_id }}
           path: ${{ runner.temp }}/release-artifact
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-qualification-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-qualifications
+          merge-multiple: true
+      - name: Bind all five target proofs to the publication artifact
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/release-artifact
+          QUALIFICATIONS_DIR: ${{ runner.temp }}/native-qualifications
+        run: >-
+          node .github/scripts/native-qualification.mjs aggregate
+          --artifact-directory "$ARTIFACT_DIR" --qualifications "$QUALIFICATIONS_DIR"
+          --source-sha "$GITHUB_SHA"
       - name: Publish and reconcile release records
         env:
           GH_TOKEN: ${{ github.token }}
