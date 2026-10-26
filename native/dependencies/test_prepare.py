@@ -126,6 +126,53 @@ class DownloadTests(unittest.TestCase):
 
 
 class BuildHostTests(unittest.TestCase):
+    def test_windows_libsrtp_uses_ucrt_format_checks_without_relaxing_warnings(self):
+        class Configured(Exception):
+            pass
+
+        for system in ('Windows', 'Linux'):
+            with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                downloads = root / 'downloads'
+                downloads.mkdir()
+                sources = [{'name': name, 'filename': name + '.tar.gz', 'root': name}
+                    for name in ('opus', 'libsrtp')]
+                for source in sources:
+                    with tarfile.open(downloads / source['filename'], 'w:gz') as archive:
+                        entry = tarfile.TarInfo(source['root'])
+                        entry.type = tarfile.DIRTYPE
+                        archive.addfile(entry)
+                commands = []
+
+                def capture(argv, *unused):
+                    command = [prepare.argument(value) for value in argv]
+                    if command[:2] == ['cmake', '-S']:
+                        commands.append(command)
+                        if Path(command[2]).name == 'libsrtp':
+                            raise Configured()
+
+                with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'MANIFEST', {'sources': sources}), \
+                        patch.object(prepare.platform, 'system', return_value=system), \
+                        patch.dict(prepare.os.environ, {'MSYSTEM': 'UCRT64'}), \
+                        patch.object(prepare.subprocess, 'check_output', return_value='x86_64-w64-mingw32\n'), \
+                        patch.object(prepare, 'run', side_effect=capture):
+                    with self.assertRaises(Configured):
+                        prepare.build(downloads, 1)
+                opus, libsrtp = commands
+                flags = [argument.split('=', 1)[1] for argument in libsrtp
+                    if argument.startswith('-DCMAKE_C_FLAGS=')]
+                if system == 'Windows':
+                    self.assertEqual(len(flags), 1)
+                    effective = prepare.shlex.split(flags[0])
+                    self.assertIn('-O2', effective)
+                    self.assertIn('-D__printf__=__gnu_printf__', effective)
+                    self.assertFalse(any(value.startswith('-Wno') for value in effective))
+                else:
+                    self.assertEqual(flags, [])
+                self.assertFalse(any('__printf__' in value for value in opus))
+                self.assertNotIn('-DENABLE_WARNINGS=OFF', libsrtp)
+                self.assertNotIn('-DENABLE_WARNINGS_AS_ERRORS=OFF', libsrtp)
+
     def test_windows_requires_ucrt64_before_any_build_side_effect(self):
         with patch.dict(prepare.os.environ, {'MSYSTEM': 'MSYS'}, clear=True):
             with self.assertRaisesRegex(ValueError, 'UCRT64'):

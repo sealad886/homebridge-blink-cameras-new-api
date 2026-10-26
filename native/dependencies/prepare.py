@@ -208,6 +208,10 @@ def build(downloads, jobs, disable_assembly=False):
     for name, extra in [('opus', ['-DOPUS_BUILD_TESTING=OFF', '-DOPUS_BUILD_PROGRAMS=OFF']),
                         ('libsrtp', ['-DLIBSRTP_TEST_APPS=OFF', '-DENABLE_OPENSSL=OFF',
                                      '-DENABLE_MBEDTLS=OFF', '-DENABLE_NSS=OFF'])]:
+        if name == 'libsrtp' and system == 'Windows':
+            # UCRT accepts C99 formats; libsrtp's explicit __printf__ attribute
+            # otherwise selects GCC's legacy MSVCRT checker. Keep format warnings.
+            extra.append(f'-DCMAKE_C_FLAGS={env["CFLAGS"]} -D__printf__=__gnu_printf__')
         source = next(s for s in MANIFEST['sources'] if s['name'] == name)
         output = work / name
         execute(['cmake', '-S', sources / source['root'], '-B', output,
