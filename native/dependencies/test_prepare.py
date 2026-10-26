@@ -79,8 +79,9 @@ class DownloadTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_signature_verification_converts_all_gpg_paths_only_for_windows(self):
+        temporary_directory = tempfile.TemporaryDirectory
         for system in ('Windows', 'Linux'):
-            with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(system=system), temporary_directory() as directory:
                 root = Path(directory)
                 downloads = root / 'downloads'
                 downloads.mkdir()
@@ -93,8 +94,13 @@ class DownloadTests(unittest.TestCase):
                     'ffmpeg_signature': {'url': 'https://example.test/signature',
                         'key_url': 'https://example.test/key', 'fingerprint': fingerprint}}
                 convert = lambda value: '/msys/' + Path(value).name
+
+                def isolated_keyring(**arguments):
+                    return temporary_directory(prefix=arguments['prefix'], dir=root)
+
                 with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'MANIFEST', manifest), \
                         patch.object(prepare, 'download'), patch.object(prepare.platform, 'system', return_value=system), \
+                        patch.object(prepare.tempfile, 'TemporaryDirectory', side_effect=isolated_keyring), \
                         patch.object(prepare, 'unix_path', side_effect=convert) as unix_path, \
                         patch.object(prepare, 'run') as imported, \
                         patch.object(prepare.subprocess, 'run', return_value=Mock(
@@ -109,10 +115,10 @@ class DownloadTests(unittest.TestCase):
                 self.assertIn('blink-gpg-', home)
                 self.assertFalse(Path(home).exists())
                 self.assertEqual(import_args[6:], ['--import', convert(downloads / 'ffmpeg-devel.asc')]
-                    if system == 'Windows' else ['--import', str(downloads / 'ffmpeg-devel.asc')])
+                    if system == 'Windows' else ['--import', (downloads / 'ffmpeg-devel.asc').as_posix()])
                 expected_files = [downloads / 'ffmpeg-9.0.2.tar.xz.asc', archive]
                 self.assertEqual(verify_args[6:], ['--status-fd', '1', '--verify',
-                    *(convert(value) if system == 'Windows' else str(value) for value in expected_files)])
+                    *(convert(value) if system == 'Windows' else value.as_posix() for value in expected_files)])
                 if system == 'Windows':
                     self.assertTrue(home.startswith('/msys/blink-gpg-'))
                 else:
