@@ -4,6 +4,7 @@ import gzip
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -99,7 +100,14 @@ class PackageTests(unittest.TestCase):
             worker = self.root / item['path']
             self.assertEqual(worker.read_bytes(), ('synthetic ' + target).encode())
             self.assertEqual(item['sha256'], hashlib.sha256(worker.read_bytes()).hexdigest())
-            self.assertTrue(worker.stat().st_mode & 0o111)
+            self.assertTrue(worker.is_file())
+            self.assertFalse(worker.is_symlink())
+            with tarfile.open(self.inputs / f'native-{target}.tar.gz') as archive:
+                executable = 'blink-codec-worker' + ('.exe' if target == 'win32-x64' else '')
+                self.assertEqual(archive.getmember(executable).mode, 0o755)
+            # Windows chmod only changes the read-only flag, not POSIX execute bits.
+            if os.name != 'nt':
+                self.assertTrue(worker.stat().st_mode & 0o111)
         source = self.root / 'native/corresponding-source.tar.gz'
         self.assertEqual(receipt['source_bundle_sha256'], hashlib.sha256(source.read_bytes()).hexdigest())
         self.assertEqual(receipt['source_sha'], SHA)
