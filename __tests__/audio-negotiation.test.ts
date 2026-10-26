@@ -1,11 +1,10 @@
 import * as realHap from 'hap-nodejs';
 import { Buffer } from 'node:buffer';
-import { HAP, PrepareStreamRequest, StreamingRequest } from 'homebridge';
+import { HAP } from 'homebridge';
 import { decode, decodeWithLists } from 'hap-nodejs/dist/lib/util/tlv';
 import { AccessoryInfo } from 'hap-nodejs/dist/lib/model/AccessoryInfo';
 import { IdentifierCache } from 'hap-nodejs/dist/lib/model/IdentifierCache';
-import { BlinkApi } from '../src/blink-api';
-import { BlinkCameraSource, BlinkCameraStreamingConfigInput, createCameraControllerOptions, refreshCameraAudioCapabilities } from '../src/accessories/camera-source';
+import { BlinkCameraStreamingConfigInput, createCameraControllerOptions, refreshCameraAudioCapabilities } from '../src/accessories/camera-source';
 
 const hap = realHap as unknown as HAP;
 const delegate = {
@@ -51,32 +50,31 @@ function advertisedConfiguration(services: readonly realHap.Service[]) {
 }
 
 describe('Real HAP audio negotiation', () => {
-  it('advertises Opus when requested AAC-ELD has no validated encoder', () => {
-    const camera = controller({ audio: { codec: 'aac-eld' } });
-    camera.constructServices();
-    expect(codecs(camera)).toEqual([{ type: 3, rates: [1, 2] }]);
+  it('rejects retired AAC-ELD preferences instead of substituting a codec', () => {
+    expect(() => controller({ audio: { codec: 'aac-eld' as never } })).toThrow(/audio codec/);
   });
 
   it.each([
-    ['aac-eld', [2, 3]],
-    ['opus', [3, 2]],
-  ] as const)('offers verified AAC-ELD and Opus, honoring %s preference', (preference, types) => {
-    const camera = controller({ audio: { codec: preference, aacEldEncoder: 'libfdk_aac' } });
+    ['opus', 3, [1, 2]],
+    ['pcma', 1, [0]],
+    ['pcmu', 0, [0]],
+  ] as const)('offers only the supported %s preference', (preference, type, rates) => {
+    const camera = controller({ audio: { codec: preference } });
     camera.constructServices();
-    expect(codecs(camera)).toEqual(types.map((type) => ({ type, rates: [1, 2] })));
+    expect(codecs(camera)).toEqual([{ type, rates }]);
   });
 
-  it('replaces restored AAC-ELD capabilities with effective Opus capabilities', () => {
-    const oldCamera = controller({ audio: { codec: 'aac-eld', aacEldEncoder: 'libfdk_aac' } });
+  it('replaces restored PCMA capabilities with effective Opus capabilities', () => {
+    const oldCamera = controller({ audio: { codec: 'pcma' } });
     const services = oldCamera.constructServices();
-    expect(codecs(oldCamera)[0].type).toBe(2);
+    expect(codecs(oldCamera)[0].type).toBe(1);
     const restored = controller({ audio: { codec: 'opus' } });
     restored.initWithServices(services);
     expect(codecs(restored)).toEqual([{ type: 3, rates: [1, 2] }]);
   });
 
   it('invalidates advertised configuration after restoring changed codecs without replacing service identity', () => {
-    const oldCamera = controller({ audio: { codec: 'aac-eld', aacEldEncoder: 'libfdk_aac' } });
+    const oldCamera = controller({ audio: { codec: 'pcma' } });
     const saved = oldCamera.constructServices();
     const services = streamServices(oldCamera);
     refreshCameraAudioCapabilities(hap, services);
@@ -115,11 +113,11 @@ describe('Real HAP audio negotiation', () => {
       expect(changed).not.toHaveBeenCalled();
       expect(info.getConfigVersion()).toBe(previousVersion + 1);
 
-      const aacAvailableAgain = controller({ audio: { codec: 'opus', aacEldEncoder: 'libfdk_aac' } });
-      aacAvailableAgain.initWithServices(saved);
-      refreshCameraAudioCapabilities(hap, streamServices(aacAvailableAgain));
-      expect(codecs(aacAvailableAgain).map((codec) => codec.type)).toEqual([3, 2]);
-      expect(info.checkForCurrentConfigurationNumberIncrement(advertisedConfiguration(streamServices(aacAvailableAgain)))).toBe(true);
+      const anotherProfile = controller({ audio: { codec: 'pcmu' } });
+      anotherProfile.initWithServices(saved);
+      refreshCameraAudioCapabilities(hap, streamServices(anotherProfile));
+      expect(codecs(anotherProfile).map((codec) => codec.type)).toEqual([0]);
+      expect(info.checkForCurrentConfigurationNumberIncrement(advertisedConfiguration(streamServices(anotherProfile)))).toBe(true);
       expect(info.getConfigVersion()).toBe(previousVersion + 2);
     } finally {
       save.mockRestore();
@@ -133,7 +131,7 @@ describe('Real HAP audio negotiation', () => {
     const saveInfo = jest.spyOn(info, 'save').mockImplementation(() => undefined);
     const saveIdentifiers = jest.spyOn(identifiers, 'save').mockImplementation(() => undefined);
     try {
-      const oldCamera = controller({ audio: { codec: 'aac-eld', aacEldEncoder: 'libfdk_aac' } });
+      const oldCamera = controller({ audio: { codec: 'pcma' } });
       const saved = oldCamera.constructServices();
       const accessory = new realHap.Accessory('Camera', realHap.uuid.generate('audio-config-camera'));
       Object.values(saved).forEach((service) => { if (service) accessory.addService(service); });
@@ -175,34 +173,4 @@ describe('Real HAP audio negotiation', () => {
     }
   });
 
-  it('rejects unavailable AAC-ELD before requesting a remote liveview and releases preparation', async () => {
-    const startCameraLiveview = jest.fn().mockRejectedValue(new Error('must not reach vendor'));
-    const source = new BlinkCameraSource({ startCameraLiveview } as unknown as BlinkApi,
-      hap, 1, 2, 'camera', 'test-serial', () => undefined, () => true, jest.fn(),
-      { audio: { codec: 'opus' } });
-    const sessionID = '00000000-0000-4000-8000-000000000001';
-    const endpoint = { port: 5000, srtpCryptoSuite: realHap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80,
-      srtp_key: Buffer.alloc(16), srtp_salt: Buffer.alloc(14) };
-    const prepare = { sessionID, targetAddress: '127.0.0.1', addressVersion: 'ipv4',
-      video: endpoint, audio: { ...endpoint, port: 5001 } } as PrepareStreamRequest;
-    const prepared = () => new Promise<void>((resolve, reject) => source.prepareStream(prepare,
-      (error) => error ? reject(error) : resolve()));
-    await prepared();
-    const request = { sessionID, type: 'start',
-      video: { width: 640, height: 360, fps: 15, max_bit_rate: 300, pt: 99, mtu: 1378,
-        profile: realHap.H264Profile.BASELINE, level: realHap.H264Level.LEVEL3_1 },
-      audio: { codec: realHap.AudioStreamingCodecType.AAC_ELD, channel: 1,
-        sample_rate: realHap.AudioStreamingSamplerate.KHZ_16, max_bit_rate: 24,
-        packet_time: 20, pt: 110 } } as StreamingRequest;
-    const callback = jest.fn();
-    const error = await new Promise<Error | undefined>((resolve) => source.handleStreamRequest(request,
-      (failure) => { callback(failure); resolve(failure); }));
-    expect(error).toBeInstanceOf(Error);
-    expect(startCameraLiveview).not.toHaveBeenCalled();
-    expect(callback).toHaveBeenCalledTimes(1);
-    // Reusing the same identifier proves failed negotiation retired its ownership.
-    await prepared();
-    await new Promise<void>((resolve) => source.handleStreamRequest({ sessionID, type: 'stop' } as StreamingRequest,
-      () => resolve()));
-  });
 });

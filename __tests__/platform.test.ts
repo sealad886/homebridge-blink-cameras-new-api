@@ -8,9 +8,6 @@ import { sampleBlinkConnection } from '../src/blink-api/connection-diagnostics';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
 import { Blink2FARequiredError, BlinkTokenRefreshError } from '../src/blink-api/auth';
 
-import { probeRtpSsrcMode, probeVideoEncoder, probeAacEldEncoder } from '../src/accessories/encoder-probe';
-
-jest.mock('../src/accessories/encoder-probe');
 jest.mock('../src/blink-api');
 jest.mock('../src/blink-api/connection-diagnostics', () => ({
   sampleBlinkConnection: jest.fn().mockResolvedValue({ dns: 'ok', addressCount: 1, connection: 'ok', elapsedMs: 1 }),
@@ -70,9 +67,6 @@ describe('BlinkCamerasPlatform', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    jest.mocked(probeRtpSsrcMode).mockResolvedValue('unsigned');
-    jest.mocked(probeVideoEncoder).mockResolvedValue({ selected: 'libx264', compiledEncoders: ['libx264'], testedEncoders: [] });
-    jest.mocked(probeAacEldEncoder).mockResolvedValue(false);
     jest.mocked(sampleBlinkConnection).mockResolvedValue({ dns: 'ok', addressCount: 1, connection: 'ok', elapsedMs: 1 });
     jest.useFakeTimers();
     hapApi = null;
@@ -191,7 +185,7 @@ describe('BlinkCamerasPlatform', () => {
     }, hapApi!)).toThrow('Invalid output quality profile');
   });
 
-  it.each(['signed', 'unsigned', undefined] as const)('probes the operator binary with a manual encoder and keeps discovery available (%s)', async mode => {
+  it('keeps native streaming configuration stable during discovery', async () => {
     hapApi = createApi() as unknown as MockAPI;
     const blinkApi = buildBlinkApi();
     blinkApi.getHomescreen.mockResolvedValue({
@@ -200,17 +194,32 @@ describe('BlinkCamerasPlatform', () => {
       doorbells: [], owls: [], sync_modules: [],
     });
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
-    jest.mocked(probeRtpSsrcMode).mockResolvedValue(mode);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
-      ...config, ffmpegPath: '/operator/ffmpeg', videoEncoder: 'libx264',
+      ...config, mediaDebug: true, audioCodec: 'pcma', softwareEncodingPreset: 'ultrafast',
     }, hapApi);
     await expect((platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices()).resolves.toBe(true);
-    expect(probeRtpSsrcMode).toHaveBeenCalledWith('/operator/ffmpeg');
-    expect(probeVideoEncoder).not.toHaveBeenCalled();
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
     expect(platform.accessories.length).toBeGreaterThan(0);
-    expect(platform.streamingConfig.enabled).toBe(mode !== undefined);
-    if (mode) expect(platform.streamingConfig.rtpSsrcMode).toBe(mode);
+    expect(platform.streamingConfig).toMatchObject({ enabled: true, mediaDebug: true,
+      audio: { codec: 'pcma' }, video: { softwarePreset: 'ultrafast' } });
+  });
+
+  it.each(['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'])(
+    'rejects retired %s before creating a vendor client', key => {
+      hapApi = createApi() as unknown as MockAPI;
+      (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());
+      expect(() => new BlinkCamerasPlatform(createLogger() as unknown as Logger, { ...config, [key]: false }, hapApi!))
+        .toThrow(/migration/);
+      expect(BlinkApi).not.toHaveBeenCalled();
+    });
+
+  it.each([{ audioCodec: 'aac-eld' }, { audioCodec: 'unknown' }, { mediaDebug: 'true' },
+    { softwareEncodingPreset: 'placebo' }])('rejects invalid native streaming configuration %j', setting => {
+    hapApi = createApi() as unknown as MockAPI;
+    (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());
+    expect(() => new BlinkCamerasPlatform(createLogger() as unknown as Logger,
+      { ...config, ...setting } as unknown as PlatformConfig, hapApi!)).toThrow();
+    expect(BlinkApi).not.toHaveBeenCalled();
   });
 
   it('registers new accessories from homescreen data', async () => {
@@ -263,7 +272,7 @@ describe('BlinkCamerasPlatform', () => {
       camera_id: 2, created_at: new Date(Date.now() + 1000).toISOString(),
     }] }) });
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
-      ...config, enableStreaming: false, videoEncoder: 'libx264', motionTimeout: 30,
+      ...config, enableStreaming: false, motionTimeout: 30,
       deviceSettingOverrides: [{ deviceIdentifier: identifier, motionTimeout: 5 }],
     }, hapApi);
     await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
@@ -291,7 +300,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       log,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
     const cached = new hapApi.platformAccessory('Cached Camera', hapApi.hap.uuid.generate('blink-camera-2'));
@@ -351,7 +360,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       createLogger() as unknown as Logger,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
     await (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices();
@@ -382,7 +391,7 @@ describe('BlinkCamerasPlatform', () => {
     blinkApi.getHomescreen.mockResolvedValueOnce(homescreen);
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' }, hapApi);
+      { ...config, enableStreaming: false }, hapApi);
     await (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices();
     let complete: (screen: BlinkHomescreen) => void = () => {};
     blinkApi.getHomescreen.mockReturnValue(new Promise(resolve => { complete = resolve; }));
@@ -410,7 +419,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       createLogger() as unknown as Logger,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
     const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
@@ -437,7 +446,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       createLogger() as unknown as Logger,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
     const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
@@ -459,7 +468,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       log,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
 
@@ -487,7 +496,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       createLogger() as unknown as Logger,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
     const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
@@ -564,7 +573,7 @@ describe('BlinkCamerasPlatform', () => {
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(
       createLogger() as unknown as Logger,
-      { ...config, enableStreaming: false, videoEncoder: 'libx264' },
+      { ...config, enableStreaming: false },
       hapApi,
     );
     await (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices();
@@ -660,7 +669,7 @@ describe('BlinkCamerasPlatform', () => {
       owls: [{ id: 6, network_id: 1, name: 'Away Owl', enabled: true }], sync_modules: [],
     };
     blinkApi.getHomescreen.mockResolvedValue(homescreen);
-    const settings = { ...config, excludedNetworks: [] as string[], enableStreaming: false, videoEncoder: 'libx264' as const };
+    const settings = { ...config, excludedNetworks: [] as string[], enableStreaming: false };
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, settings, hapApi);
     const discover = async () => {
       hapApi?.emit('shutdown');
@@ -690,7 +699,7 @@ describe('BlinkCamerasPlatform', () => {
     hapApi.unregisterPlatformAccessories = jest.fn();
     const blinkApi = buildBlinkApi();
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
-    const settings = { ...config, excludedNetworks: ['Away'], videoEncoder: 'libx264' as const };
+    const settings = { ...config, excludedNetworks: ['Away'] };
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, settings, hapApi);
     for (const [prefix, device] of [
       ['network', { id: 1, name: 'Away', armed: false }],
@@ -720,7 +729,7 @@ describe('BlinkCamerasPlatform', () => {
     const blinkApi = buildBlinkApi();
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger,
-      { ...config, excludedNetworks: ['91'], videoEncoder: 'libx264' }, hapApi);
+      { ...config, excludedNetworks: ['91'] }, hapApi);
     const missingContext = new hapApi.platformAccessory('Excluded', hapApi.hap.uuid.generate('blink-camera-3'));
     platform.configureAccessory(missingContext);
     const absentCamera = new hapApi.platformAccessory('Absent excluded', hapApi.hap.uuid.generate('blink-camera-4'));
@@ -821,18 +830,4 @@ describe('BlinkCamerasPlatform', () => {
     expect(blinkApi.getHomescreen).not.toHaveBeenCalled();
   });
 
-  it('enforces IMMIS TLS verification even when old configuration requests a bypass', () => {
-    hapApi = createApi() as unknown as MockAPI;
-    const log = createLogger() as unknown as Logger;
-    const blinkApi = buildBlinkApi();
-    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
-
-    const platform = new BlinkCamerasPlatform(
-      log,
-      { ...config, verifyImmisTls: false },
-      hapApi,
-    );
-
-    expect(platform.streamingConfig.verifyImmisTls).toBe(true);
-  });
 });
