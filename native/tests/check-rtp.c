@@ -128,7 +128,7 @@ static void receive(uint32_t type,uint8_t *payload,uint32_t size) {
 }
 int main(void) {
 #ifdef _WIN32
-    if(_setmode(_fileno(stdin),_O_BINARY)<0)fail("IO");
+    if(_setmode(_fileno(stdin),_O_BINARY)<0 || _setmode(_fileno(stdout),_O_BINARY)<0)fail("IO");
 #endif
     av_log_set_callback(quiet);if(srtp_init()!=srtp_err_status_ok)fail("INIT");
     decoded=av_frame_alloc();encoded=av_packet_alloc();if(!decoded || !encoded)fail("MEMORY");

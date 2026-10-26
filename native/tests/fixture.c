@@ -4,19 +4,26 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 static void quiet(void *p,int n,const char *f,va_list a){(void)p;(void)n;(void)f;(void)a;}
 static int write_bytes(void *unused,const uint8_t *data,int length){(void)unused; return fwrite(data,1,(size_t)length,stdout)==(size_t)length?length:AVERROR(EIO);}
 int main(int argc,char **argv){
+#ifdef _WIN32
+    if(_setmode(_fileno(stdout),_O_BINARY)<0)return 2;
+#endif
     int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
     int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
     int with_audio=latm || (argc>1 && strcmp(argv[1],"audio")==0);
     int width=16,height=16,fps=15,count=4,offset=0;
     if(bundled)count=30;
-    if(argc>1 && !with_audio) {
-        if((argc!=6 && argc!=7) || strcmp(argv[1],"video"))return 2;
+    if(argc>2 || (argc>1 && !with_audio)) {
+        if((argc!=6 && argc!=7) || (!with_audio && strcmp(argv[1],"video")))return 2;
         width=atoi(argv[2]);height=atoi(argv[3]);fps=atoi(argv[4]);count=atoi(argv[5]);
         if(argc==7)offset=atoi(argv[6]);
         if(width<2 || height<2 || width>8192 || height>8192 || (width&1) || (height&1) || fps<1 || fps>60 || count<1 || count>120)return 2;

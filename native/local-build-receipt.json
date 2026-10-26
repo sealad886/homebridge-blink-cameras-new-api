@@ -25,7 +25,8 @@
     "receipts/pre-session-local-build.json",
     "receipts/pre-exact-profile-local-build.json",
     "receipts/pre-eight-megabit-local-build.json",
-    "receipts/pre-bundled-latm-local-build.json"
+    "receipts/pre-bundled-latm-local-build.json",
+    "receipts/pre-resource-local-build.json"
   ],
   "installed_header_sha256": {
     "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
@@ -52,7 +53,7 @@
     "blink-codec-worker": "abc33f581f77c2b8b9118744f5d76a7e029cca4d43585be2cc888bec14818a89",
     "check-output": "7641d47da6cc7c427a39ca45c8ad13c38cfb5e32d601932e607c883f37dcf839",
     "check-rtp": "a0ee74256f360f7796909e8ba71262ad77ac2ee6b1764edf4b2bbc6ef561006c",
-    "fixture": "059afe00451ca64c23b830682a44307ad91442d0acf065397ba817ce8c60b21c"
+    "fixture": "703d82ff64012f7bbadbeaf8f30db9649eb97a0ebebad5edd871af8e27e41b37"
   },
   "parent_source_sha256": {
     "__tests__/media-session.test.ts": "17e9b6b175589d2ff4ad0e9871b14767af93456a391252b5b8b66f003a9d987f",
@@ -76,22 +77,23 @@
     "receipts/bundled-latm-timestamp-review.md": "95bf2784c277952dcf61178c30a5e6fedfa88b351f9a6d5a4aa087518a630060",
     "receipts/pr50-gcc-indentation-review.md": "969cef9c914cd5681f7b349ba2f979cb4657c7b621cb14913e8d2574e4c44bc8",
     "tests/audio-capabilities.c": "2eaa868a8b6f0f268402eb88c3fab2ad289033a0d6edda13f685898a96ce3d29",
-    "tests/check-output.c": "07046206711d6726dc1192015b176fabd9c1b32840332190d3fdcfa540cc1ca6",
-    "tests/check-rtp.c": "3ecdce1b26f99390dd855928882c707934fe27690dfb43d8484fefd9b2acb7a8",
-    "tests/fixture.c": "78fd64502ee1e6f1984ecde8a9d75e68549b457679466e62caecab71e8b740c8",
-    "tests/test_worker.py": "7f628aee46a9b7dd90fc6fa407d87e6f7d52f216c17cc2e040d189d37a3ab089",
-    "worker.c": "2e4ada3ebad9a5c0c515bacecb260b70ae06a7108d631db2ed7cd807c29cf33e"
+    "tests/check-output.c": "3ca650439a2da5f088224508ceaec7b1f37d144334bb67aa677b1edc329e1ef7",
+    "tests/check-rtp.c": "0a45bd4bbd6e619260f428fb1d2348ce6a07a41ca08adc3f6b63a7b33f6b84ac",
+    "tests/fixture.c": "9d0d74266559c2e571ba56047432a46d12b22ad4ee3c7d788f2b24c6eaa36f40",
+    "tests/test_resources.py": "cf10a02ef5805aa62e6296cbf1204a35d917a0ffabe0bf703df112ba8a0ac80b",
+    "tests/test_worker.py": "20f52e6ecc06f96673093a1e20bdd47e03282a8cbcba238e98654bce495c714e",
+    "worker.c": "07085bf6030ae303678b75571fff9bd4ece8d427f407733a3b678b0e6b1ef680"
   },
-  "recorded_at": "2026-10-26T00:27:53.868496+00:00",
+  "recorded_at": "2026-10-26T01:15:28.577250+00:00",
   "scope": "local macOS arm64 static worker development build; not a distribution receipt",
   "upstream_source_commit": "FFmpeg commit unverified; verified release archive identity recorded below",
   "validation": {
     "audio_capability_probe": "Opus/PCMA/PCMU opened; AAC-ELD rejected with -22",
     "bundled_latm_timestamp": "RED oldworker failed AUDIO_TIMESTAMP on retained benchmark SHA532d2fc79a248b1943bb55decb7a58b95ac3e3a4a726a50b1374cb8d8b1faf17 and generated bundled-PES all4codecs; GREEN first-source anchor plus cumulative validated samples derives missing laterPTS, knownPTS tolerance2ms no reanchor. Initialmissingreject; exact2msaccept;\u00b12.011msreject; independent decode/20msPTS/64msAVoffset; retained exactbenchmark exit0 empty stderr. See receipts/bundled-latm-timestamp-review.md; no resource acceptance claim",
     "checker": "same verified static prefix as worker, fixture and capability probe",
-    "checks": "Scoped session dependency-closure TypeScript; changed session-test ESLint; strict GCC14/GCC16 worker and fixture syntax; scoped diff check. Full repository TypeScript not rerun for this bounded audio correction; previous milestone captured concurrent parent cutover failures",
+    "checks": "Full native suite 33/33; real private-session/receiver and queue/recording checks; full repository TypeScript/lint and workflow syntax. Windows execution remains pending hosted CI.",
     "command": "make -B -C native FFMPEG_PREFIX=<verified static prefix> SRTP_PREFIX=<verified static prefix> test",
-    "crash_limit": "POSIX worker runtime sets/verifies own RLIMIT_CORE soft/hard=0; no secret-bearing crash triggered; Windows error-mode source-only",
+    "crash_limit": "POSIX own RLIMIT_CORE zero readback passed. Windows required SetErrorMode/GetErrorMode mask readback implemented before STATUS, pending actual Windows execution; external/administrative memory collectors excluded.",
     "dependency_recipe_scope": "Retained verified local-eor2xuvi prefix from earlier source build; newly extended cross-target dependency recipe and Windows target are not proved by this local receipt",
     "eight_megabit_boundary": "RED old4Mbps ceiling refused8M; GREEN nativebothpresets:8M accepted, exactHigh/SPS100 level31, independent4framepixeldecode, effective bitstream SEI bitrate/vbv_maxrate/vbv_bufsize=8000;8000001 refused; sessionpreflight8M accepted/>8Mnoeffects. Packet/queue/lifetimecaps unchanged; no stress/performance claim",
     "exact_h264_profile": "RED ultrafast Main/High emitted SPS66; GREEN all6 veryfast/ultrafast xBaseline/Main/High SPS66/77/100 and selected levels31/32/40, each independently decoded4frames/pixels; public coder/8x8dct options restore required tools; Pi CPU/resource gate remains open",
@@ -103,10 +105,11 @@
     "pattern_gate": "eight CI diagnostic sites corrected; local/regional/native-wide direct fallback; relevant Codanna included helper symbols not indexed",
     "process_surface_check": "owned synthetic child ps argv/environment, INIT reply, fixed malformed-frame diagnostics; tests run outside sandbox because sandbox blocks ps",
     "protocol_2": "13u32/52B CONFIG with preset0veryfast/1ultrafast in field5; source info output7 width,height,fps numerator/denominator; original geometry/FPS/profile/Opus/cumulative-credit proof retained",
+    "resource_observations": "Three decoded maximum-geometry/2K/square synthetic workloads; per-worker OS resident high-water marks in build/resource-receipt.json. Short-workload observations only; no hard global memory budget or physical acceptance.",
     "scope": "macOS arm64 only; no physical runtime/distribution proof",
     "session_receiver": "Eight real LATM->worker->paced RTP/SRTCP->libsrtp unprotect/libavcodec decode cases: small and bundled30-video-frame fixtures, Opus16/24kHz and PCMA/PCMU8kHz, FU-A at128-byte videoMTU, stream identity/20ms audio clocks/final SR counters/64ms audible offset, forged authentication-tag rejection; injected datagram sink, not actual UDP",
     "srtp": "published RTP/SRTCP vectors through IPC, post-codec-END protection, stdout deadline and independent STOP",
-    "tests_passed": 31
+    "tests_passed": 33
   },
   "verified_source_inputs": {
     "ffmpeg_signature": {

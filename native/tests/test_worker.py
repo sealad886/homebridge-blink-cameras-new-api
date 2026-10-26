@@ -55,6 +55,16 @@ class WorkerTests(unittest.TestCase):
         cls.media = subprocess.check_output([str(binary('fixture'))], timeout=5)
     def run_worker(self, data):
         return subprocess.run([str(WORKER)], input=data, capture_output=True, timeout=5)
+    def test_fixture_stdout_preserves_binary_transport_packets(self):
+        for mode in ([], ['audio'], ['audio-latm'], ['audio-latm-bundled']):
+            with self.subTest(mode=mode):
+                media=subprocess.check_output([str(binary('fixture')),*mode],timeout=5)
+                self.assertGreater(len(media),0)
+                self.assertEqual(len(media)%188,0)
+                self.assertTrue(all(media[offset]==0x47 for offset in range(0,len(media),188)))
+                # Exercise bytes Windows text streams translate or treat as EOF.
+                self.assertIn(b'\n',media)
+                if mode:self.assertIn(b'\x1a',media)
     def test_srtp_and_srtcp_published_vectors_and_correlation(self):
         # Public libsrtp srtp_driver.c srtp_validate vectors at pinned commit.
         key=bytes.fromhex('e1f97a0d3e018be0d64fa32c06de41390ec675ad498afeebb6960b3aabe6')
@@ -94,7 +104,7 @@ class WorkerTests(unittest.TestCase):
                 self.assertIn(b'blink-codec-worker',metadata)
             process.stdin.write(frame(99,b'synthetic-key-marker'));process.stdin.flush();process.stdin.close()
             self.assertEqual(process.wait(timeout=2),2)
-            diagnostics=process.stderr.read();self.assertEqual(diagnostics,b'BLINK_WORKER_FRAMING\n')
+            diagnostics=process.stderr.read();self.assertEqual(diagnostics.splitlines(),[b'BLINK_WORKER_FRAMING'])
             self.assertNotIn(key,diagnostics+process.stdout.read())
         finally:
             if process.poll() is None:process.kill();process.wait()
@@ -211,7 +221,7 @@ class WorkerTests(unittest.TestCase):
         # Clear only the first PES PTS/DTS flags; keep its AAC payload intact.
         media[headers[0]+7]&=0x3f
         result=self.run_worker(config(max_frames=30,audio_codec=1,audio_rate=16000,audio_channels=1,audio_bitrate=24000)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
-        self.assertEqual((result.returncode,result.stderr),(2,b'BLINK_WORKER_AUDIO_TIMESTAMP\n'))
+        self.assertEqual((result.returncode,result.stderr.splitlines()),(2,[b'BLINK_WORKER_AUDIO_TIMESTAMP']))
         self.assertNotIn((3,b''),messages(result.stdout))
     def test_bundled_latm_known_timestamp_retains_two_ms_discontinuity_boundary(self):
         source=subprocess.check_output([str(binary('fixture')),'audio-latm-bundled'],timeout=5)
@@ -223,7 +233,7 @@ class WorkerTests(unittest.TestCase):
                 shift_pes_pts(media,headers[1],ticks)
                 result=self.run_worker(config(max_frames=30,audio_codec=1,audio_rate=16000,audio_channels=1,audio_bitrate=24000)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
                 self.assertEqual(result.returncode,code,result.stderr)
-                self.assertEqual(result.stderr,b'' if code==0 else b'BLINK_WORKER_AUDIO_DISCONTINUITY\n')
+                self.assertEqual(result.stderr.splitlines(),[] if code==0 else [b'BLINK_WORKER_AUDIO_DISCONTINUITY'])
                 self.assertEqual((3,b'') in messages(result.stdout),code==0)
     def test_excessive_source_geometry_fails_closed(self):
         for width,height in [(4098,16),(4096,2050)]:

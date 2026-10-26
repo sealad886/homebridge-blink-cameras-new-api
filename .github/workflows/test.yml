@@ -159,7 +159,7 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             native_worker="$(cygpath -m "$native_worker.exe")"
           fi
-          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
+          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-resource-bounds.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
       - name: Verify actual RTSP connection boundaries in an isolated network
         if: matrix.target == 'linux-x64'
         run: |
@@ -181,6 +181,19 @@ jobs:
           prepare.write_worker_artifact(Path(prefix), worker,
               Path('native/build/native-' + os.environ['NATIVE_TARGET'] + '.tar.gz'), os.environ['GITHUB_SHA'])
           PY
+      - name: Verify resource observations were produced
+        run: |
+          test -s native/build/resource-receipt.json
+          test -s native/build/queue-recording-receipt.json
+      - name: Upload bounded resource observations
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-resources-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            native/build/resource-receipt.json
+            native/build/queue-recording-receipt.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload source-build candidate evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

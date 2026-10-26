@@ -3,10 +3,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <libavcodec/avcodec.h>
 static uint32_t u32(const uint8_t *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static void quiet(void *p,int n,const char *f,va_list a){(void)p;(void)n;(void)f;(void)a;}
 int main(int argc,char **argv){
+#ifdef _WIN32
+    if(_setmode(_fileno(stdin),_O_BINARY)<0)return 2;
+#endif
     int width=16,height=16,expected_count=4,inner_width=16,inner_height=16;
     if(argc!=1){
         if(argc!=6)return 2;
