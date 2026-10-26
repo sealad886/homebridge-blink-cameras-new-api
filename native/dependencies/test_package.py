@@ -137,6 +137,34 @@ class PackageTests(unittest.TestCase):
             package.stage_package(self.root, self.inputs, SHA)
         self.fetch.assert_not_called()
 
+    def test_windows_produced_candidate_with_large_pe_tables_stays_within_receipt_contract(self):
+        build = self.root / 'native/build'
+        prefix = build / 'deps/local-test/prefix'
+        prefix.mkdir(parents=True)
+        worker = build / 'worker.exe'
+        worker.write_bytes(b'synthetic Windows worker, never executed')
+        imports = 'DLL Name: KERNEL32.dll\nDLL Name: api-ms-win-crt-runtime-l1-1-0.dll\n'
+        dump = imports + '0000000000001000 unwind/relocation entry\n' * 80000
+        with patch.object(package.prepare.subprocess, 'check_output', return_value=dump):
+            probe_evidence = package.prepare.audit_dependencies(build / 'probe.exe', 'Windows', {})
+        dependency = {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins,
+                      'dynamic_dependencies': probe_evidence}
+        (prefix.parent / 'normalized-build-receipt.json').write_text(json.dumps(dependency))
+        output = build / 'native-win32-x64.tar.gz'
+        with patch.object(package.prepare, 'ROOT', build / 'deps'), \
+                patch.object(package.prepare.platform, 'system', return_value='Windows'), \
+                patch.object(package.prepare.platform, 'machine', return_value='AMD64'), \
+                patch.object(package.prepare, 'build_environment', return_value={}), \
+                patch.object(package.prepare.subprocess, 'check_output', return_value=dump):
+            package.prepare.write_worker_artifact(prefix, worker, output, SHA)
+        (self.inputs / output.name).write_bytes(output.read_bytes())
+        distribution = package.stage_package(self.root, self.inputs, SHA)
+        runtime = self.root / 'native/runtime/win32-x64'
+        self.assertEqual((runtime / 'worker.exe').read_bytes(), worker.read_bytes())
+        receipt = distribution['targets']['win32-x64']
+        self.assertEqual(receipt['dynamic_dependencies'], imports)
+        self.assertEqual(receipt['dependencies']['dynamic_dependencies'], imports)
+
     def test_rejects_source_target_binary_recipe_and_pinned_input_mismatch(self):
         mutations = [lambda row: row.update(target='win32-x64'), lambda row: row.update(source_sha='b' * 40),
                      lambda row: row.update(sha256='b' * 64),
@@ -211,12 +239,14 @@ class PackageTests(unittest.TestCase):
                                             ('worker-receipt.json', b'{"target":"linux-x64","target":"linux-x64"}', tarfile.REGTYPE)])
         with self.assertRaisesRegex(ValueError, 'Duplicate JSON'):
             package.stage_package(self.root, self.inputs, SHA)
-        entry = tarfile.TarInfo('blink-codec-worker')
-        entry.size = package.WORKER_LIMIT + 1
-        entry.mode = 0o755
-        (self.inputs / 'native-linux-x64.tar.gz').write_bytes(gzip.compress(entry.tobuf() + b'\0' * 1024))
-        with self.assertRaisesRegex(ValueError, 'candidate member'):
-            package.stage_package(self.root, self.inputs, SHA)
+        for name, limit in (('blink-codec-worker', package.WORKER_LIMIT), ('worker-receipt.json', package.RECEIPT_LIMIT)):
+            with self.subTest(member=name):
+                entry = tarfile.TarInfo(name)
+                entry.size = limit + 1
+                entry.mode = 0o755
+                (self.inputs / 'native-linux-x64.tar.gz').write_bytes(gzip.compress(entry.tobuf() + b'\0' * 1024))
+                with self.assertRaisesRegex(ValueError, 'candidate member'):
+                    package.stage_package(self.root, self.inputs, SHA)
 
     def test_rejects_symlinked_input_tar_and_native_output_parent(self):
         path = self.inputs / 'native-linux-x64.tar.gz'

@@ -75,6 +75,9 @@ def audit_dependencies(binary, system, env):
                                 r'api-ms-win-[a-z0-9-]+)\.dll$', re.IGNORECASE)
         if not imports or any(not system_dll.fullmatch(name) for name in imports):
             raise ValueError('Non-system Windows dependency or missing PE import evidence')
+        # Retain every checked DLL import, not objdump's unrelated PE unwind and
+        # relocation tables, in both dependency and worker identity receipts.
+        return ''.join(f'DLL Name: {name}\n' for name in imports)
     elif system == 'Darwin':
         # Exact imports observed in the isolated static worker/helper build.
         allowed = {'/usr/lib/libSystem.B.dylib', *(
