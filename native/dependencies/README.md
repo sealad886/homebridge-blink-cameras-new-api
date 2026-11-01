@@ -99,9 +99,16 @@ OpenSSL nor MbedTLS. API presence does not prove HomeKit RTP/SRTP wire parity.
 Build selects static Opus, libSRTP, x264 and FFmpeg libraries; no dependency command
 line programs. FFmpeg has --disable-autodetect --disable-everything --disable-network
 --disable-protocols --disable-programs, then explicitly enables MPEG-TS input/output,
+MP4 output and MOV input for the independent recording checker,
 H.264/AAC/AAC-LATM parsing/decoding, libx264/libopus/PCM-law/AAC encoding, swscale and
 swresample. GPL and version3 are enabled. Nonfree and libfdk_aac are disabled and
 checked after configure. Built-in AAC encoder is used; no FDK package is fetched.
+
+The protocol-3 recording source adds MP4 packaging and AAC-LC recording. Its
+five-target artifacts and corresponding-source archive must be regenerated and
+qualified before distribution. The existing published protocol-2 receipts do not
+qualify this source change. The runtime input whitelist remains MPEG-TS; compiling
+the MOV demuxer for the checker does not expose another worker input format.
 
 Selected linked worker configuration is GPL-3.0-or-later; x264 headers explicitly
 say GPL-2.0-or-later. Opus and libSRTP carry BSD-style three-clause licenses. Checked

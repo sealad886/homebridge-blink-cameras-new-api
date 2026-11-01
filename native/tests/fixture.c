@@ -20,10 +20,11 @@ int main(int argc,char **argv){
     int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
     int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
     int with_audio=latm || (argc>1 && strcmp(argv[1],"audio")==0);
+    int visual_motion=argc>1 && strcmp(argv[1],"motion")==0;
     int width=16,height=16,fps=15,count=4,offset=0;
     if(bundled)count=30;
     if(argc>2 || (argc>1 && !with_audio)) {
-        if((argc!=6 && argc!=7) || (!with_audio && strcmp(argv[1],"video")))return 2;
+        if((argc!=6 && argc!=7) || (!with_audio && !visual_motion && strcmp(argv[1],"video")))return 2;
         width=atoi(argv[2]);height=atoi(argv[3]);fps=atoi(argv[4]);count=atoi(argv[5]);
         if(argc==7)offset=atoi(argv[6]);
         if(width<2 || height<2 || width>8192 || height>8192 || (width&1) || (height&1) || fps<1 || fps>60 || count<1 || count>120)return 2;
@@ -66,10 +67,18 @@ int main(int argc,char **argv){
     if(!frame || !packet)return 2;
     frame->format=encoder->pix_fmt;frame->width=width;frame->height=height;
     if(av_frame_get_buffer(frame,32)<0)return 2;
+    int64_t audio_next=0;
     for(int i=0;i<=count;i++){
         if(i<count){
             if(av_frame_make_writable(frame)<0)return 2;
             for(int y=0;y<height;y++)memset(frame->data[0]+y*frame->linesize[0],32+(i%4)*32,(size_t)width);
+            if(visual_motion) {
+                for(int y=0;y<height;y++)memset(frame->data[0]+y*frame->linesize[0],32,(size_t)width);
+                if(i>=2*fps) {
+                    int left=i<4*fps?width/8:((i/fps)%2?width/2:width/8);
+                    for(int y=height/3;y<2*height/3;y++)memset(frame->data[0]+y*frame->linesize[0]+left,200,(size_t)width/4);
+                }
+            }
             for(int y=0;y<height/2;y++){memset(frame->data[1]+y*frame->linesize[1],128,(size_t)width/2);memset(frame->data[2]+y*frame->linesize[2],128,(size_t)width/2);}
             frame->pts=i+offset;
         }
@@ -79,17 +88,21 @@ int main(int argc,char **argv){
             if(av_interleaved_write_frame(format,packet)<0)return 2;
         }
         if(with_audio){
+            /* Match duration on the shared clock; AAC and video frame sizes differ. */
+            int64_t target=av_rescale_rnd(i+1,16000,fps,AV_ROUND_UP);
+            do {
             if(i<count){
                 if(av_frame_make_writable(audio_frame)<0)return 2;
                 float *samples=(float*)audio_frame->data[0];
                 for(int n=0;n<audio_frame->nb_samples;n++)samples[n]=(n%16<8)?0.15f:-0.15f;
-                audio_frame->pts=i*audio->frame_size;
+                audio_frame->pts=audio_next;audio_next+=audio->frame_size;
             }
             if(avcodec_send_frame(audio,i<count?audio_frame:NULL)<0)return 2;
             while(avcodec_receive_packet(audio,packet)>=0){
                 packet->stream_index=audio_stream->index;av_packet_rescale_ts(packet,audio->time_base,audio_stream->time_base);
                 if(av_interleaved_write_frame(format,packet)<0)return 2;
             }
+            } while(i<count && audio_next<target);
         }
     }
     av_frame_free(&audio_frame);avcodec_free_context(&audio);

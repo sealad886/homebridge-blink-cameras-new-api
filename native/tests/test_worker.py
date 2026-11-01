@@ -1,10 +1,12 @@
 """Behavioral private-pipe worker tests; no provider traffic or FFmpeg CLI."""
 import os
+import json
 import re
 from pathlib import Path
 import struct
 import shutil
 import subprocess
+import sys
 import time
 import unittest
 
@@ -16,10 +18,10 @@ def frame(kind, payload=b''):
     return b'BMI1' + struct.pack('!II', kind, len(payload)) + payload
 
 def config(**changes):
-    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, software_preset=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0)
+    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, software_preset=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0, output_mode=0, fragment_ms=0, iframe_ms=0)
     values.update(changes)
     if values['audio_codec']==1 and 'audio_packet_ms' not in changes:values['audio_packet_ms']=20
-    return frame(1, struct.pack('!13I', *values.values()))
+    return frame(1, struct.pack('!16I', *values.values()))
 
 def messages(data):
     result = []
@@ -55,6 +57,161 @@ class WorkerTests(unittest.TestCase):
         cls.media = subprocess.check_output([str(binary('fixture'))], timeout=5)
     def run_worker(self, data):
         return subprocess.run([str(WORKER)], input=data, capture_output=True, timeout=5)
+    def test_visual_motion_rejects_noise_brightness_and_single_frame_glitches(self):
+        result=subprocess.run([str(binary('check-motion'))],capture_output=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertLess(json.loads(result.stdout)['stateBytes'],4096)
+    def test_recording_motion_pulses_are_confirmed_bounded_and_never_sent_by_live_codec(self):
+        media=subprocess.check_output([str(binary('fixture')),'motion','128','72','15','90'],timeout=5)
+        framed=b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
+        recording=self.run_worker(config(width=128,height=72,max_frames=100,output_mode=1,fragment_ms=4000,iframe_ms=1000)+framed)
+        self.assertEqual(recording.returncode,0,recording.stderr)
+        events=[struct.unpack('!QII',body) for kind,body in messages(recording.stdout) if kind==13]
+        self.assertTrue(events,'physical scene change must reach the recording parent without clip polling')
+        self.assertTrue(all(1000000<=at and 20<=score<=1000 and event==1 for at,score,event in events))
+        self.assertTrue(all(b[0]-a[0]>=1000000 for a,b in zip(events,events[1:])))
+        live=self.run_worker(config(width=128,height=72,max_frames=100)+framed)
+        self.assertEqual(live.returncode,0,live.stderr)
+        self.assertFalse(any(kind==13 for kind,_ in messages(live.stdout)))
+    def recording(self, mode='video', rate=0, offset=0, audio_enabled=None):
+        media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','90',str(offset)],timeout=5)
+        enabled=(mode!='video') if audio_enabled is None else audio_enabled
+        values=dict(output_mode=1,fragment_ms=4000,iframe_ms=4000,max_frames=100)
+        if enabled:values.update(audio_codec=4,audio_rate=rate or 16000,audio_channels=1,audio_bitrate=32000)
+        result=self.run_worker(config(**values)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout)
+        self.assertFalse(any(k in (2,4,5,10,11,12) for k,_ in rows))
+        init=[b for k,b in rows if k==8];self.assertEqual(len(init),1);self.assertLessEqual(len(init[0]),256*1024)
+        fragments=[b for k,b in rows if k==9];self.assertGreaterEqual(len(fragments),2)
+        self.assertLess([k for k,_ in rows].index(8),[k for k,_ in rows].index(9))
+        for i,body in enumerate(fragments):
+            sequence,start,duration,key=struct.unpack('!IqqI',body[:24])
+            self.assertEqual(sequence,i);self.assertEqual(key,1);self.assertGreater(duration,0);self.assertLessEqual(duration,4000000)
+            self.assertLessEqual(len(body)-24,8*1024*1024)
+            self.assertEqual(body[28:32],b'moof')
+            if i:self.assertEqual(start,struct.unpack('!IqqI',fragments[i-1][:24])[1]+1000000)
+        return init[0],fragments
+    def decode_recording(self, data):
+        checked=subprocess.run([str(binary('check-recording'))],input=data,capture_output=True,timeout=5)
+        self.assertEqual(checked.returncode,0,checked.stderr)
+        return json.loads(checked.stdout)
+    def test_recording_fragments_decode_independently_and_keep_video_timing(self):
+        init,fragments=self.recording(offset=30)
+        decoded=self.decode_recording(init+b''.join(b[24:] for b in fragments))
+        self.assertEqual(decoded['videoFrames'],90);self.assertEqual(decoded['audioTracks'],0)
+        self.assertEqual(decoded['lastVideoUs']-decoded['firstVideoUs'],5933333)
+        for body in fragments:
+            decoded=self.decode_recording(init+body[24:])
+            self.assertEqual(decoded['videoFrames'],15);self.assertEqual(decoded['audioTracks'],0)
+    def test_recording_aac_lc_decodes_at_each_supported_rate_and_preserves_source_offset(self):
+        for mode in ('audio','audio-latm-bundled'):
+            for rate in (16000,24000):
+                with self.subTest(mode=mode,rate=rate):
+                    init,fragments=self.recording(mode,rate)
+                    decoded=self.decode_recording(init+b''.join(b[24:] for b in fragments))
+                    self.assertEqual(decoded['videoFrames'],90);self.assertEqual(decoded['audioTracks'],1);self.assertGreater(decoded['audioSamples'],rate*5)
+                    self.assertEqual(decoded['firstVideoUs'],struct.unpack('!IqqI',fragments[0][:24])[1])
+                    self.assertEqual(decoded['lastVideoUs']-decoded['firstVideoUs'],5933333)
+                    for body in fragments:
+                        independently=self.decode_recording(init+body[24:])
+                        self.assertEqual(independently['videoFrames'],15);self.assertGreater(independently['audioSamples'],0)
+    def test_recording_audio_disabled_omits_track_even_when_source_contains_audio(self):
+        init,fragments=self.recording('audio',audio_enabled=False)
+        self.assertNotIn(b'mp4a',init)
+        decoded=self.decode_recording(init+b''.join(b[24:] for b in fragments))
+        self.assertEqual(decoded['audioTracks'],0);self.assertEqual(decoded['audioSamples'],0)
+    def test_recording_configuration_rejects_audio_mismatch_and_invalid_durations(self):
+        for values in (dict(audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000),
+                       dict(output_mode=1,fragment_ms=4000,iframe_ms=4000,audio_codec=1,audio_rate=16000,audio_channels=1,audio_bitrate=32000),
+                       dict(output_mode=1,fragment_ms=4000,iframe_ms=0),dict(output_mode=1,fragment_ms=4001,iframe_ms=4000)):
+            result=self.run_worker(config(**values)+frame(2,self.media)+frame(3))
+            self.assertEqual(result.returncode,2)
+            self.assertFalse(any(k==9 for k,_ in messages(result.stdout)))
+    def test_recording_missing_audio_or_container_duration_overrun_fails_explicitly(self):
+        for mode,fragment_ms,code in [('video',4000,b'AUDIO_MISSING'),('audio',1000,b'FRAGMENT_LIMIT')]:
+            media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','90'],timeout=5)
+            result=self.run_worker(config(output_mode=1,fragment_ms=fragment_ms,iframe_ms=1000,max_frames=100,
+                audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000)+
+                b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+            self.assertEqual(result.returncode,2);self.assertIn(code,result.stderr)
+            self.assertFalse(any(k==3 for k,_ in messages(result.stdout)))
+    def test_recording_video_gap_fails_instead_of_stitching_missing_coverage(self):
+        media=bytearray(subprocess.check_output([str(binary('fixture')),'video','16','16','15','90'],timeout=5))
+        video_packets=0
+        for offset in range(0,len(media),188):
+            if not media[offset+1]&0x40 or not media[offset+3]&0x10:continue
+            start=offset+4
+            if media[offset+3]&0x20:start+=1+media[start]
+            if media[start:start+3]==b'\0\0\1' and media[start+3]&0xf0==0xe0:
+                if video_packets>=15:shift_pes_pts(media,start,450000)
+                video_packets+=1
+        self.assertGreater(video_packets,15)
+        result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100)+frame(2,media)+frame(3))
+        self.assertEqual(result.returncode,2);self.assertIn(b'VIDEO_DISCONTINUITY',result.stderr)
+        self.assertFalse(any(k==3 for k,_ in messages(result.stdout)))
+    def test_recording_duplicate_or_regressing_video_timestamp_fails_before_fps_selection(self):
+        for ticks in (-6000,-9000):
+            with self.subTest(ticks=ticks):
+                media=bytearray(subprocess.check_output([str(binary('fixture')),'video','16','16','15','30'],timeout=5))
+                packets=0
+                for offset in range(0,len(media),188):
+                    if not media[offset+1]&0x40 or not media[offset+3]&0x10:continue
+                    start=offset+4
+                    if media[offset+3]&0x20:start+=1+media[start]
+                    if media[start:start+3]==b'\0\0\1' and media[start+3]&0xf0==0xe0:
+                        if packets==1:shift_pes_pts(media,start,ticks)
+                        packets+=1
+                self.assertGreater(packets,1)
+                result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100)+frame(2,media)+frame(3))
+                self.assertEqual(result.returncode,2);self.assertIn(b'VIDEO_DISCONTINUITY',result.stderr)
+                self.assertFalse(any(k==3 for k,_ in messages(result.stdout)))
+    def audio_tail_removed(self, count=90, cutoff=459000):
+        original=subprocess.check_output([str(binary('fixture')),'audio','16','16','15',str(count)],timeout=5)
+        audio_pid=None;origin=None;latest=None;kept=[]
+        for offset in range(0,len(original),188):
+            packet=original[offset:offset+188];pid=((packet[1]&0x1f)<<8)|packet[2]
+            if packet[1]&0x40 and packet[3]&0x10:
+                start=4+(1+packet[4] if packet[3]&0x20 else 0)
+                if packet[start:start+3]==b'\0\0\1' and packet[start+3]&0xe0==0xc0:
+                    audio_pid=pid;pts=packet[start+9:start+14]
+                    latest=(((pts[0]>>1)&7)<<30)|(pts[1]<<22)|((pts[2]>>1)<<15)|(pts[3]<<7)|(pts[4]>>1)
+                    if origin is None:origin=latest
+            if pid==audio_pid and latest is not None and latest-origin>=cutoff:continue
+            kept.append(packet)
+        self.assertIsNotNone(origin)
+        return b''.join(kept)
+    def test_recording_trailing_audio_loss_cannot_complete_successfully(self):
+        media=self.audio_tail_removed()
+        result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,
+            audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000)+
+            b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual(result.returncode,2);self.assertIn(b'AUDIO_DISCONTINUITY',result.stderr)
+        self.assertFalse(any(k==3 for k,_ in messages(result.stdout)))
+        self.assertLessEqual(sum(k==9 for k,_ in messages(result.stdout)),5)
+    def test_recording_audio_watermark_failure_precedes_eof_and_incomplete_fragment(self):
+        # Leave >32 AAC packets for this tiny fixture's bounded codec probe;
+        # null TS packets alone cannot satisfy an AAC packet-count probe.
+        media=self.audio_tail_removed(120,279000)
+        # Keep the MPEG-TS AVIO probe/read-ahead supplied without signaling EOF.
+        media+=(b'\x47\x1f\xff\x10'+b'\xff'*184)*700
+        process=subprocess.Popen([str(WORKER)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            try:
+                process.stdin.write(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=120,
+                    audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000)+
+                    b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536)))
+                process.stdin.flush()
+            except BrokenPipeError:pass # Early explicit rejection may close the producer pipe.
+            self.assertEqual(process.wait(timeout=3),2)
+            self.assertIn(b'AUDIO_DISCONTINUITY',process.stderr.read())
+            rows=messages(process.stdout.read());self.assertFalse(any(k==3 for k,_ in rows))
+            self.assertLessEqual(sum(k==9 for k,_ in rows),3)
+        finally:
+            if process.poll() is None:process.kill();process.wait()
+            try:process.stdin.close()
+            except BrokenPipeError:pass
+            process.stdout.close();process.stderr.close()
     def test_fixture_stdout_preserves_binary_transport_packets(self):
         for mode in ([], ['audio'], ['audio-latm'], ['audio-latm-bundled']):
             with self.subTest(mode=mode):
@@ -148,7 +305,10 @@ class WorkerTests(unittest.TestCase):
             if process.poll() is None:process.kill();process.wait()
             process.stdin.close();process.stdout.close();process.stderr.close()
     def test_output_has_independent_two_second_deadline(self):
-        process=subprocess.Popen([str(WORKER)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        # ARM64 Linux can use 16KiB pages and a 256KiB default pipe: the fixed
+        # burst fits unless the fixture explicitly creates output backpressure.
+        pipe_options={'pipesize':4096} if sys.platform.startswith('linux') else {}
+        process=subprocess.Popen([str(WORKER)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**pipe_options)
         try:
             process.stdin.write(config()+frame(2,self.media));process.stdin.flush()
             # Codec packets alone fit the OS pipe; protection burst fills it without END.
@@ -168,7 +328,7 @@ class WorkerTests(unittest.TestCase):
         result = self.run_worker(data)
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = messages(result.stdout)
-        self.assertEqual(rows[0], (1, struct.pack('!II', 2, 15)))
+        self.assertEqual(rows[0], (1, struct.pack('!II', 3, 15)))
         packets = [body for kind, body in rows if kind == 2]
         self.assertEqual(len(packets), 4)
         pts=[struct.unpack('!q',p[:8])[0] for p in packets]

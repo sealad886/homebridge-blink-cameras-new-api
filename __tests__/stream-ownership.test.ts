@@ -141,7 +141,7 @@ describe('generation-owned streaming', () => {
     try {
       await f.prepare(); await f.start(); await f.stop(); await flush(); expect(f.api.completeCommand).toHaveBeenCalledTimes(1);
       await f.prepare(); const callback = f.begin(); await flush();
-      expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1); expect(createOwnedMediaSession).toHaveBeenCalledTimes(1);
+      expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
       retire(); await flush(); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(2); expect(callback).toHaveBeenCalledTimes(1);
     } finally { retire?.(); await f.cleanup(); }
   });
@@ -265,8 +265,12 @@ describe('generation-owned streaming', () => {
     proxy.transport.start.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     (ImmisProxyServer as unknown as jest.Mock).mockImplementationOnce(() => proxy.transport);
     try {
-      await f.prepare(); const callback = f.begin(); await flush(); await f.stop(); await expect(f.prepare()).rejects.toThrow('already owned');
-      finish('pipe:0'); await flush(); expect(proxy.transport.attachConsumer).not.toHaveBeenCalled(); expect(callback).toHaveBeenCalledTimes(1); await f.prepare();
+      await f.prepare(); const callback = f.begin(); await flush(); await f.stop();
+      // Preparation can release its local ports while the shared owner retains
+      // the cancelled vendor capability. A replacement must wait behind it.
+      await f.prepare(); f.begin(); await flush(); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
+      finish('pipe:0'); await flush(); expect(proxy.transport.attachConsumer).not.toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledTimes(1); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(2);
     } finally { finish?.('pipe:0'); await f.cleanup(); }
   });
 

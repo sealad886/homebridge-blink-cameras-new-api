@@ -32,13 +32,13 @@ function fixture() {
     ['project/native/dependencies/prepare.py', recipe], ['project/native/dependencies/source-inputs.json', json(inputs)], ['project/native/COPYING', copying],
     ...inputs.sources.map(input => [`dependencies/${input.filename}`, Buffer.from(input.name)])];
   entries.push(...runtimeNotices.map(([name, data]) => ['project/' + name, data]));
-  const manifest = { schemaVersion: 1, targets: {} }; const receipts = {};
+  const manifest = { schemaVersion: 1, protocolVersion: 3, targets: {} }; const receipts = {};
   const write = (name, bytes) => { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, bytes, { mode: 0o755 }); };
   for (const target of TARGETS) {
     const path = `native/runtime/${target}/worker${target === 'win32-x64' ? '.exe' : ''}`;
     const bytes = Buffer.from(target); write(path, bytes);
     manifest.targets[target] = { path, sha256: sha256(bytes) };
-    const receipt = { target, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
+    const receipt = { target, protocolVersion: 3, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
       dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
     receipts[target] = receipt; entries.push([`receipts/${target}.json`, json(receipt)]);
   }
@@ -51,7 +51,7 @@ function fixture() {
 test('accepts five synthetic workers with complete source and dependency identity, without declaring readiness', () => {
   const f = fixture(); try { const result = verifyNativePackage(f.root, f.proof); assert.equal(result.distribution_ready, false); assert.deepEqual(Object.keys(result.targets).sort(), [...TARGETS].sort()); } finally { f.cleanup(); }
 });
-for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'bundle', 'source', 'recipe', 'pins', 'readiness', 'symlink']) {
+for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'protocol', 'bundle', 'source', 'recipe', 'pins', 'readiness', 'symlink']) {
   test(`refuses ${mutation} native package`, () => {
     const f = fixture(); try {
       const worker = f.manifest.targets[TARGETS[0]].path;
@@ -59,6 +59,7 @@ for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'bundle', 'sou
       if (mutation === 'extra') f.write('native/runtime/untracked', Buffer.from('extra'));
       if (mutation === 'worker') f.write(worker, Buffer.from('changed'));
       if (mutation === 'manifest') f.write('native/runtime/manifest.json', json({ ...f.manifest, extra: true }));
+      if (mutation === 'protocol') f.write('native/runtime/manifest.json', json({ ...f.manifest, protocolVersion: 2 }));
       if (mutation === 'bundle') f.write('native/corresponding-source.tar.gz', Buffer.from('changed'));
       if (mutation === 'source') f.distribution.source_sha = 'b'.repeat(40);
       if (mutation === 'recipe') f.proof.recipeSha = 'b'.repeat(64);

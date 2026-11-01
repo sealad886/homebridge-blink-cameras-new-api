@@ -6,12 +6,13 @@ static Output *output_first,*output_last;
 static size_t output_bytes;
 static int64_t writing_since;
 static void output(uint32_t type,const uint8_t *data,uint32_t length) {
-    if(length>CAPACITY-12)fatal("OUTPUT_LIMIT");
+    uint32_t maximum=type==BLINK_MP4_INIT?BLINK_MP4_INIT_MAX:type==BLINK_MP4_FRAGMENT?BLINK_MP4_FRAGMENT_MAX+BLINK_MP4_METADATA_BYTES:CAPACITY-12;
+    if(length>maximum)fatal("OUTPUT_LIMIT");
     Output *o=malloc(sizeof(*o)+12+length);if(!o)fatal("MEMORY");
     o->next=NULL;o->length=12+length;o->queued=av_gettime_relative();
     memcpy(o->data,BLINK_OUTPUT_MAGIC,4);put32(o->data+4,type);put32(o->data+8,length);if(length)memcpy(o->data+12,data,length);
     LOCK(&output_mutex);
-    if(output_bytes+o->length>CAPACITY)fatal("OUTPUT_LIMIT");
+    if(output_bytes+o->length>(config[13]?BLINK_RECORDING_QUEUE_MAX:CAPACITY))fatal("OUTPUT_LIMIT");
     output_bytes+=o->length;if(output_last)output_last->next=o;else output_first=o;output_last=o;
     WAKE(&output_changed);UNLOCK(&output_mutex);
 }

@@ -42,9 +42,9 @@ function setup(audio = false, outputQuality: OutputQualityProfile = 'auto', befo
   const api = { startCameraLiveview: jest.fn(async () => ({ server: 'immis://8.8.8.8:443/private?client_id=1&token=DUMMY_CAPABILITY', command_id: 7 })),
     completeCommand: jest.fn(async () => ({})), getCommandStatus: jest.fn(async () => ({ complete: false, status: 'running' })),
     continueCommand: jest.fn(async () => ({})) };
-  const log = jest.fn(); const observed = jest.fn();
+  const log = jest.fn(); const observed = jest.fn(); const audit = jest.fn();
   const source = new BlinkCameraSource(api as unknown as BlinkApi, createHap() as unknown as HAP, 1, 2, 'camera', 'serial',
-    () => undefined, () => true, log, { audio: { enabled: audio }, video: { outputQuality } }, log, beforeLiveview, observed);
+    () => undefined, () => true, log, { audio: { enabled: audio }, video: { outputQuality } }, log, beforeLiveview, observed, audit);
   const request = { sessionID: 'secure-generation', targetAddress: '192.168.1.5', addressVersion: 'ipv4',
     video: { port: 5000, srtpCryptoSuite: 0, srtp_key: Buffer.alloc(16, 7), srtp_salt: Buffer.alloc(14, 9) },
     audio: { port: 5002, srtpCryptoSuite: 0, srtp_key: Buffer.alloc(16, 3), srtp_salt: Buffer.alloc(14, 5) } } as unknown as PrepareStreamRequest;
@@ -54,8 +54,70 @@ function setup(audio = false, outputQuality: OutputQualityProfile = 'auto', befo
   const prepare = () => new Promise<void>((resolve, reject) => source.prepareStream(request, error => error ? reject(error) : resolve()));
   const run = () => new Promise<Error | undefined>(resolve => source.handleStreamRequest(start, error => resolve(error)));
   const stop = () => new Promise<void>(resolve => source.handleStreamRequest({ type: 'stop', sessionID: request.sessionID } as unknown as StreamingRequest, () => resolve()));
-  return { native, transport, broker, api, log, observed, source, request, start, prepare, run, stop };
+  return { native, transport, broker, api, log, observed, audit, source, request, start, prepare, run, stop };
 }
+
+test('camera privacy-off retires a live viewer and blocks preparation until re-enabled', async () => {
+  jest.clearAllMocks(); const f = setup();
+  try {
+    await f.prepare(); expect(await f.run()).toBeUndefined();
+    f.source.setCameraActive(false);
+    await Promise.all([f.native.whenClosed, f.transport.whenClosed]);
+    expect(f.native.stop).toHaveBeenCalled(); expect(f.transport.retire).toHaveBeenCalled();
+    await f.stop();
+    await expect(f.prepare()).rejects.toThrow();
+    f.source.setCameraActive(true); await expect(f.prepare()).resolves.toBeUndefined();
+  } finally { await f.stop(); }
+});
+
+test('audits camera preparation, audio selection and stream control outcomes without media capabilities', async () => {
+  jest.clearAllMocks(); const f = setup(true);
+  try {
+    await f.prepare(); expect(await f.run()).toBeUndefined();
+    const reconfigure = jest.fn();
+    f.source.handleStreamRequest({ type: 'reconfigure', sessionID: f.request.sessionID, video: f.start.video } as StreamingRequest, reconfigure);
+    expect(reconfigure).toHaveBeenCalledTimes(1);
+    await f.stop();
+    const events = f.audit.mock.calls.map(([event]) => event);
+    for (const event of ['Prepare stream', 'Stream start', 'Stream reconfigure', 'Stream stop']) {
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ event, direction: 'HomeKit -> bridge', outcome: 'requested' }),
+        expect.objectContaining({ event, direction: 'bridge -> HomeKit' }),
+      ]));
+    }
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'Prepare stream', outcome: 'prepared', audio: true, talkback: false }),
+      expect.objectContaining({ event: 'Stream reconfigure', outcome: 'unsupported' }),
+      expect.objectContaining({ event: 'Stream retirement', outcome: 'completed', talkback: false }),
+    ]));
+    const serialized = JSON.stringify(events);
+    for (const secret of [f.request.sessionID, f.request.targetAddress, 'DUMMY_CAPABILITY', 'serial', f.request.video.srtp_key.toString('base64')]) {
+      expect(serialized).not.toContain(secret);
+    }
+  } finally { await f.stop(); }
+});
+
+test('audits failed camera requests once and preserves their original callback errors', async () => {
+  jest.clearAllMocks(); const f = setup();
+  try {
+    const missing = jest.fn();
+    f.source.handleStreamRequest(f.start, missing);
+    expect(missing).toHaveBeenCalledTimes(1);
+    expect(missing.mock.calls[0][0]).toBeInstanceOf(Error);
+    await f.prepare();
+    const duplicate = jest.fn();
+    f.source.prepareStream(f.request, duplicate);
+    expect(duplicate).toHaveBeenCalledTimes(1);
+    expect(duplicate.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(f.audit.mock.calls.map(([event]) => event).filter(event => event.outcome === 'failed'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ event: 'Stream start' }), expect.objectContaining({ event: 'Prepare stream' }),
+      ]));
+    f.audit.mockImplementation(() => { throw new Error('Synthetic audit failure'); });
+    expect(await f.run()).toBeUndefined();
+    await f.stop();
+  } finally { await f.stop(); }
+});
 
 test('camera streaming routes private media and keys through owned capabilities without a media CLI', async () => {
   jest.clearAllMocks(); const f = setup();
@@ -149,10 +211,12 @@ test('STOP during source configuration prevents late vendor allocation', async (
   const configure = jest.fn(() => new Promise<void>(resolve => { release = resolve; }));
   const f = setup(false, 'auto', configure);
   try {
-    await f.prepare(); const started = f.run(); expect(configure).toHaveBeenCalledTimes(1);
+    await f.prepare(); const started = f.run();
+    for (let i = 0; i < 32; i++) await Promise.resolve();
+    expect(configure).toHaveBeenCalledTimes(1);
     await f.stop(); expect(await started).toBeInstanceOf(Error); release();
     for (let i = 0; i < 16; i++) await Promise.resolve();
-    expect(createOwnedMediaSession).not.toHaveBeenCalled(); expect(f.api.startCameraLiveview).not.toHaveBeenCalled();
+    expect(f.native.stop).toHaveBeenCalled(); expect(f.api.startCameraLiveview).not.toHaveBeenCalled();
   } finally { await f.stop(); }
 });
 test.each(['OPUS', 'PCMA', 'PCMU'] as const)('%s selection carries only private native audio configuration', async selected => {

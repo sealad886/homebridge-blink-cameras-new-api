@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export function releaseTag(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.(0|[1-9]\d*))?$/.exec(version);
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.?(0|[1-9]\d*))?$/.exec(version);
   assert(match, `Unsupported release version: ${version}`);
   return match[4] ?? 'latest';
 }

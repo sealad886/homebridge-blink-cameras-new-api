@@ -43,7 +43,7 @@ const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve();
 test('owns configured worker and numeric output before chunking one admitted vendor frame', async () => {
   const f = fixture(); const owner = new globalThis.AbortController(); const session = await createOwnedMediaSession(options(), owner.signal, f.dependencies);
   try {
-    expect(f.worker.configure).toHaveBeenCalledWith([640, 360, 15, 100000, 100, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(f.worker.configure).toHaveBeenCalledWith([640, 360, 15, 100000, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expect(f.worker.initialize.mock.calls[0].slice(0, 2)).toEqual([1, 7]);
     expect(f.dependencies.openSocket).toHaveBeenCalledTimes(1);
     let release!: () => void; f.worker.media.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
@@ -135,7 +135,7 @@ test('selected software preset and rational source metadata reach the owner with
     video: { ...options().video, softwarePreset: 'ultrafast' },
     audio: { output: output(8), localPort: 6001, codec: 'opus', rate: 24000, bitrate: 24000, packetTime: 40 } },
   new globalThis.AbortController().signal, f.dependencies);
-  expect(f.worker.configure).toHaveBeenCalledWith([640, 360, 15, 100000, 100, 1, 1, 24000, 1, 24000, 0, 0, 40]);
+  expect(f.worker.configure).toHaveBeenCalledWith([640, 360, 15, 100000, 100, 1, 1, 24000, 1, 24000, 0, 0, 40, 0, 0, 0]);
   expect(() => f.callbacks().sourceInfo!({ width: 2560, height: 1440, fpsNumerator: 30000, fpsDenominator: 1001 })).toThrow('Media session unavailable');
   await session.whenClosed; expect(session.failed).toBe(true); expect(source).toHaveBeenCalledTimes(1);
 });

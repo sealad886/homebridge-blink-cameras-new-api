@@ -10,13 +10,16 @@
  * Subclasses supply device-specific API calls and metadata.
  */
 
-import { CameraController, CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import { CameraController, Characteristic, CharacteristicChange, CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { withResponseBudget, RequestOptions } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkCamerasPlatform } from '../platform';
+import { logHomeKitEvent } from '../homekit-audit';
 import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { setTimeout, clearTimeout, setImmediate } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, refreshCameraAudioCapabilities, DeviceType } from './camera-source';
+import { BlinkCameraRecordingDelegate, createRecordingOptions } from './camera-recording';
+import { startRecordingSession } from './recording-session';
 
 export interface MotionDevice {
   id: number;
@@ -34,6 +37,8 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   protected readonly motionService: Service;
   protected readonly cameraController: CameraController;
   protected readonly cameraSource: BlinkCameraSource;
+  protected readonly recording?: BlinkCameraRecordingDelegate;
+  private readonly recordingListeners: (() => void)[] = [];
   protected motionDetected = false;
   protected motionTimeout: ReturnType<typeof setTimeout> | null = null;
   private readonly refreshSnapshotService?: Service;
@@ -168,12 +173,50 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
           this.platform.log.info(`[${device.name}] Initial input video: ${observation.width}x${observation.height}${observation.fps ? ` at ${observation.fps} fps` : ''}`);
         }
       },
+      event => logHomeKitEvent(this.platform.log, this.accessory, event),
     );
 
-    this.cameraController = new this.platform.api.hap.CameraController(
-      createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig),
-    );
+    const controllerOptions = createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig);
+    if (this.platform.isHksvEnabled(device)) {
+      this.recording = new BlinkCameraRecordingDelegate(
+        (configuration, audio, callbacks, signal) => startRecordingSession(
+          (sink, owner) => this.cameraSource.subscribeFeed(sink, owner), configuration, audio, callbacks, signal,
+        ),
+        { videoMotion: () => {
+          if (this.isMotionServiceActive() && this.platform.isNetworkArmed(this.device.network_id)) {
+            this.triggerMotion(this.platform.getDeviceMotionTimeout(this.device), 'video');
+          }
+        }, status: status => {
+          const message = `[${this.device.name}] HSV ${status.state}${status.reason ? `: ${status.reason}` : ''}`;
+          if (status.state === 'fault') this.platform.log.warn(message);
+          else this.platform.log.debug(message);
+          if (status.state !== 'ready' && status.state !== 'recording') this.clearMotion();
+        } },
+      );
+      this.recording.setDeviceAvailable(this.platform.isOperational() && this.isDeviceAvailable());
+      const recordingOptions = createRecordingOptions();
+      if (cameraSourceType === 'doorbell') recordingOptions.overrideEventTriggerOptions = [2];
+      controllerOptions.recording = { options: recordingOptions, delegate: this.recording };
+      controllerOptions.sensors = { motion: this.motionService };
+    }
+    this.cameraController = new this.platform.api.hap.CameraController(controllerOptions);
     this.accessory.configureController(this.cameraController);
+    const recordingManagement = this.cameraController.recordingManagement;
+    if (this.recording && recordingManagement) {
+      const bind = (service: Service, type: typeof Characteristic.RecordingAudioActive | typeof Characteristic.HomeKitCameraActive,
+        apply: (active: boolean) => void): void => {
+        const characteristic = service.getCharacteristic(type);
+        const changed = (change: CharacteristicChange): void => apply(Boolean(change.newValue));
+        characteristic.on('change', changed);
+        this.recordingListeners.push(() => characteristic.removeListener('change', changed));
+        apply(Boolean(characteristic.value));
+      };
+      // HAP 0.14 stores recording audio on recordingManagementService.
+      bind(recordingManagement.recordingManagementService, this.platform.Characteristic.RecordingAudioActive,
+        active => this.recording?.setAudioActive(active && this.platform.streamingConfig.audio.enabled));
+      bind(recordingManagement.operatingModeService, this.platform.Characteristic.HomeKitCameraActive,
+        active => { this.cameraSource.setCameraActive(active); this.recording?.setCameraActive(active); });
+    }
     refreshCameraAudioCapabilities(this.platform.api.hap, this.accessory.services);
 
     const existingRefreshService = this.accessory.getServiceById(this.platform.Service.Switch, 'snapshot-refresh');
@@ -292,6 +335,8 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   }
 
   public updateAvailability(): void {
+    this.recording?.setDeviceAvailable(this.platform.isOperational() && this.isDeviceAvailable());
+    if (this.recording && (!this.isMotionServiceActive() || !this.platform.isNetworkArmed(this.device.network_id))) this.clearMotion();
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusFault)
       .updateValue(this.motionFault || this.refreshFault || !this.platform.isOperational() || !this.isDeviceAvailable() ? 1 : 0);
@@ -300,24 +345,47 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       .updateValue(this.isMotionServiceActive());
   }
 
-  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device)): void {
+  public usesVideoMotion(): boolean { return this.recording?.videoMotionActive ?? false; }
+
+  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device), source: 'provider' | 'video' = 'provider'): void {
     if (this.motionTimeout) {
       clearTimeout(this.motionTimeout);
     }
 
+    // Pin pre-event fragments before HAP can request the recording stream.
+    this.recording?.notifyMotion();
     this.motionDetected = true;
     this.motionService
       .getCharacteristic(this.platform.Characteristic.MotionDetected)
       .updateValue(true);
 
-    this.platform.log.info(`Motion detected on ${this.deviceLabel}: ${this.device.name}`);
+    logHomeKitEvent(this.platform.log, this.accessory, {
+      direction: 'Blink -> bridge',
+      event: source === 'video' ? 'Video motion detected' : 'Motion detected',
+      service: 'Motion Sensor',
+      characteristic: 'MotionDetected',
+      value: true,
+      outcome: 'observed',
+    });
 
-    this.motionTimeout = setTimeout(() => {
-      this.motionDetected = false;
-      this.motionService
-        .getCharacteristic(this.platform.Characteristic.MotionDetected)
-        .updateValue(false);
-      this.motionTimeout = null;
-    }, timeoutMs);
+    this.motionTimeout = setTimeout(() => this.clearMotion(), timeoutMs);
+  }
+
+  private clearMotion(): void {
+    if (this.motionTimeout) { clearTimeout(this.motionTimeout); this.motionTimeout = null; }
+    if (!this.motionDetected) return;
+    this.motionDetected = false;
+    this.motionService.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(false);
+    logHomeKitEvent(this.platform.log, this.accessory, {
+      direction: 'bridge -> HAP', event: 'Motion cleared', service: 'Motion Sensor',
+      characteristic: 'MotionDetected', value: false, outcome: 'submitted',
+    });
+    this.recording?.endMotion();
+  }
+
+  public async shutdown(): Promise<void> {
+    if (this.motionTimeout) { clearTimeout(this.motionTimeout); this.motionTimeout = null; }
+    for (const remove of this.recordingListeners.splice(0)) remove();
+    await Promise.all([this.recording?.stop(), this.cameraSource.shutdown()]);
   }
 }

@@ -21,8 +21,9 @@ import {
   StreamRequestCallback,
   StreamingRequest,
 } from 'homebridge';
-import { withResponseBudget, withinRequestBudget, RequestOptions, checkRequestBudget, budgetedDelay } from '../operation-budget';
+import { withResponseBudget, withinRequestBudget, RequestOptions, checkRequestBudget } from '../operation-budget';
 import { toHapError } from '../hap-errors';
+import type { HomeKitAuditEvent } from '../homekit-audit';
 import { BlinkApi } from '../blink-api/client';
 import { readBoundedBody } from '../blink-api/response-body';
 import { BlinkHttpError } from '../blink-api/http';
@@ -43,6 +44,7 @@ import { Writable } from 'node:stream';
 import { resolve } from 'node:path';
 import { Buffer } from 'node:buffer';
 import { createHash, randomBytes } from 'node:crypto';
+import { SharedCameraFeed, type FeedHandle, type FeedSink, type FeedSubscription } from './shared-feed';
 import * as dgram from 'node:dgram';
 
 import { URL } from 'node:url';
@@ -161,13 +163,9 @@ interface PendingStreamSession {
 
 interface ActiveStreamSession extends PendingStreamSession {
   media?: OwnedMediaSession;
-  broker?: OwnedRtspBroker;
-  consumer?: Writable;
-  commandId?: number;
-  keepAliveTimer?: ReturnType<typeof setTimeout> | null;
   stopped?: boolean;
-  immisProxy?: ImmisProxyServer;
   readyNotified?: boolean;
+  feed?: FeedSubscription;
 }
 
 const usedPorts = new Set<number>();
@@ -220,10 +218,14 @@ class SnapshotNetworkError extends Error {
 
 export class BlinkCameraSource implements CameraStreamingDelegate {
   private readonly streamingConfig: BlinkCameraStreamingConfig;
+  private readonly sharedFeed: SharedCameraFeed;
   private readonly sessionOwners = new Map<string, SessionOwner>();
   private readonly pendingSessions = new Map<string, PendingStreamSession>();
   private readonly ongoingSessions = new Map<string, ActiveStreamSession>();
   private cachedSnapshot: Buffer | null = null;
+  private cameraActive = true;
+  private cameraEpoch = 0;
+  private snapshotAbort = new globalThis.AbortController();
   private cachedSnapshotTime = 0;
   private lastSuccessfulCaptureTime = 0;
   private freshSnapshotPromise: Promise<Buffer> | null = null;
@@ -254,12 +256,34 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly errorLog: (message: string) => void = log,
     private readonly beforeLiveview?: (options: RequestOptions) => Promise<void>,
     private readonly onInputObservation?: (observation: InputVideoObservation) => void,
+    private readonly auditEvent?: (event: HomeKitAuditEvent) => void,
   ) {
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
+    this.sharedFeed = new SharedCameraFeed((sink, signal) => this.startVendorFeed(sink, signal));
   }
 
   private logError(message: string): void {
     this.errorLog(redactDiagnosticText(message));
+  }
+
+  private audit(event: HomeKitAuditEvent): void {
+    try {
+      this.auditEvent?.(event);
+    } catch {
+      // Observability must not change HomeKit callback or media ownership behavior.
+    }
+  }
+
+  /** HomeKit camera-off applies to every live and recording consumer. */
+  setCameraActive(active: boolean): void {
+    if (active === this.cameraActive) return;
+    this.cameraActive = active; this.cameraEpoch++;
+    this.snapshotFailure = null; this.snapshotFailureCooldownUntil = 0;
+    if (!active) {
+      this.snapshotAbort.abort(); this.freshSnapshotPromise = null;
+      this.cachedSnapshot?.fill(0); this.cachedSnapshot = null; this.cachedSnapshotTime = 0;
+      for (const [id, owner] of this.sessionOwners) void this.stopStream(id, owner);
+    } else { this.snapshotAbort = new globalThis.AbortController(); }
   }
 
   /**
@@ -274,11 +298,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     request: SnapshotRequest,
     callback: SnapshotRequestCallback,
   ): Promise<void> {
+    this.audit({ direction: 'HomeKit -> bridge', event: 'Snapshot', outcome: 'requested',
+      width: request.width, height: request.height });
     this.log(`Snapshot requested (${request.width}x${request.height})`);
 
-    if (!this.isDeviceAvailable()) {
+    if (!this.cameraActive || !this.isDeviceAvailable()) {
       this.cachedSnapshot = null;
       this.cachedSnapshotTime = 0;
+      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'unavailable' });
       callback(new Error('Camera is unavailable/offline'));
       return;
     }
@@ -286,6 +313,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const persistSnapshotCache = this.streamingConfig.persistSnapshotCache ?? false;
     if (this.cachedSnapshot && persistSnapshotCache) {
       this.log(`Snapshot returned from persistent cache (${this.cachedSnapshot.length} bytes, download age ${Math.round((Date.now() - this.cachedSnapshotTime) / 1000)}s, capture age ${this.lastSuccessfulCaptureTime ? Math.round((Date.now() - this.lastSuccessfulCaptureTime) / 1000) + 's' : 'unknown'})`);
+      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'persistent cache', bytes: this.cachedSnapshot.length });
       callback(undefined, this.cachedSnapshot);
       return;
     }
@@ -296,18 +324,22 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     // Return cached snapshot if still valid by TTL
     if (this.cachedSnapshot && cacheTTL > 0 && cacheAge < cacheTTL) {
       this.log(`Snapshot returned from cache (${this.cachedSnapshot.length} bytes, age ${Math.round(cacheAge / 1000)}s)`);
+      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'cache', bytes: this.cachedSnapshot.length });
       callback(undefined, this.cachedSnapshot);
       return;
     }
 
+    let buffer: Buffer;
     try {
-      const buffer = await withResponseBudget(this.fetchFreshSnapshot());
-
-      this.log(`Snapshot returned (${buffer.length} bytes)`);
-      callback(undefined, buffer);
+      buffer = await withResponseBudget(this.fetchFreshSnapshot());
     } catch (error) {
+      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'failed' });
       callback(toHapError(this.hap, error));
+      return;
     }
+    this.log(`Snapshot returned (${buffer.length} bytes)`);
+    this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'fresh', bytes: buffer.length });
+    callback(undefined, buffer);
   }
 
   /**
@@ -315,7 +347,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Used by manual refresh controls when persistent caching is enabled.
    */
   async refreshSnapshotCache(): Promise<void> {
-    if (!this.isDeviceAvailable()) {
+    if (!this.cameraActive || !this.isDeviceAvailable()) {
       throw new Error('Camera is unavailable/offline');
     }
 
@@ -333,9 +365,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     this.snapshotFailure = null;
     this.snapshotFailureCooldownUntil = 0;
 
-    const request = (async () => {
+    const epoch = this.cameraEpoch, signal = this.snapshotAbort.signal;
+    const request: Promise<Buffer> = (async () => {
       try {
-        const buffer = await withResponseBudget(this.fetchSnapshotBuffer(Date.now() + 60_000), 60_000);
+        const buffer = await withResponseBudget(this.fetchSnapshotBuffer(Date.now() + 60_000, signal), 60_000);
+        if (epoch !== this.cameraEpoch || !this.cameraActive) { buffer.fill(0); throw new Error('Camera is unavailable/offline'); }
         this.cacheSnapshot(buffer);
         this.snapshotFailure = null;
         this.snapshotFailureCooldownUntil = 0;
@@ -350,13 +384,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         }
         // Availability already prevents outbound work. Let a camera that comes
         // back online recover immediately instead of inheriting a network cooldown.
-        if (this.isDeviceAvailable()) {
+        if (epoch === this.cameraEpoch && this.cameraActive && this.isDeviceAvailable()) {
           this.snapshotFailure = failure;
           this.snapshotFailureCooldownUntil = Date.now() + SNAPSHOT_FAILURE_COOLDOWN_MS;
         }
         throw failure;
       } finally {
-        this.freshSnapshotPromise = null;
+        if (epoch === this.cameraEpoch) this.freshSnapshotPromise = null;
       }
     })();
 
@@ -367,7 +401,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private cacheSnapshot(buffer: Buffer): void {
     // Status polling can report the camera offline while its image is downloading.
     // Never publish or retain that late response as an available snapshot.
-    if (!this.isDeviceAvailable()) {
+    if (!this.cameraActive || !this.isDeviceAvailable()) {
+      buffer.fill(0);
       this.cachedSnapshot = null;
       this.cachedSnapshotTime = 0;
       throw new Error('Camera is unavailable/offline');
@@ -376,9 +411,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     this.cachedSnapshotTime = Date.now();
   }
 
-  private async fetchSnapshotBuffer(deadline: number): Promise<Buffer> {
-    const capture = await this.requestThumbnail({ deadline });
-    checkRequestBudget({ deadline });
+  private async fetchSnapshotBuffer(deadline: number, signal: globalThis.AbortSignal): Promise<Buffer> {
+    const capture = await this.requestThumbnail({ deadline, signal });
+    checkRequestBudget({ deadline, signal });
     const url = capture.thumbnail;
     if (capture.completed) {
       this.lastSuccessfulCaptureTime = Date.now();
@@ -415,7 +450,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       response = await fetch(resourceUrl.toString(), {
         headers: this.api.getAuthHeaders(),
         redirect: 'error',
-        signal: globalThis.AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now()))),
+        signal: globalThis.AbortSignal.any([signal, globalThis.AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now())))]),
       });
     } catch (error) {
       throw new SnapshotNetworkError(describeNetworkFailure(error, resourceUrl, startedAtMs));
@@ -425,11 +460,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error(`Failed to fetch thumbnail: ${response.status}`);
     }
     try {
-      const buffer = await readBoundedBody(response, { kind: 'thumbnail', deadline });
-      checkRequestBudget({ deadline });
+      const buffer = await readBoundedBody(response, { kind: 'thumbnail', deadline, signal });
+      checkRequestBudget({ deadline, signal });
       return buffer;
     } catch {
-      checkRequestBudget({ deadline });
+      checkRequestBudget({ deadline, signal });
       throw new Error('Blink thumbnail response could not be read.');
     }
   }
@@ -458,13 +493,20 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Prepare stream - allocate ports and SRTP parameters for HomeKit.
    */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    if (!this.streamingConfig.enabled) {
+    this.audit({ direction: 'HomeKit -> bridge', event: 'Prepare stream', outcome: 'requested',
+      audio: this.streamingConfig.audio.enabled, talkback: false });
+    const complete: PrepareStreamCallback = (...args) => {
+      this.audit({ direction: 'bridge -> HomeKit', event: 'Prepare stream', outcome: args[0] ? 'failed' : 'prepared',
+        audio: this.streamingConfig.audio.enabled, talkback: false });
+      callback(...args);
+    };
+    if (!this.cameraActive || !this.streamingConfig.enabled) {
       this.log('Stream preparation requested but streaming is disabled');
-      callback(new Error('Live streaming disabled'));
+      complete(new Error('Live streaming disabled'));
       return;
     }
 
-    void this.prepareStreamInternal(request, callback);
+    void this.prepareStreamInternal(request, complete);
   }
 
   private async prepareStreamInternal(
@@ -490,6 +532,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     };
     owner.expiry = setTimeout(() => { void this.stopStream(sessionId); }, 30_000);
     owner.expiry.unref?.();
+    let response: PrepareStreamResponse;
     try {
       const videoSSRC = randomBytes(4).readUInt32BE(0) || 1;
       const localVideoPort = await allocateOwned();
@@ -520,7 +563,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       owner.phase = 'PREPARED';
       this.pendingSessions.set(sessionId, session);
 
-      const response: PrepareStreamResponse = {
+      response = {
         video: {
           port: localVideoPort,
           ssrc: videoSSRC,
@@ -539,7 +582,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       }
 
       this.logNegotiation('Stream prepared');
-      callback(undefined, response);
     } catch {
       const message = owner.abort.signal.aborted ? 'Streaming preparation cancelled' : 'Stream preparation failed';
       owner.preparing = false;
@@ -547,16 +589,28 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       await this.stopStream(sessionId);
       this.logError(message);
       callback(new Error(message));
+      return;
     }
+    callback(undefined, response);
   }
 
   /**
    * Handle generation-owned private media streaming.
    */
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
+    const event = request.type === 'start' ? 'Stream start' : request.type === 'reconfigure' ? 'Stream reconfigure' : 'Stream stop';
+    this.audit({ direction: 'HomeKit -> bridge', event, outcome: 'requested',
+      ...(request.type === 'start' ? { width: request.video.width, height: request.video.height,
+        audio: this.streamingConfig.audio.enabled && Boolean(request.audio), talkback: false } : {}) });
+    const complete: StreamRequestCallback = (...args) => {
+      const outcome = args[0] ? 'failed' : !this.streamingConfig.enabled ? 'disabled'
+        : request.type === 'reconfigure' ? 'unsupported' : 'completed';
+      this.audit({ direction: 'bridge -> HomeKit', event, outcome });
+      callback(...args);
+    };
     if (!this.streamingConfig.enabled) {
       this.log('Stream request received but streaming is disabled');
-      callback();
+      complete();
       return;
     }
 
@@ -564,15 +618,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     switch (request.type) {
       case 'start':
-        void this.startStream(sessionId, request, callback);
+        void this.startStream(sessionId, request, complete);
         break;
       case 'reconfigure':
         this.log(`Stream reconfigure requested for session ${sessionId} (unsupported)`);
-        callback();
+        complete();
         break;
       case 'stop':
         this.log(`Stream stop requested for session ${sessionId}`);
-        void this.stopStream(sessionId).finally(() => callback());
+        void this.stopStream(sessionId).finally(() => complete());
         break;
     }
   }
@@ -626,26 +680,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     let callbackDone = false;
     callback = (error) => { if (!callbackDone) { callbackDone = true; originalCallback(error); } };
     owner.cancelStart = () => callback(new Error('Streaming startup cancelled'));
-    const active: ActiveStreamSession = {
-      ...pending,
-      keepAliveTimer: null,
-    };
+    const active: ActiveStreamSession = { ...pending };
     this.pendingSessions.delete(sessionId);
     this.ongoingSessions.set(sessionId, active);
 
     try {
       // Resolve shipped bytes and validate negotiation before acquiring a vendor capability.
       const mediaOptions = this.buildNativeMediaOptions(request, active);
-      if (this.beforeLiveview) {
-        const options = { signal: owner.abort.signal, deadline: Date.now() + 12_000 };
-        await withinRequestBudget(this.beforeLiveview(options), options);
-        if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
-      }
-      // Leave time to report a bounded startup failure before the remote
-      // cleanup duty reaches its independent five-second deadline.
-      await withinRequestBudget(Promise.all([this.remoteRetirement, ...this.remoteAllocations]),
-        { signal: owner.abort.signal, deadline: Date.now() + 4000 });
-      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       owner.localStarting = true;
       owner.mediaClosed = false;
       try {
@@ -654,6 +695,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         void media.whenClosed.then(() => {
           owner.mediaClosed = true; owner.release?.();
           if (this.ownsSession(sessionId, active)) {
+            this.audit({ direction: 'bridge -> HAP', event: 'Stream media ended', outcome: media.failed ? 'failed' : 'completed' });
             if (media.failed) this.markStreamFailure(sessionId, active);
             void this.stopStream(sessionId, owner);
           }
@@ -664,80 +706,29 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         if (!active.media) owner.mediaClosed = true;
         owner.release?.();
       }
-      const allocation = this.requestLiveView().then(async liveview => {
-        active.commandId = liveview.command_id ?? liveview.id;
-        if (!this.ownsSession(sessionId, active)) {
-          if (active.commandId) await this.completeLiveview(active.commandId);
-          throw new Error('Streaming startup cancelled');
-        }
-        return liveview;
-      });
-      // Keep a cancelled POST owned until a late command has been retired.
-      // This barrier never depends on local slots and does not replay the POST.
-      const allocationDuty = allocation.then(() => undefined, () => undefined);
-      this.remoteAllocations.add(allocationDuty);
-      void allocationDuty.then(() => this.remoteAllocations.delete(allocationDuty));
-      const liveview = await allocation;
-      if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
-      const originalUrl = liveview.server;
-      if (!originalUrl) {
-        throw new Error('Live view did not return a server URL');
-      }
-
-      const commandId = liveview.command_id ?? liveview.id;
-      active.commandId = commandId;
-
-      const readiness = commandId && !originalUrl.startsWith('immis://')
-        ? this.waitForLiveViewReady(commandId, liveview.polling_interval ?? 5, 6, owner)
-        : Promise.resolve();
-      readiness.catch(() => undefined);
-      const failed = (): void => {
-        if (!this.ownsSession(sessionId, active)) return;
-        this.logError('Private media transport failed'); this.markStreamFailure(sessionId, active);
-        void this.stopStream(sessionId, owner);
-      };
       owner.localStarting = true;
       try {
-        if (originalUrl.startsWith('immis://')) {
-          const proxy = new ImmisProxyServer({ immisUrl: originalUrl, serial: this.serial,
-            log: message => this.log(message), errorLog: message => this.logError(message),
-            debug: this.streamingConfig.mediaDebug, saveStreamPath: this.streamingConfig.debugStreamPath, verifyTls: true });
-          active.immisProxy = proxy; proxy.on('error', failed);
-          const media = active.media!;
-          active.consumer = new Writable({ write(bytes: Buffer, _encoding, done) {
-            void media.write(bytes).then(() => done(), () => done(new Error('Private media unavailable')));
-          } });
-          active.consumer.on('error', failed);
-          await proxy.start();
-          if (!this.ownsSession(sessionId, active)) { proxy.stop(); throw new Error('Streaming startup cancelled'); }
-          proxy.attachConsumer(active.consumer);
-        } else {
-          const media = active.media!;
-          const broker = new OwnedRtspBroker(originalUrl, { write: bytes => media.write(bytes), close: () => media.stop() },
-            { error: failed }, owner.abort.signal);
-          active.broker = broker;
-          await broker.start();
-          if (!this.ownsSession(sessionId, active)) { void broker.stop(); throw new Error('Streaming startup cancelled'); }
-        }
+        const media = active.media!;
+        active.feed = await this.sharedFeed.subscribe({
+          write: bytes => media.write(bytes),
+          end: () => media.end(),
+          fail: () => {
+            if (!this.ownsSession(sessionId, active)) return;
+            this.audit({ direction: 'bridge -> HAP', event: 'Stream transport', outcome: 'failed' });
+            this.markStreamFailure(sessionId, active);
+            void this.stopStream(sessionId, owner);
+          },
+        }, owner.abort.signal);
+        if (!this.ownsSession(sessionId, active)) { await active.feed.stop(); throw new Error('Streaming startup cancelled'); }
       } finally {
         owner.localStarting = false;
         if (owner.abort.signal.aborted) {
-          const closed = Promise.all([active.immisProxy?.whenClosed, active.broker?.whenClosed]);
-          void closed.then(() => { owner.transportClosed = true; owner.release?.(); });
+          void active.feed?.whenClosed.then(() => { owner.transportClosed = true; owner.release?.(); });
         }
+        owner.release?.();
       }
       if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       active.readyNotified = true; owner.phase = 'RUNNING'; callback();
-
-      // Start keep-alive and liveview polling in the BACKGROUND (non-blocking)
-      // Start monitoring only after owned media startup is confirmed.
-      if (commandId) {
-        // IMMIS command monitoring is independent of media startup.
-        // Other inputs retain their existing readiness polling owner.
-        void readiness
-          .then(() => { if (this.ownsSession(sessionId, active)) this.startKeepAlive(sessionId, commandId, liveview.polling_interval); })
-          .catch(() => undefined);
-      }
 
     } catch {
       // Home may immediately resubmit START after a refusal. Keep remote POSTs bounded
@@ -784,6 +775,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const pending = this.pendingSessions.get(sessionId);
     if (!owner || (expectedOwner && owner !== expectedOwner)) return;
     if (owner.retirement) return owner.retirement;
+    this.audit({ direction: 'bridge -> HAP', event: 'Stream retirement', outcome: 'requested', talkback: false });
     owner.phase = 'RETIRING';
     recordSecurityBoundaryEvent('cancellation');
     owner.abort.abort(new Error('Streaming session retired'));
@@ -791,25 +783,23 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     globalThis.clearTimeout(owner.expiry);
     if (active) {
       active.stopped = true;
-      if (active.keepAliveTimer) globalThis.clearTimeout(active.keepAliveTimer);
-      active.keepAliveTimer = null;
-      try { active.immisProxy?.retire(); void active.broker?.stop(); void active.media?.stop(); active.consumer?.destroy(); }
+      try { void active.feed?.stop(); void active.media?.stop(); }
       catch { this.logError('Media transport cleanup failed'); }
     }
     if (pending) this.pendingSessions.delete(sessionId);
-    const transportClosure = active?.immisProxy || active?.broker
-      ? Promise.all([active.immisProxy?.whenClosed, active.broker?.whenClosed]).then(() => undefined)
-      : undefined;
+    const transportClosure = active?.feed?.whenClosed;
     owner.transportClosed = !transportClosure;
     owner.retirement = (async () => {
       const release = (): void => {
         if (owner.preparing || owner.localStarting || owner.mediaClosed === false || owner.transportClosed === false) return;
+        const wasClosed = owner.phase === 'CLOSED';
         for (const port of owner.ports) releasePort(port);
         owner.ports.clear(); owner.phase = 'CLOSED';
         const session = active ?? pending;
         session?.videoSRTP.fill(0); session?.audioSRTP?.fill(0);
         if (this.sessionOwners.get(sessionId) === owner) this.sessionOwners.delete(sessionId);
         if (this.ongoingSessions.get(sessionId) === active) this.ongoingSessions.delete(sessionId);
+        if (!wasClosed) this.audit({ direction: 'bridge -> HAP', event: 'Stream retirement', outcome: 'completed', talkback: false });
       };
       owner.release = release;
       if (transportClosure) {
@@ -822,7 +812,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         });
       }
       release();
-      if (active?.commandId) void this.completeLiveview(active.commandId);
     })();
     return owner.retirement;
   }
@@ -838,47 +827,106 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     }
   }
 
-  private async waitForLiveViewReady(
-    commandId: number,
-    pollingInterval: number,
-    maxAttempts: number = 6,
-    owner?: SessionOwner,
-  ): Promise<void> {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      owner?.abort.signal.throwIfAborted();
-      const status = await this.api.getCommandStatus(this.networkId, commandId, { signal: owner?.abort.signal });
-      owner?.abort.signal.throwIfAborted();
-      if (status.complete || status.status === 'complete' || status.status === 'running') {
-        return;
+  /** The single vendor owner shared by live viewers and continuous recording. */
+  private async startVendorFeed(sink: FeedSink, signal: globalThis.AbortSignal): Promise<FeedHandle> {
+    signal.throwIfAborted();
+    if (!this.cameraActive || !this.isDeviceAvailable()) throw new Error('Camera feed unavailable');
+    const abort = new globalThis.AbortController();
+    let proxy: ImmisProxyServer | undefined;
+    let broker: OwnedRtspBroker | undefined;
+    let consumer: Writable | undefined;
+    let commandId: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopping: Promise<void> | undefined;
+    let finish!: () => void;
+    const whenClosed = new Promise<void>(resolve => { finish = resolve; });
+    const stop = (): Promise<void> => {
+      if (stopping) return stopping;
+      abort.abort(); globalThis.clearTimeout(timer);
+      signal.removeEventListener('abort', cancelled);
+      stopping = (async () => {
+        proxy?.retire(); void broker?.stop(); consumer?.destroy();
+        await Promise.all([proxy?.whenClosed, broker?.whenClosed]);
+        if (commandId) void this.completeLiveview(commandId);
+        finish();
+      })();
+      return stopping;
+    };
+    const cancelled = (): void => { void stop(); };
+    const failed = (): void => {
+      if (abort.signal.aborted) return;
+      this.logError('Private media transport failed');
+      try { sink.fail(); } finally { void stop(); }
+    };
+    signal.addEventListener('abort', cancelled, { once: true });
+    try {
+      if (this.beforeLiveview) {
+        const options = { signal: abort.signal, deadline: Date.now() + 12_000 };
+        await withinRequestBudget(this.beforeLiveview(options), options);
       }
-      if (status.status === 'failed') {
-        throw new Error(`Live view command ${commandId} failed`);
+      await withinRequestBudget(Promise.all([this.remoteRetirement, ...this.remoteAllocations]),
+        { signal: abort.signal, deadline: Date.now() + 4000 });
+      abort.signal.throwIfAborted();
+      const allocation = this.requestLiveView().then(async liveview => {
+        commandId = liveview.command_id ?? liveview.id;
+        if (abort.signal.aborted) {
+          if (commandId) await this.completeLiveview(commandId);
+          throw new Error('Camera feed cancelled');
+        }
+        return liveview;
+      });
+      const duty = allocation.then(() => undefined, () => undefined);
+      this.remoteAllocations.add(duty);
+      void duty.then(() => this.remoteAllocations.delete(duty));
+      const liveview = await withinRequestBudget(allocation, { signal: abort.signal, deadline: Date.now() + 25000 });
+      abort.signal.throwIfAborted();
+      if (!liveview.server) throw new Error('Camera feed unavailable');
+      if (liveview.server.startsWith('immis://')) {
+        proxy = new ImmisProxyServer({ immisUrl: liveview.server, serial: this.serial,
+          log: message => this.log(message), errorLog: message => this.logError(message),
+          debug: this.streamingConfig.mediaDebug, saveStreamPath: this.streamingConfig.debugStreamPath, verifyTls: true });
+        proxy.on('error', failed);
+        consumer = new Writable({ write(bytes: Buffer, _encoding, done) {
+          void sink.write(bytes).then(() => done(), () => done(new Error('Private media unavailable')));
+        } });
+        consumer.on('error', failed);
+        await proxy.start(); abort.signal.throwIfAborted(); proxy.attachConsumer(consumer);
+        void proxy.whenClosed.then(() => { if (!abort.signal.aborted) failed(); });
+      } else {
+        broker = new OwnedRtspBroker(liveview.server, { write: bytes => sink.write(bytes), close: () => sink.end() },
+          { error: failed }, abort.signal);
+        await broker.start(); abort.signal.throwIfAborted();
+        void broker.whenClosed.then(() => { if (!abort.signal.aborted) failed(); });
       }
-      // Use the provided pollingInterval unless the response explicitly specifies one
-      const delayMs = pollingInterval * 1000;
-      await budgetedDelay(delayMs, { signal: owner?.abort.signal });
+      if (commandId) {
+        const ownedCommand = commandId;
+        const interval = Math.max(1, Math.min(60, Number.isFinite(liveview.polling_interval) && liveview.polling_interval! > 0 ? liveview.polling_interval! : 5)) * 1000;
+        const poll = async (): Promise<void> => {
+          if (abort.signal.aborted) return;
+          try {
+            const status = await this.api.getCommandStatus(this.networkId, ownedCommand, { signal: abort.signal, deadline: Date.now() + 30_000 });
+            if (abort.signal.aborted || status.complete || status.status === 'complete' || status.status === 'failed') return;
+          } catch { if (abort.signal.aborted) return; this.logError('Live view polling failed'); }
+          timer = setTimeout(() => { void poll(); }, interval);
+        };
+        void poll();
+      }
+      return { whenClosed, stop };
+    } catch {
+      await stop();
+      throw new Error('Camera feed unavailable');
     }
   }
 
-  private startKeepAlive(sessionId: string, commandId: number, intervalSeconds?: number): void {
-    const active = this.ongoingSessions.get(sessionId);
-    if (!active) {
-      return;
-    }
+  subscribeFeed(sink: FeedSink, signal: globalThis.AbortSignal): Promise<FeedSubscription> {
+    if (!this.cameraActive) return Promise.reject(new Error('Camera feed unavailable'));
+    return this.sharedFeed.subscribe(sink, signal);
+  }
 
-    // continue_interval belongs to the vendor's Continue button. Command
-    // liveness uses polling_interval and an immediate first GET, like the app.
-    const intervalMs = Math.max(1, Math.min(60,
-      typeof intervalSeconds === 'number' && Number.isFinite(intervalSeconds) && intervalSeconds > 0 ? intervalSeconds : 5)) * 1000;
-    const poll = async (): Promise<void> => {
-      if (!this.ownsSession(sessionId, active)) return;
-      try {
-        const status = await this.api.getCommandStatus(this.networkId, commandId, { signal: active.owner?.abort.signal, deadline: Date.now() + 30_000 });
-        if (!this.ownsSession(sessionId, active) || status.complete || status.status === 'complete' || status.status === 'failed') return;
-      } catch { if (!this.ownsSession(sessionId, active)) return; this.logError('Live view polling failed'); }
-      active.keepAliveTimer = setTimeout(() => { void poll(); }, intervalMs);
-    };
-    void poll();
+  async shutdown(): Promise<void> {
+    this.setCameraActive(false);
+    await Promise.all([...this.sessionOwners].map(([id, owner]) => this.stopStream(id, owner)));
+    await this.sharedFeed.stop();
   }
 
   private buildNativeMediaOptions(request: Extract<StreamingRequest, { type: 'start' }>, active: ActiveStreamSession): MediaSessionOptions {

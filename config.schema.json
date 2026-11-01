@@ -119,6 +119,19 @@
         "type": "boolean",
         "default": true
       },
+      "hksvCameras": {
+        "title": "HomeKit Secure Video Cameras",
+        "description": "Opt in up to four cameras by exact Blink name, numeric ID, or serial number. Recording permission in Apple Home starts continuous capture with a four-second memory buffer and local video motion detection, increasing battery and network use. Motion requires the Blink network armed and camera motion enabled. Leave empty to disable. Restart the child bridge after changes.",
+        "type": "array",
+        "default": [],
+        "maxItems": 4,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "pattern": "\\S",
+          "title": "Camera Name / ID / Serial"
+        }
+      },
       "mediaDebug": {
         "title": "Streaming Diagnostics",
         "description": "Enable bounded, redacted streaming diagnostics. Per-packet and NAL traces are omitted.",
@@ -327,6 +340,12 @@
       "expanded": false,
       "items": [
         "enableStreaming",
+        {
+          "key": "hksvCameras",
+          "type": "array",
+          "buttonText": "Enable Recording for Camera",
+          "items": ["hksvCameras[]"]
+        },
         "maxStreams",
         "enableAudio",
         "audioCodec",

@@ -123,6 +123,7 @@ def write_worker_artifact(prefix, worker, output, source_sha):
     with worker.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     receipt = {'target': target, 'source_sha': source_sha, 'sha256': digest, 'dependencies': dependency,
+               'protocolVersion': 3,
                'dynamic_dependencies': dynamic, 'distribution_ready': False,
                'limitations': ['CI build/test artifact only; no minimum-OS clean-host or npm artifact acceptance',
                                'No corresponding-source distribution or integrated physical acceptance']}
@@ -260,7 +261,7 @@ def build(downloads, jobs, disable_assembly=False):
         f'--cc={env.get("CC", "cc")}', '--enable-gpl', '--enable-version3', '--enable-libx264', '--enable-libopus',
         '--enable-avcodec', '--enable-avformat', '--enable-avutil', '--enable-swscale',
         '--enable-swresample', '--disable-avdevice', '--disable-avfilter',
-        '--enable-demuxer=mpegts', '--enable-muxer=mpegts',
+        '--enable-demuxer=mpegts,mov', '--enable-muxer=mpegts,mp4',
         '--enable-parser=h264,aac,aac_latm', '--enable-decoder=h264,aac,aac_latm,opus,pcm_alaw,pcm_mulaw',
         '--enable-encoder=libx264,libopus,pcm_alaw,pcm_mulaw,aac', '--pkg-config-flags=--static']
     if disable_assembly:

@@ -56,6 +56,9 @@ Use a minor bump for new compatible capabilities, a patch for compatible fixes.
 The supported progression is `X.Y.Z-alpha.0`, `X.Y.Z-beta.0`, `X.Y.Z-rc.0`, then
 `X.Y.Z`. Increment the prerelease number after changes within a stage. Freeze the
 version target before alpha. Never reuse a published version for different code.
+Numeric prereleases may also use a compact identifier, such as `1.0.0-beta1`;
+the `alpha`, `beta` or `rc` channel still determines the npm dist-tag. The first
+HSV beta uses `1.0.0-beta1` at the maintainer's explicit request.
 
 Update `CHANGELOG.md` with a `## [VERSION] - YYYY-MM-DD` section describing user
 behavior, security fixes, upgrade notes, and known limitations. Keep package.json

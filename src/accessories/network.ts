@@ -28,6 +28,9 @@ export class NetworkAccessory {
   private pendingOperations = 0;
   private intentRevision = 0;
 
+  /** Confirmed Blink state, never a pending arm/disarm intent. */
+  public isArmed(): boolean { return this.device.armed === true; }
+
   constructor(
     private readonly platform: BlinkCamerasPlatform,
     private readonly accessory: PlatformAccessory,
@@ -155,6 +158,7 @@ export class NetworkAccessory {
         ? this.platform.Characteristic.StatusFault.GENERAL_FAULT
         : this.platform.Characteristic.StatusFault.NO_FAULT,
     );
+    this.platform.updateMotionAvailability();
   }
 
   /**

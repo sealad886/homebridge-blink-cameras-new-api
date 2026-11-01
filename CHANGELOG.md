@@ -7,6 +7,47 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.0.0-beta1] - 2026-11-01
+
+### Added
+- Opt-in HomeKit Secure Video recording with a four-second, memory-only prebuffer,
+  H.264 video and optional AAC-LC audio. Select cameras with `hksvCameras`, then
+  enable recording in Apple Home after installation.
+- Share one Blink feed per camera between HomeKit live viewers and recording.
+  Retain complete recording fragments with explicit per-camera and shared memory
+  limits; report discontinuities and overflow instead of silently losing footage.
+- Detect motion from the recording worker's decoded video while its prebuffer is
+  ready. Respect confirmed Blink arming and camera motion settings, with bounded
+  scene analysis that rejects uniform exposure changes and isolated noise.
+  HSV motion does not require delayed Blink cloud-clip polling.
+- Respect HomeKit camera, recording and audio permissions. Revocation, camera
+  unavailability and shutdown stop capture and erase retained recording buffers.
+- Add privacy-preserving HomeKit request and state audit logging, including
+  motion, doorbell, snapshot and streaming outcomes without media capabilities,
+  pairing identifiers or footage in logs.
+
+### Native media and release
+- Add private worker protocol 3 for complete fragmented MP4 initialization and
+  media segments. Reject incompatible worker manifests before launch and require
+  newly built, hash-bound native artifacts for every supported target.
+- Validate recording timestamp continuity, keyframe boundaries and audio
+  coverage. Withhold incomplete fragments and fail explicitly on source resets,
+  missing audio, stalled consumers or resource exhaustion.
+- Publish the exact `1.0.0-beta1` version on the `beta` dist-tag. The stable
+  `latest` channel remains unchanged.
+
+### Beta acceptance and installation
+- Recording remains off by default. Continuous Blink capture increases battery,
+  network and encoding load, and provider session endings can leave gaps while
+  the buffer warms again. Buffering cannot restore media never sent by Blink.
+- Local native decoding, HAP negotiation, permission, buffering and ownership
+  tests provide development evidence. Physical motion-to-Home-hub-to-iCloud
+  recording and playback remain operator acceptance steps after installation.
+- Install the exact registry beta through Homebridge package management. Existing
+  HomeKit pairing and accessory persistence must be retained. Follow
+  `docs/RELEASE.md` and the HomeKit Secure Video section of the README; no Pi
+  installation or configuration change is included in publication.
+
 ## [0.11.0-beta.0] - 2026-10-25
 
 ### Added
