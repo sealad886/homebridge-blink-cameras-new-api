@@ -55,7 +55,7 @@ static Condition changed;
 static uint8_t queue[CAPACITY];
 static size_t first, available;
 static int configured, ended, reader_closed;
-static uint32_t config[13];
+static uint32_t config[16];
 static int64_t started;
 static uint32_t consumed_media;
 static void fatal(const char *code) { fprintf(stderr, "BLINK_WORKER_%s\n", code); fflush(stderr); _Exit(2); }
@@ -83,7 +83,7 @@ static void read_messages(void) {
         if(type>=10 && type<=12) { protect_message(type,payload,length); LOCK(&mutex);WAKE(&changed);UNLOCK(&mutex); continue; }
         LOCK(&mutex);
         if(type==1 && !configured && !ended && length==BLINK_CONFIG_BYTES) {
-            for(int i=0;i<13;i++) config[i]=u32(payload+4*i);
+            for(int i=0;i<16;i++) config[i]=u32(payload+4*i);
             if(!config[0] || !config[1] || config[0]>1920 || config[1]>1080 ||
                (config[0]&1) || (config[1]&1) || config[2]<1 || config[2]>30 ||
                config[3]<20000 || config[3]>8000000 || config[4]<1 || config[4]>9000 || config[5]>1) fatal("CONFIG");
@@ -91,9 +91,11 @@ static void read_messages(void) {
             uint32_t blocks=((config[0]+15)/16)*((config[1]+15)/16);
             const uint32_t max_blocks[]={3600,5120,8192},max_block_rate[]={108000,216000,245760};
             if(blocks>max_blocks[config[11]] || blocks*config[2]>max_block_rate[config[11]])fatal("CONFIG");
-            if(config[6]>3 || (!config[6] && (config[7] || config[8] || config[9])) ||
+            if(config[13]>1 || (!config[13] && (config[14] || config[15])) ||
+               (config[13] && (config[14]<1000 || config[14]>4000 || config[15]<1000 || config[15]>4000 || config[15]>config[14])))fatal("CONFIG");
+            if(config[6]>4 || (config[13]?(config[6]!=0 && config[6]!=4):config[6]==4) || (!config[6] && (config[7] || config[8] || config[9])) ||
                (config[6] && (config[8]!=1 || config[9]<8000 || config[9]>128000 ||
-               (config[6]==1?(config[7]!=16000 && config[7]!=24000):config[7]!=8000)))) fatal("AUDIO_CONFIG");
+               (config[6]==1 || config[6]==4?(config[7]!=16000 && config[7]!=24000):config[7]!=8000)))) fatal("AUDIO_CONFIG");
             if(config[6]==1?(config[12]!=10 && config[12]!=20 && config[12]!=40 && config[12]!=60):config[12]!=0)fatal("AUDIO_CONFIG");
             configured=1;
         } else if(type==2 && configured && !ended && length) {
@@ -147,11 +149,14 @@ static int deny_open(AVFormatContext *context, AVIOContext **io, const char *url
     return AVERROR(EPERM);
 }
 static int interrupted(void *unused) { (void)unused; return av_gettime_relative()-started>300000000; }
+#include "recording.inc"
+#include "motion.inc"
 static void packets(AVCodecContext *encoder, AVPacket *packet, uint64_t *bytes,uint32_t type) {
     int result;
     while((result=avcodec_receive_packet(encoder,packet))>=0) {
         if(packet->size<=0 || (uint32_t)packet->size>MAX_PACKET || *bytes+(uint32_t)packet->size>64u*1024u*1024u) fatal("OUTPUT_LIMIT");
         *bytes+=(uint32_t)packet->size;
+        if(config[13]) { recording_packet(encoder,packet,type);av_packet_unref(packet);continue; }
         uint32_t length=48+(uint32_t)packet->size;
         uint8_t *framed=av_malloc(length); if(!framed) fatal("MEMORY");
         put64(framed,av_rescale_q(packet->pts,encoder->time_base,AV_TIME_BASE_Q));
@@ -219,20 +224,24 @@ int main(int argc, char **argv) {
     const int profiles[]={AV_PROFILE_H264_BASELINE,AV_PROFILE_H264_MAIN,AV_PROFILE_H264_HIGH},levels[]={31,32,40};
     encoder->profile=profiles[config[10]];encoder->level=levels[config[11]];
     encoder->rc_max_rate=config[3];encoder->rc_buffer_size=(int)config[3];
+    if(config[13])encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
     /* Profiles are exact: libx264 applies these public options after the preset.
      * CABAC distinguishes Main; the 8x8 transform distinguishes High. */
     if(av_dict_set(&options,"preset",config[5]?"ultrafast":"veryfast",0)<0 ||
        av_dict_set(&options,"tune","zerolatency",0)<0 ||
        av_dict_set(&options,"coder",config[10]?"cabac":"cavlc",0)<0 ||
        av_dict_set_int(&options,"8x8dct",config[10]==2,0)<0)fatal("MEMORY");
+    if(config[13] && av_dict_set_int(&options,"sc_threshold",0,0)<0)fatal("MEMORY");
     if(avcodec_open2(encoder,codec,&options)<0) { fatal("ENCODER"); }
     av_dict_free(&options);
+    if(config[13]) { if(config[6])audio_open_encoder();recording_open(encoder,audio_encoder); }
     AVFrame *decoded=av_frame_alloc(), *scaled=av_frame_alloc(); AVPacket *packet=av_packet_alloc(), *encoded=av_packet_alloc();
     if(!decoded || !scaled || !packet || !encoded) fatal("MEMORY");
     scaled->format=AV_PIX_FMT_YUV420P; scaled->width=encoder->width; scaled->height=encoder->height;scaled->sample_aspect_ratio=(AVRational){1,1};
     if(av_frame_get_buffer(scaled,32)<0) fatal("MEMORY");
     struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;
-    int64_t first_video_pts=AV_NOPTS_VALUE,last_selected_pts=AV_NOPTS_VALUE,next_output_frame=0;
+    int64_t first_video_pts=AV_NOPTS_VALUE,last_selected_pts=AV_NOPTS_VALUE,last_source_pts=AV_NOPTS_VALUE,next_output_frame=0;
+    MotionDetector motion={0};
     for (;;) {
         result=av_read_frame(input,packet);
         if(result<0 && result!=AVERROR_EOF) fatal("MEDIA");
@@ -267,6 +276,8 @@ int main(int argc, char **argv) {
             }
             if(decoded->best_effort_timestamp==AV_NOPTS_VALUE)fatal("VIDEO_TIMESTAMP");
             int64_t pts=av_rescale_q(decoded->best_effort_timestamp,input->streams[video]->time_base,AV_TIME_BASE_Q);
+            if(config[13] && last_source_pts!=AV_NOPTS_VALUE && pts<=last_source_pts)fatal("VIDEO_DISCONTINUITY");
+            last_source_pts=pts;
             /* Keep rational output deadlines anchored to the source clock, not each selected frame. */
             if(last_selected_pts!=AV_NOPTS_VALUE && pts<=last_selected_pts) { av_frame_unref(decoded);continue; }
             if(first_video_pts==AV_NOPTS_VALUE)first_video_pts=pts;
@@ -292,13 +303,21 @@ int main(int argc, char **argv) {
             if(sws_scale(scaler,(const uint8_t *const*)decoded->data,decoded->linesize,0,decoded->height,target,scaled->linesize)!=inner_height) fatal("SCALE");
             scaled->pts=pts;
             if(avcodec_send_frame(encoder,scaled)<0) { fatal("ENCODE"); }
-            packets(encoder,encoded,&bytes,2); av_frame_unref(decoded);
+            packets(encoder,encoded,&bytes,2);
+            if(config[13]) {
+                uint32_t score=0;
+                if(motion_sample(&motion,scaled->data[0],scaled->linesize[0],scaled->width,scaled->height,(int64_t)elapsed,&score)) {
+                    uint8_t event[16];put64(event,(int64_t)elapsed);put32(event+8,score);put32(event+12,1);
+                    output(BLINK_VIDEO_MOTION,event,sizeof(event));
+                }
+            }
+            av_frame_unref(decoded);
         }
         if(received!=AVERROR(EAGAIN) && received!=AVERROR_EOF) fatal("DECODE");
         if(result==AVERROR_EOF) break;
     }
     if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
-    packets(encoder,encoded,&bytes,2); audio_finish(&bytes); output(3,NULL,0);
+    packets(encoder,encoded,&bytes,2); audio_finish(&bytes); if(config[13])recording_finish();output(3,NULL,0);
     sws_freeContext(scaler); av_frame_free(&decoded); av_frame_free(&scaled); av_packet_free(&packet); av_packet_free(&encoded); avcodec_free_context(&decoder); avcodec_free_context(&encoder);
     avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);
     LOCK(&mutex);while(!reader_closed)if(!WAIT(&changed,&mutex))fatal("FINAL_IDLE_TIMEOUT");UNLOCK(&mutex);

@@ -83,7 +83,9 @@ export function collectSourceProof(root, sourceSha) {
     if (path === 'native/dependencies/prepare.py') recipeSha = sha256(data);
     if (path === 'native/dependencies/source-inputs.json') pins = JSON.parse(data);
   }
-  for (const path of ['native/worker.c', 'native/Makefile', 'native/COPYING', 'native/dependencies/package.py', '.github/workflows/test.yml',
+  for (const path of ['native/worker.c', 'native/protocol.h', 'native/recording.inc', 'native/tests/check-recording.c',
+    'native/motion.inc', 'native/tests/check-motion.c',
+    'native/Makefile', 'native/COPYING', 'native/dependencies/package.py', '.github/workflows/test.yml',
     'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING', 'native/dependencies/licenses/libsrtp-LICENSE',
     ...WINDOWS_RUNTIME_NOTICES]) assert(sources[path], 'Missing exact corresponding source');
   assert(recipeSha && pins?.sources?.length === 4); return { sourceSha, recipeSha, pins, sources };
@@ -94,7 +96,8 @@ export function verifyNativePackage(root, proof) {
   const read = (path, limit) => regularFile(root, path, limit);
   const manifestBytes = read('native/runtime/manifest.json', 65536); const manifest = JSON.parse(manifestBytes);
   const distribution = JSON.parse(read('native/runtime/distribution-receipt.json', 2 * 1024 * 1024));
-  keys(manifest, ['schemaVersion', 'targets']); assert.equal(manifest.schemaVersion, 1); keys(manifest.targets, TARGETS);
+  keys(manifest, ['schemaVersion', 'protocolVersion', 'targets']); assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.protocolVersion, 3, 'Native protocol mismatch'); keys(manifest.targets, TARGETS);
   keys(distribution, ['schemaVersion', 'source_sha', 'targets', 'manifest_sha256', 'source_bundle_sha256', 'distribution_ready']);
   assert.equal(distribution.schemaVersion, 1); assert.equal(distribution.source_sha, proof.sourceSha, 'Native source mismatch');
   assert.equal(distribution.distribution_ready, false, 'Build receipts cannot declare distribution acceptance'); keys(distribution.targets, TARGETS);
@@ -107,7 +110,8 @@ export function verifyNativePackage(root, proof) {
     const bytes = read(entry.path); assert.equal(sha256(bytes), entry.sha256, 'Native binary hash mismatch');
     if (process.platform !== 'win32') assert(lstatSync(join(root, entry.path)).mode & 0o111, 'Native executable mode missing');
     const receipt = distribution.targets[target];
-    keys(receipt, ['target', 'source_sha', 'sha256', 'dependencies', 'dynamic_dependencies', 'distribution_ready', 'limitations', 'artifact_sha256']);
+    keys(receipt, ['target', 'protocolVersion', 'source_sha', 'sha256', 'dependencies', 'dynamic_dependencies', 'distribution_ready', 'limitations', 'artifact_sha256']);
+    assert.equal(receipt.protocolVersion, 3, 'Native target protocol mismatch');
     assert.equal(receipt.target, target); assert.equal(receipt.source_sha, proof.sourceSha); assert.equal(receipt.sha256, entry.sha256); hash(receipt.artifact_sha256);
     assert.equal(receipt.distribution_ready, false); assert.equal(receipt.dependencies.recipe_sha256, proof.recipeSha, 'Native dependency recipe mismatch');
     assert.deepEqual(receipt.dependencies.source_inputs, proof.pins, 'Native pinned inputs mismatch');

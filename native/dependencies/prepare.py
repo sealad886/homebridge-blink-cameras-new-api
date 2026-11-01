@@ -14,6 +14,8 @@ import shlex
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
@@ -123,6 +125,7 @@ def write_worker_artifact(prefix, worker, output, source_sha):
     with worker.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     receipt = {'target': target, 'source_sha': source_sha, 'sha256': digest, 'dependencies': dependency,
+               'protocolVersion': 3,
                'dynamic_dependencies': dynamic, 'distribution_ready': False,
                'limitations': ['CI build/test artifact only; no minimum-OS clean-host or npm artifact acceptance',
                                'No corresponding-source distribution or integrated physical acceptance']}
@@ -152,7 +155,19 @@ def download(url, path, limit):
     temporary = None
     try:
         opener = urllib.request.build_opener(HTTPSOnlyRedirects())
-        with opener.open(url, timeout=60) as response:
+        # Retry only connection establishment. Body reads and every integrity,
+        # size, redirect and TLS validation failure retain their fail-closed path.
+        for attempt in range(3):
+            try:
+                response = opener.open(url, timeout=60)
+                break
+            except urllib.error.URLError as error:
+                if (isinstance(error, urllib.error.HTTPError) or
+                        not isinstance(error.reason, (TimeoutError, ConnectionError)) or attempt == 2):
+                    raise
+                print(f'Download connection failed; retry {attempt + 2}/3', flush=True)
+                time.sleep(attempt + 1)
+        with response:
             if urlparse(response.url).scheme != 'https':
                 raise ValueError('HTTPS redirect required')
             declared = response.headers.get('Content-Length')
@@ -260,7 +275,7 @@ def build(downloads, jobs, disable_assembly=False):
         f'--cc={env.get("CC", "cc")}', '--enable-gpl', '--enable-version3', '--enable-libx264', '--enable-libopus',
         '--enable-avcodec', '--enable-avformat', '--enable-avutil', '--enable-swscale',
         '--enable-swresample', '--disable-avdevice', '--disable-avfilter',
-        '--enable-demuxer=mpegts', '--enable-muxer=mpegts',
+        '--enable-demuxer=mpegts,mov', '--enable-muxer=mpegts,mp4',
         '--enable-parser=h264,aac,aac_latm', '--enable-decoder=h264,aac,aac_latm,opus,pcm_alaw,pcm_mulaw',
         '--enable-encoder=libx264,libopus,pcm_alaw,pcm_mulaw,aac', '--pkg-config-flags=--static']
     if disable_assembly:

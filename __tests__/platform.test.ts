@@ -672,7 +672,6 @@ describe('BlinkCamerasPlatform', () => {
     const settings = { ...config, excludedNetworks: [] as string[], enableStreaming: false };
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, settings, hapApi);
     const discover = async () => {
-      hapApi?.emit('shutdown');
       await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
     };
     await discover();

@@ -28,10 +28,10 @@ else
 LDLIBS += -pthread
 endif
 .PHONY: all test
-all: build/blink-codec-worker$(EXEEXT) build/fixture$(EXEEXT) build/check-output$(EXEEXT) build/audio-capabilities$(EXEEXT) build/check-rtp$(EXEEXT)
+all: build/blink-codec-worker$(EXEEXT) build/fixture$(EXEEXT) build/check-output$(EXEEXT) build/audio-capabilities$(EXEEXT) build/check-rtp$(EXEEXT) build/check-recording$(EXEEXT) build/check-motion$(EXEEXT)
 build:
 	mkdir -p build
-build/blink-codec-worker$(EXEEXT): worker.c protocol.h audio.inc output.inc protection.inc | build
+build/blink-codec-worker$(EXEEXT): worker.c protocol.h audio.inc output.inc protection.inc recording.inc motion.inc | build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
 build/fixture$(EXEEXT): tests/fixture.c | build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
@@ -46,3 +46,9 @@ build/audio-capabilities$(EXEEXT): tests/audio-capabilities.c | build
 
 build/check-rtp$(EXEEXT): tests/check-rtp.c | build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
+
+build/check-recording$(EXEEXT): tests/check-recording.c | build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
+
+build/check-motion$(EXEEXT): tests/check-motion.c motion.inc | build
+	$(CC) $(CFLAGS) $< -o $@

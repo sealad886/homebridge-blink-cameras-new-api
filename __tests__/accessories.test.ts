@@ -33,7 +33,7 @@ jest.mock('node:dgram', () => {
 });
 
 type PlatformStub = Pick<BlinkCamerasPlatform,
-  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled'>;
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isHksvEnabled' | 'isNetworkArmed' | 'updateMotionAvailability'>;
 
 // Capabilities stand in for the native codec and vendor transport. Public HAP
 // callbacks still own preparation, selection, cancellation and reservation.
@@ -422,10 +422,99 @@ describe('Accessory handlers', () => {
       isOperational: () => true,
       getDeviceInputQuality: jest.fn().mockReturnValue('auto'),
       isTemperatureEnabled: jest.fn().mockReturnValue(false),
+      isHksvEnabled: jest.fn().mockReturnValue(false),
+      isNetworkArmed: jest.fn().mockReturnValue(true),
+      updateMotionAvailability: jest.fn(),
     };
 
     return { hap, apiClient, platform, log };
   };
+
+  it.each([CameraAccessory, DoorbellAccessory, OwlAccessory])('logs each %p motion trigger and timed reset with camera identity at INFO', (Handler) => {
+    jest.useFakeTimers({ now: new Date('2026-10-30T10:00:00.000Z') });
+    const timers = jest.requireActual<typeof import('timers')>('timers');
+    const schedule = jest.spyOn(timers, 'setTimeout').mockImplementation(globalThis.setTimeout);
+    const cancel = jest.spyOn(timers, 'clearTimeout').mockImplementation(globalThis.clearTimeout);
+    try {
+      const { hap, platform, log } = buildPlatform();
+      const first = new MockAccessory('Kitchen (PRIVATE_SERIAL)', 'uuid-motion-first', hap);
+      first.context.device = { id: 200, network_id: 100, name: 'Kitchen', serial: 'PRIVATE_SERIAL' };
+      const second = new MockAccessory('Hall', 'uuid-motion-second', hap);
+      second.context.device = { id: 201, network_id: 100, name: 'Hall' };
+      const kitchen = new Handler(platform as unknown as BlinkCamerasPlatform, first as unknown as PlatformAccessory,
+        { id: 200, network_id: 100, name: 'Kitchen', enabled: true });
+      const hall = new Handler(platform as unknown as BlinkCamerasPlatform, second as unknown as PlatformAccessory,
+        { id: 201, network_id: 100, name: 'Hall', enabled: true });
+      const records = () => log.info.mock.calls
+        .map(([message]) => String(message))
+        .filter(message => message.startsWith('[HomeKit audit] '))
+        .map(message => JSON.parse(message.slice('[HomeKit audit] '.length)));
+      const state = (accessory: MockAccessory) => accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')!
+        .getCharacteristic(hap.Characteristic.MotionDetected).onGetHandler?.();
+
+      kitchen.triggerMotion(1000);
+      hall.triggerMotion(1000);
+      jest.advanceTimersByTime(500);
+      kitchen.triggerMotion(1000);
+      expect(records().filter(record => record.event === 'Motion detected').map(record => record.accessory))
+        .toEqual(['Kitchen', 'Hall', 'Kitchen']);
+      expect(records().every(record => new Date(record.datetime).toISOString() === record.datetime)).toBe(true);
+      expect(state(first)).toBe(true);
+      jest.advanceTimersByTime(500);
+      expect(state(first)).toBe(true);
+      expect(state(second)).toBe(false);
+      jest.advanceTimersByTime(500);
+      expect(state(first)).toBe(false);
+      expect(records().filter(record => record.event === 'Motion cleared').map(record => record.accessory))
+        .toEqual(['Hall', 'Kitchen']);
+      expect(JSON.stringify(records())).not.toContain('PRIVATE_SERIAL');
+    } finally { schedule.mockRestore(); cancel.mockRestore(); jest.useRealTimers(); }
+  });
+
+  it('keeps motion and repeated doorbell reporting functional when INFO logging fails', () => {
+    jest.useFakeTimers();
+    const timers = jest.requireActual<typeof import('timers')>('timers');
+    const schedule = jest.spyOn(timers, 'setTimeout').mockImplementation(globalThis.setTimeout);
+    const cancel = jest.spyOn(timers, 'clearTimeout').mockImplementation(globalThis.clearTimeout);
+    try {
+      const { hap, platform, log } = buildPlatform();
+      const accessory = new MockAccessory('Front door', 'uuid-ring-audit', hap);
+      const doorbell = new DoorbellAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+        { id: 20, network_id: 10, name: 'Front door', enabled: true });
+      doorbell.triggerRing();
+      doorbell.triggerRing();
+      const records = log.info.mock.calls.map(([message]) => String(message))
+        .filter(message => message.startsWith('[HomeKit audit] '))
+        .map(message => JSON.parse(message.slice('[HomeKit audit] '.length)));
+      expect(records.filter(record => record.event === 'Doorbell ring')).toHaveLength(2);
+      log.info.mockImplementation(() => { throw new Error('Synthetic logger failure'); });
+      expect(() => doorbell.triggerRing()).not.toThrow();
+      expect(() => doorbell.triggerMotion(1000)).not.toThrow();
+      expect(() => jest.advanceTimersByTime(1000)).not.toThrow();
+      expect(accessory.getServiceById(hap.Service.MotionSensor, 'motion-sensor')!
+        .getCharacteristic(hap.Characteristic.MotionDetected).onGetHandler?.()).toBe(false);
+    } finally { schedule.mockRestore(); cancel.mockRestore(); jest.useRealTimers(); }
+  });
+
+  it('wires camera delegate requests and results to the camera-specific INFO audit', async () => {
+    const { hap, platform, log } = buildPlatform();
+    const accessory = new MockAccessory('Garden', 'uuid-snapshot-audit', hap);
+    accessory.context.device = { name: 'Garden', id: 20, network_id: 10, serial: 'PRIVATE_SERIAL' };
+    new CameraAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+      { id: 20, network_id: 10, name: 'Garden', enabled: true, status: 'offline' });
+    const options = hap.CameraController.mock.calls[0][0] as { delegate: BlinkCameraSource };
+    const callback = jest.fn();
+    await options.delegate.handleSnapshotRequest({ width: 640, height: 360 } as SnapshotRequest, callback);
+    const records = log.info.mock.calls.map(([message]) => String(message))
+      .filter(message => message.startsWith('[HomeKit audit] '))
+      .map(message => JSON.parse(message.slice('[HomeKit audit] '.length)));
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accessory: 'Garden', direction: 'HomeKit -> bridge', event: 'Snapshot', outcome: 'requested' }),
+      expect.objectContaining({ accessory: 'Garden', direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'unavailable' }),
+    ]));
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(records)).not.toContain('PRIVATE_SERIAL');
+  });
 
   it('exposes opted-in camera temperature from bounded metadata reads without motion or quality writes', async () => {
     const { hap, apiClient, platform } = buildPlatform();
@@ -626,7 +715,8 @@ describe('Accessory handlers', () => {
     try {
       await runtime.prepare(); expect(await runtime.start()).toBeInstanceOf(Error);
       expect(apiClient.setDeviceVideoQuality).toHaveBeenCalledWith('camera', 1, 2, 'best', expect.any(Object));
-      expect(apiClient.startCameraLiveview).not.toHaveBeenCalled(); expect(createOwnedMediaSession).not.toHaveBeenCalled();
+      expect(apiClient.startCameraLiveview).not.toHaveBeenCalled();
+      expect(runtime.media[0].session.stop).toHaveBeenCalled();
       expect(accessory.context.initialInputQuality).toBeUndefined();
     } finally { await runtime.cleanup(); }
   });

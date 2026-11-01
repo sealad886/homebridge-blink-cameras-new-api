@@ -22,6 +22,8 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 - **Doorbell** service exposed for doorbell devices; automatic ring delivery is not implemented
 - **Switch** for enabling/disabling motion detection per device
 - **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
+- **Opt-in HomeKit Secure Video** with a four-second memory prebuffer;
+  physical Apple home hub and iCloud recording acceptance remains pending
 - **Connection monitor and retry control** for provider outages
 - **Optional TemperatureSensor** for traditional cameras reporting temperature;
   default off, with global and per-device settings
@@ -40,6 +42,7 @@ change these private interfaces without notice.
 - [Configuration](#configuration)
 - [Using the plugin in Apple Home](#using-the-plugin-in-apple-home)
 - [Live streaming and quality](#live-streaming-and-quality)
+- [HomeKit Secure Video](#homekit-secure-video)
 - [Troubleshooting](#troubleshooting)
 - [Documentation and development](#documentation-and-development)
 - [Disclaimer and trademarks](#disclaimer-and-trademarks)
@@ -173,11 +176,64 @@ The next beta remains blocked until private-worker secret handling and owned RTS
 destination enforcement are verified against its release artifacts. The [stable 0.10.0 residual-risk decision](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
 accepts these risks for that release only; it does not mark them fixed.
 
+## HomeKit Secure Video
+
+Recording is disabled by default. Select cameras explicitly with `hksvCameras`
+in plugin settings, using up to four exact Blink names, numeric IDs as strings,
+or serial numbers. Stable IDs or serial numbers avoid changes when a camera is
+renamed. For example:
+
+```json
+{
+  "hksvCameras": ["123456"],
+  "enableMotionPolling": false
+}
+```
+
+Restart the child bridge after changing the selection. In Apple Home, allow
+recording for each selected camera. HomeKit recording permission and camera-active
+controls govern background capture; removing recording permission stops recording
+and clears retained fragments. Recording audio follows Home's recording-audio
+permission and the plugin's audio setting. Live-view permission is separate:
+`enableStreaming: false` does not disable opted-in recording.
+
+An active recording camera keeps a Blink live feed open and shares that feed with
+HomeKit live viewers. This increases battery use, bandwidth, and host encoding
+work. Begin with one camera; simultaneous capture across different Blink cameras
+has not been qualified. Blink can end sessions or refuse new ones, so reconnection
+and session rollover can leave gaps. Buffering cannot recover video the camera
+or provider never sends and does not guarantee lossless or continuous recording.
+
+The prebuffer retains four seconds before a local video motion trigger. The
+recording worker compares small luminance samples from decoded frames, compensates
+for uniform brightness shifts, and confirms changes across consecutive frames.
+This fixed detector is not person or object recognition; scene-specific sensitivity
+and physical motion-to-iCloud playback still need qualification. Motion events are
+published only after the buffer is ready, the Blink network is armed, and that
+camera's motion switch is enabled. HomeKit recording and camera permissions also
+apply. While this recording policy is active, delayed Blink clip-polling events
+are suppressed for that camera. `enableMotionPolling` remains optional for other
+cameras and is not required for HSV. Continuous live view may affect Blink's own
+motion recording; this interaction needs physical testing. Recordings use memory only: retained
+fragments are limited to 32 MiB per camera and 64 MiB across cameras, with bounded
+transport and worker queues. Exhaustion or discontinuity fails the recording and
+clears the affected buffer instead of concealing a gap.
+
+Apple requires a compatible home hub and an eligible iCloud+ plan. Clips appear
+in the Home app's recording history, rather than as files in iCloud Drive; see
+[Apple's HomeKit Secure Video guide](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud).
+This local implementation still needs physical motion-to-home-hub-to-iCloud
+acceptance, including playback and privacy controls. Automated tests and a working
+live stream alone do not establish that iCloud saved a clip.
+
 ## Troubleshooting
 
 Use the [troubleshooting guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/troubleshooting.md) for connection faults,
 recovery, motion, rate limits and runtime checks. Use
 [bounded diagnostics](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/debug_logging_spec.md) when collecting evidence.
+HomeKit bridge audit entries are logged at INFO with an explicit UTC datetime and
+camera/accessory name, including motion detections and clears, characteristic
+requests/results, and camera control lifecycles. Debug mode is not required.
 A cached snapshot or a Live label alone does not prove sustained video/audio.
 
 ## Documentation and development

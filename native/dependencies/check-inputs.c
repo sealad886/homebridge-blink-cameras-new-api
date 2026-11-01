@@ -14,7 +14,8 @@ int main(void) {
     if (!avcodec_find_decoder(AV_CODEC_ID_H264) || !avcodec_find_decoder(AV_CODEC_ID_AAC) ||
         !avcodec_find_decoder(AV_CODEC_ID_AAC_LATM) || !avcodec_find_encoder_by_name("libx264") ||
         !avcodec_find_encoder_by_name("libopus") || !avcodec_find_encoder_by_name("pcm_alaw") ||
-        !avcodec_find_encoder_by_name("pcm_mulaw")) return 3;
+        !avcodec_find_encoder_by_name("pcm_mulaw") || !avcodec_find_encoder_by_name("aac") ||
+        !av_find_input_format("mpegts") || !av_find_input_format("mov") || !av_guess_format("mp4",NULL,NULL)) return 3;
     if (avformat_version() != AV_VERSION_INT(63,1,102) || avcodec_version() != AV_VERSION_INT(63,1,102) ||
         avutil_version() != AV_VERSION_INT(61,1,102) || !swresample_version()) return 4;
     unsigned char key[30] = {0}; /* synthetic fixture, never used on network */

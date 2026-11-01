@@ -2,13 +2,17 @@
 
 See the [documentation map](../docs/README.md) for scope and navigation.
 
-This is the codec-only worker shipped in the `0.11.0-beta.0` secure media runtime. It
+This source extends the codec-only worker shipped in the `0.11.0-beta.0` secure media runtime. It
 accepts H.264 plus optional AAC/AAC-LATM in MPEG-TS through private stdin and emits
-bounded H.264/Opus/PCMA/PCMU packets through framed stdout. Maintained libsrtp
+bounded H.264/Opus/PCMA/PCMU packets or H.264/AAC-LC fragmented MP4 through framed stdout. Maintained libsrtp
 2.8.1 protects parent-provided RTP/RTCP through the same private protocol. The
 parent owns verified vendor TLS, paired-controller sockets and generation lifetime;
 the worker has no vendor URL, TLS, socket output, media/configuration file or
-FFmpeg CLI path. AAC-ELD is excluded from the approved runtime offer.
+FFmpeg CLI path. AAC-ELD remains excluded; recording uses AAC-LC.
+
+Protocol-3 source and local macOS tests are new development work. Existing packaged
+protocol-2 binaries and their five-target qualification do not cover this source.
+Regenerate every target and the corresponding-source archive before distribution.
 
 The [26 October release checkpoint](../docs/plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
 records the published source, package integrity and verified five-target artifact.
@@ -30,42 +34,98 @@ make -C native test FFMPEG_PREFIX=/absolute/pinned/ffmpeg-9.0.2 SRTP_PREFIX=/abs
 
 The worker accepts no command-line options. Start with executable argv only, private piped stdin/stdout/stderr, and a scrubbed environment. Runtime rejects libavformat/libavcodec versions other than 63.1.102 and libavutil other than 61.1.102. This prevents observed major-version drift; distribution receipts bind exact artifact/source/dependency identity. The recorded local macOS worker statically linked the verified FFmpeg/Opus/x264/libsrtp archives and dynamically linked only Apple system libraries/frameworks. That local import result is not a claim about Linux or Windows imports; the published five-target artifacts pass their separate native dependency audits.
 
-## Protocol version 2
+## Protocol version 3
 
 All integers are big-endian. Input frame header: ASCII `BMI1`, u32 type, u32 payload length. Output header substitutes `BMO1`. Partial I/O is accumulated; partial header/body at EOF is fatal. Every input payload is capped at 65,536 bytes. Unknown type, duplicate CONFIG, media before CONFIG, media after END, invalid lengths or unknown enum values are fatal.
 
 | Input type | Payload |
 |---|---|
-| 1 CONFIG | Thirteen u32: width, height, fps, bitrate, maximum decoded video frames, software preset, audio codec, audio rate, audio channels, audio bitrate, H264 profile, H264 level, Opus packet duration in ms |
+| 1 CONFIG | Sixteen u32: width, height, fps, bitrate, maximum decoded video frames, software preset, audio codec, audio rate, audio channels, audio bitrate, H264 profile, H264 level, Opus packet duration in ms, output mode, maximum fragment duration in ms, maximum I-frame interval in ms |
 | 2 MEDIA | Nonempty fragment of the owned MPEG-TS byte stream; input frame boundaries need not align with TS packets |
 | 3 END | Empty; declares media EOF. Protection remains available after codec END; parent closes stdin after final protection replies or sends STOP |
 | 4 STOP | Empty; allowed before CONFIG and after END, terminates process immediately |
 
-CONFIG allows even dimensions 2..1920 by 2..1080, fps 1..30, video bitrate 20,000..8,000,000, and maximum video frames 1..9000. Audio codec enum: 0 disabled (all audio fields zero), 1 Opus (rate 16000 or 24000), 2 PCMA/3 PCMU (rate 8000). Enabled audio requires one channel and bitrate 8000..128000. Opus packet duration must be 10, 20, 40 or 60 ms; other codecs require zero in that field. H264 profile IDs 0/1/2 select Baseline/Main/High and level IDs 0/1/2 select 3.1/3.2/4.0. Geometry and fps must fit the selected level’s macroblock/frame and macroblock/second limits. Software preset IDs 0/1 select the existing veryfast/ultrafast choices, both with zerolatency. Configured bitrate supplies both maximum rate and VBV buffer size. Ultrafast also selects Opus compression level 3, matching the existing operator choice. No hardware encoder or additional preset choice is exposed. PCM wire bitrate is fixed by codec/rate; configured bitrate does not change that. Enum 4 AAC-ELD is rejected rather than substituted with AAC-LC.
+CONFIG allows even dimensions 2..1920 by 2..1080, fps 1..30, video bitrate 20,000..8,000,000, and maximum video frames 1..9000. Audio codec enum: 0 disabled (all audio fields zero), 1 Opus (rate 16000 or 24000), 2 PCMA/3 PCMU (rate 8000), 4 AAC-LC (recording only, rate 16000 or 24000). Enabled audio requires one channel and bitrate 8000..128000. Opus packet duration must be 10, 20, 40 or 60 ms; other codecs require zero in that field. H264 profile IDs 0/1/2 select Baseline/Main/High and level IDs 0/1/2 select 3.1/3.2/4.0. Geometry and fps must fit the selected level’s macroblock/frame and macroblock/second limits. Software preset IDs 0/1 select the existing veryfast/ultrafast choices, both with zerolatency. Configured bitrate supplies both maximum rate and VBV buffer size. Ultrafast also selects Opus compression level 3, matching the existing operator choice. No hardware encoder or additional preset choice is exposed. PCM wire bitrate is fixed by codec/rate; configured bitrate does not change that. Output mode 0 emits codec packets and requires both recording duration fields zero. Mode 1 emits fMP4 and accepts only disabled audio or AAC-LC; fragment and I-frame durations are 1000..4000 ms, with I-frame interval no greater than fragment duration. AAC-LC and AAC-ELD are distinct codec requirements; no AAC-ELD support is advertised.
 
-Only first H.264 video and optional first AAC/AAC-LATM audio stream are processed. Missing optional audio produces no invented stream or packet. Video PTS/DTS and audio timing use the original shared MPEG-TS timestamp domain, reported as signed microseconds. Audio resampling and encoder initial/discard padding are explicit. No timeline normalization independently resets streams to zero. Video selects existing frames at no more than requested fps using source timestamps before scaling; it does not duplicate slower input. Aspect-preserving scaling uses even inner dimensions, centered black padding and square output SAR. Independent low-rate-source upconversion parity remains unverified. Source timestamp discontinuity beyond 2 ms in audio fails closed; broad real-provider jitter/wrap/reorder calibration remains pending.
+Only first H.264 video and optional first AAC/AAC-LATM audio stream are processed. In live packet mode, missing optional audio produces no invented stream or packet. Recording with audio enabled requires source audio; missing source audio fails explicitly. Video PTS/DTS and audio timing use the original shared MPEG-TS timestamp domain, reported as signed microseconds. Audio resampling and encoder initial/discard padding are explicit. No timeline normalization independently resets streams to zero. Video selects existing frames at no more than requested fps using source timestamps before scaling; it does not duplicate slower input. Aspect-preserving scaling uses even inner dimensions, centered black padding and square output SAR. Independent low-rate-source upconversion parity remains unverified. Source timestamp discontinuity beyond 2 ms in audio fails closed; broad real-provider jitter/wrap/reorder calibration remains pending.
 
 | Output type | Payload |
 |---|---|
-| 1 STATUS | u32 protocol version 2, u32 output fps |
+| 1 STATUS | u32 protocol version 3, u32 output fps |
 | 2 PACKET | i64 PTS/DTS/duration in microseconds, u32 owned keyframe flag, u32 stream ID 1, u32 timebase numerator 1, u32 denominator 1000000, u32 skip-start/end samples, then encoded Annex-B H.264 bytes |
 | 4 AUDIO PACKET | Same 48-byte metadata as video, stream ID 2, then encoded audio bytes |
 | 5 AUDIO INFO | u32 codec/rate/channels/initial-padding/extradata-size, followed by bounded codec extradata |
 | 3 END | Empty; emitted only after successful media EOF and decoder/encoder draining |
+| 8 MP4 INIT | Complete `ftyp` + `moov` initialization segment, at most 256 KiB |
+| 9 MP4 FRAGMENT | u32 zero-based sequence, i64 first video PTS in microseconds, i64 video duration in microseconds, u32 keyframe-start flag 1, then complete `moof` + `mdat` fragment at most 8 MiB |
 | 7 SOURCE INFO | Four u32: actual decoded source width/height and frame-rate numerator/denominator. Emitted once after validated decoding, with unknown rate encoded as 0/1 |
 | 6 MEDIA CONSUMED | Strictly increasing u32 cumulative count of media bytes removed from the native ring into the demuxer AVIO buffer; repeated/backwards or unadmitted progress is fatal in the parent |
+| 13 VIDEO MOTION | Recording mode only: u64 elapsed source microseconds, u32 changed-sample permille (0..1000), u32 confirmed event marker 1. Maximum one pulse per source second; no image or codec bytes |
 
-Only owned keyframe flag 1 is emitted; other library flags are withheld. Every complete output frame, including header and metadata, is at most 1 MiB. Audio skip/padding values are sample counts in configured audio sample rate. Opus RTP clock remains 48 kHz independently of configured encoder input rate; the parent RTP layer performs explicit clock conversion. Audio extradata is at most 4096 bytes. Parent must cap header lengths before allocation, retain complete frame boundaries, and route packet data into a maintained RTP/SRTP implementation. No claim that private IPC alone resolves SRTP output secret handling.
+Only owned keyframe flag 1 is emitted; other library flags are withheld. Every raw codec output frame, including header and metadata, is at most 1 MiB. Recording types have their separate limits above. Audio skip/padding values are sample counts in configured audio sample rate. Opus RTP clock remains 48 kHz independently of configured encoder input rate; the parent RTP layer performs explicit clock conversion. Audio extradata is at most 4096 bytes. Parent must cap header lengths before allocation, retain complete frame boundaries, and route packet data into a maintained RTP/SRTP implementation. No claim that private IPC alone resolves SRTP output secret handling.
+
+Recording-mode motion uses at most a 64x36 luma grid, sampled at no more than
+5 Hz. A median global brightness correction suppresses uniform exposure changes;
+pixel changes below 20 luma levels and changes covering less than 2% of the grid
+are ignored. After a one-second scene warmup, two changed samples against the
+held pre-change reference confirm an event, including an object that enters and
+then stands still. Confirmed pulses are limited to 1 Hz. The parent independently
+requires a ready prebuffer, recording permissions, enabled camera motion and an
+armed Blink network before publishing motion to HomeKit. Disabling recording
+terminates the worker and its detector state. This visual signal is not person
+classification; HomeKit's event-selection policy remains authoritative.
 
 STOP executes `_Exit(0)` in the input reader thread, independent of synchronous codec work, a stalled media reader, or a blocked stdout consumer. It intentionally does not flush codec/output queues or emit END. Parent must discard partial output and confirm process/pipe closure before retiring its generation. Fatal malformed framing and queue overflow similarly exit with status 2. Ordinary EOF without END is fatal. Clean media END drains codec output; with incomplete TS payload, EOF acceptance remains subject to decoder parsing rather than byte-exact container integrity.
 
 ## Bounds and trust boundary
 
-Media queue: fixed 1 MiB ring; overfill is fatal, not an unbounded backlog. Input message: 64 KiB. Lifetime media input: 128 MiB; encoded output: 64 MiB. Decoded source dimensions: at most 4096 on either axis and 8,388,608 pixels, independently from the maximum 1920x1080 negotiated output. Decoder `max_pixels` enforces the total-pixel bound before decoding; known initial dimensions and delivered frames are also checked. Demuxer streams: at most eight; MPEG-TS packet option: 256 KiB; resynchronization scan: 64 KiB. These bounds still require valid-provider traffic calibration. Audio input: 8..48 kHz, at most two channels and 8192 samples per decoded frame; two-second mono output FIFO, 32768 converted samples per batch and 300 seconds lifetime audio sample budget. Source rate/format/channel-count changes fail closed. One decoder/encoder thread per codec. Input/config wait timeout: 15 seconds; output queue: 1 MiB including the in-flight writer frame, independent two-second oldest-frame watchdog; process watchdog: 300 seconds. Frames: configured cap, maximum 9000.
+Media queue: fixed 1 MiB ring; overfill is fatal, not an unbounded backlog. Input message: 64 KiB. Lifetime media input: 128 MiB; encoded output: 64 MiB. Decoded source dimensions: at most 4096 on either axis and 8,388,608 pixels, independently from the maximum 1920x1080 negotiated output. Decoder `max_pixels` enforces the total-pixel bound before decoding; known initial dimensions and delivered frames are also checked. Demuxer streams: at most eight; MPEG-TS packet option: 256 KiB; resynchronization scan: 64 KiB. These bounds still require valid-provider traffic calibration. Audio input: 8..48 kHz, at most two channels and 8192 samples per decoded frame; two-second mono output FIFO, 32768 converted samples per batch and 300 seconds lifetime audio sample budget. Source rate/format/channel-count changes fail closed. One decoder/encoder thread per codec. Input/config wait timeout: 15 seconds; output queue: 1 MiB in packet mode or 16 MiB in recording mode, including the in-flight writer frame, independent two-second oldest-frame watchdog; process watchdog: 300 seconds. Frames: configured cap, maximum 9000.
 
 The reader does not wait for queue space, so STOP remains readable until a protocol violation or overflow ends the process. The client admits at most one MEDIA chunk of 64 KiB and awaits consumption credits for every admitted byte before the next MEDIA or END. Credits describe ring consumption, not decoding or presentation completion. Control and STOP retain independent admission; a missing credit expires after two seconds. Integrations must split larger vendor frames and honor this contract to avoid overflowing the native ring. Decoder/demuxer internal allocations are not measured RSS ceilings, and a separate process is not an OS sandbox. Missing MPEG-TS demuxer fails closed rather than falling back to auto-probing. An empty protocol allowlist and rejecting `io_open` callback deny secondary public library I/O. Explicit MPEG-TS format allowlist and memory AVIO avoid URL/protocol input selection; no RTSP or general libav URL-opening entrypoint is exposed.
 
 Libav logging is discarded and own diagnostics use fixed codes, with no input interpolation. The SRTP INIT key buffer is explicitly erased after library initialization; library-owned key memory is reclaimed on process exit without a general memory-zeroization proof. The release checkpoint records integrated F05 dummy-secret/process-metadata/default-crash-policy verification and its privileged-memory/dump exclusions. It also records F06 verification at the parent-owned DNS/redirect/reconnect/SDP/control/secondary transport boundary with original TLS identity. Unsupported talkback remains disabled.
+
+## Fragmented MP4 recording
+
+Recording uses the same worker and pinned libraries, with custom write-only AVIO.
+It never receives an output filename, URL, credential or SRTP key. libavformat
+packages H.264 with global headers and optional mono AAC-LC into fMP4. Disabled
+recording audio omits the audio track entirely, even when MPEG-TS contains audio.
+
+The delayed initialization segment arrives when the first fragment is flushed
+(about one second of source video, or EOF). Feed media after STATUS; do not wait
+for initialization before feeding. Delayed moov/edit lists preserve the common
+source clock and AAC priming instead of independently normalizing tracks to zero.
+Every fragment starts its video track on a keyframe. The recording encoder uses a
+one-second GOP with scene cuts disabled. Negotiated fragment duration remains an upper bound. Metadata duration
+describes video coverage; AAC packets can straddle a video boundary. Input gaps
+beyond the configured I-frame interval fail with an explicit discontinuity.
+Duplicate or regressing source timestamps also fail before FPS selection; ordinary
+FPS downsampling remains separate. Enabled audio must cover each fragment's video
+end within two AAC frames plus 2 ms. A delayed audio watermark retains following
+video for at most 64 packets, 1 MiB and one second of source time; audio catches up
+before the fragment is emitted, or capture fails. Final EOF also checks audio/video
+leading and trailing coverage. This bounded hold accommodates bundled AAC PES and
+encoder delay without accepting an incomplete audio tail as a complete fragment.
+
+The muxer payload budget reserves 256 KiB for headers before adding each encoded
+packet, and the AVIO collector independently caps a complete fragment at 8 MiB.
+Native and parent queues cap recording output at 16 MiB and retain the existing
+two-second callback/output deadline. Queue exhaustion terminates capture; it does
+not silently remove encoded packets. Intentional rolling prebuffer eviction is
+parent-owned. STOP aborts promptly; clean END flushes the final fragment before
+END. Existing 300-second/128-MiB-input/64-MiB-output worker lifetime limits remain;
+renewal requires a new generation and cannot claim seamless capture.
+Recording callback buffers are borrowed: callers copy retained footage before
+resolving. The TypeScript client erases recording buffers after callback completion
+and erases active, queued and partial parser media on STOP or process closure.
+
+Local protocol-3 verification uses the synthetic MPEG-TS fixture and a separate
+MOV demux/decode checker. It decodes complete six-second recordings and every
+individual fragment, checks keyframe starts, monotonic/source-preserving video
+timing, AAC-LC at 16/24 kHz from AAC and bundled AAC-LATM input, and absence of an
+audio track when audio is disabled. These synthetic macOS checks do not prove
+Apple hub acceptance, provider continuity or the five distribution targets.
 
 ## Historical local prototype evidence
 
@@ -93,7 +153,7 @@ Before reading private configuration, POSIX builds set and verify the worker's o
 
 ## Parent readiness and drain
 
-`PrivateMediaWorker.whenReady` resolves only after a unique protocol-2 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a two-second deadline from accepted input END. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
+`PrivateMediaWorker.whenReady` resolves only after a unique protocol-3 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a two-second deadline from accepted input END. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
 
 ## Owned session and independent synthetic receiver
 

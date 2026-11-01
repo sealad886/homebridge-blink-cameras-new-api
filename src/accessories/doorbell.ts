@@ -17,6 +17,7 @@ import { BlinkCamerasPlatform } from '../platform';
 import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { BlinkDoorbell } from '../types';
 import { MotionDeviceBase } from './motion-base';
+import { logHomeKitEvent } from '../homekit-audit';
 
 export class DoorbellAccessory extends MotionDeviceBase<BlinkDoorbell> {
   private readonly doorbellService: Service;
@@ -60,10 +61,19 @@ export class DoorbellAccessory extends MotionDeviceBase<BlinkDoorbell> {
   triggerRing(): void {
     const { ProgrammableSwitchEvent } = this.platform.Characteristic;
 
+    this.recording?.notifyDoorbell();
     this.doorbellService
       .getCharacteristic(ProgrammableSwitchEvent)
       .updateValue(ProgrammableSwitchEvent.SINGLE_PRESS);
+    if (!this.motionDetected) this.recording?.endMotion();
 
-    this.platform.log.info(`Doorbell ring: ${this.device.name}`);
+    logHomeKitEvent(this.platform.log, this.accessory, {
+      direction: 'Blink -> bridge',
+      event: 'Doorbell ring',
+      service: 'Doorbell',
+      characteristic: 'ProgrammableSwitchEvent',
+      value: ProgrammableSwitchEvent.SINGLE_PRESS,
+      outcome: 'observed',
+    });
   }
 }

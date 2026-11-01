@@ -44,6 +44,7 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { withResponseBudget } from './operation-budget';
 import { toHapError } from './hap-errors';
 import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
+import { HomeKitAudit } from './homekit-audit';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -89,6 +90,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   pollInterval?: number;
   motionTimeout?: number;
   enableMotionPolling?: boolean;
+  hksvCameras?: string[];
   excludeDevices?: string[];
   excludedNetworks?: string[];
   /** @deprecated Use deviceNameOverrides instead */
@@ -140,6 +142,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private lastSuccessfulPoll: number | null = null;
   private outageConfirmedAt: number | null = null;
   private readonly reportedNameAdjustments = new Set<string>();
+  private readonly homeKitAudit: HomeKitAudit;
 
   // Maps for quick accessory lookup by device ID
   private networkAccessories = new Map<number, NetworkAccessory>();
@@ -154,6 +157,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
+    this.homeKitAudit = new HomeKitAudit(this.log);
 
     // Validate configuration
     this.validateConfig();
@@ -233,10 +237,21 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
       }
+      void this.shutdownMotionHandlers([
+        ...this.cameraAccessories.values(),
+        ...this.doorbellAccessories.values(),
+        ...this.owlAccessories.values(),
+      ]);
+      this.homeKitAudit.dispose();
     });
   }
 
   private validateConfig(): void {
+    const cameras = this.config.hksvCameras;
+    if (cameras !== undefined && (!Array.isArray(cameras) || cameras.length > 4 ||
+      cameras.some(entry => typeof entry !== 'string' || !entry.trim()) || new Set(cameras).size !== cameras.length)) {
+      throw new Error('Invalid hksvCameras: select up to four unique, non-empty camera names, IDs, or serial numbers');
+    }
     const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     if (retired.some(key => Object.hasOwn(this.config, key))) {
       throw new Error('Retired streaming settings require the explicit scripts/migrate-secure-media-config.cjs migration');
@@ -298,16 +313,34 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
     const excludeList = this.config.excludeDevices ?? [];
-    const excluded = excludeList.some(
-      (entry) =>
-        entry === device.name ||
-        entry === `${device.id}` ||
-        (device.serial && entry === device.serial),
-    );
+    const excluded = excludeList.some(entry => this.matchesDeviceIdentifier(device, entry));
     if (excluded) {
       this.log.info(`Excluding device: ${device.name} (matched exclusion list)`);
     }
     return excluded;
+  }
+
+  private matchesDeviceIdentifier(device: { id: number; name?: string; serial?: string }, identifier: string): boolean {
+    return identifier === device.name || identifier === String(device.id) || identifier === device.serial;
+  }
+
+  public isHksvEnabled(device: { id: number; name?: string; serial?: string }): boolean {
+    return (this.config.hksvCameras ?? []).some(entry => this.matchesDeviceIdentifier(device, entry));
+  }
+
+  public isNetworkArmed(networkId: number): boolean { return this.networkAccessories.get(networkId)?.isArmed() ?? false; }
+
+  public updateMotionAvailability(): void {
+    for (const handler of [...this.cameraAccessories.values(), ...this.owlAccessories.values(), ...this.doorbellAccessories.values()]) {
+      handler.updateAvailability();
+    }
+  }
+
+  private async shutdownMotionHandlers(handlers: Iterable<{ shutdown(): Promise<void> }>): Promise<void> {
+    await Promise.all(Array.from(handlers, async handler => {
+      try { await handler.shutdown(); }
+      catch { this.log.error('Failed to stop camera media during shutdown'); }
+    }));
   }
 
   private getDeviceDisplayName(device: { id: number; name: string; serial?: string }): string {
@@ -387,6 +420,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
+    this.homeKitAudit.observe(accessory);
     const cachedDevice = accessory.context.device;
     if (
       cachedDevice &&
@@ -446,12 +480,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     try {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
-      this.registerDevices(homescreen);
+      if (!this.monitorActive) return false;
+      const registration = this.registerDevices(homescreen);
+      if (registration) await registration;
+      if (!this.monitorActive) return false;
       this.inventoryInitialized = true;
       this.startPolling();
       this.setConnectionHealthy();
       return true;
     } catch (error) {
+      if (!this.monitorActive) return false;
       this.log.error(
         `Device discovery failed (${this.describeConnectionFailure(error)}). ` +
         'Check the preceding bounded authentication/API diagnostics.',
@@ -546,12 +584,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const hapDisplayName = this.hapName(displayName, 'Blink Connection');
     if (!accessory) {
       accessory = new this.api.platformAccessory(hapDisplayName, uuid);
+      this.homeKitAudit.observe(accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
     } else {
       accessory.displayName = hapDisplayName;
     }
     accessory.context[contextKey] = true;
+    this.homeKitAudit.observe(accessory);
     accessory.getService(this.Service.AccessoryInformation)
       ?.setCharacteristic(this.Characteristic.Name, hapDisplayName);
     return accessory;
@@ -720,17 +760,21 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         await this.apiClient.login(this.config.twoFactorCode);
       }
       const homescreen = await this.apiClient.getHomescreen({ deadline: Date.now() + 25000, retryTransient: true });
+      if (!this.monitorActive) return false;
       if (this.inventoryInitialized) {
         this.updateDeviceStates(homescreen);
       } else {
         // A startup failure occurs before handlers exist. Complete initial
         // discovery exactly once; ordinary runtime recovery remains state-only.
-        this.registerDevices(homescreen);
+        const registration = this.registerDevices(homescreen);
+        if (registration) await registration;
+        if (!this.monitorActive) return false;
         this.inventoryInitialized = true;
       }
       this.setConnectionHealthy();
       return true;
     } catch (error) {
+      if (!this.monitorActive) return false;
       if (startedFaulted || authenticate) {
         this.log.error(`Blink connection recovery failed (${this.describeConnectionFailure(error)}).`);
         this.setConnectionFailure(error);
@@ -775,7 +819,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return (this.config.excludedNetworks ?? []).some(entry => entry === String(network.id) || entry === network.name);
   }
 
-  private registerDevices(homescreen: BlinkHomescreen): void {
+  // Normal construction stays synchronous so deferred accessory reads run after
+  // connection health is published. Only retiring excluded media needs a wait.
+  private registerDevices(homescreen: BlinkHomescreen): void | Promise<void> {
     validateHomescreen(homescreen);
     let excludedCount = 0;
     const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number }>([
@@ -805,9 +851,68 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       return excluded(device) || (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${device.id}`)
         && this.isNetworkExcluded(device));
     });
-    if (removed.length) {
+    const registerCurrentDevices = (): void => {
+      if (!this.monitorActive) return;
+
+      for (const network of homescreen.networks) {
+        if (!this.isDeviceExcluded(network) && !excludedNetworkIds.has(network.id)) {
+          this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      for (const camera of homescreen.cameras) {
+        if (!excluded(camera)) {
+          this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      for (const doorbell of homescreen.doorbells) {
+        if (!excluded(doorbell)) {
+          this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      for (const owl of homescreen.owls) {
+        if (!excluded(owl)) {
+          this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      this.log.info(
+        `Discovered: ${homescreen.networks.length} networks, ` +
+        `${homescreen.cameras.length} cameras, ` +
+        `${homescreen.doorbells.length} doorbells, ` +
+        `${homescreen.owls.length} owls` +
+        (excludedCount > 0 ? ` (${excludedCount} excluded)` : ''),
+      );
+    };
+
+    if (!removed.length) { registerCurrentDevices(); return; }
+    return (async () => {
+      const retiring = removed.flatMap(accessory => {
+        const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
+        const handlers = [
+          ['blink-camera-', this.cameraAccessories],
+          ['blink-doorbell-', this.doorbellAccessories],
+          ['blink-owl-', this.owlAccessories],
+        ] as const;
+        return handlers.flatMap(([prefix, map]) => {
+          const handler = accessory.UUID === this.api.hap.uuid.generate(`${prefix}${id}`) ? map.get(id) : undefined;
+          return handler ? [handler] : [];
+        });
+      });
+      await this.shutdownMotionHandlers(retiring);
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, removed);
       for (const accessory of removed) {
+        this.homeKitAudit.remove(accessory);
         this.accessories.splice(this.accessories.indexOf(accessory), 1);
         const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${id}`)) this.networkAccessories.delete(id);
@@ -816,47 +921,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-owl-${id}`)) this.owlAccessories.delete(id);
       }
       this.log.info(`Removed ${removed.length} explicitly excluded accessories.`);
-    }
-
-    for (const network of homescreen.networks) {
-      if (!this.isDeviceExcluded(network) && !excludedNetworkIds.has(network.id)) {
-        this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    for (const camera of homescreen.cameras) {
-      if (!excluded(camera)) {
-        this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    for (const doorbell of homescreen.doorbells) {
-      if (!excluded(doorbell)) {
-        this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    for (const owl of homescreen.owls) {
-      if (!excluded(owl)) {
-        this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    this.log.info(
-      `Discovered: ${homescreen.networks.length} networks, ` +
-      `${homescreen.cameras.length} cameras, ` +
-      `${homescreen.doorbells.length} doorbells, ` +
-      `${homescreen.owls.length} owls` +
-      (excludedCount > 0 ? ` (${excludedCount} excluded)` : ''),
-    );
+      registerCurrentDevices();
+    })();
   }
 
   private registerDevice<TDevice extends { id: number; name: string; serial?: string }, THandler>(
@@ -875,13 +941,17 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       existing.getService(this.Service.AccessoryInformation)
         ?.setCharacteristic(this.Characteristic.Name, displayName);
       existing.context.device = device;
+      this.homeKitAudit.observe(existing);
       const handler = new HandlerClass(this, existing, device);
+      this.homeKitAudit.observe(existing);
       accessoryMap.set(device.id, handler);
       this.log.info(`Restored Blink ${deviceLabel} from cache:`, displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = device;
+      this.homeKitAudit.observe(accessory);
       const handler = new HandlerClass(this, accessory, device);
+      this.homeKitAudit.observe(accessory);
       accessoryMap.set(device.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
@@ -909,11 +979,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Poll device states from homescreen and check for motion events
    */
   private async pollDeviceStates(): Promise<void> {
-    if (this.connectionState === 'authentication-required') {
+    if (!this.monitorActive || this.connectionState === 'authentication-required') {
       return;
     }
     try {
       await this.recoverConnection(!this.inventoryInitialized);
+      if (!this.monitorActive) return;
 
       // Check for new motion events
       if (this.enableMotionPolling) {
@@ -1016,21 +1087,21 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // Try camera first
     const cameraHandler = this.cameraAccessories.get(clip.camera_id);
     if (cameraHandler) {
-      cameraHandler.triggerMotion();
+      if (!cameraHandler.usesVideoMotion()) cameraHandler.triggerMotion();
       return;
     }
 
     // Try owl
     const owlHandler = this.owlAccessories.get(clip.camera_id);
     if (owlHandler) {
-      owlHandler.triggerMotion();
+      if (!owlHandler.usesVideoMotion()) owlHandler.triggerMotion();
       return;
     }
 
     // Try doorbell
     const doorbellHandler = this.doorbellAccessories.get(clip.camera_id);
     if (doorbellHandler) {
-      doorbellHandler.triggerMotion();
+      if (!doorbellHandler.usesVideoMotion()) doorbellHandler.triggerMotion();
       return;
     }
 

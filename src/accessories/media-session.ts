@@ -116,7 +116,7 @@ class Session implements OwnedMediaSession {
       if (a) { protectors.push(await this.#worker.initialize(2, a.output.ssrc, a.output.key, a.output.salt)); this.#check(); }
       await this.#worker.configure([v.width, v.height, v.output.fps, v.bitrate, v.maxFrames, v.softwarePreset === 'ultrafast' ? 1 : 0,
         a ? a.codec === 'opus' ? 1 : a.codec === 'pcma' ? 2 : 3 : 0, a?.rate ?? 0, a ? 1 : 0, a?.bitrate ?? 0,
-        v.profile, v.level, a?.codec === 'opus' ? a.packetTime ?? 20 : 0]);
+        v.profile, v.level, a?.codec === 'opus' ? a.packetTime ?? 20 : 0, 0, 0, 0]);
       await this.#worker.whenReady; this.#check();
       for (const stream of [v, ...(a ? [a] : [])]) {
         const socket = await (this.dependencies.openSocket ?? openMediaSocket)(stream.output, stream.localPort, this.#cancel.signal);

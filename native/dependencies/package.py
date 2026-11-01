@@ -99,7 +99,9 @@ def source_files(root: Path, source_sha: str) -> dict[str, bytes]:
         if len(data) != int(size):
             raise ValueError('Source blob size mismatch')
         result[path] = data
-    required = {'native/worker.c', 'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
+    required = {'native/worker.c', 'native/protocol.h', 'native/audio.inc', 'native/recording.inc', 'native/motion.inc',
+                'native/output.inc', 'native/protection.inc', 'native/tests/check-recording.c', 'native/tests/check-motion.c',
+                'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
                 'native/dependencies/package.py', 'native/dependencies/source-inputs.json', '.github/workflows/test.yml',
                 'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/libsrtp-LICENSE',
                 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING',
@@ -132,12 +134,14 @@ def read_candidate(path: Path, target: str, source_sha: str, recipe: str, pins: 
     if set(members) != {expected_worker, 'worker-receipt.json'}:
         raise ValueError('Missing native candidate member')
     receipt = strict_json(members['worker-receipt.json'])
-    keys = {'target', 'source_sha', 'sha256', 'dependencies', 'dynamic_dependencies', 'distribution_ready', 'limitations'}
+    keys = {'target', 'source_sha', 'sha256', 'dependencies', 'dynamic_dependencies', 'distribution_ready', 'limitations', 'protocolVersion'}
     if (not isinstance(receipt, dict) or set(receipt) != keys or receipt.get('distribution_ready') is not False or
             not isinstance(receipt.get('dynamic_dependencies'), str) or not receipt['dynamic_dependencies'] or
             not isinstance(receipt.get('limitations'), list) or len(receipt['limitations']) > 32 or
             any(not isinstance(value, str) or len(value) > 4096 for value in receipt['limitations'])):
         raise ValueError('Invalid candidate receipt')
+    if type(receipt.get('protocolVersion')) is not int or receipt['protocolVersion'] != 3:
+        raise ValueError('Candidate protocol mismatch')
     if receipt.get('target') != target or receipt.get('source_sha') != source_sha:
         raise ValueError('Candidate source or target mismatch')
     dependency = receipt.get('dependencies')
@@ -219,6 +223,8 @@ def stage_package(root: Path, artifacts: Path, source_sha: str) -> dict:
     if artifacts.is_symlink() or {item.name for item in artifacts.iterdir()} != names:
         raise ValueError('Exactly five candidate archives required')
     sources = source_files(root, source_sha)
+    if not re.search(rb'^#define BLINK_PROTOCOL_VERSION 3u\s*$', sources.get('native/protocol.h', b''), re.MULTILINE):
+        raise ValueError('Corresponding source protocol mismatch')
     recipe = digest(sources['native/dependencies/prepare.py'])
     pins = strict_json(sources['native/dependencies/source-inputs.json'])
     if (json_bytes(pins) != json_bytes(prepare.MANIFEST) or recipe != prepare.RECIPE_SHA256 or
@@ -229,7 +235,7 @@ def stage_package(root: Path, artifacts: Path, source_sha: str) -> dict:
     candidates = {target: read_candidate(artifacts / f'native-{target}.tar.gz', target, source_sha, recipe, pins)
                   for target in TARGETS}
     downloads = prepare.fetch()  # Existing checksum and pinned GPG fingerprint verification remains mandatory.
-    manifest = {'schemaVersion': 1, 'targets': {}}
+    manifest = {'schemaVersion': 1, 'protocolVersion': 3, 'targets': {}}
     target_receipts = {}
     for target, (worker, receipt) in candidates.items():
         path = f'native/runtime/{target}/worker' + ('.exe' if target == 'win32-x64' else '')

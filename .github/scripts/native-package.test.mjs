@@ -7,6 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { load as loadYaml } from 'js-yaml';
 import { TARGETS, sha256, verifyNativePackage, readSourceArchive, verifyPackageIdentity } from './native-package.mjs';
 
 function tar(entries) {
@@ -32,13 +33,13 @@ function fixture() {
     ['project/native/dependencies/prepare.py', recipe], ['project/native/dependencies/source-inputs.json', json(inputs)], ['project/native/COPYING', copying],
     ...inputs.sources.map(input => [`dependencies/${input.filename}`, Buffer.from(input.name)])];
   entries.push(...runtimeNotices.map(([name, data]) => ['project/' + name, data]));
-  const manifest = { schemaVersion: 1, targets: {} }; const receipts = {};
+  const manifest = { schemaVersion: 1, protocolVersion: 3, targets: {} }; const receipts = {};
   const write = (name, bytes) => { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, bytes, { mode: 0o755 }); };
   for (const target of TARGETS) {
     const path = `native/runtime/${target}/worker${target === 'win32-x64' ? '.exe' : ''}`;
     const bytes = Buffer.from(target); write(path, bytes);
     manifest.targets[target] = { path, sha256: sha256(bytes) };
-    const receipt = { target, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
+    const receipt = { target, protocolVersion: 3, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
       dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
     receipts[target] = receipt; entries.push([`receipts/${target}.json`, json(receipt)]);
   }
@@ -51,7 +52,7 @@ function fixture() {
 test('accepts five synthetic workers with complete source and dependency identity, without declaring readiness', () => {
   const f = fixture(); try { const result = verifyNativePackage(f.root, f.proof); assert.equal(result.distribution_ready, false); assert.deepEqual(Object.keys(result.targets).sort(), [...TARGETS].sort()); } finally { f.cleanup(); }
 });
-for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'bundle', 'source', 'recipe', 'pins', 'readiness', 'symlink']) {
+for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'protocol', 'bundle', 'source', 'recipe', 'pins', 'readiness', 'symlink']) {
   test(`refuses ${mutation} native package`, () => {
     const f = fixture(); try {
       const worker = f.manifest.targets[TARGETS[0]].path;
@@ -59,6 +60,7 @@ for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'bundle', 'sou
       if (mutation === 'extra') f.write('native/runtime/untracked', Buffer.from('extra'));
       if (mutation === 'worker') f.write(worker, Buffer.from('changed'));
       if (mutation === 'manifest') f.write('native/runtime/manifest.json', json({ ...f.manifest, extra: true }));
+      if (mutation === 'protocol') f.write('native/runtime/manifest.json', json({ ...f.manifest, protocolVersion: 2 }));
       if (mutation === 'bundle') f.write('native/corresponding-source.tar.gz', Buffer.from('changed'));
       if (mutation === 'source') f.distribution.source_sha = 'b'.repeat(40);
       if (mutation === 'recipe') f.proof.recipeSha = 'b'.repeat(64);
@@ -122,3 +124,44 @@ test('JavaScript-only smoke refuses creation of release output', () => {
     assert.notEqual(result.status, 0); assert.match(result.stderr, /Release output requires native verification/);
   } finally { f.cleanup(); }
 });
+
+const workflow = name => loadYaml(readFileSync(new URL(`../workflows/${name}.yml`, import.meta.url), 'utf8'));
+const sourceArtifactName = 'native-source-inputs-${{ github.sha }}';
+const sourceDirectory = 'native/build/deps/downloads';
+
+test('CI fetches and uploads only the six verified source inputs at the checked-out SHA', () => {
+  const job = workflow('test').jobs['source-inputs'];
+  assert.ok(job, 'a single source-input producer must precede native builds');
+  assert.equal(job['runs-on'], 'ubuntu-24.04');
+  assert.deepEqual(job.permissions, { contents: 'read' });
+  const checkout = job.steps.find(step => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout.with.ref, '${{ github.sha }}');
+  assert.equal(checkout.with['persist-credentials'], false);
+  const fetchIndex = job.steps.findIndex(step => step.run === 'python native/dependencies/prepare.py');
+  const uploadIndex = job.steps.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.ok(fetchIndex >= 0 && uploadIndex > fetchIndex, 'canonical verification must finish before upload');
+  const upload = job.steps[uploadIndex].with;
+  const pins = JSON.parse(readFileSync(new URL('../../native/dependencies/source-inputs.json', import.meta.url), 'utf8'));
+  const filenames = [...pins.sources.map(source => source.filename), 'ffmpeg-9.0.2.tar.xz.asc', 'ffmpeg-devel.asc'];
+  assert.equal(upload.name, sourceArtifactName);
+  assert.deepEqual(upload.path.trim().split(/\s+/).sort(), filenames.map(name => `${sourceDirectory}/${name}`).sort());
+  assert.equal(upload['if-no-files-found'], 'error');
+});
+
+for (const [name, jobName, dependency, verification] of [
+  ['test', 'native-validation', 'source-inputs', 'python native/dependencies/prepare.py --build-local'],
+  ['publish', 'package', 'gates', 'python native/dependencies/package.py --root'],
+]) {
+  test(`${name} reuses same-run SHA-bound inputs before canonical source verification`, () => {
+    const job = workflow(name).jobs[jobName];
+    assert.ok([job.needs].flat().includes(dependency));
+    const downloadIndex = job.steps.findIndex(step => step.uses?.startsWith('actions/download-artifact@')
+      && step.with?.name === sourceArtifactName);
+    const verifyIndex = job.steps.findIndex(step => step.run?.includes(verification));
+    assert.ok(downloadIndex >= 0 && verifyIndex > downloadIndex, 'download must precede unchanged SHA/GPG verification');
+    assert.deepEqual(job.steps[downloadIndex].with, { name: sourceArtifactName, path: sourceDirectory });
+    if (name === 'test') {
+      assert.deepEqual(job.strategy.matrix.include.map(target => target.target).sort(), [...TARGETS].sort());
+    }
+  });
+}
