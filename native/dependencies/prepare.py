@@ -14,6 +14,8 @@ import shlex
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
@@ -153,7 +155,19 @@ def download(url, path, limit):
     temporary = None
     try:
         opener = urllib.request.build_opener(HTTPSOnlyRedirects())
-        with opener.open(url, timeout=60) as response:
+        # Retry only connection establishment. Body reads and every integrity,
+        # size, redirect and TLS validation failure retain their fail-closed path.
+        for attempt in range(3):
+            try:
+                response = opener.open(url, timeout=60)
+                break
+            except urllib.error.URLError as error:
+                if (isinstance(error, urllib.error.HTTPError) or
+                        not isinstance(error.reason, (TimeoutError, ConnectionError)) or attempt == 2):
+                    raise
+                print(f'Download connection failed; retry {attempt + 2}/3', flush=True)
+                time.sleep(attempt + 1)
+        with response:
             if urlparse(response.url).scheme != 'https':
                 raise ValueError('HTTPS redirect required')
             declared = response.headers.get('Content-Length')

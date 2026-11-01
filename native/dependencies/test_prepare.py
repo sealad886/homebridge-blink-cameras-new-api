@@ -3,10 +3,12 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import ssl
 import tempfile
 import tarfile
 import unittest
 from unittest.mock import patch, Mock
+import urllib.error
 import urllib.request
 
 spec = importlib.util.spec_from_file_location('native_prepare', Path(__file__).with_name('prepare.py'))
@@ -20,6 +22,76 @@ class Response(io.BytesIO):
 
 
 class DownloadTests(unittest.TestCase):
+    def test_connection_timeout_then_response_completes_atomic_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'source.tar'
+            opener = Mock()
+            opener.open.side_effect = [urllib.error.URLError(TimeoutError('connection timeout')), Response(b'data')]
+            with patch.object(prepare.urllib.request, 'build_opener', return_value=opener), patch('time.sleep') as sleep:
+                prepare.download(Response.url, output, 4)
+            self.assertEqual(output.read_bytes(), b'data')
+            self.assertEqual(opener.open.call_count, 2)
+            sleep.assert_called_once_with(1)
+            self.assertEqual([path.name for path in Path(directory).iterdir()], ['source.tar'])
+
+    def test_connection_failures_stop_after_three_attempts_without_cache_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opener = Mock()
+            error = urllib.error.URLError(ConnectionResetError('connection reset'))
+            opener.open.side_effect = error
+            with patch.object(prepare.urllib.request, 'build_opener', return_value=opener), patch('time.sleep') as sleep:
+                with self.assertRaises(urllib.error.URLError) as caught:
+                    prepare.download(Response.url, Path(directory) / 'source.tar', 4)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(opener.open.call_count, 3)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_security_and_http_open_failures_are_not_retried(self):
+        failures = [
+            urllib.error.URLError(ssl.SSLCertVerificationError(1, 'certificate rejected')),
+            urllib.error.URLError(ssl.SSLError(1, 'TLS rejected')),
+            urllib.error.HTTPError(Response.url, 403, 'Forbidden', {}, None),
+            urllib.error.HTTPError(Response.url, 503, 'Unavailable', {}, None),
+            ValueError('HTTPS redirect required'),
+        ]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                opener = Mock()
+                opener.open.side_effect = failure
+                with patch.object(prepare.urllib.request, 'build_opener', return_value=opener), patch('time.sleep') as sleep:
+                    with self.assertRaises(type(failure)):
+                        prepare.download(Response.url, Path(directory) / 'source.tar', 4)
+                self.assertEqual(opener.open.call_count, 1)
+                sleep.assert_not_called()
+                self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_body_timeout_is_not_retried_and_partial_bytes_are_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opener = Mock()
+            response = Response(b'data')
+            response.read = Mock(side_effect=[b'part', urllib.error.URLError(TimeoutError('body timeout'))])
+            opener.open.return_value = response
+            with patch.object(prepare.urllib.request, 'build_opener', return_value=opener), patch('time.sleep') as sleep:
+                with self.assertRaises(urllib.error.URLError):
+                    prepare.download(Response.url, Path(directory) / 'source.tar', 8)
+            self.assertEqual(opener.open.call_count, 1)
+            sleep.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_unsafe_response_url_is_not_retried_or_written(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opener = Mock()
+            response = Response(b'data')
+            response.url = 'http://example.test/source'
+            opener.open.return_value = response
+            with patch.object(prepare.urllib.request, 'build_opener', return_value=opener), patch('time.sleep') as sleep:
+                with self.assertRaisesRegex(ValueError, 'HTTPS redirect required'):
+                    prepare.download(Response.url, Path(directory) / 'source.tar', 4)
+            self.assertEqual(opener.open.call_count, 1)
+            sleep.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
     def download(self, data, limit, *, headers=None, interrupted=False):
         with tempfile.TemporaryDirectory(prefix='blink-fetch-test-') as directory:
             output = Path(directory) / 'source.tar'
