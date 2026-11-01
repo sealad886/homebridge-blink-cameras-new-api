@@ -263,9 +263,9 @@ encrypted iCloud storage, with later Home playback downloading and decrypting th
 clip. Its protected rendering can also prevent stream screenshot capture, so a
 black screenshot alone is not a recording-failure result. See
 [HomeKit camera security](https://support.apple.com/en-gb/guide/security/sec525461d19/web).
-The interaction between Blink clip polling and a continuously open live feed is
-still a physical-test gap; no official source inspected here establishes that
-motion clips remain available under that condition.
+The final beta uses motion detected from the continuous video feed, independently
+of Blink clip polling. Blink's own clip recording during an open live feed remains
+unqualified; HSV acceptance must check Home's recording history directly.
 
 ### Manual-install handoff after publication
 
@@ -284,19 +284,19 @@ pairing identity. Then restart the Blink child bridge through Homebridge UI and
 verify its startup log identifies `1.0.0-beta1` and successful device discovery.
 
 Start recording acceptance with one camera. Add its stable Blink ID or serial to
-the existing platform configuration and enable the existing motion event source:
+the existing platform configuration. HSV motion does not require cloud polling:
 
 ```json
 {
   "hksvCameras": ["CAMERA_ID_OR_SERIAL"],
-  "enableMotionPolling": true
+  "enableMotionPolling": false
 }
 ```
 
 Restart the child bridge after saving the selection. In Home, enable recording
 for that camera in the intended home/away modes and confirm an active home hub
 and an eligible iCloud+ camera allowance. Keep the Blink system armed and that
-camera's motion detection enabled for the current clip-polling trigger source.
+camera's motion detection enabled; both gate local video motion events.
 Allow the recording buffer to become ready, trigger physical motion, and check
 the saved Home recording timeline and playback. Record the event time, plugin
 motion/HDS receipts and clip time together. If Home's recording choice is absent,
@@ -317,8 +317,9 @@ five-target candidate builds, exact-source receipts, corresponding-source bundle
 and canonical package verification before distribution. Old protocol manifests
 are rejected. The local macOS test binary is development evidence only.
 
-Pi installation, configuration, restart and publication were not performed.
-Real-camera continuous capture, Blink clip polling during live view, Apple hub
-negotiation, saved iCloud clips and playback still require physical qualification.
-The four-second prebuffer precedes the received trigger; cloud polling delay can
-place physical motion outside it. No lossless-capture guarantee is made.
+Pi plugin installation, configuration and restart remain reserved for the user.
+Real-camera continuous capture and a synthetic event replay produced decodable
+local clips. Apple hub negotiation, physical motion sensitivity, saved iCloud
+clips and Home playback still require qualification after manual installation.
+The four-second prebuffer precedes the local video motion trigger; provider
+session interruptions can leave gaps. No lossless-capture guarantee is made.

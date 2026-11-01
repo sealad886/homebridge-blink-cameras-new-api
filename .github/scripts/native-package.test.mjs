@@ -7,6 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { load as loadYaml } from 'js-yaml';
 import { TARGETS, sha256, verifyNativePackage, readSourceArchive, verifyPackageIdentity } from './native-package.mjs';
 
 function tar(entries) {
@@ -123,3 +124,44 @@ test('JavaScript-only smoke refuses creation of release output', () => {
     assert.notEqual(result.status, 0); assert.match(result.stderr, /Release output requires native verification/);
   } finally { f.cleanup(); }
 });
+
+const workflow = name => loadYaml(readFileSync(new URL(`../workflows/${name}.yml`, import.meta.url), 'utf8'));
+const sourceArtifactName = 'native-source-inputs-${{ github.sha }}';
+const sourceDirectory = 'native/build/deps/downloads';
+
+test('CI fetches and uploads only the six verified source inputs at the checked-out SHA', () => {
+  const job = workflow('test').jobs['source-inputs'];
+  assert.ok(job, 'a single source-input producer must precede native builds');
+  assert.equal(job['runs-on'], 'ubuntu-24.04');
+  assert.deepEqual(job.permissions, { contents: 'read' });
+  const checkout = job.steps.find(step => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout.with.ref, '${{ github.sha }}');
+  assert.equal(checkout.with['persist-credentials'], false);
+  const fetchIndex = job.steps.findIndex(step => step.run === 'python native/dependencies/prepare.py');
+  const uploadIndex = job.steps.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.ok(fetchIndex >= 0 && uploadIndex > fetchIndex, 'canonical verification must finish before upload');
+  const upload = job.steps[uploadIndex].with;
+  const pins = JSON.parse(readFileSync(new URL('../../native/dependencies/source-inputs.json', import.meta.url), 'utf8'));
+  const filenames = [...pins.sources.map(source => source.filename), 'ffmpeg-9.0.2.tar.xz.asc', 'ffmpeg-devel.asc'];
+  assert.equal(upload.name, sourceArtifactName);
+  assert.deepEqual(upload.path.trim().split(/\s+/).sort(), filenames.map(name => `${sourceDirectory}/${name}`).sort());
+  assert.equal(upload['if-no-files-found'], 'error');
+});
+
+for (const [name, jobName, dependency, verification] of [
+  ['test', 'native-validation', 'source-inputs', 'python native/dependencies/prepare.py --build-local'],
+  ['publish', 'package', 'gates', 'python native/dependencies/package.py --root'],
+]) {
+  test(`${name} reuses same-run SHA-bound inputs before canonical source verification`, () => {
+    const job = workflow(name).jobs[jobName];
+    assert.ok([job.needs].flat().includes(dependency));
+    const downloadIndex = job.steps.findIndex(step => step.uses?.startsWith('actions/download-artifact@')
+      && step.with?.name === sourceArtifactName);
+    const verifyIndex = job.steps.findIndex(step => step.run?.includes(verification));
+    assert.ok(downloadIndex >= 0 && verifyIndex > downloadIndex, 'download must precede unchanged SHA/GPG verification');
+    assert.deepEqual(job.steps[downloadIndex].with, { name: sourceArtifactName, path: sourceDirectory });
+    if (name === 'test') {
+      assert.deepEqual(job.strategy.matrix.include.map(target => target.target).sort(), [...TARGETS].sort());
+    }
+  });
+}
