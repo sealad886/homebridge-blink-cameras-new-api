@@ -66,6 +66,7 @@ homebridge-ui/server.js
 homebridge-ui/server.js.map
 
 /scripts/*
+!/scripts/preview-plugin-ui.mjs
 !/scripts/release.mjs
 !/scripts/migrate-secure-media-config.cjs
 !/scripts/check-rtsp-network.cjs

@@ -125,9 +125,15 @@ Never put passwords or verification codes into plugin settings.
 
 ## Configuration
 
-Use the plugin settings form and click Homebridge’s **Save** button; selecting a
-value alone changes only the draft. Apply runtime changes using your normal
-child-bridge restart workflow.
+Plugin settings have five sections: **Overview & connection**, **Cameras in
+Home**, **HomeKit recording**, **Live viewing & sound**, and **Advanced &
+troubleshooting**. Choose cameras from discovery rather than entering IDs.
+Account maintenance and diagnostic recording are under Advanced.
+
+Edits remain a draft until you click Homebridge’s **Save**. Save closes settings
+and offers the normal restart workflow; restart the Blink child bridge to apply
+changes. Camera selections or a successful connection check do not establish
+that Apple Home has allowed recording or saved a clip.
 
 The [configuration reference](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md) owns defaults, manual
 JSON examples, exclusions, naming overrides and snapshot settings. The

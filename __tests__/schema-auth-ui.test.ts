@@ -171,7 +171,10 @@ describe('schema auth UI regression', () => {
     const openerIndex = handler.indexOf('blinkWindow.opener = null');
     const firstAwaitIndex = handler.indexOf('await ');
     expect(html).toContain('maxlength="128"');
-    expect(html).toContain('pattern="[A-Za-z0-9._-]+"');
+    const devicePattern = html.match(/id="deviceId"[\s\S]*?pattern="([^"]+)"/)?.[1];
+    expect(devicePattern).toBeDefined();
+    expect(new RegExp(`^(?:${devicePattern})$`, 'v').test('bridge-id_1.0')).toBe(true);
+    expect(new RegExp(`^(?:${devicePattern})$`, 'v').test('invalid id')).toBe(false);
     expect(handler).toContain('/^[A-Za-z0-9._-]{1,128}$/.test(deviceIdValue)');
     expect(handler).toContain("deviceIdValue = document.getElementById('deviceId').value.trim() || 'homebridge-blink'");
     expect(handler).toContain('deviceId: deviceIdValue');
@@ -290,7 +293,7 @@ describe('schema auth UI regression', () => {
     const html = readText('src/homebridge-ui/public/index.html');
     const saveConfig = sectionBetween(
       html,
-      'async function saveTokenOnlyConfig(data) {',
+      'async function saveTokenOnlyConfig(',
       'async function handleAuthResponse(data,',
     );
     const authResponse = sectionBetween(

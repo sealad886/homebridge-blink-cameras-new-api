@@ -1,190 +1,17 @@
-<!-- Blink Cameras Plugin Custom UI -->
-<!-- Blink-hosted OAuth wizard with post-token verification support -->
-
-<style>
-  .blink-ui {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  }
-
-  /* Homebridge themes style body/classes, not Bootstrap's root palette. */
-  .blink-ui .text-muted {
-    color: inherit !important;
-    opacity: 0.75;
-  }
-
-  .blink-logo {
-    text-align: center;
-    margin-bottom: 1.5rem;
-  }
-
-  .blink-logo svg {
-    width: 64px;
-    height: 64px;
-    fill: currentColor;
-  }
-
-  .step-indicator {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 1.5rem;
-    gap: 0.5rem;
-  }
-
-  .step {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background-color: currentColor;
-    opacity: 0.35;
-    transition: all 0.3s ease;
-  }
-
-  .step.active {
-    opacity: 1;
-    transform: scale(1.2);
-  }
-
-  .step.completed {
-    opacity: 1;
-  }
-
-  .auth-step {
-    display: none;
-  }
-
-  .auth-step.active {
-    display: block;
-    animation: fadeIn 0.3s ease;
-  }
-
-  .auth-step h5[tabindex="-1"]:focus {
-    outline: none;
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .auth-step.active { animation: none; }
-    .step { transition: none; }
-  }
-
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border-radius: 2rem;
-    font-size: 0.875rem;
-    margin-bottom: 1rem;
-    border: 1px solid currentColor;
-  }
-
-  .status-icon {
-    width: 16px;
-    height: 16px;
-  }
-
-  .blink-ui .log-container {
-    max-height: 150px;
-    overflow-y: auto;
-    border-radius: 0.375rem;
-    padding: 0.75rem;
-    font-family: monospace;
-    font-size: 0.75rem;
-    margin-top: 1rem;
-    display: none;
-  }
-
-  .blink-ui .log-container.visible {
-    display: block;
-  }
-
-  .log-entry {
-    margin-bottom: 0.25rem;
-    word-break: break-word;
-  }
-
-  .log-entry.debug { opacity: 0.75; }
-  .log-entry.warn, .log-entry.error { font-weight: 600; }
-
-  .verification-hint {
-    padding: 0.75rem 1rem;
-    margin-bottom: 1rem;
-    border-radius: 0.25rem;
-  }
-
-  .verification-hint strong {
-    display: block;
-    margin-bottom: 0.25rem;
-  }
-
-  .success-details {
-    border-radius: 0.5rem;
-    padding: 1rem;
-    margin-top: 1rem;
-  }
-
-  .success-details dt {
-    font-weight: 600;
-    opacity: 0.75;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-  }
-
-  .success-details dd {
-    margin-bottom: 0.75rem;
-    margin-left: 0;
-  }
-
-  .status-error {
-    margin-top: 0.75rem;
-  }
-
-  .btn-group-vertical {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .device-id-toggle {
-    cursor: pointer;
-    font-size: 0.875rem;
-    margin-top: 0.5rem;
-  }
-
-  .device-id-toggle:hover {
-    text-decoration: underline;
-  }
-
-  .hidden {
-    display: none !important;
-  }
-</style>
-
+<link rel="stylesheet" href="settings.css">
 <div class="blink-ui">
   <div id="flowStatus" class="visually-hidden" role="status" aria-live="polite"></div>
-  <div id="bootError" class="alert alert-danger mb-3 hidden" role="alert">
-    <strong>Unable to load the plugin UI.</strong>
-    <span id="bootErrorMessage" class="ms-1">Please close and reopen this screen.</span>
-  </div>
-
-  <div class="blink-logo">
-    <svg class="primary-text" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-    </svg>
-    <h4 class="mt-2 mb-0">Blink Cameras</h4>
-    <small class="text-muted">Connect your cameras to HomeKit</small>
-  </div>
-
-  <div class="step-indicator" aria-hidden="true">
-    <div class="step primary-text active" id="step1-dot"></div>
-    <div class="step primary-text" id="step2-dot"></div>
-    <div class="step primary-text" id="step3-dot"></div>
-  </div>
-
+  <div id="bootError" class="alert alert-danger hidden" role="alert"><strong>Settings could not load.</strong> <span id="bootErrorMessage"></span></div>
+  <button type="button" class="btn btn-outline-secondary" id="retryLoad" hidden>Retry loading settings</button>
+  <p class="blink-eyebrow">BLINK CAMERAS · HOMEKIT</p>
+  <nav id="settingsNavigation" class="blink-navigation" aria-label="Blink settings sections"></nav>
+  <p id="draftStatus" class="blink-draft-status" role="status" aria-live="polite">Loading settings…</p>
+  <h2 id="sectionTitle" tabindex="-1">Overview &amp; connection</h2>
+  <div id="settingsErrors" class="alert alert-danger" role="alert" hidden></div>
+  <div id="settingsWarnings" class="alert alert-warning" hidden></div>
+  <button type="button" class="btn btn-outline-secondary" id="retrySettings" hidden>Retry checking changes</button>
+  <p id="inventoryStatus" class="blink-help"></p>
+  <div id="connectionFlow">
   <div class="auth-step active" id="step-login">
     <div class="card">
       <div class="card-body">
@@ -195,9 +22,9 @@
 
         <div id="deviceIdSection" class="hidden">
           <div class="form-group">
-            <label for="deviceId">Device ID</label>
+            <label for="deviceId">Homebridge connection ID</label>
             <input type="text" class="form-control" id="deviceId" placeholder="homebridge-blink"
-                   maxlength="128" pattern="[A-Za-z0-9._-]+" autocomplete="off">
+                   maxlength="128" pattern="[A-Za-z0-9._\-]+" autocomplete="off">
             <small class="form-text text-muted">Optional stable identifier for this Homebridge instance.</small>
           </div>
         </div>
@@ -265,7 +92,7 @@
             <label for="verifyCode">Verification Code</label>
             <input type="text" class="form-control" id="verifyCode"
                    placeholder="Enter verification code" maxlength="12"
-                   pattern="[A-Za-z0-9-]*" autocomplete="one-time-code" required>
+                   pattern="[A-Za-z0-9\-]*" autocomplete="one-time-code" required>
           </div>
 
           <input type="hidden" id="verifyType" value="client">
@@ -283,103 +110,62 @@
   </div>
 
   <div class="auth-step" id="step-success">
-    <div class="card">
-      <div class="card-body text-center">
-        <div class="status-badge success mx-auto" id="successStatusBadge">
-          <svg class="status-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-          </svg>
-          <span id="successStatusLabel">Authentication Successful</span>
-        </div>
-
-        <h5 class="card-title" id="successTitle">Connected to Blink</h5>
-        <p class="card-text text-muted" id="successSummary">Blink tokens are stored and verified.</p>
-
-        <div class="success-details card text-start">
-          <dl class="mb-0">
-            <dt>Account</dt>
-            <dd id="successEmail">Blink account</dd>
-            <dt>API tier</dt>
-            <dd id="successTier">-</dd>
-            <dt>Status</dt>
-            <dd><span class="badge bg-success" id="authStatusBadge">Authenticated</span></dd>
-          </dl>
-
-          <div class="status-error alert alert-warning py-2 px-3 hidden" id="statusError" role="alert">
-            <span id="statusErrorMessage">Unable to reach the plugin backend.</span>
-            <button type="button" class="btn btn-sm btn-control ms-2" id="statusRetry">Retry</button>
-          </div>
-        </div>
-
-        <div class="form-group mt-3 text-start">
-          <strong>Exclude Blink Networks</strong>
-          <p class="small text-muted">Excluded networks and their cameras are removed from this Homebridge instance. Restart the Blink child bridge after saving.</p>
-          <button type="button" class="btn btn-control" id="loadNetworks">Choose Networks</button>
-          <div id="blinkNetworkList" class="mt-2"></div>
-          <button type="button" class="btn btn-primary hidden" id="saveNetworks">Save Network Selection</button>
-        </div>
-
-        <div class="mt-4">
-          <p class="text-muted small">
-            Blink tokens are stored in Homebridge's protected authentication file. Configure camera settings below, then click Homebridge's Save button to write them to disk. Restart the child bridge yourself to apply streaming changes.
-          </p>
-          <button type="button" class="btn btn-control mb-2" id="testConnectionButton">
-            Test Connection
-          </button>
-          <br>
-          <button type="button" class="btn btn-primary" id="showSchemaForm">
-            Configure Camera Settings
-          </button>
-        </div>
-
-        <hr class="mt-4 mb-3">
-
-        <div id="authLockSection">
-          <h6 class="text-muted">Authentication Lock</h6>
-          <p class="small text-muted mb-2">
-            Lock authentication to prevent stale legacy verification values from interfering with token refresh.
-            Locking clears those legacy values from your config.
-          </p>
-
-          <div id="lockControls">
-            <button type="button" class="btn btn-sm btn-warning" id="lockAuthBtn">
-              🔒 Lock Authentication
-            </button>
-          </div>
-
-          <div id="unlockControls" class="hidden">
-            <span class="badge bg-warning text-dark text-wrap mb-2">🔒 Authentication Locked</span>
-            <br>
-            <button type="button" class="btn btn-sm btn-danger" id="unlockAuthBtn">
-              🔓 Unlock &amp; Re-authenticate
-            </button>
-          </div>
-        </div>
-      </div>
+    <div class="blink-connection-card">
+      <div id="successStatusBadge"><span id="successStatusLabel">Sign-in stored</span></div>
+      <h3 id="successTitle">Blink connection</h3>
+      <p id="successSummary"></p>
+      <details class="blink-details"><summary>Account details</summary>
+        <dl><dt>Account</dt><dd id="successEmail"></dd><dt>API tier</dt><dd id="successTier"></dd><dt>Status</dt><dd><span id="authStatusBadge"></span></dd></dl>
+      </details>
+      <div class="alert alert-warning hidden" id="statusError" role="alert"><span id="statusErrorMessage"></span> <button type="button" class="btn btn-sm btn-outline-secondary" id="statusRetry">Retry status</button></div>
+      <button type="button" class="btn btn-outline-secondary" id="testConnectionButton">Test connection</button>
+      <button type="button" class="btn btn-primary" id="openCameras">Choose cameras</button>
+      <p class="blink-help">Stored sign-in does not confirm camera availability or Apple Home recording permission.</p>
     </div>
   </div>
-
-  <div id="configSaveError" class="alert alert-warning mt-3 hidden" role="alert">
-    Blink tokens are stored, but Homebridge settings could not be saved. Retry saving before restarting the child bridge.
-    <button type="button" class="btn btn-control mt-2" id="retryConfigSave">Retry Saving Settings</button>
   </div>
-
-  <div id="errorAlert" class="alert alert-danger mt-3 hidden" role="alert">
-    <strong>Error:</strong> <span id="errorMessage"></span>
+  <div id="sectionFields"></div>
+  <div id="accountMaintenance" hidden>
+    <details class="blink-details"><summary>Account maintenance</summary>
+      <p>These account actions take effect immediately. They do not restart Homebridge.</p>
+      <div id="authLockSection">
+        <div id="lockControls"><button type="button" class="btn btn-outline-secondary" id="lockAuthBtn">Lock stored authentication</button></div>
+        <div id="unlockControls" class="hidden"><p>Stored authentication is locked.</p><button type="button" class="btn btn-outline-danger" id="unlockAuthBtn">Clear sign-in and authenticate again</button></div>
+      </div>
+    </details>
+    <details class="blink-details"><summary>Recent UI diagnostics</summary>
+      <p id="runtimeDiagnostics" class="blink-help">No unexpected browser events observed in this editor.</p>
+      <a href="#" id="toggleLogs">Show debug logs</a>
+      <div class="log-container" id="logContainer"><div id="logOutput"></div></div>
+    </details>
   </div>
-
-  <div class="log-container card" id="logContainer">
-    <strong class="d-block mb-2">Debug Log:</strong>
-    <div id="logOutput"></div>
-  </div>
-
-  <div class="text-center mt-3">
-    <small class="text-muted"><a href="#" id="toggleLogs">Show Debug Logs</a></small>
-  </div>
+  <p id="accountDraftWarning" class="alert alert-warning" hidden>Save changes, or close and reopen settings to discard them, before changing the Blink account.</p>
+  <div id="configSaveError" class="alert alert-warning hidden" role="alert">Blink tokens are stored, but account configuration could not be saved. <button type="button" class="btn btn-outline-secondary" id="retryConfigSave">Retry account save</button></div>
+  <div id="errorAlert" class="alert alert-danger hidden" role="alert"><span id="errorMessage"></span></div>
 </div>
-
+<script src="settings-state.js"></script>
+<script src="settings-ui.js"></script>
 <script>
-(async () => {
+
+(function () {
+  let browserDiagnosticCount = 0;
+  function recordBrowserDiagnostic(event) {
+    browserDiagnosticCount += 1;
+    const name = event.type === 'unhandledrejection' ? event.reason?.name : event.error?.name;
+    const category = ['SyntaxError', 'TypeError', 'ReferenceError', 'RangeError', 'Error'].includes(name) ? name : 'Browser event';
+    document.getElementById('runtimeDiagnostics').textContent = `${browserDiagnosticCount} unexpected browser event(s) · ${category} · origin unattributed. See the browser console for details. This does not identify a failed settings action.`;
+    // Do not preventDefault: preserve the original console diagnostics.
+  }
+  function fatal(message) {
+    document.getElementById('bootError').classList.remove('hidden');
+    document.getElementById('bootErrorMessage').textContent = message;
+    document.getElementById('draftStatus').textContent = 'Settings unavailable. No settings were saved.';
+    for (const id of ['settingsNavigation', 'connectionFlow', 'sectionFields', 'accountMaintenance']) document.getElementById(id).hidden = true;
+    document.getElementById('retryLoad').hidden = false;
+    window.homebridge?.disableSaveButton?.();
+  }
+  document.getElementById('retryLoad').addEventListener('click', () => window.location.reload());
+  async function initialize() {
   const bootError = document.getElementById('bootError');
   const bootErrorMessage = document.getElementById('bootErrorMessage');
   let bootFailed = false;
@@ -387,8 +173,7 @@
   function showBootError(message) {
     if (bootFailed) return;
     bootFailed = true;
-    bootErrorMessage.textContent = message;
-    bootError.classList.remove('hidden');
+    fatal(message);
     try {
       window.homebridge?.hideSpinner?.();
     } catch {
@@ -396,13 +181,8 @@
     }
   }
 
-  window.addEventListener('error', () => {
-    showBootError('The UI failed to load. Close and reopen the settings, then check Homebridge logs.');
-  });
-
-  window.addEventListener('unhandledrejection', () => {
-    showBootError('The UI failed to load. Close and reopen the settings, then check Homebridge logs.');
-  });
+  window.addEventListener('error', recordBrowserDiagnostic);
+  window.addEventListener('unhandledrejection', recordBrowserDiagnostic);
 
   if (!window.homebridge) {
     showBootError('Homebridge UI API is unavailable. Close and reopen the settings screen.');
@@ -423,12 +203,6 @@
     verify: document.getElementById('step-verify'),
     success: document.getElementById('step-success')
   };
-  const dots = {
-    1: document.getElementById('step1-dot'),
-    2: document.getElementById('step2-dot'),
-    3: document.getElementById('step3-dot')
-  };
-
   const startAuthButton = document.getElementById('startAuthButton');
   const pasteCallbackButton = document.getElementById('pasteCallbackButton');
   const manualCallbackButton = document.getElementById('manualCallbackButton');
@@ -464,47 +238,30 @@
   const unlockAuthBtn = document.getElementById('unlockAuthBtn');
 
   try {
-    pluginConfig = await homebridge.getPluginConfig();
+    pluginConfig = await window.BlinkSettings.deadline(homebridge.getPluginConfig());
   } catch {
     showBootError('Unable to load the plugin configuration. Close and reopen the settings, then check Homebridge logs.');
     return;
   }
 
-  let schemaConfigRevision = 0;
-  homebridge.addEventListener('configChanged', event => {
-    if (!Array.isArray(event.data)) return;
-    pluginConfig = event.data;
-    schemaConfigRevision += 1;
-  });
-
-  // A schema edit can arrive while the host answers a config request. Keep
-  // that newer draft instead of replacing it with the request's snapshot.
-  async function getLatestPluginConfig() {
-    const revision = schemaConfigRevision;
-    const latest = await homebridge.getPluginConfig();
-    return revision === schemaConfigRevision ? latest : pluginConfig;
+  let settings;
+  try {
+    const schema = await window.BlinkSettings.deadline(homebridge.getPluginConfigSchema());
+    settings = window.BlinkSettingsUI.mount(homebridge, schema, pluginConfig);
+    homebridge.hideSchemaForm();
+  } catch {
+    showBootError('The configuration definitions could not load. Close and reopen settings.');
+    return;
   }
 
-  deviceIdValue = typeof pluginConfig[0]?.deviceId === 'string'
-    ? pluginConfig[0].deviceId.trim()
+  deviceIdValue = typeof pluginConfig[settings.draft.index]?.deviceId === 'string'
+    ? pluginConfig[settings.draft.index].deviceId.trim()
     : '';
   document.getElementById('deviceId').value = deviceIdValue;
 
   function showStep(step) {
     Object.values(steps).forEach(element => element.classList.remove('active'));
     steps[step].classList.add('active');
-    Object.values(dots).forEach(dot => dot.classList.remove('active', 'completed'));
-
-    if (step === 'login') {
-      dots[1].classList.add('active');
-    } else if (step === 'callback' || step === 'verify') {
-      dots[1].classList.add('completed');
-      dots[2].classList.add('active');
-    } else {
-      dots[1].classList.add('completed');
-      dots[2].classList.add('completed');
-      dots[3].classList.add('active');
-    }
     const heading = steps[step].querySelector('h5');
     document.getElementById('flowStatus').textContent = heading?.textContent || '';
     if (heading) {
@@ -550,7 +307,7 @@
     const verified = state === 'verified';
     const failed = state === 'failed';
     successEmail.textContent = data.email || 'Blink account';
-    successTier.textContent = data.tier || pluginConfig[0]?.tier || '-';
+    successTier.textContent = data.tier || pluginConfig[settings.draft.index]?.tier || '-';
     successStatusBadge.classList.toggle('success', verified);
     successStatusBadge.classList.toggle('warning', failed);
     authStatusBadge.classList.toggle('bg-success', verified);
@@ -580,28 +337,35 @@
     }
   }
 
-  async function saveTokenOnlyConfig(data) {
-    const latestConfig = await getLatestPluginConfig();
-    const config = { ...(latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' }) };
-    config.deviceId = deviceIdValue || config.deviceId || 'homebridge-blink';
-    config.tier = data.tier || config.tier || 'prod';
-    config.persistAuth = true;
-    config.authLocked = true;
-    delete config.username;
-    delete config.email;
-    delete config.password;
-    delete config.twoFactorCode;
-    delete config.clientVerificationCode;
-    delete config.accountVerificationCode;
+  async function saveTokenOnlyConfig(data, reservedAction = null) {
+    const action = reservedAction || settings.beginAccountAction();
+    if (!action) throw new Error('Settings are unavailable for an account action.');
+    try {
+      const latestConfig = action.blocks;
+      const config = { ...(latestConfig[settings.draft.index] || { platform: 'BlinkCameras', name: 'Blink' }) };
+      config.deviceId = deviceIdValue || config.deviceId || 'homebridge-blink';
+      config.tier = data.tier || config.tier || 'prod';
+      config.persistAuth = true;
+      config.authLocked = true;
+      delete config.username;
+      delete config.email;
+      delete config.password;
+      delete config.twoFactorCode;
+      delete config.clientVerificationCode;
+      delete config.accountVerificationCode;
 
-    pluginConfig = [config, ...latestConfig.slice(1)];
-    await homebridge.updatePluginConfig(pluginConfig);
-    await homebridge.savePluginConfig();
-    deviceIdValue = config.deviceId;
-    updateLockUI(true);
+      pluginConfig = latestConfig.map((block, index) => index === settings.draft.index ? config : block);
+      await homebridge.updatePluginConfig(pluginConfig);
+      await homebridge.savePluginConfig();
+      await settings.replaceBaseline(pluginConfig);
+      deviceIdValue = config.deviceId;
+      updateLockUI(true);
+    } finally {
+      if (!reservedAction) action.finish();
+    }
   }
 
-  async function handleAuthResponse(data, { persistConfig = true, notify = true } = {}) {
+  async function handleAuthResponse(data, { persistConfig = true, notify = true, accountAction = null } = {}) {
     if (!data || data.authenticated !== true) {
       showError('Blink sign-in was not completed. Start a fresh sign-in and try again.');
       return;
@@ -610,7 +374,7 @@
     if (persistConfig) {
       pendingAuthConfig = data;
       try {
-        await saveTokenOnlyConfig(data);
+        await saveTokenOnlyConfig(data, accountAction);
         pendingAuthConfig = null;
         document.getElementById('configSaveError').classList.add('hidden');
       } catch {
@@ -619,7 +383,7 @@
     }
 
     setAuthLockVisibility(true);
-    homebridge.showSchemaForm();
+    settings.setAccountReady(!data.requiresClientVerification && !data.requiresAccountVerification);
 
     if (data.requiresClientVerification) {
       handleVerificationRequired('client', data);
@@ -644,82 +408,29 @@
   async function refreshAuthStatus() {
     hideStatusError();
     try {
-      const data = await homebridge.request('/status');
+      const data = await window.BlinkSettings.deadline(homebridge.request('/status'));
       if (data?.authenticated === true) {
         await handleAuthResponse(data, { persistConfig: false, notify: false });
       } else {
         setAuthLockVisibility(false);
-        homebridge.hideSchemaForm();
+        settings.setAccountReady(false);
         showStep('login');
       }
       return data;
     } catch {
       setAuthLockVisibility(false);
-      homebridge.hideSchemaForm();
-      showStep('login');
-      showError('Unable to check stored Blink authentication. Check Homebridge logs and try again.');
+      settings.setAccountReady(false);
+      showStep('success');
+      successStatusLabel.textContent = 'Connection status unavailable';
+      successTitle.textContent = 'Check Blink connection';
+      successSummary.textContent = 'Stored sign-in could not be checked. Retry status before changing the account.';
+      successEmail.textContent = 'Not checked';
+      successTier.textContent = '-';
+      authStatusBadge.textContent = 'Unknown';
+      showStatusError('Unable to check stored Blink authentication. Retry the status check.');
       return null;
     }
   }
-
-  let discoveredNetworks = [];
-  document.getElementById('loadNetworks').addEventListener('click', async () => {
-    const button = document.getElementById('loadNetworks');
-    button.disabled = true;
-    try {
-      const networks = await homebridge.request('/getNetworks');
-      discoveredNetworks = networks;
-      const container = document.getElementById('blinkNetworkList');
-      container.replaceChildren();
-      const excluded = pluginConfig[0]?.excludedNetworks || [];
-      networks.forEach((network, index) => {
-        const row = document.createElement('div');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.id = `exclude-network-${index}`;
-        input.value = network.id;
-        input.checked = excluded.includes(network.id) || excluded.includes(network.name);
-        const label = document.createElement('label');
-        label.htmlFor = input.id;
-        label.textContent = `${network.name} (${network.id})`;
-        row.append(input, label);
-        container.append(row);
-      });
-      if (!networks.length) container.textContent = 'No networks found.';
-      document.getElementById('saveNetworks').classList.toggle('hidden', !networks.length);
-      document.getElementById('saveNetworks').disabled = !networks.length;
-    } catch {
-      discoveredNetworks = [];
-      document.getElementById('blinkNetworkList').replaceChildren();
-      document.getElementById('saveNetworks').classList.toggle('hidden', true);
-      document.getElementById('saveNetworks').disabled = true;
-      showError('Could not load Blink networks. Test the connection and try again.');
-    } finally {
-      button.disabled = false;
-    }
-  });
-
-  document.getElementById('saveNetworks').addEventListener('click', async () => {
-    const button = document.getElementById('saveNetworks');
-    button.disabled = true;
-    try {
-      const latestConfig = await getLatestPluginConfig();
-      const previous = latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' };
-      // Keep exclusions for networks absent from this response.
-      const retained = (previous.excludedNetworks || []).filter(value =>
-        !discoveredNetworks.some(network => network.id === value || network.name === value));
-      const selected = Array.from(document.querySelectorAll('#blinkNetworkList input:checked')).map(input => input.value);
-      const next = [{ ...previous, excludedNetworks: [...new Set([...retained, ...selected])] }, ...latestConfig.slice(1)];
-      await homebridge.updatePluginConfig(next);
-      await homebridge.savePluginConfig();
-      pluginConfig = next;
-      homebridge.toast.success('Saved. Restart the Blink child bridge to apply network selection.');
-    } catch {
-      showError('Could not save excluded networks. Try again.');
-    } finally {
-      button.disabled = false;
-    }
-  });
 
   function addLog(level, message) {
     const entry = document.createElement('div');
@@ -754,12 +465,15 @@
       showError('Device ID may contain only letters, numbers, dots, underscores, and hyphens.');
       return;
     }
-    let blinkWindow = window.open('about:blank', '_blank');
-    if (blinkWindow) blinkWindow.opener = null;
+    const action = settings.beginAccountAction();
+    if (!action) return;
+    let blinkWindow;
     setButtonBusy(startAuthButton, true, 'Starting Blink sign-in…', 'Sign in securely with Blink');
     homebridge.showSpinner();
 
     try {
+      blinkWindow = window.open('about:blank', '_blank');
+      if (blinkWindow) blinkWindow.opener = null;
       const response = await homebridge.request('/auth/start', {
         deviceId: deviceIdValue
       });
@@ -771,7 +485,7 @@
         fallbackLink.href = response.authorizationUrl;
         fallbackLink.classList.remove('hidden');
       }
-      homebridge.hideSchemaForm();
+      settings.setAccountReady(false);
       showStep('callback');
     } catch {
       if (blinkWindow) blinkWindow.close();
@@ -780,6 +494,7 @@
     } finally {
       setButtonBusy(startAuthButton, false, 'Starting Blink sign-in…', 'Sign in securely with Blink');
       homebridge.hideSpinner();
+      action.finish();
     }
   });
 
@@ -865,6 +580,8 @@
       return;
     }
 
+    const action = settings.beginAccountAction();
+    if (!action) return;
     let submitted = callbackUrl;
     callbackUrl = '';
     callbackInput.value = '';
@@ -885,7 +602,7 @@
       } catch {
         // Clipboard clearing is best effort only.
       }
-      await handleAuthResponse(response);
+      await handleAuthResponse(response, { accountAction: action });
     } catch (error) {
       const supportCode = hostedOAuthSupportCode(error);
       resetHostedFlow();
@@ -900,6 +617,7 @@
       setButtonBusy(pasteCallbackButton, false, 'Finishing Blink sign-in…', 'Paste Blink Result and Finish');
       setButtonBusy(manualCallbackButton, false, 'Finishing Blink sign-in…', 'Finish with Pasted Address');
       homebridge.hideSpinner();
+      action.finish();
     }
   }
 
@@ -957,6 +675,7 @@
   }
 
   restartHostedAuthButton.addEventListener('click', () => {
+    if (settings.draft.state.accountAction) return;
     if (completionInFlight) {
       showError('Blink sign-in completion is already in progress.');
       return;
@@ -985,36 +704,40 @@
 
   verifyForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const action = settings.beginAccountAction();
+    if (!action) return;
     hideError();
     const code = document.getElementById('verifyCode').value.trim();
     setButtonBusy(verifyBtn, true, 'Verifying…', 'Verify Code');
     homebridge.showSpinner();
 
     try {
-      const latestConfig = await getLatestPluginConfig();
+      const latestConfig = action.blocks;
       const data = await homebridge.request('/verify', {
         code,
         type: verifyType,
-        trustDevice: latestConfig[0]?.trustDevice !== false
+        trustDevice: latestConfig[settings.draft.index]?.trustDevice !== false
       });
       document.getElementById('verifyCode').value = '';
-      await handleAuthResponse(data);
+      await handleAuthResponse(data, { accountAction: action });
     } catch {
       document.getElementById('verifyCode').value = '';
       showError('Blink verification could not be completed. Check the code or start sign-in again to request a new one.');
     } finally {
       setButtonBusy(verifyBtn, false, 'Verifying…', 'Verify Code');
       homebridge.hideSpinner();
+      action.finish();
     }
   });
 
   async function testStoredConnection(button) {
+    if (settings.draft.state.accountAction) return;
     hideError();
     setButtonBusy(button, true, 'Testing…', 'Test Connection');
     homebridge.showSpinner();
     try {
       const response = await homebridge.request('/test-connection', {
-        deviceId: deviceIdValue || pluginConfig[0]?.deviceId || 'homebridge-blink'
+        deviceId: deviceIdValue || pluginConfig[settings.draft.index]?.deviceId || 'homebridge-blink'
       });
       if (!response?.success) {
         const status = await refreshAuthStatus();
@@ -1042,37 +765,43 @@
   });
 
   statusRetry.addEventListener('click', async () => {
+    if (settings.draft.state.accountAction) return;
     await refreshAuthStatus();
   });
 
-  document.getElementById('showSchemaForm').addEventListener('click', () => {
-    homebridge.showSchemaForm();
-  });
+  document.getElementById('openCameras').addEventListener('click', () => settings.showSection(1));
 
   lockAuthBtn.addEventListener('click', async () => {
+    const action = settings.beginAccountAction();
+    if (!action) return;
     try {
       await homebridge.request('/lock');
-      const latestConfig = await getLatestPluginConfig();
-      const config = { ...(latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' }) };
+      const latestConfig = action.blocks;
+      const config = { ...(latestConfig[settings.draft.index] || { platform: 'BlinkCameras', name: 'Blink' }) };
       config.authLocked = true;
       delete config.twoFactorCode;
       delete config.clientVerificationCode;
       delete config.accountVerificationCode;
-      pluginConfig = [config, ...latestConfig.slice(1)];
+      pluginConfig = latestConfig.map((block, index) => index === settings.draft.index ? config : block);
       await homebridge.updatePluginConfig(pluginConfig);
       await homebridge.savePluginConfig();
+      await settings.replaceBaseline(pluginConfig);
       updateLockUI(true);
       homebridge.toast.success('Authentication locked. Legacy verification values were cleared.', 'Locked');
     } catch {
       showError('Authentication could not be locked. Check Homebridge logs and try again.');
+    } finally {
+      action.finish();
     }
   });
 
   async function restartAuthentication() {
+    const action = settings.beginAccountAction();
+    if (!action) return;
     try {
       await homebridge.request('/unlock');
-      const latestConfig = await getLatestPluginConfig();
-      const config = { ...(latestConfig[0] || { platform: 'BlinkCameras', name: 'Blink' }) };
+      const latestConfig = action.blocks;
+      const config = { ...(latestConfig[settings.draft.index] || { platform: 'BlinkCameras', name: 'Blink' }) };
       config.authLocked = false;
       delete config.username;
       delete config.email;
@@ -1080,18 +809,21 @@
       delete config.twoFactorCode;
       delete config.clientVerificationCode;
       delete config.accountVerificationCode;
-      pluginConfig = [config, ...latestConfig.slice(1)];
+      pluginConfig = latestConfig.map((block, index) => index === settings.draft.index ? config : block);
       await homebridge.updatePluginConfig(pluginConfig);
       await homebridge.savePluginConfig();
+      await settings.replaceBaseline(pluginConfig);
       updateLockUI(false);
       setAuthLockVisibility(false);
       pendingAuthConfig = null;
       document.getElementById('configSaveError').classList.add('hidden');
-      homebridge.hideSchemaForm();
+      settings.setAccountReady(false);
       resetHostedFlow();
       homebridge.toast.info('Stored Blink authentication was cleared. Start a new hosted sign-in.', 'Unlocked');
     } catch {
       showError('Authentication could not be unlocked. Check Homebridge logs and try again.');
+    } finally {
+      action.finish();
     }
   }
 
@@ -1113,7 +845,19 @@
     }
   });
 
-  updateLockUI(pluginConfig[0]?.authLocked === true);
+  updateLockUI(pluginConfig[settings.draft.index]?.authLocked === true);
   await refreshAuthStatus();
+  }
+  if (!window.homebridge) {
+    fatal('Homebridge UI API is unavailable. Retry loading or reopen settings.');
+    return;
+  }
+  window.homebridge.addEventListener('ready', () => {
+    window.homebridge.disableSaveButton();
+    initialize().catch(() => {
+      fatal('Initialization failed. Retry loading or reopen settings.');
+    });
+  }, { once: true });
 })();
+
 </script>

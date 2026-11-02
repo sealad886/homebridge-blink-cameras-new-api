@@ -1,0 +1,35 @@
+.blink-ui { max-width: 100%; padding: .25rem .25rem 1rem; color: inherit; }
+.blink-ui [hidden], .blink-ui .hidden { display: none !important; }
+.blink-eyebrow { font-size: .75rem; font-weight: 650; letter-spacing: .1em; margin: 0 0 .8rem; }
+.blink-navigation { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+.blink-nav-button { border: 1px solid currentColor; font-size: .875rem; padding: .45rem .7rem; color: inherit; }
+.blink-nav-button.active { background: var(--bs-primary, #a65c00); color: var(--bs-white, white); border-color: transparent; }
+.blink-ui button:focus-visible, .blink-ui input:focus-visible, .blink-ui select:focus-visible, .blink-ui summary:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.blink-ui h2 { font-size: 1.4rem; margin: 1rem 0; }
+.blink-ui h3 { font-size: 1.05rem; margin-top: .9rem; }
+.blink-draft-status { padding: .7rem .85rem; border-inline-start: 3px solid currentColor; font-size: .875rem; margin: .6rem 0; }
+.blink-help { font-size: .85rem; line-height: 1.5; margin: .4rem 0 .7rem; }
+.blink-field { margin: 1rem 0 1.25rem; }
+.blink-field > label { display: block; font-weight: 600; margin-bottom: .4rem; }
+.blink-field input[inputmode="numeric"] { max-width: 14rem; font-variant-numeric: tabular-nums; }
+.blink-check { display: flex; align-items: flex-start; gap: .65rem; margin: .8rem 0; cursor: pointer; }
+.blink-check input { width: 1.15rem; height: 1.15rem; flex-shrink: 0; margin-top: .15rem; accent-color: var(--bs-primary, #b76a00); }
+.blink-check:has(input:disabled) { cursor: default; }
+.blink-camera, .blink-details, .blink-system, .blink-connection-card { border: 1px solid var(--bs-border-color, #888); border-radius: .45rem; padding: .85rem 1rem; margin: .8rem 0; }
+.blink-camera summary, .blink-details summary { cursor: pointer; font-weight: 600; line-height: 1.5; }
+.blink-camera[open] summary, .blink-details[open] summary { margin-bottom: .8rem; }
+.blink-module + .blink-module { border-top: 1px solid var(--bs-border-color, #888); margin-top: 1rem; padding-top: .25rem; }
+.blink-unresolved { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; justify-content: space-between; margin: .8rem 0; overflow-wrap: anywhere; }
+.blink-inventory-tools { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; align-items: center; margin: .8rem 0; }
+.blink-checklist { padding-left: 1.3rem; line-height: 1.6; }
+.blink-ui .form-control, .blink-ui .form-select { width: 100%; }
+.blink-ui .alert { margin: .8rem 0; overflow-wrap: anywhere; }
+.blink-ui .alert p:last-child { margin-bottom: 0; }
+.blink-ui [aria-invalid="true"] { border: 2px solid var(--bs-danger, #cf4a4a); }
+.auth-step { display: none; }.auth-step.active { display: block; }
+.blink-ui .card { margin: .8rem 0; }.blink-ui .card-body { padding: 1rem; }
+.blink-ui .text-muted { color: inherit !important; opacity: 1; }
+.blink-ui dl { margin: .8rem 0; }.blink-ui dt { font-size: .8rem; }.blink-ui dd { overflow-wrap: anywhere; }
+.log-container { display: none; max-height: 15rem; overflow: auto; font-family: monospace; font-size: .8rem; }.log-container.visible { display: block; }
+@media (max-width: 480px) { .blink-nav-button { flex: 1 1 45%; text-align: start; }.blink-camera,.blink-details,.blink-system { padding: .7rem; } }
+@media (prefers-reduced-motion: reduce) { .blink-ui *, .blink-ui *::before, .blink-ui *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

@@ -30,7 +30,7 @@ export class CameraAccessory extends MotionDeviceBase<BlinkCamera> {
   ) {
     const deviceType = device.type === 'owl' ? 'owl' as const : 'camera' as const;
     super(platform, accessory, device, device.type ?? 'Camera', 'camera', deviceType);
-    this.exposeTemperature = deviceType === 'camera' && platform.isTemperatureEnabled(device);
+    this.exposeTemperature = deviceType === 'camera' && platform.isTemperatureEnabled(device, 'camera');
     this.temperatureService = accessory.getServiceById(platform.Service.TemperatureSensor, 'temperature');
     if (!this.exposeTemperature && this.temperatureService) {
       accessory.removeService(this.temperatureService);

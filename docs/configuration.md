@@ -1,6 +1,6 @@
 # Configuration reference
 
-Last reviewed: 26 October 2026.
+Last reviewed: 2 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -16,6 +16,65 @@ only the form draft. Apply runtime changes through your normal operator-owned
 child-bridge restart workflow.
 
 For sign-in and token-storage behavior, see [authentication](authentication.md).
+
+The editor separates five tasks:
+
+| Section | Use it for |
+| --- | --- |
+| Overview & connection | Sign in, inspect stored-session facts and test the Blink connection. |
+| Cameras in Home | Choose systems/cameras, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional feed limits. Excluded cameras remain visible here so you can include them again. |
+| HomeKit recording | Choose discovered cameras and review recording, motion and privacy prerequisites. |
+| Live viewing & sound | Allow live viewing, choose a picture preset and allow shared HomeKit audio. |
+| Advanced & troubleshooting | Polling, previews, exact tuning values, diagnostics and immediate account maintenance. |
+
+Navigation retains incomplete edits. Invalid values or an unavailable validation
+service keep Save disabled with a retryable explanation. Camera discovery failure
+preserves existing selections and marks the last list stale; it does not turn
+missing cameras into an empty successful result. Unresolved saved identifiers
+remain visible until you explicitly remove them. New selections use qualified
+identities such as `camera:123`, `owl:123` or `doorbell:123` so equal numeric IDs
+across device types stay distinct.
+
+Account actions are immediate and separate from settings Save. Save or discard
+unsaved settings before changing the account, so an account action cannot save
+unrelated edits. Settings stay unavailable throughout the account request and
+its configuration save. Per-camera temperature offers **Use platform setting**, **Show**
+and **Hide**. Blank per-camera motion duration inherits the platform duration.
+
+## HomeKit recording and feed limits
+
+Select cameras in **HomeKit recording**, Save and restart the Blink child bridge.
+Then use the camera's settings in Apple Home to allow **Stream & Allow Recording**
+and choose recording-audio permission. HomeKit recordings are viewed in Apple
+Home; the plugin does not choose an iCloud Drive folder or confirm a saved clip.
+
+Recording permission starts continuous capture with a four-second memory buffer
+and local video-motion detection. This increases battery and network use. New
+motion events require the Blink system to be armed and camera motion enabled.
+Disarming Blink or turning camera motion off suppresses new events; the
+background feed and buffer may continue. Turning recording off in Home cancels
+recording capture and clears the buffer. Turning the camera off in Home also
+blocks live viewing and snapshots.
+
+**Read motion events from Blink** only reads Blink cloud clip events. It does
+not control HSV's local motion detector. Live-view enablement is independent
+from recording-camera selection. Camera audio applies to both; Apple Home's
+recording-audio permission also applies. Live picture presets do not set the
+Home hub's recording format.
+
+There is no four-camera recording-selection limit. The global upstream feed
+capacity is the known, included camera count; an offline camera remains known.
+Live viewing and recording can share one camera's upstream feed. Each actual
+Sync Module defaults to the included camera count associated with its Blink
+system. Set an optional positive whole-number limit in the module details;
+**Use discovered default** removes that override. Blink may impose additional
+limits regardless of local capacity.
+
+A Blink system is not a Sync Module ID. The available inventory associates a
+camera with a real module only when exactly one module belongs to its system;
+this is not proof of the physical video path. Ambiguous associations and stale
+explicit module limits receive validation errors. Remove an override or resolve
+the inventory before saving; the editor never silently ignores it.
 
 ## Manual Configuration
 
@@ -57,12 +116,14 @@ Add a platform entry to your Homebridge `config.json`:
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
-| `enableMotionPolling` | No | `true` | Poll for motion events |
+| `enableMotionPolling` | No | `true` | Read Blink cloud clip events; independent of HSV local video motion and capture permission |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
+| `hksvCameras` | No | `[]` | Cameras offered for HSV recording; the discovered picker writes qualified type/ID values. Home permissions and restart are additional steps. |
+| `syncModuleFeedLimits` | No | `[]` | Optional `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. |
 | `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
-| `enableAudio` | No | `true` | Enable audio streaming from camera |
+| `enableAudio` | No | `true` | Allow camera audio for live viewing and HSV; Home recording-audio permission must also allow it |
 | `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `outputQuality` | No | `auto` | System-wide output profile; see [quality profiles](streaming.md#input-and-output-quality) |
@@ -71,15 +132,15 @@ Add a platform entry to your Homebridge `config.json`:
 | `debugStreamPath` | No | - | Save raw IMMIS MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging; RTSPS recording is not implemented |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` requests fresh snapshots, subject to capture coalescing, failure backoff and provider busy fallback |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
-| `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
+| `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
 | `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout, exposeTemperature }` (legacy `deviceSettings` is still accepted for motion timeout; see [input quality](streaming.md#input-and-output-quality)) |
 
 For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration) before restarting; retired CLI and AAC-ELD settings are rejected.
 
-Use **Excluded Networks** in the plugin settings to select systems this instance
-should not expose. Save and restart the Blink child bridge. Clearing a selection
-restores that network on discovery. Missing/offline devices are not removed merely
+Use **Cameras in Home** to select systems this instance should expose. Save and
+restart the Blink child bridge. Including a system restores it on discovery.
+Missing/offline devices are not removed merely
 because they are absent from one response. Network names are exact matches; IDs
 remain stable if a network is renamed.
 

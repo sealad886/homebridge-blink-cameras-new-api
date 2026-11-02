@@ -1,8 +1,9 @@
 # Configuration UX and camera-feed capacity design
 
-Status: approved for local implementation. Publication and device installation
-are separate actions. Baseline: `a23124e4875cb3fa21d9baedeedddb9b830cdc30`,
-Homebridge UI 5.29.0 and Plugin UI Utils 2.2.5.
+Status: implemented and verified locally with independent code and security
+review. Publication and device installation are separate actions. Baseline: `a23124e4875cb3fa21d9baedeedddb9b830cdc30`,
+Homebridge UI 5.29.0 and Plugin UI Utils 2.2.5. The later in-app browser review
+observed Homebridge UI 5.30.0 on the same Pi.
 
 ## Outcome and constraints
 
@@ -35,7 +36,7 @@ Five wrapping navigation buttons select one section at a time:
 | Cameras in Home | Discovered camera inclusion, Home names, per-camera overrides and clearly identified Blink systems/Sync Modules. |
 | HomeKit recording | Discovered-camera opt-in, Home permissions, pre-event capture and motion/privacy explanations. |
 | Live viewing & sound | Live view, ordinary picture-quality choices and the shared camera-audio permission. |
-| Advanced & troubleshooting | Exact viewer/bitrate/module limits, polling, snapshots, codecs, encoder tuning, diagnostics, identity and unusual account recovery. |
+| Advanced & troubleshooting | Exact viewer/bitrate limits, polling, snapshots, codecs, encoder tuning, diagnostics, identity and unusual account recovery. |
 
 Keep module capacity visible beside the discovered topology, with the exact
 integer editor in the relevant camera/module details rather than a range slider.
@@ -50,6 +51,9 @@ existing enums and the existing domain arrays. Discovered-camera and module
 controls may have specialized presentation, but must use the same draft and
 validation path. Use Homebridge's injected theme and preserve semantic labels,
 visible focus and existing reduced-motion support.
+Optional per-camera booleans require Inherit / On / Off, and optional numeric
+overrides require a clear inherited state. Preserve unknown per-camera fields
+when changing an override.
 
 ### Why authored controls
 
@@ -67,7 +71,12 @@ on unsupported definitions.
 
 Primary contracts:
 [Plugin UI Utils 2.2.5](https://github.com/homebridge/plugin-ui-utils/blob/v2.2.5/README.md),
-[Homebridge UI 5.29 custom plugin component](https://github.com/homebridge/homebridge-config-ui-x/blob/v5.29.0/ui/src/app/core/plugins/custom-plugins/custom-plugins.component.ts).
+[Homebridge UI 5.29 custom plugin component](https://github.com/homebridge/homebridge-config-ui-x/blob/v5.29.0/ui/src/app/core/plugins/custom-plugins/custom-plugins.component.ts),
+[Homebridge UI 5.30 custom plugin component](https://github.com/homebridge/homebridge-config-ui-x/blob/v5.30.0/ui/src/app/core/plugins/custom-plugins/custom-plugins.component.ts).
+The 5.30 source retains schema retrieval, acknowledged configuration staging,
+Save enable/disable messages and the outer Save/close/restart flow. Its standalone
+form updates still use the 100 ms debounce. This is source confirmation of the
+host contract, not installation of the new editor on the Pi.
 
 ## One draft and the host Save action
 
@@ -97,19 +106,23 @@ automatically restart Homebridge.
 
 ## Read-only inventory and canonical validation
 
-Extend the existing authenticated settings-server service with one inventory
-projection shared by runtime and settings validation. It contains networks,
+Extend the existing authenticated settings-server service with one
+`/settings/inventory` projection shared by runtime and settings validation. It contains networks,
 actual Sync Modules and cameras from the camera, owl and doorbell lists. Camera
 identity is qualified by kind (`camera:123`, `owl:123`, `doorbell:123`) to avoid
 unproven numeric-ID uniqueness. Names, network context and module association
 make duplicate names distinguishable in the editor.
 
-Expose only configuration-relevant identity/state data, a snapshot revision and
-fetch time; never credentials or raw provider responses. Failed discovery is an
+Expose only configuration-relevant identity/state data, a snapshot revision,
+`fetchedAt` time and derived capacity; never credentials or raw provider responses. Failed discovery is an
 error, not a successful empty inventory. Preserve saved selections and visibly
 retain a last-good snapshot as stale if refresh fails. Never silently remove
 unmatched or ambiguous existing selections. New selections use qualified
 identities in existing configuration arrays; runtime matching understands them.
+Zero selected HSV cameras is a valid absent or empty list. Do not create a blank
+placeholder selector or prevent saving unrelated settings in that state.
+Keep excluded discovered cameras in the response with their inclusion state so
+they can be re-included; only capacity derivation filters them.
 
 Add `/settings/validate` for the full platform draft and its client revision.
 Compile the canonical inner JSON schema once with the existing Ajv 8 dependency,
@@ -225,6 +238,11 @@ address a plugin parser error. Surface unexpected errors safely without turning
 an unrelated recoverable error into a permanent blanket failure over a
 functioning editor. Include real Safari parsing/interaction evidence, since a
 jsdom or Chromium-only pass does not establish this regression is fixed.
+An unowned global browser error must not claim that a user action failed when no
+owned action was running. Preserve console output and expose a safe error-class
+count with unattributed origin in Advanced. Owned initialization/action failures
+retain their accurate local phase, retry and Save-gating behavior. Do not claim
+the original compound-expression source is fixed if it remains unattributed.
 
 ## Verification and integration
 
@@ -249,4 +267,3 @@ Preserving existing keys means no running-config conversion is required. The
 implementation changes files only; a future user save uses Homebridge's normal
 configuration persistence. Rolling back the local source requires no production
 data rewrite. Publication/install and its rollback plan require their own scope.
-

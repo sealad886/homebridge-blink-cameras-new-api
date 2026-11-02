@@ -8,18 +8,18 @@ write, installation, restart, external tracker write or real-feed load probe.
 
 - [x] Complete source investigation and authenticated before-screen review.
 - [x] Resolve schema-driven rendering, Save semantics and topology limits.
-- [ ] **Active:** Record and locally commit the approved design before product edits.
-- [ ] Implement the disjoint UI and runtime slices below; run focused checks.
-- [ ] Integrate and run build, lint and full Jest; update graph metadata.
-- [ ] Independently review code, TypeScript, privacy and local rendered behavior.
-- [ ] Update canonical configuration help and hand off the verified local change.
+- [x] Record and locally commit the approved design before product edits (`e1cf8d0`, local only).
+- [x] Implement the disjoint UI and runtime slices below; run focused checks.
+- [x] Integrate and run build, lint and full Jest; update graph metadata.
+- [x] Independently review code, TypeScript, privacy and local rendered behavior.
+- [x] Prepare the verified local handoff with updated configuration help.
 
 ## Work and ownership
 
 | Work | Owner | Files and contract |
 | --- | --- | --- |
-| UI | UI implementer | Sole writer of public UI assets, `config.schema.json`, UI/schema tests and related configuration help. Five sections, authored schema-driven controls, discovered selectors and one revision-fenced draft. |
-| Runtime | Runtime implementer | Runtime/provider types, shared inventory and validation, platform capacity, shared upstream admission, settings service/server and backend tests. No schema edits; supply the schema contract to the UI owner. |
+| UI | `configuration_ux_journey` | Sole writer of public UI assets, `config.schema.json`, UI/schema tests, a canonical-source local preview adapter if needed, and related configuration help. Five sections, authored schema-driven controls, discovered selectors and one revision-fenced draft. |
+| Runtime | `configuration_runtime_implementation` | Runtime/provider types, shared inventory and validation, platform capacity, shared upstream admission, settings service/server and backend tests. No schema edits; supply the schema contract to the UI owner. |
 | Integration | Root | Manifest/lockfile Ajv promotion, branch, integration, full checks, review dispatch and final handoff. |
 | Evidence | Delivery orchestrator | Review/plan synthesis and bounded implementation routing. |
 
@@ -42,6 +42,29 @@ including removal of the HSV count limit and the new module-limit property.
 
 ## Required evidence
 
+The final frozen source passed independent Node 24.22.2 build, lint and full Jest:
+61 suites / 1,425 tests passed; one suite / 18 tests remain skipped by the existing
+suite. Focused UI tests passed four suites / 44 tests, including deferred account
+requests, intervening edit attempts, duplicate operations and persistence failure.
+Independent code/TypeScript and security reviews found no remaining confirmed
+blocker after corrections to account reservations, qualified selector isolation,
+unavailable system exclusions and module-control placement.
+
+The repository JavaScript-only package smoke passed. A second smoke installed
+only locked production dependencies in an isolated temporary prefix and loaded
+the packed validator, canonical schema and three UI assets. Ajv 8.20.0 was present;
+six recording cameras validated, and string-to-integer coercion was rejected.
+This does not qualify the five native release targets or create a release.
+
+The authenticated in-app browser review confirmed the installed beta on the Pi
+now uses Homebridge UI 5.30.0. The new editor was exercised separately using its
+actual public assets with a synthetic host: six recording selections, two module
+limits, invalid Save gating, draft retention, inherited overrides, stale discovery,
+light/dark rendering, keyboard section activation and a 540px viewport. The
+viewport override was restored. No Pi setting was saved or process restarted.
+The earlier unattributed Safari compound-expression source is not claimed fixed.
+Graphify's final AST update completed with 4,186 nodes and 8,174 edges.
+
 | Area | Observable acceptance |
 | --- | --- |
 | Settings | Five task sections; no stacked auth/form surfaces; final raw edit survives Save staging; navigation preserves valid/invalid edits and unknown config; only the latest valid staged revision enables Save. |
@@ -58,4 +81,3 @@ original triggering error remains unobserved, report that limit even after the
 contradictory-state handling is corrected. Safari console currently identifies
 an invalid HTML pattern and a compound-expression SyntaxError; reproduce and
 trace those generated-source failures and verify the replacement in Safari.
-

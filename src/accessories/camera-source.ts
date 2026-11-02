@@ -25,6 +25,7 @@ import { withResponseBudget, withinRequestBudget, RequestOptions, checkRequestBu
 import { toHapError } from '../hap-errors';
 import type { HomeKitAuditEvent } from '../homekit-audit';
 import { BlinkApi } from '../blink-api/client';
+import { FeedAdmissionError, type FeedLease } from './feed-admission';
 import { readBoundedBody } from '../blink-api/response-body';
 import { BlinkHttpError } from '../blink-api/http';
 import {
@@ -233,6 +234,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private snapshotFailure: Error | null = null;
   private streamFailureCooldownUntil = 0;
   private remoteRetirement: Promise<void> = Promise.resolve();
+  private feedRetirement: Promise<void> = Promise.resolve();
   private readonly remoteAllocations = new Set<Promise<void>>();
   private retirementReceiptBudget = 8;
   private readonly negotiationDiagnostics = new StreamDiagnosticBudget(32, 8);
@@ -257,6 +259,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly beforeLiveview?: (options: RequestOptions) => Promise<void>,
     private readonly onInputObservation?: (observation: InputVideoObservation) => void,
     private readonly auditEvent?: (event: HomeKitAuditEvent) => void,
+    private readonly acquireFeed?: () => FeedLease,
   ) {
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
     this.sharedFeed = new SharedCameraFeed((sink, signal) => this.startVendorFeed(sink, signal));
@@ -831,6 +834,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private async startVendorFeed(sink: FeedSink, signal: globalThis.AbortSignal): Promise<FeedHandle> {
     signal.throwIfAborted();
     if (!this.cameraActive || !this.isDeviceAvailable()) throw new Error('Camera feed unavailable');
+    let lease: FeedLease | undefined;
     const abort = new globalThis.AbortController();
     let proxy: ImmisProxyServer | undefined;
     let broker: OwnedRtspBroker | undefined;
@@ -838,6 +842,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     let commandId: number | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopping: Promise<void> | undefined;
+    let allocationDuty: Promise<void> | undefined;
+    let commandRetirement: Promise<void> | undefined;
+    const retireCommand = (): Promise<void> => commandId
+      ? commandRetirement ??= this.completeLiveview(commandId) : Promise.resolve();
     let finish!: () => void;
     const whenClosed = new Promise<void>(resolve => { finish = resolve; });
     const stop = (): Promise<void> => {
@@ -847,9 +855,18 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       stopping = (async () => {
         proxy?.retire(); void broker?.stop(); consumer?.destroy();
         await Promise.all([proxy?.whenClosed, broker?.whenClosed]);
-        if (commandId) void this.completeLiveview(commandId);
+        if (commandId) void retireCommand();
         finish();
       })();
+      // Local transport closure releases HomeKit ports independently. The
+      // upstream lease additionally owns any still-pending vendor allocation.
+      const leaseRetirement = stopping.then(async () => {
+        await allocationDuty;
+        await retireCommand();
+        lease?.release();
+      });
+      this.feedRetirement = Promise.all([this.feedRetirement, leaseRetirement]).then(() => undefined);
+      void this.feedRetirement.catch(() => undefined);
       return stopping;
     };
     const cancelled = (): void => { void stop(); };
@@ -864,18 +881,20 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         const options = { signal: abort.signal, deadline: Date.now() + 12_000 };
         await withinRequestBudget(this.beforeLiveview(options), options);
       }
-      await withinRequestBudget(Promise.all([this.remoteRetirement, ...this.remoteAllocations]),
+      await withinRequestBudget(Promise.all([this.remoteRetirement, this.feedRetirement, ...this.remoteAllocations]),
         { signal: abort.signal, deadline: Date.now() + 4000 });
       abort.signal.throwIfAborted();
+      lease = this.acquireFeed?.();
       const allocation = this.requestLiveView().then(async liveview => {
         commandId = liveview.command_id ?? liveview.id;
         if (abort.signal.aborted) {
-          if (commandId) await this.completeLiveview(commandId);
+          await retireCommand();
           throw new Error('Camera feed cancelled');
         }
         return liveview;
       });
       const duty = allocation.then(() => undefined, () => undefined);
+      allocationDuty = duty;
       this.remoteAllocations.add(duty);
       void duty.then(() => this.remoteAllocations.delete(duty));
       const liveview = await withinRequestBudget(allocation, { signal: abort.signal, deadline: Date.now() + 25000 });
@@ -912,7 +931,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         void poll();
       }
       return { whenClosed, stop };
-    } catch {
+    } catch (error) {
+      if (error instanceof FeedAdmissionError) this.logError(error.message);
       await stop();
       throw new Error('Camera feed unavailable');
     }

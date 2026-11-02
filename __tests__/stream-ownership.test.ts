@@ -10,6 +10,8 @@ import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifac
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { OwnedRtspBroker } from '../src/blink-api/rtsp-broker';
 import { createHap } from './helpers/homebridge';
+import { CameraFeedAdmission } from '../src/accessories/feed-admission';
+import { cameraKey, projectSettingsInventory } from '../src/settings-inventory';
 
 jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn() }));
 jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: jest.fn(() => '/verified/worker') }));
@@ -46,7 +48,7 @@ function ownedTransport(autoClose: () => boolean) {
   return { transport, consumers, close: () => close() };
 }
 
-function fixture(config: BlinkCameraStreamingConfigInput = {}) {
+function fixture(config: BlinkCameraStreamingConfigInput = {}, acquireFeed?: () => { release(): void }, identity = { networkId: 1, deviceId: 2 }) {
   const state = { closeMedia: true, closeTransport: true };
   const natives: ReturnType<typeof ownedMedia>[] = []; const transports: ReturnType<typeof ownedTransport>[] = [];
   const preparationCallbacks: jest.Mock[] = [];
@@ -67,8 +69,8 @@ function fixture(config: BlinkCameraStreamingConfigInput = {}) {
     .mockResolvedValue({ server: immis }), completeCommand: jest.fn().mockResolvedValue(null),
   getCommandStatus: jest.fn().mockResolvedValue({ complete: false, status: 'running' }) };
   const source = new BlinkCameraSource(api as unknown as BlinkApi, createHap() as unknown as HAP,
-    1, 2, 'camera', 'serial', () => undefined, () => true, log,
-    { audio: { enabled: false }, ...config }, errorLog, undefined, observed);
+    identity.networkId, identity.deviceId, 'camera', 'serial', () => undefined, () => true, log,
+    { audio: { enabled: false }, ...config }, errorLog, undefined, observed, undefined, acquireFeed);
   const selected = (id = 's') => ({ type: 'start', sessionID: id,
     video: { fps: 15, width: 640, height: 480, max_bit_rate: 300, profile: 0, level: 0, pt: 99, mtu: 1378 },
     ...(config.audio?.enabled ? { audio: { codec: 'OPUS', sample_rate: 16, channel: 1, max_bit_rate: 32, pt: 110, packet_time: 20 } } : {})
@@ -99,6 +101,75 @@ function fixture(config: BlinkCameraStreamingConfigInput = {}) {
 describe('generation-owned streaming', () => {
   beforeEach(() => { jest.clearAllMocks(); mockDelayBind = false; mockBinds.length = 0; });
   afterEach(() => { jest.useRealTimers(); });
+
+  it('starts six distinct synthetic vendor feeds under inventory-derived admission', async () => {
+    const inventory = projectSettingsInventory({ account: { account_id: 1 },
+      networks: [{ id: 1, name: 'System', armed: true }], sync_modules: [{ id: 9, network_id: 1, status: 'online' }],
+      cameras: Array.from({ length: 6 }, (_, i) => ({ id: i + 1, network_id: 1, name: `Camera ${i}`, enabled: true })),
+      owls: [], doorbells: [],
+    });
+    const admission = new CameraFeedAdmission(); admission.configure(inventory, {});
+    const sources = inventory.cameras.map(camera => fixture({}, () => admission.acquire(camera.key), { networkId: 1, deviceId: Number(camera.id) }));
+    const feeds = await Promise.all(sources.map(f => f.source.subscribeFeed({ write: async () => {}, end: async () => {}, fail: () => {} }, new globalThis.AbortController().signal)));
+    sources.forEach((f, index) => expect(f.api.startCameraLiveview).toHaveBeenCalledWith(1, index + 1));
+    await Promise.all(feeds.map(feed => feed.stop())); await flush();
+    for (let id = 1; id <= 6; id++) admission.acquire(cameraKey('camera', id)).release();
+  });
+
+  it('releases admission after provider allocation fails, without starting a transport', async () => {
+    const release = jest.fn(); const f = fixture({}, () => ({ release }));
+    f.api.startCameraLiveview.mockRejectedValueOnce(new Error('private-provider-detail'));
+    await expect(f.source.subscribeFeed({ write: async () => {}, end: async () => {}, fail: () => {} }, new globalThis.AbortController().signal)).rejects.toThrow(/unavailable/);
+    await flush(); expect(release).toHaveBeenCalledTimes(1); expect(f.transports).toHaveLength(0);
+    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain('private-provider-detail');
+  });
+
+  it('counts shared live/recording consumers as one upstream lease until actual transport closure', async () => {
+    const release = jest.fn(); const acquire = jest.fn(() => ({ release }));
+    const f = fixture({}, acquire); f.state.closeTransport = false;
+    const sink = () => ({ write: jest.fn(async () => {}), end: jest.fn(async () => {}), fail: jest.fn() });
+    const first = await f.source.subscribeFeed(sink(), new globalThis.AbortController().signal);
+    const second = await f.source.subscribeFeed(sink(), new globalThis.AbortController().signal);
+    expect(acquire).toHaveBeenCalledTimes(1); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
+    await first.stop(); expect(release).not.toHaveBeenCalled();
+    const stop = second.stop(); await flush(); expect(release).not.toHaveBeenCalled();
+    f.transports[0].close(); await stop; expect(release).toHaveBeenCalledTimes(1);
+    await second.stop(); expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains admission across cancelled late allocation and its bounded remote retirement', async () => {
+    const release = jest.fn(); const f = fixture({}, () => ({ release }));
+    let allocate!: (result: { server: string; command_id: number }) => void;
+    let complete!: () => void;
+    f.api.startCameraLiveview.mockReturnValueOnce(new Promise(resolve => { allocate = resolve; }));
+    f.api.completeCommand.mockReturnValueOnce(new Promise<void>(resolve => { complete = resolve; }));
+    const abort = new globalThis.AbortController();
+    const started = f.source.subscribeFeed({ write: async () => {}, end: async () => {}, fail: () => {} }, abort.signal);
+    const rejected = expect(started).rejects.toThrow(/unavailable/i);
+    await flush(); abort.abort(); await rejected; expect(release).not.toHaveBeenCalled();
+    allocate({ server: immis, command_id: 99 }); await flush();
+    expect(f.api.completeCommand).toHaveBeenCalledWith(1, 99, expect.anything());
+    expect(release).not.toHaveBeenCalled();
+    complete(); await flush(); expect(release).toHaveBeenCalledTimes(1);
+    await f.source.shutdown();
+  });
+
+  it('reopens only after the previous upstream lease has completed retirement', async () => {
+    const inventory = projectSettingsInventory({ account: { account_id: 1 }, networks: [{ id: 1, name: 'System', armed: true }],
+      sync_modules: [], cameras: [{ id: 2, network_id: 1, name: 'Camera', enabled: true }], owls: [], doorbells: [] });
+    const admission = new CameraFeedAdmission(); admission.configure(inventory, {});
+    const f = fixture({}, () => admission.acquire('camera:2'));
+    let complete!: () => void;
+    f.api.startCameraLiveview.mockResolvedValue({ server: immis, command_id: 55 });
+    f.api.completeCommand.mockReturnValueOnce(new Promise<void>(resolve => { complete = resolve; }));
+    const sink = { write: async () => {}, end: async () => {}, fail: () => {} };
+    const first = await f.source.subscribeFeed(sink, new globalThis.AbortController().signal);
+    await first.stop();
+    const second = f.source.subscribeFeed(sink, new globalThis.AbortController().signal);
+    await flush(); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
+    complete(); const reopened = await second;
+    expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(2); await reopened.stop(); await flush();
+  });
 
   it('stops one-way IMMIS by retiring its owned consumer without talkback commands', async () => {
     const f = fixture({ audio: { enabled: true } });
