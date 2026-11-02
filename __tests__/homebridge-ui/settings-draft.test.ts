@@ -72,6 +72,19 @@ it('distinguishes kind collisions and preserves unavailable selectors while chan
   expect(toggleSelection(['missing-camera', 'owl:1'], cameras[1], false, cameras)).toEqual(['missing-camera']);
 });
 
+it('does not bind missing or malformed selectors to a sole camera without a serial', () => {
+  const { resolveSelector, toggleSelection } = load();
+  const camera = { key: 'camera:1', id: '1', kind: 'camera', name: 'Camera' };
+  for (const selector of [undefined, null, '', '  ', false, 0, {}, []]) {
+    expect(resolveSelector(selector, [camera])).toEqual([]);
+  }
+  expect(resolveSelector('camera:1', [camera])).toEqual([camera]);
+  expect(resolveSelector('1', [camera])).toEqual([camera]);
+  expect(resolveSelector('Camera', [camera])).toEqual([camera]);
+  expect(resolveSelector('serial-1', [{ ...camera, serial: 'serial-1' }])).toEqual([{ ...camera, serial: 'serial-1' }]);
+  expect(toggleSelection([undefined, 'missing-camera', 'camera:1'], camera, false, [camera])).toEqual([undefined, 'missing-camera']);
+});
+
 it('allows six recording cameras and enforces positive exact module limits through the canonical schema', () => {
   const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8')).schema;
   const validate = new Ajv({ strict: false }).compile(schema);

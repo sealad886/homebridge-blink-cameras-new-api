@@ -42,6 +42,7 @@ export function cameraKey(kind: BlinkCameraKind, id: number | string): CameraKey
 export function matchesDeviceIdentifier(
   device: { id: number | string; name?: string; serial?: string }, identifier: string, kind?: BlinkCameraKind,
 ): boolean {
+  if (typeof identifier !== 'string' || !identifier.trim()) return false;
   if (/^(?:camera|owl|doorbell):/.test(identifier)) {
     return kind !== undefined && identifier === cameraKey(kind, device.id);
   }

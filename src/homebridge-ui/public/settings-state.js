@@ -90,6 +90,7 @@
     }
   }
   function resolveSelector(token, cameras) {
+    if (typeof token !== 'string' || !token.trim()) return [];
     return cameras.filter(camera => token === camera.key || (!/^(camera|owl|doorbell):/.test(token)
       && [String(camera.id), camera.name, camera.serial].includes(token)));
   }

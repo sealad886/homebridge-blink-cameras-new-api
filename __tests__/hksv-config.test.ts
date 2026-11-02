@@ -106,6 +106,21 @@ describe('HomeKit Secure Video configuration and platform ownership', () => {
     expect(platform.getDeviceMotionTimeout({ id: 1 }, 'owl')).toBe(17000);
   });
 
+  it('keeps temperature inheritance when an orphaned settings row has no camera identifier', () => {
+    const platform = build({ exposeTemperature: true,
+      deviceSettingOverrides: [
+        { exposeTemperature: false, inputQuality: 'auto' },
+        { deviceIdentifier: 'camera:2', exposeTemperature: false, inputQuality: 'saver', motionTimeout: 17 },
+      ],
+    });
+    const serialless = { id: 1, name: 'Camera' };
+    expect(platform.isTemperatureEnabled(serialless, 'camera')).toBe(true);
+    expect(platform.getDeviceInputQuality(serialless, 'camera')).toBe('auto');
+    expect(platform.isTemperatureEnabled({ id: 2, name: 'Other camera' }, 'camera')).toBe(false);
+    expect(platform.getDeviceInputQuality({ id: 2 }, 'camera')).toBe('saver');
+    expect(platform.getDeviceMotionTimeout({ id: 2 }, 'camera')).toBe(17000);
+  });
+
   it('reserves qualified camera selectors even when a different device has that name or serial', async () => {
     const misleading = { id: 7, network_id: 10, name: 'owl:123', serial: 'doorbell:123', enabled: true };
     const selectedOwl = { id: 123, network_id: 10, name: 'Mini', enabled: true };
