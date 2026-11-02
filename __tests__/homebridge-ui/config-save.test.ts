@@ -13,9 +13,9 @@ it('auth completion preserves settings edited since boot and sanitizes only auth
   };
   const context = {
     homebridge, getLatestPluginConfig: homebridge.getPluginConfig, pluginConfig: [{ platform: 'BlinkCameras', pollInterval: 60 }],
-    deviceIdValue: 'synthetic-device', updateLockUI: jest.fn(),
+    deviceIdValue: 'synthetic-device', updateLockUI: jest.fn(), settings: { draft: { index: 0 }, beginAccountAction: () => ({ blocks: structuredClone(latest), finish: jest.fn() }), replaceBaseline: jest.fn() },
   };
-  runInNewContext(section('  async function saveTokenOnlyConfig(data) {', '  async function handleAuthResponse('), context);
+  runInNewContext(section('  async function saveTokenOnlyConfig(', '  async function handleAuthResponse('), context);
   await (context as typeof context & { saveTokenOnlyConfig: (data: unknown) => Promise<void> }).saveTokenOnlyConfig({ tier: 'e999' });
   expect(homebridge.updatePluginConfig).toHaveBeenCalledWith([
     { platform: 'BlinkCameras', pollInterval: 120, excludedNetworks: ['2'], deviceId: 'synthetic-device', tier: 'e999', persistAuth: true, authLocked: true },
@@ -29,7 +29,7 @@ it.each(['client', 'account'])('keeps %s verification reachable when config save
   const classes = { add: jest.fn(), remove: jest.fn() };
   const data = { authenticated: true, [type === 'client' ? 'requiresClientVerification' : 'requiresAccountVerification']: true };
   const context = {
-    pendingAuthConfig: null, saveTokenOnlyConfig: jest.fn().mockRejectedValue(new Error('synthetic failure')),
+    settings: { setAccountReady: jest.fn() }, pendingAuthConfig: null, saveTokenOnlyConfig: jest.fn().mockRejectedValue(new Error('synthetic failure')),
     document: { getElementById: () => ({ classList: classes }) },
     homebridge: { showSchemaForm: jest.fn(), toast: { warning: jest.fn(), success: jest.fn() } },
     setAuthLockVisibility: jest.fn(), showConnectionStatus: jest.fn(), showStep: jest.fn(), showError: jest.fn(), handleVerificationRequired: jest.fn(),
@@ -51,7 +51,7 @@ it.each([false, true, undefined])('verification honors current trust-device sett
     showSpinner: jest.fn(), hideSpinner: jest.fn(),
   };
   const context = {
-    verifyForm: { addEventListener: (_event: string, handler: typeof submit) => { submit = handler; } },
+    settings: { draft: { index: 0 }, beginAccountAction: () => ({ blocks: [{ trustDevice }], finish: jest.fn() }) }, verifyForm: { addEventListener: (_event: string, handler: typeof submit) => { submit = handler; } },
     document: { getElementById: () => codeInput }, homebridge, getLatestPluginConfig: homebridge.getPluginConfig, verifyType: 'client', verifyBtn: {},
     hideError: jest.fn(), setButtonBusy: jest.fn(), handleAuthResponse: jest.fn(), showError: jest.fn(),
   };
@@ -61,52 +61,39 @@ it.each([false, true, undefined])('verification honors current trust-device sett
 });
 
 
-it('preserves newer schema quality edits while authentication reads an older draft', async () => {
-  let configChanged: (event: { data: unknown }) => void = () => undefined;
-  let resolveRead: (value: unknown) => void = () => undefined;
-  const older = [{ platform: 'BlinkCameras', outputQuality: 'auto', pollInterval: 120 }, { platform: 'Other', name: 'kept' }];
+it('refuses an immediate account save while settings have unsaved edits', async () => {
+  const context = { settings: { beginAccountAction: () => null }, homebridge: { updatePluginConfig: jest.fn(), savePluginConfig: jest.fn() } };
+  runInNewContext(section('  async function saveTokenOnlyConfig(', '  async function handleAuthResponse('), context);
+  await expect((context as typeof context & { saveTokenOnlyConfig: (data: unknown) => Promise<void> }).saveTokenOnlyConfig({})).rejects.toThrow();
+  expect(context.homebridge.updatePluginConfig).not.toHaveBeenCalled();
+  expect(context.homebridge.savePluginConfig).not.toHaveBeenCalled();
+});
+
+it('reserves token-only persistence until host save settles and releases it after failure', async () => {
+  const stateContext = { module: { exports: {} }, structuredClone, setTimeout, clearTimeout };
+  runInNewContext(readFileSync(join(__dirname, '../../src/homebridge-ui/public/settings-state.js'), 'utf8'), stateContext);
+  const { Draft } = stateContext.module.exports as any;
+  let finishSave: (error: Error) => void;
   const homebridge = {
-    addEventListener: (_event: string, handler: typeof configChanged) => { configChanged = handler; },
-    getPluginConfig: jest.fn().mockImplementation(() => new Promise(resolve => { resolveRead = resolve; })),
-    updatePluginConfig: jest.fn().mockResolvedValue(undefined), savePluginConfig: jest.fn().mockResolvedValue(undefined),
+    updatePluginConfig: jest.fn().mockResolvedValue(undefined),
+    savePluginConfig: jest.fn(() => new Promise((_resolve, reject) => { finishSave = reject; })),
   };
-  const context = { homebridge, pluginConfig: older, deviceIdValue: 'synthetic-device', updateLockUI: jest.fn() };
-  runInNewContext(section('  let schemaConfigRevision = 0;', '  deviceIdValue = typeof'), context);
-  runInNewContext(section('  async function saveTokenOnlyConfig(data) {', '  async function handleAuthResponse('), context);
-  const saving = (context as typeof context & { saveTokenOnlyConfig: (data: unknown) => Promise<void> }).saveTokenOnlyConfig({ tier: 'e999' });
-  configChanged({ data: [{ ...older[0], outputQuality: '720p15', deviceSettingOverrides: [{ deviceIdentifier: 'test-camera', inputQuality: 'best' }] }, older[1]] });
-  resolveRead(older);
-  await saving;
-  expect(homebridge.updatePluginConfig).toHaveBeenCalledWith([
-    expect.objectContaining({ outputQuality: '720p15', pollInterval: 120, deviceSettingOverrides: [{ deviceIdentifier: 'test-camera', inputQuality: 'best' }], authLocked: true }),
-    older[1],
-  ]);
-  expect(homebridge.savePluginConfig).toHaveBeenCalledTimes(1);
-});
-
-it('reads current host config when no newer schema event arrives and ignores malformed events', async () => {
-  let configChanged: (event: { data: unknown }) => void = () => undefined;
-  const latest = [{ platform: 'BlinkCameras', outputQuality: '360p15' }];
+  const draft = new Draft([{ platform: 'BlinkCameras', pollInterval: 60 }], {
+    validate: async ({ revision }: any) => ({ revision, valid: true }), stage: jest.fn(), changed: jest.fn(), saveEnabled: jest.fn(),
+  });
   const context = {
-    pluginConfig: [{ platform: 'BlinkCameras', outputQuality: 'auto' }],
-    homebridge: { addEventListener: (_event: string, handler: typeof configChanged) => { configChanged = handler; }, getPluginConfig: jest.fn().mockResolvedValue(latest) },
+    settings: { draft, beginAccountAction: () => draft.beginAccountAction(), replaceBaseline: (blocks: unknown[]) => draft.replaceBaseline(blocks) },
+    homebridge, deviceIdValue: '', updateLockUI: jest.fn(), pluginConfig: [],
   };
-  runInNewContext(section('  let schemaConfigRevision = 0;', '  deviceIdValue = typeof'), context);
-  configChanged({ data: undefined });
-  const result = await (context as typeof context & { getLatestPluginConfig: () => Promise<unknown> }).getLatestPluginConfig();
-  expect(result).toEqual(latest);
-});
-
-
-it('exposes per-camera input quality and global output quality in the rendered schema layout', () => {
-  const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8')) as { layout: unknown };
-  const keys: string[] = [];
-  const collect = (value: unknown): void => {
-    if (typeof value === 'string') keys.push(value);
-    else if (Array.isArray(value)) value.forEach(collect);
-    else if (value && typeof value === 'object') Object.values(value).forEach(collect);
-  };
-  collect(schema.layout);
-  expect(keys).toContain('outputQuality');
-  expect(keys).toContain('deviceSettingOverrides[].inputQuality');
+  runInNewContext(section('  async function saveTokenOnlyConfig(', '  async function handleAuthResponse('), context);
+  const operation = (context as typeof context & { saveTokenOnlyConfig: (data: unknown) => Promise<void> }).saveTokenOnlyConfig({});
+  await new Promise(resolve => setImmediate(resolve));
+  draft.set('pollInterval', 120);
+  expect(draft.config.pollInterval).toBe(60);
+  expect(draft.canRunAccountAction()).toBe(false);
+  finishSave!(new Error('synthetic host save failure'));
+  await expect(operation).rejects.toThrow(); await draft.flush();
+  draft.set('pollInterval', 180); await draft.flush();
+  expect(draft.config.pollInterval).toBe(180);
+  expect(homebridge.updatePluginConfig).toHaveBeenCalledWith([expect.objectContaining({ pollInterval: 60 })]);
 });

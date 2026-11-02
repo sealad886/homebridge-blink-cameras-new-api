@@ -47,6 +47,7 @@ function fixture(hksvEnabled = true, kind: 'camera' | 'doorbell' = 'camera') {
     apiClient: {}, log: createLogger(), streamingConfig: resolveStreamingConfig(),
     isHksvEnabled: () => hksvEnabled, isOperational: () => true, getDeviceInputQuality: () => 'auto', getDeviceMotionTimeout: () => 1000,
     isNetworkArmed: jest.fn().mockReturnValue(true),
+    acquireCameraFeed: () => ({ release: jest.fn() }),
   } as unknown as BlinkCamerasPlatform;
   const accessory = Object.assign(new hap.Accessory('Test Camera', hap.uuid.generate(`hksv-${hksvEnabled}`)), { context: {} });
   const configure = jest.spyOn(accessory, 'configureController');

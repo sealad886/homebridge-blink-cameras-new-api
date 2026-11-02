@@ -144,7 +144,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       this.platform.streamingConfig,
       (msg) => this.platform.log.error(`[${device.name}] ${msg}`),
       async (options) => {
-        const quality = this.platform.getDeviceInputQuality(this.device);
+        const quality = this.platform.getDeviceInputQuality(this.device, this.cameraSourceType);
         const remember = (state: { quality?: string }) => {
           if (!options.signal?.aborted && state.quality && !this.accessory.context.initialInputQuality) {
             this.accessory.context.initialInputQuality = state.quality;
@@ -174,17 +174,18 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
         }
       },
       event => logHomeKitEvent(this.platform.log, this.accessory, event),
+      () => this.platform.acquireCameraFeed(this.cameraSourceType, this.device.id),
     );
 
     const controllerOptions = createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig);
-    if (this.platform.isHksvEnabled(device)) {
+    if (this.platform.isHksvEnabled(device, cameraSourceType)) {
       this.recording = new BlinkCameraRecordingDelegate(
         (configuration, audio, callbacks, signal) => startRecordingSession(
           (sink, owner) => this.cameraSource.subscribeFeed(sink, owner), configuration, audio, callbacks, signal,
         ),
         { videoMotion: () => {
           if (this.isMotionServiceActive() && this.platform.isNetworkArmed(this.device.network_id)) {
-            this.triggerMotion(this.platform.getDeviceMotionTimeout(this.device), 'video');
+            this.triggerMotion(this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType), 'video');
           }
         }, status: status => {
           const message = `[${this.device.name}] HSV ${status.state}${status.reason ? `: ${status.reason}` : ''}`;
@@ -347,7 +348,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
   public usesVideoMotion(): boolean { return this.recording?.videoMotionActive ?? false; }
 
-  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device), source: 'provider' | 'video' = 'provider'): void {
+  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType), source: 'provider' | 'video' = 'provider'): void {
     if (this.motionTimeout) {
       clearTimeout(this.motionTimeout);
     }

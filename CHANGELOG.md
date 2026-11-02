@@ -7,6 +7,47 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.0.0-beta2] - 2026-11-02
+
+### Changed
+- Replace the stacked account and settings forms with five task sections:
+  Overview & connection, Cameras in Home, HomeKit recording, Live viewing &
+  sound, and Advanced & troubleshooting.
+- Choose discovered cameras and Blink systems, edit per-camera names and
+  inherited settings, and retain selections and incomplete edits across
+  navigation or discovery failures. Keep one validated draft until Homebridge
+  Save; precise numeric settings use exact inputs.
+- Remove the four-camera HomeKit recording selection limit. Derive global
+  upstream feed capacity from the known, included camera count, and expose
+  independent feed limits for actual Sync Modules under Cameras in Home.
+  Live viewing and recording share one upstream feed per camera; pending and
+  retiring feeds retain their capacity until owned cleanup completes.
+
+### Fixed
+- Reserve a captured configuration throughout immediate account actions so
+  asynchronous sign-in, lock or unlock operations cannot save unrelated edits.
+- Match qualified camera identities exclusively across recording, exclusions
+  and overrides, including devices or systems whose names resemble another
+  camera's identifier. Preserve and expose unavailable saved system exclusions.
+- Separate initialization, connection and discovery failures, preserve saved
+  choices on discovery failure, and explain which controls govern Blink clip
+  polling, live viewing, background buffering, audio and Home recording.
+
+### Upgrade and beta acceptance
+- Install the exact registry beta through Homebridge package management. Keep
+  HomeKit pairing and accessory persistence. Existing settings remain available;
+  Save and restart the Blink child bridge to apply changes.
+- A Sync Module limit uses its discovered Blink-system association, not proof
+  of a physical video path. Ambiguous associations require resolution before an
+  explicit limit can be saved. Blink can impose lower limits than local capacity.
+  The separate per-camera HomeKit viewer limit and fixed recording-memory and
+  worker-resource bounds remain in place.
+- Recording stays opt-in. Continuous capture increases battery and network use;
+  provider interruptions can leave gaps. Synthetic and local browser checks do
+  not establish physical all-camera concurrency or saved iCloud clips. Apple
+  Home recording permission, motion-to-recording and playback remain operator
+  acceptance steps after installation; publication does not install on the Pi.
+
 ## [1.0.0-beta1] - 2026-11-01
 
 ### Added

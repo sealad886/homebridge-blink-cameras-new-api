@@ -77,6 +77,17 @@ export function validateHomescreen(value: unknown): BlinkHomescreen {
       if (typeof device.name !== 'string' || device.name.length > 256) throw new Error('Blink returned an invalid homescreen.');
     }
   }
+  if (screen.sync_modules !== undefined) {
+    if (!Array.isArray(screen.sync_modules) || (total += screen.sync_modules.length) > 1000) throw new Error('Blink returned invalid Sync Module metadata.');
+    for (const module of screen.sync_modules) {
+      if (!module || typeof module !== 'object' || Array.isArray(module)) throw new Error('Blink returned invalid Sync Module metadata.');
+      requireRemoteId(module.id); requireRemoteId(module.network_id);
+      if (typeof module.status !== 'string' || module.status.length > 128 ||
+        (module.name !== undefined && (typeof module.name !== 'string' || module.name.length > 256))) {
+        throw new Error('Blink returned invalid Sync Module metadata.');
+      }
+    }
+  }
   if (screen.account && typeof screen.account === 'object') {
     const id = (screen.account as Record<string, unknown>).account_id;
     if (id !== undefined) requireRemoteId(id);

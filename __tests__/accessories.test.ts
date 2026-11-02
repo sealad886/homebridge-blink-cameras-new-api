@@ -33,7 +33,7 @@ jest.mock('node:dgram', () => {
 });
 
 type PlatformStub = Pick<BlinkCamerasPlatform,
-  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isHksvEnabled' | 'isNetworkArmed' | 'updateMotionAvailability'>;
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isHksvEnabled' | 'isNetworkArmed' | 'updateMotionAvailability' | 'acquireCameraFeed'>;
 
 // Capabilities stand in for the native codec and vendor transport. Public HAP
 // callbacks still own preparation, selection, cancellation and reservation.
@@ -425,6 +425,7 @@ describe('Accessory handlers', () => {
       isHksvEnabled: jest.fn().mockReturnValue(false),
       isNetworkArmed: jest.fn().mockReturnValue(true),
       updateMotionAvailability: jest.fn(),
+      acquireCameraFeed: jest.fn(() => ({ release: jest.fn() })),
     };
 
     return { hap, apiClient, platform, log };

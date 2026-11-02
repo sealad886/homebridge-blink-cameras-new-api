@@ -25,7 +25,10 @@ import type {
   BlinkHostedOAuthStart,
   BlinkLogger,
   BlinkOAuthClientId,
+  BlinkHomescreen,
 } from '../types';
+import { projectSettingsInventory, type SettingsInventory } from '../settings-inventory';
+import { SettingsValidator, type SettingsValidationResult } from './settings-validation';
 import {
   loadPersistedAuthStateFromFiles,
   type PersistedAuthStateLoadResult,
@@ -185,6 +188,8 @@ export class HostedAuthService {
   private api: BlinkApi | null = null;
   private apiSessionIdentity: string | null = null;
   private lastStatus: AuthStatus | null = null;
+  private settingsInventory?: SettingsInventory;
+  private readonly settingsValidator = new SettingsValidator(() => this.settingsInventory);
 
   constructor(private readonly options: HostedAuthServiceOptions) {
     this.apiFactory = options.apiFactory ?? ((config: BlinkConfig) => new BlinkApi(config));
@@ -203,6 +208,7 @@ export class HostedAuthService {
       this.api = api;
       this.apiSessionIdentity = null;
       this.lastStatus = null;
+      this.settingsInventory = undefined;
       return {
         authorizationUrl: result.authorizationUrl,
         flowId: result.flowId,
@@ -475,6 +481,20 @@ export class HostedAuthService {
   }
 
   async getNetworks(): Promise<Array<{ id: string; name: string }>> {
+    return this.discoverHomescreen(homescreen => homescreen.networks.map(network => ({ id: String(network.id), name: network.name })));
+  }
+
+  getSettingsInventory(config: Record<string, unknown> = {}): Promise<SettingsInventory> {
+    return this.discoverHomescreen(homescreen => {
+      const inventory = projectSettingsInventory(homescreen, config);
+      this.settingsInventory = inventory;
+      return inventory;
+    });
+  }
+
+  validateSettings(payload: unknown): SettingsValidationResult { return this.settingsValidator.validate(payload); }
+
+  private discoverHomescreen<T>(project: (homescreen: BlinkHomescreen) => T): Promise<T> {
     return this.enqueueAuthOperation(async () => {
       try {
         const context = await this.getPersistedApiContext();
@@ -486,7 +506,7 @@ export class HostedAuthService {
           throw new HostedAuthServiceError(NO_STORED_AUTH_MESSAGE, 'storage', 400);
         }
         this.bindApiToState(context.api, persisted.state);
-        return homescreen.networks.map(network => ({ id: String(network.id), name: network.name }));
+        return project(homescreen);
       } catch (error) {
         this.options.logger.warn('[Hosted Auth] Network discovery failed.');
         throw new HostedAuthServiceError(this.connectionFailureMessage(error), 'authentication', 400);
@@ -559,6 +579,7 @@ export class HostedAuthService {
   private bindApiToState(api: BlinkApi, state: BlinkAuthState): void {
     if (this.apiSessionIdentity !== durableSessionIdentity(state)) {
       this.lastStatus = null;
+      this.settingsInventory = undefined;
     }
     this.api = api;
     this.apiSessionIdentity = durableSessionIdentity(state);
@@ -568,6 +589,7 @@ export class HostedAuthService {
     this.api = null;
     this.apiSessionIdentity = null;
     this.lastStatus = null;
+    this.settingsInventory = undefined;
   }
 
   private reconcileRetainedSession(state: BlinkAuthState | null): void {
