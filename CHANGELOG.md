@@ -7,6 +7,16 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.0.0-beta3] - 2026-11-02
+
+### Fixed
+- Ignore missing, nonstring or blank camera identifiers when resolving camera
+  selections and settings overrides. An orphaned settings row can no longer
+  override inherited settings for a camera without a serial number.
+- Preserve existing saved rows and valid camera identifiers. Invalid rows still
+  need to be removed or completed before Homebridge can save the configuration;
+  they do not define plugin or Sync Module defaults.
+
 ## [1.0.0-beta2] - 2026-11-02
 
 ### Changed
