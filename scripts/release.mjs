@@ -68,9 +68,9 @@ const packAndClean = () => {
 ensureCleanWorkingTree();
 
 run('npm', ['run', 'lint']);
-run('npm', ['test']);
 run('npm', ['run', 'clean']);
 run('npm', ['run', 'build']);
+run('npm', ['test']);
 packAndClean();
 
 logger.log(`\nRelease checks complete. After the reviewed version bump is merged to main, dispatch: ${releaseCommand()}`);
