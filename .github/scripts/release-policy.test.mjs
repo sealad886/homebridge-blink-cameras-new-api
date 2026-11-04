@@ -1,6 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { releaseTag, releaseNotes, registryMetadata, verifyPublished, waitForPublished, waitForTagRemoval, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
+import { releaseTag, releaseNotes, releaseIntent, registryMetadata, verifyPublished, waitForPublished, waitForTagRemoval, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
+
+test('build intent defaults to read-only candidates and publication requires exact explicit main intent', () => {
+  for (const ref of ['refs/heads/main', 'refs/heads/codex/hsv-saved-clip-prototype']) {
+    for (const mode of [undefined, 'build-only', 'publish', 'unknown']) {
+      for (const requestedVersion of ['', '1.0.0-beta3', '1.0.0-beta4', 'invalid']) {
+        const allowed = (mode === undefined || mode === 'build-only') && ['', '1.0.0-beta3'].includes(requestedVersion)
+          || mode === 'publish' && ref === 'refs/heads/main' && requestedVersion === '1.0.0-beta3';
+        const input = { ref, mode, requestedVersion, manifestVersion: '1.0.0-beta3' };
+        if (allowed) assert.deepEqual(releaseIntent(input), { mode: mode ?? 'build-only', version: '1.0.0-beta3' });
+        else assert.throws(() => releaseIntent(input), JSON.stringify(input));
+      }
+    }
+  }
+});
 
 for (const [version, tag] of [['0.10.0-alpha.0', 'alpha'], ['0.10.0-beta.2', 'beta'], ['1.0.0-beta1', 'beta'], ['0.10.0-rc.0', 'rc'], ['0.10.0', 'latest']]) {
   test(`routes ${version} to ${tag}`, () => assert.equal(releaseTag(version), tag));

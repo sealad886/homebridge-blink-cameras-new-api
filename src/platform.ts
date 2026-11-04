@@ -12,6 +12,7 @@ import { validateHomescreen } from './blink-api/domain-validation';
  */
 import { setInterval, clearInterval } from 'timers';
 import * as path from 'node:path';
+import { Buffer } from 'node:buffer';
 import {
   API,
   Characteristic,
@@ -36,15 +37,20 @@ import {
   BlinkMediaClip,
   BlinkCameraKind,
 } from './types';
-import { cameraKey, matchesDeviceIdentifier as matchesIdentifier, projectSettingsInventory,
-  validateModuleFeedLimits, type ModuleFeedLimit } from './settings-inventory';
+import { cameraKey, matchesDeviceIdentifier as matchesIdentifier, projectSettingsInventory, projectRecordingSelections,
+  validateModuleFeedLimits, validateRecordingSource, validateModuleRecording, resolveCameraRecording,
+  type ModuleFeedLimit, type ModuleRecording, type SettingsInventory, type CameraRecordingSelection } from './settings-inventory';
+import { NativeClipRecorder, type NativeClipActivity } from './native-clip-recorder';
+import { composeRecordingReadiness, type RecordingReadinessReport } from './recording-readiness';
+import { writeOwnerOnlyJsonFile } from './blink-api/secure-json-file';
+import type { BlinkCameraRecordingDelegate } from './accessories/camera-recording';
 import { CameraFeedAdmission, type FeedLease } from './accessories/feed-admission';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
 import { AudioCodecPreference, BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
 import { OutputQualityProfile } from './accessories/stream-quality';
 import { BlinkInputQuality } from './types';
 import { setHapServiceName, toHapName } from './hap-name';
-import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
+import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_RECORDING_POLL_SECONDS, RECORDING_STORAGE_DIRECTORY, type RecordingSource } from './settings';
 import { withResponseBudget } from './operation-budget';
 import { toHapError } from './hap-errors';
 import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
@@ -95,6 +101,8 @@ interface BlinkPlatformConfig extends PlatformConfig {
   motionTimeout?: number;
   enableMotionPolling?: boolean;
   hksvCameras?: string[];
+  hksvSource?: RecordingSource;
+  syncModuleRecording?: ModuleRecording[];
   syncModuleFeedLimits?: ModuleFeedLimit[];
   excludeDevices?: string[];
   excludedNetworks?: string[];
@@ -149,6 +157,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private outageConfirmedAt: number | null = null;
   private readonly reportedNameAdjustments = new Set<string>();
   private readonly homeKitAudit: HomeKitAudit;
+  private recordingInventory?: SettingsInventory;
+  private nativeRecorder?: NativeClipRecorder;
+  private nativeRecorderIdentity?: string;
+  private readonly recordingTargets = new Map<string, BlinkCameraRecordingDelegate>();
+  private readonly nativeRegisteredTargets = new Set<string>();
+  private readonly recordingPolicyUpdates = new Set<Promise<void>>();
+  private recordingUnavailableReported = false;
+  private nativeActivity?: NativeClipActivity;
+  private pendingRecordingHealth?: RecordingReadinessReport;
+  private recordingHealthWrite?: Promise<void>;
 
   // Maps for quick accessory lookup by device ID
   private networkAccessories = new Map<number, NetworkAccessory>();
@@ -227,6 +245,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       authLocked: this.config.authLocked,
       logger: this.log,
     });
+    this.scheduleRecordingHealth();
 
     this.api.on('didFinishLaunching', () => {
       this.log.info('Finished launching; starting Blink discovery');
@@ -243,16 +262,19 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
       }
-      void this.shutdownMotionHandlers([
-        ...this.cameraAccessories.values(),
-        ...this.doorbellAccessories.values(),
-        ...this.owlAccessories.values(),
-      ]);
+      void (async () => {
+        await this.nativeRecorder?.stop();
+        await this.shutdownMotionHandlers([
+          ...this.cameraAccessories.values(), ...this.doorbellAccessories.values(), ...this.owlAccessories.values(),
+        ]);
+        this.scheduleRecordingHealth(); await this.flushRecordingHealth();
+      })().catch(() => this.log.error('Failed to stop recording owner during shutdown'));
       this.homeKitAudit.dispose();
     });
   }
 
   private validateConfig(): void {
+    validateRecordingSource(this.config.hksvSource); validateModuleRecording(this.config.syncModuleRecording);
     const cameras = this.config.hksvCameras;
     if (cameras !== undefined && (!Array.isArray(cameras) ||
       cameras.some(entry => typeof entry !== 'string' || !entry.trim()) || new Set(cameras).size !== cameras.length)) {
@@ -332,7 +354,128 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   public isHksvEnabled(device: { id: number; name?: string; serial?: string }, kind?: BlinkCameraKind): boolean {
+    if (this.recordingInventory && kind) {
+      return projectRecordingSelections(this.recordingInventory, this.config).some(row => row.cameraKey === cameraKey(kind, device.id));
+    }
     return (this.config.hksvCameras ?? []).some(entry => this.matchesDeviceIdentifier(device, entry, kind));
+  }
+
+  public getRecordingSelection(device: { id: number }, kind: BlinkCameraKind): CameraRecordingSelection {
+    if (this.recordingInventory) return resolveCameraRecording(this.recordingInventory, cameraKey(kind, device.id), this.config);
+    const source = validateRecordingSource(this.config.hksvSource);
+    return { source, pollIntervalSeconds: DEFAULT_RECORDING_POLL_SECONDS, available: source === 'continuous',
+      ...(source === 'saved-clips' ? { reason: 'module-unavailable' as const } : {}) };
+  }
+
+  public registerRecordingTarget(device: { id: number }, kind: BlinkCameraKind, target: BlinkCameraRecordingDelegate): void {
+    this.recordingTargets.set(cameraKey(kind, device.id), target);
+    const selection = this.getRecordingSelection(device, kind);
+    target.setRecordingSource(selection.source, selection.available);
+    this.scheduleRecordingHealth();
+  }
+
+  public notifyRecordingPolicyChanged(device: { id: number }, kind: BlinkCameraKind): void {
+    this.scheduleRecordingHealth();
+    if (!this.nativeRecorder) return;
+    const update = this.nativeRecorder.notifyPolicyChanged(cameraKey(kind, device.id))
+      .catch(() => this.log.warn('Native recording policy could not be persisted'));
+    this.recordingPolicyUpdates.add(update);
+    void update.finally(() => this.recordingPolicyUpdates.delete(update));
+  }
+
+  public async unregisterRecordingTarget(device: { id: number }, kind: BlinkCameraKind): Promise<void> {
+    const key = cameraKey(kind, device.id), target = this.recordingTargets.get(key);
+    if (!this.monitorActive) { this.nativeRegisteredTargets.delete(key); this.recordingTargets.delete(key); return; }
+    target?.setRecordingSource(target.source, false);
+    await Promise.all([...this.recordingPolicyUpdates]);
+    await this.nativeRecorder?.unregisterCamera(key);
+    this.nativeRegisteredTargets.delete(key); this.recordingTargets.delete(key); this.scheduleRecordingHealth();
+  }
+
+  public getNativeRecordingHealthPath(): string | undefined {
+    const storage = this.api?.user?.storagePath?.();
+    return storage ? path.join(storage, RECORDING_STORAGE_DIRECTORY, 'native-clips', 'health.json') : undefined;
+  }
+  public getNativeRecordingHealth(): RecordingReadinessReport {
+    return composeRecordingReadiness({ config: this.config, inventory: this.recordingInventory, activity: this.nativeActivity,
+      runtime: !this.monitorActive ? 'stopped' : this.recordingUnavailableReported ? 'unavailable'
+        : !this.recordingInventory ? 'starting' : this.isOperational() ? 'running' : 'unavailable',
+      observations: new Map([...this.recordingTargets].map(([key, target]) => [key,
+        { home: target.getHomeRecordingObservation(), status: target.status }])) });
+  }
+
+  /** Coalesce local observations, with one writer and no report timer/provider calls. */
+  private scheduleRecordingHealth(): void {
+    const healthPath = this.getNativeRecordingHealthPath(); if (!healthPath) return;
+    this.pendingRecordingHealth = this.getNativeRecordingHealth();
+    if (this.recordingHealthWrite) return;
+    const work = (async () => {
+      while (this.pendingRecordingHealth) {
+        const report = this.pendingRecordingHealth; this.pendingRecordingHealth = undefined;
+        if (Buffer.byteLength(JSON.stringify(report, null, 2)) > 1024 * 1024) throw new Error('Recording report exceeds its bound');
+        await writeOwnerOnlyJsonFile(healthPath, report);
+      }
+    })();
+    this.recordingHealthWrite = work.catch(() => { this.log.debug('Recording readiness report unavailable'); })
+      .finally(() => { this.recordingHealthWrite = undefined; if (this.pendingRecordingHealth) this.scheduleRecordingHealth(); });
+  }
+  public async flushRecordingHealth(): Promise<void> { while (this.recordingHealthWrite) await this.recordingHealthWrite; }
+
+  private async configureNativeRecording(homescreen: BlinkHomescreen): Promise<void> {
+    const inventory = this.recordingInventory!;
+    const selections = projectRecordingSelections(inventory, this.config);
+    for (const [key, target] of this.recordingTargets) {
+      const selection = resolveCameraRecording(inventory, key, this.config);
+      target.setRecordingSource(selection.source, selection.available && selections.some(row => row.cameraKey === key && row.available));
+    }
+    // Persist the false policy before unregistering or stopping a source-mode selection.
+    await Promise.all([...this.recordingPolicyUpdates]);
+    const selected = inventory.cameras.filter(camera => this.recordingTargets.has(camera.key) && selections.some(row =>
+      row.cameraKey === camera.key && row.source === 'saved-clips' && row.available));
+    const needed = new Set<string>(selected.map(camera => camera.key));
+    for (const key of this.nativeRegisteredTargets) {
+      if (!needed.has(key)) { await this.nativeRecorder?.unregisterCamera(key); this.nativeRegisteredTargets.delete(key); }
+    }
+    if (!selected.length) { await this.nativeRecorder?.stop(); this.scheduleRecordingHealth(); return; }
+    const accountId = homescreen.account?.account_id, storage = this.api?.user?.storagePath?.();
+    try {
+      if (!storage || !Number.isSafeInteger(accountId) || accountId <= 0) throw new Error('Recording storage/account unavailable');
+      const modules = inventory.syncModules.filter(module => selected.some(camera => camera.moduleAssociation.candidateIds[0] === module.id));
+      const identity = JSON.stringify([accountId, modules.map(module => module.id).sort()]);
+      if (!this.nativeRecorder || identity !== this.nativeRecorderIdentity) {
+        await this.nativeRecorder?.stop();
+        this.nativeActivity = undefined;
+        const recorder = new NativeClipRecorder({ storagePath: path.join(storage, RECORDING_STORAGE_DIRECTORY), accountId, api: this.apiClient,
+          activityChanged: activity => { this.nativeActivity = activity; this.scheduleRecordingHealth(); } });
+        await recorder.initialize(); this.nativeRecorder = recorder; this.nativeRecorderIdentity = identity; this.nativeRegisteredTargets.clear();
+      }
+      for (const module of modules) {
+        const camera = selected.find(value => value.moduleAssociation.candidateIds[0] === module.id)!;
+        const settings = resolveCameraRecording(inventory, camera.key, this.config);
+        this.nativeRecorder.registerModule({ networkId: Number(module.networkId), syncModuleId: Number(module.id),
+          label: module.name, pollIntervalMs: settings.pollIntervalSeconds * 1000 });
+      }
+      for (const camera of selected) {
+        const target = this.recordingTargets.get(camera.key)!;
+        try {
+          this.nativeRecorder.registerCamera({ cameraKey: camera.key, cameraId: camera.id, networkId: Number(camera.networkId),
+            syncModuleId: Number(camera.moduleAssociation.candidateIds[0]), providerName: camera.name, label: camera.name }, target);
+          this.nativeRegisteredTargets.add(camera.key);
+          await this.nativeRecorder.notifyPolicyChanged(camera.key);
+        } catch {
+          target.setRecordingSource('saved-clips', false);
+          await this.nativeRecorder.unregisterCamera(camera.key);
+          this.log.warn('Native recording camera identity is unavailable; no live-feed fallback was started');
+        }
+      }
+      if (!this.monitorActive) { await this.nativeRecorder.stop(); return; }
+      this.nativeRecorder.start(); this.recordingUnavailableReported = false;
+    } catch {
+      for (const camera of selected) this.recordingTargets.get(camera.key)?.setRecordingSource('saved-clips', false);
+      if (!this.recordingUnavailableReported) this.log.warn('Native saved-clip recording unavailable; check account, Sync Module association and private storage');
+      this.recordingUnavailableReported = true;
+    }
+    this.scheduleRecordingHealth();
   }
 
   public acquireCameraFeed(kind: BlinkCameraKind, id: number): FeedLease { return this.feedAdmission.acquire(cameraKey(kind, id)); }
@@ -606,6 +749,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private updateConnectionAccessoryState(statusService?: Service): void {
+    this.scheduleRecordingHealth();
     const service = statusService ?? this.accessories
       .find(candidate => candidate.UUID === this.api.hap.uuid.generate(CONNECTION_DIAGNOSTIC_UUID))
       ?.getServiceById(this.Service.ContactSensor, CONNECTION_STATUS_SUBTYPE);
@@ -771,6 +915,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       if (!this.monitorActive) return false;
       if (this.inventoryInitialized) {
         this.updateDeviceStates(homescreen);
+        await this.configureNativeRecording(homescreen);
       } else {
         // A startup failure occurs before handlers exist. Complete initial
         // discovery exactly once; ordinary runtime recovery remains state-only.
@@ -831,6 +976,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   // connection health is published. Only retiring excluded media needs a wait.
   private registerDevices(homescreen: BlinkHomescreen): void | Promise<void> {
     validateHomescreen(homescreen);
+    this.recordingInventory = projectSettingsInventory(homescreen, this.config);
+    this.scheduleRecordingHealth();
     let excludedCount = 0;
     this.feedAdmission.configure(projectSettingsInventory(homescreen, this.config), this.config);
     const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number; kind?: BlinkCameraKind }>([
@@ -906,7 +1053,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       );
     };
 
-    if (!removed.length) { registerCurrentDevices(); return; }
+    if (!removed.length) {
+      registerCurrentDevices();
+      if (this.recordingTargets.size) return this.configureNativeRecording(homescreen);
+      this.scheduleRecordingHealth();
+      return;
+    }
     return (async () => {
       const retiring = removed.flatMap(accessory => {
         const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
@@ -933,6 +1085,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       }
       this.log.info(`Removed ${removed.length} explicitly excluded accessories.`);
       registerCurrentDevices();
+      await this.configureNativeRecording(homescreen);
     })();
   }
 
@@ -1022,6 +1175,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Update all device states from homescreen response
    */
   private updateDeviceStates(homescreen: BlinkHomescreen): void {
+    this.recordingInventory = projectSettingsInventory(homescreen, this.config);
+    this.scheduleRecordingHealth();
     this.feedAdmission.configure(projectSettingsInventory(homescreen, this.config), this.config);
     for (const network of homescreen.networks) {
       const handler = this.networkAccessories.get(network.id);

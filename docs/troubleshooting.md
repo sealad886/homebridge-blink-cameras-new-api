@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Last reviewed: 26 October 2026.
+Last reviewed: 4 November 2026.
 
 Start with the checks below. For safe collection/redaction use the
 [diagnostic specification](debug_logging_spec.md) and the
@@ -105,14 +105,24 @@ public diagnostic reports.
 
 ## Rate Limits (429)
 
-The plugin automatically backs off and retries. If you're hitting rate limits frequently:
+The plugin uses bounded backoff for eligible requests. If you see rate limits
+frequently, adjust the polling source involved:
 
-- Increase `pollInterval` to reduce API calls
-- Set `enableMotionPolling` to `false` to reduce calls
+- Increase `pollInterval` to reduce state/cloud-motion polling.
+- Set `enableMotionPolling` to `false` if you do not need Blink cloud clip motion
+  events. This does not stop completed USB clip discovery or continuous recording.
+- For saved-clip USB checks, use the separate interval under **Recording by Sync
+  Module** (`syncModuleRecording[].pollIntervalSeconds`): 30 seconds by default,
+  with a supported range of 15–300 seconds.
+
+See [recording activity and limits](RECORDING.md#activity-and-resource-limits)
+before changing unrelated settings.
 
 ## Node.js Version
 
-This plugin requires Node.js 20, 22, or 24 LTS. Check your version:
+This source revision supports Node.js 22, 24, or 26 LTS. Check the actual child
+bridge runtime as well as your shell version; changing a shell alias does not
+change an already running Homebridge service. Start with:
 
 ```bash
 node --version
@@ -120,6 +130,33 @@ node --version
 
 ## Motion Not Detected
 
-- Ensure `enableMotionPolling` is `true`
-- Check that the network is armed (motion events only trigger when armed)
-- Reduce `pollInterval` for faster detection (but more API calls)
+First distinguish Blink cloud motion events from HomeKit recording.
+
+For **saved-clip HSV**, confirm that Blink is producing fresh native **Local
+Storage** clips, with the system armed and camera motion enabled. Daily **Cloud
+Clip Backup** to USB is different; USB connection, armed/online state or any cloud
+clip in the Blink app does not prove native capture. See
+[Blink's storage guidance](https://support.blinkforhome.com/en_US/514890).
+
+Allow **Stream & Allow Recording** in Home for the wanted locations and choose
+a motion-enabled policy and recording-audio preference. Wait for the camera's
+**Initial clip scan**, then trigger a fresh native clip. Check **Recording setup
+and activity** for
+capture, download, preparation and offer times. Look for the result around Home's
+ingestion/offer time, which can be later than Blink's capture time. Follow the
+[recording guide](RECORDING.md) for the full first-clip and permission checks.
+Enabling the cloud motion poller cannot create a missing native clip.
+
+For draft/restart/report warnings, unknown or denied Home policy, ring-only
+policy, pending scan, queue pressure, expiry or uncertain transport, follow the
+[recording recovery table](RECORDING.md#recovery). Missing/stale reports do not
+invalidate otherwise valid settings. Do not delete accessory persistence, reset
+pairing or re-offer an uncertain clip as routine recovery.
+
+For **continuous HSV**, verify that you explicitly selected that source and that
+Home recording, Blink arming and camera motion permit events. Its local video
+motion detector does not require `enableMotionPolling`.
+
+For **Blink cloud motion events**, enable `enableMotionPolling` and check arming.
+`pollInterval` controls those state/cloud checks; reducing it makes checks more
+frequent but increases API traffic. It does not set the USB clip-discovery interval.

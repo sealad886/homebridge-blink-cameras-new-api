@@ -60,7 +60,7 @@
         "access": "public"
     },
     "engines": {
-        "node": "^20.0.0 || ^22.0.0 || ^24.0.0",
+        "node": "^22.0.0 || ^24.0.0 || ^26.0.0",
         "homebridge": ">=1.11.1"
     },
     "dependencies": {
@@ -72,6 +72,7 @@
         "@commitlint/cli": "20.5.3",
         "@commitlint/config-conventional": "20.5.3",
         "@faker-js/faker": "^10.2.0",
+        "@homebridge/hap-nodejs": "2.3.0",
         "@oznu/homebridge-types": "*",
         "@types/async-lock": "^1.4.2",
         "@types/jest": "^30.0.0",
@@ -79,14 +80,14 @@
         "@typescript-eslint/eslint-plugin": "^8.53.1",
         "@typescript-eslint/parser": "^8.53.1",
         "eslint": "^9.39.2",
-        "homebridge": "^1.11.1",
+        "homebridge": "2.5.0",
         "jest": "^30.2.0",
+        "jest-util": "*",
         "nodemon": "^3.1.11",
         "npm-check-updates": "^19.3.1",
         "prettier": "^3.8.0",
         "ts-jest": "^29.4.6",
-        "typescript": "^5.9.3",
-        "jest-util": "*"
+        "typescript": "^5.9.3"
     },
     "scripts": {
         "blink-api:decompile": "node scripts/blink-api-contract/index.cjs decompile --apk-dir logs/blink-apk/59.2-29823413/apks --output-dir logs/blink-apk/59.2-29823413/decompiled",

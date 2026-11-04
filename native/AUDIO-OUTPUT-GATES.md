@@ -1,5 +1,13 @@
 # Audio and LAN output evidence
 
+> Historical prototype evidence, primarily from 25 October 2026. Preserve the
+> observations below as recorded; its future-tense gates and source pointers are
+> not current operating instructions. Published beta3 already includes the
+> integrated protocol-3 worker. Use the [current worker contract](README.md),
+> [release guide](../docs/RELEASE.md) and
+> [current HSV qualification](../docs/audits/2026-11-04-hsv-readiness-qualification.md)
+> for the upcoming protocol-4 source and its remaining acceptance.
+
 See the [native prototype overview](README.md) for scope and navigation.
 
 The local prototype now decodes optional AAC/AAC-LATM MPEG-TS audio and encodes mono Opus at 16/24 kHz or PCMA/PCMU at 8 kHz. This proves a bounded codec subset, not HomeKit audio parity or live integration. The source contract is `src/accessories/camera-source.ts`, including `buildAudioEncoderArgs` and the advertised codec/rate combinations.

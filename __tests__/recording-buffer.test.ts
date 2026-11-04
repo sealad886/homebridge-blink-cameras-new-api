@@ -108,3 +108,14 @@ test('malformed or repeated initialization cannot replace active media', () => {
   buffer.initialize(initialization()); expect(() => buffer.initialize(initialization())).toThrow('invalid_media');
   buffer.clear(); expect(budget.bytes).toBe(0);
 });
+
+test('finite completion pins a short complete clip without declaring a live prebuffer ready', () => {
+  const budget = new RecordingBufferBudget(); const buffer = new RecordingFragmentBuffer(budget);
+  buffer.initialize(initialization()); buffer.append(fragment(0));
+  expect(buffer.ready).toBe(false); expect(() => buffer.pin()).toThrow('invalid_media');
+  const pin = buffer.sealFinite();
+  expect(pin.fragments.map(f => f.sequence)).toEqual([0]); expect(buffer.ready).toBe(false);
+  expect(() => buffer.append(fragment(1))).toThrow('invalid_media');
+  expect(() => buffer.initialize(initialization())).toThrow('invalid_media');
+  buffer.clear(); expect(budget.bytes).toBe(0); expect(pin.released).toBe(true);
+});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
@@ -33,13 +33,13 @@ function fixture() {
     ['project/native/dependencies/prepare.py', recipe], ['project/native/dependencies/source-inputs.json', json(inputs)], ['project/native/COPYING', copying],
     ...inputs.sources.map(input => [`dependencies/${input.filename}`, Buffer.from(input.name)])];
   entries.push(...runtimeNotices.map(([name, data]) => ['project/' + name, data]));
-  const manifest = { schemaVersion: 1, protocolVersion: 3, targets: {} }; const receipts = {};
+  const manifest = { schemaVersion: 1, protocolVersion: 4, targets: {} }; const receipts = {};
   const write = (name, bytes) => { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, bytes, { mode: 0o755 }); };
   for (const target of TARGETS) {
     const path = `native/runtime/${target}/worker${target === 'win32-x64' ? '.exe' : ''}`;
     const bytes = Buffer.from(target); write(path, bytes);
     manifest.targets[target] = { path, sha256: sha256(bytes) };
-    const receipt = { target, protocolVersion: 3, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
+    const receipt = { target, protocolVersion: 4, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
       dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
     receipts[target] = receipt; entries.push([`receipts/${target}.json`, json(receipt)]);
   }
@@ -149,7 +149,7 @@ test('CI fetches and uploads only the six verified source inputs at the checked-
 });
 
 for (const [name, jobName, dependency, verification] of [
-  ['test', 'native-validation', 'source-inputs', 'python native/dependencies/prepare.py --build-local'],
+  ['test', 'native-validation', 'source-inputs', 'python native/dependencies/prepare.py'],
   ['publish', 'package', 'gates', 'python native/dependencies/package.py --root'],
 ]) {
   test(`${name} reuses same-run SHA-bound inputs before canonical source verification`, () => {
@@ -162,6 +162,83 @@ for (const [name, jobName, dependency, verification] of [
     assert.deepEqual(job.steps[downloadIndex].with, { name: sourceArtifactName, path: sourceDirectory });
     if (name === 'test') {
       assert.deepEqual(job.strategy.matrix.include.map(target => target.target).sort(), [...TARGETS].sort());
+      const step = job.steps[verifyIndex];
+      assert.equal(step.env?.NATIVE_TARGET, '${{ matrix.target }}');
+      for (const target of TARGETS) {
+        // Exercise the actual lane selection without invoking Python or building dependencies.
+        const selected = spawnSync('bash', ['-c', `python() { printf '%s\\0' "$@"; }\n${step.run}`], {
+          encoding: 'utf8', env: { ...process.env, NATIVE_TARGET: target },
+        });
+        assert.equal(selected.status, 0, `${target}: ${selected.stderr}`);
+        const args = selected.stdout.split('\0').slice(0, -1);
+        assert.equal(args[0], 'native/dependencies/prepare.py');
+        assert.ok(args.includes('--build-local'), `${target} must build the verified sources`);
+        assert.equal(args.includes('--disable-assembly'), !target.endsWith('-arm64'), `${target} assembly choice`);
+        assert.equal(args[args.indexOf('--prefix-file') + 1], 'native/build/deps/ci-prefix.txt');
+      }
     }
   });
 }
+
+test('actual dispatch conditions keep all five candidate qualifications reachable without publishing credentials', () => {
+  const release = workflow('publish'), gates = workflow('test');
+  assert.equal(release.on.workflow_dispatch.inputs.mode.default, 'build-only');
+  assert.deepEqual(release.on.workflow_dispatch.inputs.mode.options.sort(), ['build-only', 'publish']);
+  assert.equal(release.on.workflow_dispatch.inputs.version.required, false);
+  assert.equal(release.jobs.gates.uses, './.github/workflows/test.yml');
+  assert.equal(release.jobs.gates.with.release, true);
+  assert.deepEqual(release.jobs.qualify.strategy.matrix.include.map(lane => lane.target).sort(), [...TARGETS].sort());
+  assert.ok([release.jobs.complete.needs].flat().includes('qualify'), 'completion must wait for every qualification lane');
+  assert.ok([release.jobs.publish.needs].flat().includes('complete'), 'publication must use the completed proof');
+  for (const [name, job] of [...Object.entries(release.jobs), ...Object.entries(gates.jobs).map(([name, job]) => [`gates/${name}`, job])]) {
+    if (name === 'publish') continue;
+    const permissions = job.permissions ?? (name.startsWith('gates/') ? gates.permissions : release.permissions);
+    assert.equal(permissions.contents, 'read', name);
+    assert.ok(Object.values(permissions).every(value => value === 'read' || value === 'none'), name);
+    assert.equal(job.environment, undefined, name);
+    for (const step of job.steps || []) {
+      assert.equal(step.env?.GH_TOKEN, undefined, name);
+      if (step.uses?.startsWith('actions/checkout@')) {
+        assert.equal(step.with.ref, '${{ github.sha }}', name);
+        assert.equal(step.with['persist-credentials'], false, name);
+      }
+    }
+  }
+  assert.equal(release.jobs.publish.permissions['id-token'], 'write');
+  const completed = release.jobs.complete.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+  const publishing = release.jobs.publish.steps.find(step => step.uses?.startsWith('actions/download-artifact@'));
+  assert.equal(publishing.with.name, completed.with.name, 'publisher must consume the same completed artifact');
+  const intent = release.jobs.intent.steps.find(step => step.id === 'intent');
+  const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+  const scratch = mkdtempSync(join(tmpdir(), 'blink-workflow-intent-'));
+  try {
+    let index = 0;
+    for (const ref of ['refs/heads/main', 'refs/heads/codex/hsv-saved-clip-prototype']) {
+      for (const mode of [undefined, 'build-only', 'publish', 'unknown']) {
+        for (const requested of ['', manifest.version, '99.0.0', 'invalid']) {
+          const output = join(scratch, String(index++));
+          const env = { ...process.env, GITHUB_REF: ref, GITHUB_OUTPUT: output, RELEASE_VERSION: requested };
+          if (mode === undefined) delete env.RELEASE_MODE; else env.RELEASE_MODE = mode;
+          // Execute the actual checked-in intent step, not a reimplementation of its shell/Node logic.
+          const resolved = spawnSync('bash', ['-c', intent.run], { cwd: process.cwd(), encoding: 'utf8', env });
+          const allowed = (mode === undefined || mode === 'build-only') && ['', manifest.version].includes(requested)
+            || mode === 'publish' && ref === 'refs/heads/main' && requested === manifest.version;
+          assert.equal(resolved.status === 0, allowed, `${ref}/${mode}/${requested}: ${resolved.stderr}`);
+          const outputs = existsSync(output) ? Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(line => line.split('='))) : {};
+          const reached = new Map([['intent', allowed]]);
+          function reachable(name) {
+            if (reached.has(name)) return reached.get(name);
+            const job = release.jobs[name];
+            const dependencies = job.needs === undefined ? [] : [job.needs].flat();
+            const success = dependencies.every(reachable) && (!job.if || Function('github', 'needs', `return (${job.if});`)(
+              { ref }, { intent: { outputs } }));
+            reached.set(name, success); return success;
+          }
+          assert.equal(reachable('complete'), allowed, 'all valid branch candidates must complete five qualifications');
+          assert.equal(reachable('publish'), allowed && mode === 'publish', 'only explicit main publication is reachable');
+          if (allowed) assert.equal(outputs.version, manifest.version);
+        }
+      }
+    }
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});

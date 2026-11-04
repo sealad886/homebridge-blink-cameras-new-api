@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext, Script } from 'node:vm';
 import { execFileSync } from 'node:child_process';
+import { SettingsValidator } from '../../src/homebridge-ui/settings-validation';
+import type { SettingsInventory } from '../../src/settings-inventory';
+import { composeRecordingReadiness, unknownHomeRecordingObservation } from '../../src/recording-readiness';
+import type { NativeClipActivity } from '../../src/native-clip-recorder';
 
 class Element {
   children: Element[] = [];
@@ -9,7 +13,7 @@ class Element {
   dataset: Record<string, string> = {};
   attributes: Record<string, string> = {};
   classList = { add: jest.fn(), remove: jest.fn(), toggle: jest.fn() };
-  hidden = false; checked = false; disabled = false; value = ''; textContent = ''; id = ''; type = ''; inputMode = ''; className = ''; htmlFor = '';
+  hidden = false; open = false; checked = false; disabled = false; value = ''; textContent = ''; id = ''; type = ''; inputMode = ''; className = ''; htmlFor = '';
   constructor(public tag = 'div') {}
   append(...children: Element[]): void { this.children.push(...children); }
   replaceChildren(): void { this.children = []; }
@@ -29,19 +33,59 @@ const cameras = [{ key: 'camera:1', kind: 'camera', id: '1', name: 'Same', netwo
 function mount(config: Record<string, unknown>) {
   const elements = new Map(['settingsNavigation', 'sectionFields', 'connectionFlow', 'accountMaintenance', 'sectionTitle', 'draftStatus', 'settingsErrors', 'inventoryStatus', 'retrySettings', 'accountDraftWarning', 'settingsWarnings'].map(id => [id, new Element()]));
   const document = { createElement: (tag: string) => new Element(tag), getElementById: (id: string) => elements.get(id) };
-  const context: any = { window: {}, document, structuredClone, setTimeout, clearTimeout };
+  // The real Homebridge page uses ordinary HTTP; neither WebCrypto nor a
+  // browser-generated settings hash is available to this recording flow.
+  const context: any = { window: { crypto: undefined }, crypto: undefined, document, structuredClone, setTimeout, clearTimeout };
   runInNewContext(source('settings-state.js'), context);
   runInNewContext(source('settings-ui.js'), context);
+  const inventory = { revision: '1', fetchedAt: '2026-11-02T00:00:00Z', networks: [{ id: '10', name: 'Home', armed: true }],
+    syncModules: [{ id: '100', networkId: '10', status: 'online' }], cameras } as SettingsInventory;
+  const validator = new SettingsValidator(() => inventory);
   const homebridge = {
     request: jest.fn(async (path: string, payload?: any) => path === '/settings/inventory'
       ? { revision: '1', fetchedAt: '2026-11-02T00:00:00Z', networks: [{ id: '10', name: 'Home', armed: true }], syncModules: [{ id: '100', networkId: '10', status: 'online' }], cameras }
-      : { revision: payload.revision, valid: true, errors: [], warnings: [] }),
+      : path === '/settings/recording-health' ? { state: 'missing', checkedAt: '2026-11-03T00:00:00Z' }
+        : validator.validate(payload)),
     updatePluginConfig: jest.fn().mockResolvedValue(undefined), enableSaveButton: jest.fn(), disableSaveButton: jest.fn(),
   };
   const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8'));
   const editor = context.window.BlinkSettingsUI.mount(homebridge, schema, [{ platform: 'BlinkCameras', name: 'Blink', ...config }]);
-  return { editor, homebridge, elements };
+  return { editor, homebridge, elements, inventory };
 }
+
+it('enables a walk test only for applied current Home permissions and a complete camera baseline, while refresh preserves draft and opened details', async () => {
+  const config = { hksvCameras: ['camera:1'] }, f = mount(config);
+  const initial = f.homebridge.request.getMockImplementation()!;
+  const activity: NativeClipActivity = { updatedAt: new Date().toISOString(), queue: 0, active: 0, mediaBytes: 0, reservedBytes: 0, preparationLimit: 1,
+    modules: [], cameras: [{ id: '0000000000000000', key: 'camera:1', label: 'Same', baseline: 'pending', queued: 0, delivered: 0, uncertain: 0 }] };
+  const home = { ...unknownHomeRecordingObservation(), configuration: 'configured' as const, recordingActive: true, cameraActive: true, audioActive: false, triggerTypes: [1] };
+  let result: any;
+  const update = () => { result = { state: 'available', health: composeRecordingReadiness({ config, inventory: f.inventory, runtime: 'running', activity,
+    observations: new Map([['camera:1', { home, status: { state: 'off' } }]]) }) }; };
+  update();
+  f.homebridge.request.mockImplementation(async (path, payload) => path === '/settings/recording-health' ? result : initial(path, payload));
+  f.editor.setAccountReady(true); await tick(); await f.editor.draft.flush(); f.editor.showSection(2); await tick();
+  const fields = f.elements.get('sectionFields')!;
+  const testButton = () => fields.querySelectorAll('button').find(button => button.dataset.walkTest)!;
+  expect(testButton().disabled).toBe(true);
+  activity.cameras[0].baseline = 'complete'; update(); await f.editor.refreshRecordingHealth();
+  expect(testButton().disabled).toBe(false);
+  for (const change of [{ state: 'stale' }, { state: 'missing' }, { state: 'unsupported' },
+    { state: 'available', health: { ...result.health, version: 1 } },
+    { state: 'available', health: { ...result.health, settingsRevision: 'old' } }]) {
+    result = change; await f.editor.refreshRecordingHealth(); expect(testButton().disabled).toBe(true);
+    expect(f.homebridge.enableSaveButton).toHaveBeenCalled();
+  }
+  home.cameraActive = false; update(); await f.editor.refreshRecordingHealth(); expect(testButton().disabled).toBe(true);
+  home.cameraActive = true; home.triggerTypes = [2]; update(); await f.editor.refreshRecordingHealth(); expect(testButton().disabled).toBe(true);
+  home.triggerTypes = [1]; update(); await f.editor.refreshRecordingHealth();
+  const detail = fields.querySelectorAll('details').find(item => item.dataset.expansionKey)!; detail.open = true;
+  f.editor.draft.set('pollInterval', 120); await f.editor.draft.flush();
+  const before = structuredClone(f.editor.blocks); await f.editor.refreshRecordingHealth();
+  expect(testButton().disabled).toBe(true); expect(f.editor.blocks).toEqual(before);
+  expect(f.elements.get('sectionTitle')!.textContent).toMatch(/recording/i);
+  expect(fields.querySelectorAll('details').find(item => item.dataset.expansionKey === detail.dataset.expansionKey)!.open).toBe(true);
+});
 
 it('renders a valid zero-selection recording picker without adding a blank selector', async () => {
   const { editor, homebridge, elements } = mount({ unrelated: 'kept' });
@@ -53,6 +97,85 @@ it('renders a valid zero-selection recording picker without adding a blank selec
   editor.draft.set('pollInterval', 120); await editor.draft.flush();
   expect(homebridge.updatePluginConfig).toHaveBeenLastCalledWith([expect.objectContaining({ unrelated: 'kept', pollInterval: 120 })]);
   expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('hksvCameras');
+});
+
+it('opens first-use setup, progressively discloses it for existing selections, and preserves an explicit expansion choice on refresh', async () => {
+  const fresh = mount({}); fresh.editor.setAccountReady(true); await tick(); await fresh.editor.draft.flush(); fresh.editor.showSection(2); await tick();
+  const setup = () => fresh.elements.get('sectionFields')!.querySelectorAll('details').find(item => item.dataset.expansionKey === 'recording:setup')!;
+  expect(setup().open).toBe(true);
+  setup().open = false; await fresh.editor.refreshRecordingHealth(); expect(setup().open).toBe(false);
+  const selected = mount({ hksvCameras: ['camera:1'] }); selected.editor.setAccountReady(true); await tick(); await selected.editor.draft.flush(); selected.editor.showSection(2); await tick();
+  const selectedSetup = () => selected.elements.get('sectionFields')!.querySelectorAll('details').find(item => item.dataset.expansionKey === 'recording:setup')!;
+  expect(selectedSetup().open).toBe(false);
+  selectedSetup().open = true; await selected.editor.refreshRecordingHealth(); expect(selectedSetup().open).toBe(true);
+});
+
+it('retains per-selected status rows for excluded and unresolved cameras without materializing invalid config', async () => {
+  const { editor, elements } = mount({ hksvCameras: ['camera:1', 'owl:1', 'Unavailable camera'], excludeDevices: ['camera:1'] });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2); await tick();
+  const buttons = elements.get('sectionFields')!.querySelectorAll('button').filter(button => button.dataset.walkTest);
+  expect(buttons).toHaveLength(3); expect(buttons.every(button => button.disabled)).toBe(true);
+  expect(editor.draft.state.recording.selections.map((row: { selection: string }) => row.selection)).toEqual(['excluded', 'unavailable', 'unresolved']);
+  expect(editor.draft.state.valid).toBe(true);
+  expect(editor.draft.config.hksvCameras).toEqual(['camera:1', 'owl:1', 'Unavailable camera']);
+});
+
+it('keeps recording defaults implicit through render, discovery and global source changes', async () => {
+  const { editor, elements } = mount({ futureSetting: true });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  expect(editor.draft.config).not.toHaveProperty('hksvSource');
+  expect(editor.draft.config).not.toHaveProperty('syncModuleRecording');
+  const sourceControl = elements.get('sectionFields')!.querySelectorAll('select').find(input => input.dataset.setting === 'hksvSource')!;
+  expect(sourceControl.value).toBe('saved-clips');
+  sourceControl.value = 'continuous'; sourceControl.handlers.change(); await editor.draft.flush();
+  await editor.refreshInventory(); editor.showSection(1); editor.showSection(2);
+  expect(editor.draft.config).toEqual({ platform: 'BlinkCameras', name: 'Blink', futureSetting: true, hksvSource: 'continuous' });
+  expect(new SettingsValidator(() => undefined).validate({ revision: 1, config: editor.draft.config }).valid).toBe(true);
+});
+
+it('writes only explicit module recording fields and removes an override when all fields inherit', async () => {
+  const { editor, elements } = mount({});
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  const moduleSource = () => elements.get('sectionFields')!.querySelectorAll('select').find(input => input.dataset.setting === 'syncModuleRecording')!;
+  const poll = () => elements.get('sectionFields')!.querySelectorAll('input').find(input => input.dataset.setting === 'syncModuleRecording')!;
+  expect(moduleSource().value).toBe('inherit');
+  moduleSource().value = 'continuous'; moduleSource().handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config.syncModuleRecording).toEqual([{ syncModuleId: '100', source: 'continuous' }]);
+  moduleSource().value = 'inherit'; moduleSource().handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config.syncModuleRecording).toEqual([]);
+  poll().value = '45'; poll().handlers.input(); await editor.draft.flush();
+  expect(editor.draft.config.syncModuleRecording).toEqual([{ syncModuleId: '100', pollIntervalSeconds: 45 }]);
+  poll().value = ''; poll().handlers.input(); await editor.draft.flush();
+  expect(editor.draft.config.syncModuleRecording).toEqual([]);
+  expect(new SettingsValidator(() => undefined).validate({ revision: 1, config: editor.draft.config }).valid).toBe(true);
+});
+
+it('shows and removes only real unavailable recording overrides when discovery is unavailable', async () => {
+  const { editor, homebridge, elements } = mount({ syncModuleRecording: [{ syncModuleId: '999', source: 'continuous' }], other: 'preserved' });
+  homebridge.request.mockImplementation(async (path, payload?: any) => {
+    if (path === '/settings/inventory') throw new Error('Discovery unavailable');
+    if (path === '/settings/recording-health') return { state: 'missing', checkedAt: '2026-11-03T00:00:00Z' };
+    return { revision: payload.revision, valid: true, errors: [], warnings: [] };
+  });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2); await tick();
+  const button = elements.get('sectionFields')!.querySelectorAll('button').find(item => item.dataset.recordingRemove === '999')!;
+  button.handlers.click(); await editor.draft.flush();
+  expect(editor.draft.config.syncModuleRecording).toEqual([]);
+  expect(editor.draft.config.other).toBe('preserved');
+  expect(elements.get('sectionFields')!.querySelectorAll('button').some(item => item.dataset.recordingRemove)).toBe(false);
+});
+
+it('keeps a valid Save and draft unchanged when recording health cannot be read', async () => {
+  const { editor, homebridge, elements } = mount({});
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2); await tick();
+  const before = structuredClone(editor.blocks);
+  homebridge.request.mockImplementation(async () => { throw new Error('private health details'); });
+  await editor.refreshRecordingHealth();
+  expect(editor.blocks).toEqual(before);
+  expect(editor.draft.state.error).toBe('');
+  expect(homebridge.enableSaveButton).toHaveBeenCalled();
+  expect(elements.get('sectionFields')!.querySelectorAll('p').some(item => /could not be read/.test(item.textContent))).toBe(true);
+  expect(elements.get('sectionFields')!.querySelectorAll('p').some(item => item.textContent.includes('private health details'))).toBe(false);
 });
 
 it('keeps excluded cameras discoverable and re-includes one while preserving unavailable exclusions', async () => {

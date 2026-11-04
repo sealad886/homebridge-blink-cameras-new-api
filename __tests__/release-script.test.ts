@@ -105,7 +105,7 @@ describe('release script', () => {
       'npm run build',
       'npm pack',
     ]);
-    expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f version=1.2.3-alpha.0');
+    expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f mode=publish -f version=1.2.3-alpha.0');
   });
 
   it('stops preflight on unrelated changes and preserves their contents', () => {
@@ -125,5 +125,6 @@ describe('release script', () => {
     expect(result.status).toBe(1);
     expect(result.commands).toEqual([]);
     expect(`${result.stdout}${result.stderr}`).toContain('The --yes local publish mode has been removed.');
+    expect(result.stderr).toContain('gh workflow run publish.yml --ref main -f mode=publish -f version=1.2.3-alpha.0');
   });
 });

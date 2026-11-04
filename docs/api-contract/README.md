@@ -1,5 +1,7 @@
 # Blink API Contract for AI Agents
 
+Last reviewed: 4 November 2026.
+
 The canonical static contract is `blink-59.2-29823413.json`. Its schema is
 `schema.json`; `blink-59.2-29823413.md` is generated for human review.
 
@@ -7,6 +9,13 @@ The JSON is factual interface metadata recovered from the official Android APK.
 It does not contain APK code, credentials, account identifiers, device
 identifiers, or live traffic. Static declarations do not prove that a server
 currently accepts a request.
+
+For implemented URL construction and the upcoming native USB request sequence,
+use the [maintained routing map](../../blink_api_map.md). The typed native-storage
+parser and coordinator include observed provider details that must not be
+inferred from static endpoint declarations alone. Normal recording setup belongs
+to the [recording guide](../RECORDING.md); this catalog is not a user setup recipe
+or permission to run provider requests.
 
 ## Deterministic queries
 

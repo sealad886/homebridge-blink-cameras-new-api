@@ -6,7 +6,7 @@ import process from 'node:process';
 const logger = new Console({ stdout: process.stdout, stderr: process.stderr });
 
 const args = new Set(process.argv.slice(2));
-const releaseCommand = () => `gh workflow run publish.yml --ref main -f version=${JSON.parse(readFileSync('package.json', 'utf8')).version}`;
+const releaseCommand = () => `gh workflow run publish.yml --ref main -f mode=publish -f version=${JSON.parse(readFileSync('package.json', 'utf8')).version}`;
 
 if (args.has('--yes')) {
     logger.error('The --yes local publish mode has been removed.');

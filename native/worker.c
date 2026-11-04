@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Prototype: owned MPEG-TS input -> H.264 packet output. No network URL APIs.
+ * Owned MPEG-TS or finite MP4 input -> bounded codec/recording output. No URL APIs.
  */
 #include "protocol.h"
 #include <errno.h>
@@ -41,6 +41,7 @@ static int wait_condition(Condition *c, Mutex *m) {
 #include <libavutil/opt.h>
 #include <libavutil/intreadwrite.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mem.h>
 #include <libavutil/time.h>
 #include <libswscale/swscale.h>
 
@@ -50,14 +51,19 @@ static int wait_condition(Condition *c, Mutex *m) {
 #define MAX_PACKET (CAPACITY - 60u)
 #define MAX_INPUT_DIMENSION 4096
 #define MAX_INPUT_PIXELS 8388608
+#define VIDEO_CADENCE_QUANTIZATION_US 100u
 static Mutex mutex;
 static Condition changed;
 static uint8_t queue[CAPACITY];
 static size_t first, available;
 static int configured, ended, reader_closed;
-static uint32_t config[16];
+static uint32_t config[18];
 static int64_t started;
 static uint32_t consumed_media;
+static uint8_t *finite_media;
+static size_t finite_size,finite_position;
+static uint32_t selected_video_frames,encoded_video_frames,generated_audio_samples;
+static int64_t finite_source_video_end=AV_NOPTS_VALUE;
 static void fatal(const char *code) { fprintf(stderr, "BLINK_WORKER_%s\n", code); fflush(stderr); _Exit(2); }
 static uint32_t u32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 static void put32(uint8_t *p, uint32_t n) { p[0]=n>>24; p[1]=n>>16; p[2]=n>>8; p[3]=n; }
@@ -83,7 +89,7 @@ static void read_messages(void) {
         if(type>=10 && type<=12) { protect_message(type,payload,length); LOCK(&mutex);WAKE(&changed);UNLOCK(&mutex); continue; }
         LOCK(&mutex);
         if(type==1 && !configured && !ended && length==BLINK_CONFIG_BYTES) {
-            for(int i=0;i<16;i++) config[i]=u32(payload+4*i);
+            for(int i=0;i<18;i++) config[i]=u32(payload+4*i);
             if(!config[0] || !config[1] || config[0]>1920 || config[1]>1080 ||
                (config[0]&1) || (config[1]&1) || config[2]<1 || config[2]>30 ||
                config[3]<20000 || config[3]>8000000 || config[4]<1 || config[4]>9000 || config[5]>1) fatal("CONFIG");
@@ -97,12 +103,26 @@ static void read_messages(void) {
                (config[6] && (config[8]!=1 || config[9]<8000 || config[9]>128000 ||
                (config[6]==1 || config[6]==4?(config[7]!=16000 && config[7]!=24000):config[7]!=8000)))) fatal("AUDIO_CONFIG");
             if(config[6]==1?(config[12]!=10 && config[12]!=20 && config[12]!=40 && config[12]!=60):config[12]!=0)fatal("AUDIO_CONFIG");
+            if(config[16]>1 || config[17]>1 || (config[16] && !config[13]) ||
+               (config[17] && (!config[16] || config[6]!=4)))fatal("INPUT_CONFIG");
+            if(config[16]) {
+                av_max_alloc(64u*1024u*1024u);
+                finite_media=av_malloc(BLINK_FINITE_INPUT_MAX);if(!finite_media)fatal("MEMORY");
+            }
             configured=1;
         } else if(type==2 && configured && !ended && length) {
-            total+=length; if(total>MAX_MEDIA || available+length>CAPACITY) fatal("INPUT_LIMIT");
-            size_t tail=(first+available)%CAPACITY;
-            size_t a=length<CAPACITY-tail?length:CAPACITY-tail;
-            memcpy(queue+tail,payload,a); memcpy(queue,payload+a,length-a); available+=length;
+            total+=length;
+            if(config[16]) {
+                if(total>BLINK_FINITE_INPUT_MAX)fatal("INPUT_LIMIT");
+                memcpy(finite_media+finite_size,payload,length);finite_size+=length;
+                consumed_media+=length;
+                uint8_t credit[4];put32(credit,consumed_media);output(BLINK_MEDIA_CONSUMED,credit,sizeof(credit));
+            } else {
+                if(total>MAX_MEDIA || available+length>CAPACITY) fatal("INPUT_LIMIT");
+                size_t tail=(first+available)%CAPACITY;
+                size_t a=length<CAPACITY-tail?length:CAPACITY-tail;
+                memcpy(queue+tail,payload,a); memcpy(queue,payload+a,length-a); available+=length;
+            }
         } else if(type==3 && configured && !ended && length==0) ended=1;
         else fatal("FRAMING");
         WAKE(&changed); UNLOCK(&mutex);
@@ -142,6 +162,20 @@ static int read_media(void *unused, uint8_t *target, int count) {
     uint8_t credit[4];put32(credit,consumed_media);output(BLINK_MEDIA_CONSUMED,credit,sizeof(credit));
     return (int)n;
 }
+static int read_finite(void *unused,uint8_t *target,int count) {
+    (void)unused;
+    if(count<=0)return AVERROR(EINVAL);
+    if(finite_position>=finite_size)return AVERROR_EOF;
+    size_t n=finite_size-finite_position;if(n>(size_t)count)n=(size_t)count;
+    memcpy(target,finite_media+finite_position,n);finite_position+=n;return (int)n;
+}
+static int64_t seek_finite(void *unused,int64_t offset,int whence) {
+    (void)unused;whence&=~AVSEEK_FORCE;
+    if(whence==AVSEEK_SIZE)return (int64_t)finite_size;
+    int64_t base=whence==SEEK_SET?0:whence==SEEK_CUR?(int64_t)finite_position:whence==SEEK_END?(int64_t)finite_size:-1;
+    if(base<0 || offset < -base || offset > (int64_t)finite_size-base)return AVERROR(EINVAL);
+    finite_position=(size_t)(base+offset);return (int64_t)finite_position;
+}
 /* Custom media bytes are the only I/O capability. Reject secondary library opens. */
 static int deny_open(AVFormatContext *context, AVIOContext **io, const char *url,
                      int flags, AVDictionary **options) {
@@ -156,6 +190,7 @@ static void packets(AVCodecContext *encoder, AVPacket *packet, uint64_t *bytes,u
     while((result=avcodec_receive_packet(encoder,packet))>=0) {
         if(packet->size<=0 || (uint32_t)packet->size>MAX_PACKET || *bytes+(uint32_t)packet->size>64u*1024u*1024u) fatal("OUTPUT_LIMIT");
         *bytes+=(uint32_t)packet->size;
+        if(type==BLINK_VIDEO_PACKET && ++encoded_video_frames>config[4])fatal("FRAME_LIMIT");
         if(config[13]) { recording_packet(encoder,packet,type);av_packet_unref(packet);continue; }
         uint32_t length=48+(uint32_t)packet->size;
         uint8_t *framed=av_malloc(length); if(!framed) fatal("MEMORY");
@@ -201,21 +236,37 @@ int main(int argc, char **argv) {
 #endif
     LOCK(&mutex); while(!configured) if(!WAIT(&changed,&mutex)) fatal("CONFIG_TIMEOUT"); UNLOCK(&mutex);
     uint8_t status[8]; put32(status,BLINK_PROTOCOL_VERSION); put32(status+4,config[2]); output(1,status,sizeof(status));
+    if(config[16]) {
+        LOCK(&mutex);while(!ended)if(!WAIT(&changed,&mutex))fatal("INPUT_TIMEOUT");UNLOCK(&mutex);
+        if(!finite_size)fatal("MEDIA");
+    }
     AVFormatContext *input=avformat_alloc_context(); if(!input) fatal("MEMORY");
     uint8_t *buffer=av_malloc(32768); if(!buffer) fatal("MEMORY");
-    AVIOContext *io=avio_alloc_context(buffer,32768,0,NULL,read_media,NULL,NULL); if(!io) fatal("MEMORY");
+    AVIOContext *io=avio_alloc_context(buffer,32768,0,NULL,config[16]?read_finite:read_media,NULL,config[16]?seek_finite:NULL); if(!io) fatal("MEMORY");
     input->pb=io; input->flags|=AVFMT_FLAG_CUSTOM_IO; input->io_open=deny_open;
-    input->protocol_whitelist=av_strdup(""); input->format_whitelist=av_strdup("mpegts");
+    input->protocol_whitelist=av_strdup(""); input->format_whitelist=av_strdup(config[16]?"mov":"mpegts");
     if(!input->protocol_whitelist || !input->format_whitelist) fatal("MEMORY");
-    const AVInputFormat *demuxer=av_find_input_format("mpegts");
+    const AVInputFormat *demuxer=av_find_input_format(config[16]?"mov":"mpegts");
     if(!demuxer) fatal("DEMUXER");
-    input->interrupt_callback.callback=interrupted; input->probesize=64*1024; input->max_analyze_duration=1000000; input->max_probe_packets=32; input->max_streams=8;
+    input->interrupt_callback.callback=interrupted; input->probesize=64*1024; input->max_analyze_duration=1000000; input->max_probe_packets=32; input->max_streams=config[16]?2:8;
     AVDictionary *options=NULL;
     if(av_dict_set(&options,"codec_whitelist","h264,aac,aac_latm",0)<0 ||
        av_dict_set_int(&options,"max_packet_size",256*1024,0)<0 ||
        av_dict_set_int(&options,"resync_size",65536,0)<0) fatal("MEMORY");
+    if(config[16] && (av_dict_set_int(&options,"enable_drefs",0,0)<0 ||
+       av_dict_set_int(&options,"use_absolute_path",0,0)<0))fatal("MEMORY");
     if(avformat_open_input(&input,NULL,demuxer,&options)<0) { fatal("MEDIA"); }
     av_dict_free(&options);
+    if(config[16]) {
+        unsigned videos=0,audios=0;
+        for(unsigned i=0;i<input->nb_streams;i++) {
+            AVCodecParameters *p=input->streams[i]->codecpar;
+            if(p->codec_type==AVMEDIA_TYPE_VIDEO) { if(p->codec_id!=AV_CODEC_ID_H264)fatal("CODEC");videos++; }
+            else if(p->codec_type==AVMEDIA_TYPE_AUDIO) { if(p->codec_id!=AV_CODEC_ID_AAC)fatal("AUDIO_CODEC");audios++; }
+            else fatal("MEDIA_STREAMS");
+        }
+        if(videos!=1 || audios>1 || (config[6] && audios!=1) || input->duration>90250000)fatal("MEDIA_STREAMS");
+    }
     AVCodecContext *decoder=NULL;
     const AVCodec *codec=avcodec_find_encoder_by_name("libx264"); if(!codec) fatal("ENCODER");
     AVCodecContext *encoder=avcodec_alloc_context3(codec); if(!encoder) fatal("MEMORY");
@@ -253,6 +304,10 @@ int main(int argc, char **argv) {
                 codec=avcodec_find_decoder(AV_CODEC_ID_H264); decoder=avcodec_alloc_context3(codec); if(!decoder) fatal("MEMORY");
                 if(avcodec_parameters_to_context(decoder,params)<0) fatal("DECODE");
                 decoder->pkt_timebase=input->streams[video]->time_base; decoder->max_pixels=MAX_INPUT_PIXELS; decoder->thread_count=1;
+                /* Native MP4 may store SPS/PPS-only samples between pictures.
+                 * Keep decoder state across those legitimate non-frame chunks;
+                 * codec errors still fail closed. Live TS framing is unchanged. */
+                if(config[16])decoder->flags2|=AV_CODEC_FLAG2_CHUNKS;
                 if(params->width>MAX_INPUT_DIMENSION || params->height>MAX_INPUT_DIMENSION)fatal("FRAME_LIMIT");
                 if(avcodec_open2(decoder,codec,NULL)<0) fatal("DECODE");
             }
@@ -281,13 +336,26 @@ int main(int argc, char **argv) {
             /* Keep rational output deadlines anchored to the source clock, not each selected frame. */
             if(last_selected_pts!=AV_NOPTS_VALUE && pts<=last_selected_pts) { av_frame_unref(decoded);continue; }
             if(first_video_pts==AV_NOPTS_VALUE)first_video_pts=pts;
+            if(config[16]) {
+                int64_t duration=av_rescale_q(decoded->duration,input->streams[video]->time_base,AV_TIME_BASE_Q);
+                if(duration<=0) {
+                    AVRational rate=av_guess_frame_rate(input,input->streams[video],decoded);
+                    duration=rate.num>0 && rate.den>0?av_rescale(rate.den,1000000,rate.num):av_rescale(1,1000000,config[2]);
+                }
+                if(duration<=0 || duration>1000000 || pts>INT64_MAX-duration)fatal("VIDEO_TIMESTAMP");
+                if(finite_source_video_end==AV_NOPTS_VALUE || pts+duration>finite_source_video_end)finite_source_video_end=pts+duration;
+            }
             uint64_t elapsed=(uint64_t)pts-(uint64_t)first_video_pts;
             if(elapsed>INT64_MAX)fatal("VIDEO_TIMESTAMP");
-            /* One microsecond covers rounding the source and output clocks to AV_TIME_BASE. */
-            if(elapsed+1<(uint64_t)av_rescale(next_output_frame,1000000,config[2])) { av_frame_unref(decoded);continue; }
+            if(config[16] && elapsed>90000000)fatal("TIME_LIMIT");
+            /* Vendor timestamps can quantize a native-rate frame slightly before
+             * its rational deadline (33.300 vs 33.333 ms at 30 fps). Keep that
+             * bounded phase error; true higher-rate sampling stays unchanged. */
+            if(elapsed+VIDEO_CADENCE_QUANTIZATION_US<(uint64_t)av_rescale(next_output_frame,1000000,config[2])) { av_frame_unref(decoded);continue; }
             int64_t after_source=av_rescale_rnd((int64_t)elapsed,config[2],1000000,AV_ROUND_DOWN)+1;
             next_output_frame=FFMAX(next_output_frame+1,after_source);
             last_selected_pts=pts;
+            selected_video_frames++;
             int inner_width=encoder->width,inner_height=encoder->height;
             if((int64_t)decoded->width*encoder->height>(int64_t)decoded->height*encoder->width)
                 inner_height=(int)((int64_t)decoded->height*encoder->width/decoded->width)&~1;
@@ -317,9 +385,19 @@ int main(int argc, char **argv) {
         if(result==AVERROR_EOF) break;
     }
     if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
-    packets(encoder,encoded,&bytes,2); audio_finish(&bytes); if(config[13])recording_finish();output(3,NULL,0);
+    packets(encoder,encoded,&bytes,2);if(config[16])recording_finish_video();
+    audio_finish(&bytes); if(config[13])recording_finish();
+    if(config[16]) {
+        uint8_t summary[32];put32(summary,frames);put32(summary+4,selected_video_frames);put32(summary+8,encoded_video_frames);
+        put32(summary+12,generated_audio_samples);put32(summary+16,config[7]);put32(summary+20,config[16]);
+        uint64_t span=(uint64_t)recording_all_end-(uint64_t)recording_all_start;
+        if(!span || span>92000000 || recording_audio_priming_us<0 || span+(uint64_t)recording_audio_priming_us>92000000)fatal("TIME_LIMIT");
+        put64(summary+24,(int64_t)(span+(uint64_t)recording_audio_priming_us));
+        output(BLINK_RECORDING_SUMMARY,summary,sizeof(summary));
+    }
+    output(3,NULL,0);
     sws_freeContext(scaler); av_frame_free(&decoded); av_frame_free(&scaled); av_packet_free(&packet); av_packet_free(&encoded); avcodec_free_context(&decoder); avcodec_free_context(&encoder);
-    avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);
+    avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);av_freep(&finite_media);
     LOCK(&mutex);while(!reader_closed)if(!WAIT(&changed,&mutex))fatal("FINAL_IDLE_TIMEOUT");UNLOCK(&mutex);
     close_protection();drain_output();
     return 0;

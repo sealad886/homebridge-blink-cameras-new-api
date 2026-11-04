@@ -140,7 +140,7 @@ def read_candidate(path: Path, target: str, source_sha: str, recipe: str, pins: 
             not isinstance(receipt.get('limitations'), list) or len(receipt['limitations']) > 32 or
             any(not isinstance(value, str) or len(value) > 4096 for value in receipt['limitations'])):
         raise ValueError('Invalid candidate receipt')
-    if type(receipt.get('protocolVersion')) is not int or receipt['protocolVersion'] != 3:
+    if type(receipt.get('protocolVersion')) is not int or receipt['protocolVersion'] != 4:
         raise ValueError('Candidate protocol mismatch')
     if receipt.get('target') != target or receipt.get('source_sha') != source_sha:
         raise ValueError('Candidate source or target mismatch')
@@ -223,7 +223,7 @@ def stage_package(root: Path, artifacts: Path, source_sha: str) -> dict:
     if artifacts.is_symlink() or {item.name for item in artifacts.iterdir()} != names:
         raise ValueError('Exactly five candidate archives required')
     sources = source_files(root, source_sha)
-    if not re.search(rb'^#define BLINK_PROTOCOL_VERSION 3u\s*$', sources.get('native/protocol.h', b''), re.MULTILINE):
+    if not re.search(rb'^#define BLINK_PROTOCOL_VERSION 4u\s*$', sources.get('native/protocol.h', b''), re.MULTILINE):
         raise ValueError('Corresponding source protocol mismatch')
     recipe = digest(sources['native/dependencies/prepare.py'])
     pins = strict_json(sources['native/dependencies/source-inputs.json'])
@@ -235,7 +235,7 @@ def stage_package(root: Path, artifacts: Path, source_sha: str) -> dict:
     candidates = {target: read_candidate(artifacts / f'native-{target}.tar.gz', target, source_sha, recipe, pins)
                   for target in TARGETS}
     downloads = prepare.fetch()  # Existing checksum and pinned GPG fingerprint verification remains mandatory.
-    manifest = {'schemaVersion': 1, 'protocolVersion': 3, 'targets': {}}
+    manifest = {'schemaVersion': 1, 'protocolVersion': 4, 'targets': {}}
     target_receipts = {}
     for target, (worker, receipt) in candidates.items():
         path = f'native/runtime/{target}/worker' + ('.exe' if target == 'win32-x64' else '')

@@ -1,7 +1,7 @@
-import * as realHap from 'hap-nodejs';
+import * as realHap from '@homebridge/hap-nodejs';
 import { HAP, PrepareStreamRequest, StreamingRequest } from 'homebridge';
 import { Buffer } from 'node:buffer';
-import { decode, decodeWithLists } from 'hap-nodejs/dist/lib/util/tlv';
+import { decode, decodeWithLists } from '@homebridge/hap-nodejs';
 import { BlinkApi } from '../src/blink-api';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { effectiveOutputFps, isSupportedOutputVideo, outputResolutions, OutputQualityProfile } from '../src/accessories/stream-quality';

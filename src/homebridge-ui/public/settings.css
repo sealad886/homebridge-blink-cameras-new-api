@@ -22,6 +22,18 @@
 .blink-unresolved { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; justify-content: space-between; margin: .8rem 0; overflow-wrap: anywhere; }
 .blink-inventory-tools { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; align-items: center; margin: .8rem 0; }
 .blink-checklist { padding-left: 1.3rem; line-height: 1.6; }
+.blink-recording-guide { padding: .8rem 1rem; border-inline-start: 3px solid var(--bs-primary, #a65c00); background: color-mix(in srgb, currentColor 4%, transparent); margin: 1rem 0; }
+.blink-recording-status { margin-top: .6rem; }
+.blink-recording-setup .blink-recording-guide { padding: 0; margin: 0; border: 0; background: transparent; }
+.blink-recording-camera { border: 1px solid var(--bs-border-color, #888); border-radius: .45rem; padding: .8rem 1rem; margin: .9rem 0; overflow-wrap: anywhere; }
+.blink-recording-camera > h3 { margin-top: 0; }
+.blink-source-line { font-size: .85rem; font-weight: 600; margin: .4rem 0 .8rem; }
+.blink-readiness-title { font-weight: 650; margin: .7rem 0 .35rem; }
+.blink-recovery, .blink-walk-steps { border-inline-start: 2px solid currentColor; padding-inline-start: .7rem; font-size: .85rem; line-height: 1.55; margin: .8rem 0; }
+.blink-recording-guide-link { display: block; margin-top: .8rem; }
+.blink-recording-status > button + button { margin-inline-start: .5rem; }
+.blink-recording-timeline { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(9rem, 1.3fr); gap: .45rem 1rem; }
+.blink-recording-timeline dt, .blink-recording-timeline dd { margin: 0; font-size: .8rem; line-height: 1.4; }
 .blink-ui .form-control, .blink-ui .form-select { width: 100%; }
 .blink-ui .alert { margin: .8rem 0; overflow-wrap: anywhere; }
 .blink-ui .alert p:last-child { margin-bottom: 0; }

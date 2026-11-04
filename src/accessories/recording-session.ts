@@ -1,12 +1,25 @@
 import { Buffer } from 'node:buffer';
 import { resolve } from 'node:path';
 import type { CameraRecordingConfiguration } from 'homebridge';
-import { PrivateMediaWorker, MEDIA_WORKER_LIMITS } from './media-worker';
+import { PrivateMediaWorker, MEDIA_WORKER_LIMITS, type RecordingWorkerConfiguration } from './media-worker';
 import { loadPackagedMediaWorker } from './media-worker-artifact';
 import type { FeedSink, FeedSubscription } from './shared-feed';
 import type { RecordingSession, RecordingSessionCallbacks } from './camera-recording';
 
 export type SubscribeRecordingFeed = (sink: FeedSink, signal: globalThis.AbortSignal) => Promise<FeedSubscription>;
+
+/** One conversion for live and finite recording through the canonical worker. */
+export function recordingWorkerConfiguration(configuration: CameraRecordingConfiguration, audioActive: boolean): RecordingWorkerConfiguration {
+  const video = configuration.videoCodec;
+  const [width, height, fps] = video.resolution;
+  const rate = audioActive ? configuration.audioCodec.samplerate === 1 ? 16000 : configuration.audioCodec.samplerate === 2 ? 24000 : 0 : 0;
+  if (audioActive && (!rate || configuration.audioCodec.type !== 0)) throw new Error('Recording audio unavailable');
+  return { width, height, fps, bitrate: video.parameters.bitRate * 1000,
+    maxFrames: 9000, preset: 0, profile: video.parameters.profile, level: video.parameters.level,
+    audioCodec: audioActive ? 4 : 0, audioRate: rate, audioBitrate: audioActive ? configuration.audioCodec.bitrate * 1000 : 0,
+    fragmentMs: configuration.mediaContainerConfiguration.fragmentLength,
+    iFrameIntervalMs: Math.min(1000, video.parameters.iFrameInterval) };
+}
 
 /** Adapt the canonical private native worker to one recording generation. */
 export async function startRecordingSession(
@@ -44,8 +57,6 @@ export async function startRecordingSession(
   };
   owner.addEventListener('abort', cancelled, { once: true });
   try {
-    const video = configuration.videoCodec;
-    const [width, height, fps] = video.resolution;
     // This is a trusted, content-verified package artifact, never a user path.
     // eslint-disable-next-line no-undef -- Published CommonJS module.
     const path = loadPackagedMediaWorker(resolve(__dirname, '../..'));
@@ -62,13 +73,7 @@ export async function startRecordingSession(
       },
     });
     void worker.whenClosed.then(() => { if (!abort.signal.aborted) failed(); });
-    const rate = audioActive ? configuration.audioCodec.samplerate === 1 ? 16000 : configuration.audioCodec.samplerate === 2 ? 24000 : 0 : 0;
-    if (audioActive && (!rate || configuration.audioCodec.type !== 0)) throw new Error('Recording audio unavailable');
-    await worker.configureRecording({ width, height, fps, bitrate: video.parameters.bitRate * 1000,
-      maxFrames: 9000, preset: 0, profile: video.parameters.profile, level: video.parameters.level,
-      audioCodec: audioActive ? 4 : 0, audioRate: rate, audioBitrate: audioActive ? configuration.audioCodec.bitrate * 1000 : 0,
-      fragmentMs: configuration.mediaContainerConfiguration.fragmentLength,
-      iFrameIntervalMs: Math.min(1000, video.parameters.iFrameInterval) });
+    await worker.configureRecording(recordingWorkerConfiguration(configuration, audioActive));
     await worker.whenReady; owner.throwIfAborted(); abort.signal.throwIfAborted();
     const media = worker;
     subscribing = subscribe({

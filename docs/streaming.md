@@ -1,11 +1,15 @@
 # Live streaming and quality
 
-Last reviewed: 26 October 2026. Secure runtime implementation is under review;
-beta publication remains blocked until its security and release gates pass.
+Last reviewed: 4 November 2026.
 
 This guide owns packaged codec requirements, transport, quality and talkback.
 See [configuration](configuration.md) for saving settings and
 [diagnostics](debug_logging_spec.md) for the logging policy.
+The [recording guide](RECORDING.md) owns saved-clip/continuous recording setup,
+battery behavior and Home playback. Published beta3 ships its five protocol-3
+workers; upcoming finite-MP4 saved-clip source requires matching protocol-4
+artifacts and separate qualification. Do not substitute an older worker for a
+changed protocol.
 
 ## Packaged codec requirements
 
@@ -39,9 +43,11 @@ an explicit configuration path on a POSIX host:
 
 ```sh
 node /absolute/plugin/path/scripts/migrate-secure-media-config.cjs /absolute/homebridge/config.json
+node /absolute/plugin/path/scripts/migrate-secure-media-config.cjs /absolute/homebridge/config.json --apply
 ```
 
-It writes an owner-only backup beside the file before replacing it atomically,
+The first command previews changes without writing. The `--apply` command writes
+an owner-only backup beside the file before replacing it atomically,
 removes retired Blink settings, maps AAC-ELD to Opus and renames `ffmpegDebug` to
 `mediaDebug`. An existing `mediaDebug` value wins. It also removes legacy nested
 `audio.aacEldEncoder`, `audio.twoWay` and `video.encoder` fields, and maps nested
@@ -50,6 +56,11 @@ Keep the backup private: it contains the original configuration. Windows operato
 must back up their configuration using their normal private storage and remove the
 listed keys manually; the script refuses hosts without POSIX permission semantics.
 Publication does not run this script or restart an installed bridge.
+
+The same conversion makes an implicit recording source explicitly `saved-clips`
+and preserves explicit continuous/module choices. Normal new GUI setup does not
+require the script; review the [recording migration guidance](RECORDING.md#explicit-configuration-conversion)
+when upgrading an existing configuration.
 
 ## Encoding and transport
 

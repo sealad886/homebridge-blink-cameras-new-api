@@ -1601,6 +1601,7 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/getNetworks',
       '/settings/inventory',
       '/settings/validate',
+      '/settings/recording-health',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });

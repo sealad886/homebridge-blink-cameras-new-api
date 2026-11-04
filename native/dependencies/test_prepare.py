@@ -312,7 +312,7 @@ class WorkerArtifactTests(unittest.TestCase):
                 self.assertEqual(receipt['sha256'], prepare.hashlib.sha256(worker.read_bytes()).hexdigest())
                 self.assertEqual(receipt['dependencies'], dependency)
                 self.assertFalse(receipt['distribution_ready'])
-                self.assertEqual(receipt['protocolVersion'], 3)
+                self.assertEqual(receipt['protocolVersion'], 4)
                 self.assertEqual(archive.extractfile('blink-codec-worker').read(), worker.read_bytes())
                 self.assertEqual(archive.getmember('blink-codec-worker').mode, 0o755)
 

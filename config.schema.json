@@ -117,7 +117,7 @@
       },
       "enableMotionPolling": {
         "title": "Read motion events from Blink",
-        "description": "Reads Blink cloud clip events. HomeKit recording uses local video motion instead; turning this off does not stop recording capture.",
+        "description": "Reads Blink cloud clip events for motion state. Separate from saved USB clip discovery and continuous recording's local video motion; turning this off does not stop permitted recording.",
         "type": "boolean",
         "default": true
       },
@@ -149,7 +149,7 @@
       },
       "hksvCameras": {
         "title": "Cameras selected for HomeKit recording",
-        "description": "Choose discovered cameras. Apple Home recording permission enables continuous capture and a four-second memory buffer, increasing battery and network use. Local video motion requires the Blink system armed and camera motion enabled. Save, then restart the Blink child bridge.",
+        "description": "Choose cameras offered to HomeKit Secure Video. Saved clips use native Blink motion and completed Sync Module USB recordings. Recording permission and audio are managed in Apple Home. Save, then restart the Blink child bridge.",
         "type": "array",
         "default": [],
         "uniqueItems": true,
@@ -380,6 +380,57 @@
             }
           }
         }
+      },
+      "hksvSource": {
+        "title": "Default recording source",
+        "type": "string",
+        "default": "saved-clips",
+        "enum": [
+          "saved-clips",
+          "continuous"
+        ],
+        "enumNames": [
+          "Saved Blink clips (lower idle battery use)",
+          "Continuous feed (opt in)"
+        ],
+        "description": "Saved clips replay completed Sync Module USB recordings after capture and preparation, without an idle live feed. Continuous mode keeps cameras streaming while Home recording is allowed and increases battery and network use."
+      },
+      "syncModuleRecording": {
+        "title": "Sync Module recording overrides",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "syncModuleId"
+          ],
+          "properties": {
+            "syncModuleId": {
+              "title": "Sync Module ID",
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,15}$"
+            },
+            "source": {
+              "title": "Recording source",
+              "type": "string",
+              "enum": [
+                "saved-clips",
+                "continuous"
+              ],
+              "enumNames": [
+                "Saved Blink clips",
+                "Continuous feed"
+              ]
+            },
+            "pollIntervalSeconds": {
+              "title": "Check for completed clips (seconds)",
+              "type": "integer",
+              "minimum": 15,
+              "maximum": 300,
+              "description": "Leave blank to check every 30 seconds. Used only for saved clips; does not start a live feed."
+            }
+          }
+        },
+        "description": "Optional source and clip-polling overrides for actual Sync Modules. Omit or use an empty list to inherit the default source and 30-second polling."
       }
     }
   },
@@ -406,7 +457,9 @@
       "type": "fieldset",
       "title": "HomeKit recording",
       "items": [
-        "hksvCameras"
+        "hksvSource",
+        "hksvCameras",
+        "syncModuleRecording"
       ]
     },
     {

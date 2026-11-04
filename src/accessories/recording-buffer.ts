@@ -5,6 +5,7 @@ export const RECORDING_BUFFER_LIMITS = Object.freeze({
   fragmentBytes: 8 * 1024 * 1024,
   cameraBytes: 32 * 1024 * 1024,
   aggregateBytes: 64 * 1024 * 1024,
+  fragments: 128,
   prebufferMs: 4000,
   timelineToleranceUs: 2000n,
 });
@@ -86,6 +87,7 @@ export class RecordingFragmentBuffer {
   #bytes = 0;
   #last?: Retained;
   #closed = false;
+  #finite = false;
   #durationUs = 0n;
   readonly prebufferUs: bigint;
   constructor(
@@ -110,12 +112,12 @@ export class RecordingFragmentBuffer {
     return this.#durationUs;
   }
   initialize(data: Buffer): void {
-    if (this.#closed || this.#initialization || !data.length || data.length > RECORDING_BUFFER_LIMITS.initializationBytes ||
+    if (this.#closed || this.#finite || this.#initialization || !data.length || data.length > RECORDING_BUFFER_LIMITS.initializationBytes ||
         !boxes(data, ['ftyp', 'moov'])) throw new RecordingBufferError('invalid_media');
     this.#initialization = this.#copy(data);
   }
   append(fragment: RecordingFragment): void {
-    if (this.#closed || !this.#initialization || !Number.isSafeInteger(fragment.sequence) || fragment.sequence < 0 || fragment.sequence > 0xffffffff ||
+    if (this.#closed || this.#finite || !this.#initialization || !Number.isSafeInteger(fragment.sequence) || fragment.sequence < 0 || fragment.sequence > 0xffffffff ||
         typeof fragment.startUs !== 'bigint' || typeof fragment.durationUs !== 'bigint' || fragment.startUs < 0n ||
         fragment.durationUs <= 0n || fragment.durationUs > BigInt(this.maximumFragmentMs) * 1000n || !fragment.keyframe ||
         !fragment.data.length || fragment.data.length > RECORDING_BUFFER_LIMITS.fragmentBytes || !boxes(fragment.data, ['moof', 'mdat'])) {
@@ -130,13 +132,25 @@ export class RecordingFragmentBuffer {
     }
     // Reclaim only media outside the retained prebuffer and outside any pinned event.
     this.#evict(fragment.durationUs);
+    if (this.#fragments.length >= RECORDING_BUFFER_LIMITS.fragments) throw new RecordingBufferError('buffer_exhausted');
     const owned: Retained = { ...fragment, endUs: fragment.startUs + fragment.durationUs, data: this.#copy(fragment.data), pins: this.#pin ? 1 : 0 };
     this.#fragments.push(owned); this.#last = owned;
     this.#durationUs += owned.durationUs;
     this.#pin?.fragments.push(owned);
   }
   pin(): RecordingBufferPin {
-    if (!this.ready || this.#pin) throw new RecordingBufferError('invalid_media');
+    if (!this.ready || this.#pin || this.#finite) throw new RecordingBufferError('invalid_media');
+    return this.#createPin();
+  }
+  /** Seal completed finite input, including a valid clip shorter than the live prebuffer. */
+  sealFinite(): RecordingBufferPin {
+    if (this.#closed || this.#finite || !this.#initialization || this.#fragments[0]?.sequence !== 0) {
+      throw new RecordingBufferError('invalid_media');
+    }
+    this.#finite = true;
+    return this.#pin ?? this.#createPin();
+  }
+  #createPin(): RecordingBufferPin {
     const fragments = [...this.#fragments];
     for (const fragment of fragments) fragment.pins++;
     const pin: Pin = { fragments, initialization: this.#initialization!, released: false, release: () => {
@@ -166,6 +180,7 @@ export class RecordingFragmentBuffer {
   }
   #erase(data: Buffer): void { data.fill(0); this.#bytes -= data.length; this.budget.release(data.length); }
   #evict(incomingDuration: bigint): void {
+    if (this.#finite) return;
     while (this.#fragments.length > 1) {
       const first = this.#fragments[0];
       if (first.pins || this.#durationUs - first.durationUs + incomingDuration < this.prebufferUs) break;

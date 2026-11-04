@@ -8,7 +8,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 
-from test_worker import ROOT, binary, config, frame, messages
+from test_worker import ROOT, binary, config, frame, messages, mp4_with_oversized_sample_table
 
 
 class MeasuredProcess(subprocess.Popen):
@@ -55,8 +55,15 @@ def windows_peak_working_set(process):
     return counters.PeakWorkingSetSize
 
 
-def measured_worker(data):
-    with MeasuredProcess([str(binary('blink-codec-worker'))],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE) as process:
+def measured_worker(data,*,address_space_limit=None):
+    options={}
+    if address_space_limit is not None:
+        if sys.platform!='linux':raise ValueError('address-space guard requires Linux')
+        def limit_address_space():
+            import resource
+            resource.setrlimit(resource.RLIMIT_AS,(address_space_limit,address_space_limit))
+        options['preexec_fn']=limit_address_space
+    with MeasuredProcess([str(binary('blink-codec-worker'))],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**options) as process:
         try:output,errors=process.communicate(data,timeout=30)
         except subprocess.TimeoutExpired:
             process.kill();process.communicate()
@@ -68,6 +75,17 @@ def measured_worker(data):
 
 
 class ResourceTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform=='linux','allocation-amplification probe requires a Linux address-space cap')
+    def test_finite_mp4_rejects_sample_table_amplification_before_large_allocation(self):
+        media=mp4_with_oversized_sample_table()
+        self.assertLess(len(media),10000)
+        data=config(output_mode=1,fragment_ms=4000,iframe_ms=1000,input_format=1)+frame(2,media)+frame(3)
+        result=measured_worker(data,address_space_limit=512*1024*1024)
+        self.assertEqual(result.returncode,2,result.stderr)
+        self.assertNotIn((3,b''),messages(result.stdout))
+        self.assertGreater(result.peak_rss_bytes,0)
+        self.assertLessEqual(result.peak_rss_bytes,64*1024*1024,
+            'tiny malformed sample tables must not amplify into large resident allocations')
     def test_representative_maximum_geometry_with_audio_decodes_and_records_peak(self):
         observations=[]
         for width,height,inner_width,inner_height in [(4096,2048,1920,960),(2560,1440,1920,1080),(1920,1920,1080,1080)]:

@@ -14,3 +14,4 @@ revision and environment.
 | [004: Session ownership](004-stream-session-ownership.md) | Generation ownership, cancellation and retirement |
 | [005: Media network feasibility](005-secure-media-network-feasibility.md) | Destination authority, native boundary and closure gates |
 | [006: Stream quality](006-stream-quality-authority.md) | Per-camera input and system-wide output authority |
+| [Native clip HSV](2026-11-03-native-clip-hsv.md) | Native USB discovery/replay, bounded jobs, permission cutovers and observed readiness |

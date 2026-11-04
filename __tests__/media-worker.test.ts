@@ -20,7 +20,7 @@ function fixture(stalled = false) {
 }
 const flush = async () => { for (let i = 0; i < 4; i++) { await Promise.resolve(); } };
 function consumptionAck(bytes: number): Buffer { const body = Buffer.alloc(4); body.writeUInt32BE(bytes); return output(6, body); }
-function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(3); body.writeUInt32BE(fps, 4); return output(1, body); }
+function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(4); body.writeUInt32BE(fps, 4); return output(1, body); }
 function sourceInfo(width: number, height: number, numerator = 0, denominator = 1): Buffer {
   const body = Buffer.alloc(16); [width, height, numerator, denominator].forEach((n, i) => body.writeUInt32BE(n, i * 4)); return output(7, body);
 }
@@ -245,6 +245,62 @@ function recordingBody(sequence = 0, dataBytes = 16): Buffer {
 }
 const recordingConfig = { width: 16, height: 16, fps: 15, bitrate: 100000, maxFrames: 9000, preset: 0 as const,
   profile: 0 as const, level: 0 as const, audioCodec: 0 as const, audioRate: 0 as const, audioBitrate: 0, fragmentMs: 4000, iFrameIntervalMs: 4000 };
+test('finite recording explicitly selects MP4 and strict audio coverage on the private wire', async () => {
+  const f=fixture(); const worker=new PrivateMediaWorker('/verified/worker',{},f.launch);
+  try {
+    const configuration={...recordingConfig,inputFormat:'mp4',audioTailPolicy:'strict'};
+    await worker.configureRecording(configuration as typeof recordingConfig);
+    expect(f.writes[0].readUInt32BE(8)).toBe(72);
+    expect(f.writes[0].readUInt32BE(12+16*4)).toBe(1);
+    expect(f.writes[0].readUInt32BE(12+17*4)).toBe(0);
+  } finally { await worker.stop(); }
+});
+function recordingSummaryBody(changes: { decoded?: number; selected?: number; encoded?: number; generated?: number; rate?: number; format?: number; span?: bigint } = {}): Buffer {
+  const body = Buffer.alloc(32);
+  [changes.decoded ?? 90, changes.selected ?? 90, changes.encoded ?? 90, changes.generated ?? 0, changes.rate ?? 0, changes.format ?? 1]
+    .forEach((n, i) => body.writeUInt32BE(n, i * 4));
+  body.writeBigUInt64BE(changes.span ?? 6000000n, 24); return body;
+}
+test('finite processing starts after END with its fixed budget while live drain keeps its shorter deadline', async () => {
+  jest.useFakeTimers(); try {
+    const f = fixture(); const worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
+    await worker.configureRecording({ ...recordingConfig, inputFormat: 'mp4' }); f.child.stdout.write(status(15)); await worker.whenReady;
+    const drained = expect(worker.whenMediaDrained).rejects.toThrow(); await worker.endMedia();
+    await jest.advanceTimersByTimeAsync(MEDIA_WORKER_LIMITS.requestMs); expect(worker.failed).toBe(false);
+    await jest.advanceTimersByTimeAsync(MEDIA_WORKER_LIMITS.finiteProcessingMs - MEDIA_WORKER_LIMITS.requestMs);
+    await drained; await worker.whenClosed; expect(worker.failed).toBe(true);
+  } finally { jest.useRealTimers(); }
+});
+test('finite summary reports validated counts, generated samples and conservative span before successful drain', async () => {
+  const f = fixture(); const summary = jest.fn();
+  const worker = new PrivateMediaWorker('/verified/worker', { recordingInit: async () => {}, recordingFragment: async () => {}, recordingSummary: summary }, f.launch);
+  await worker.configureRecording({ ...recordingConfig, inputFormat: 'mp4', audioCodec: 4, audioRate: 16000, audioBitrate: 32000, audioTailPolicy: 'pad-bounded' });
+  f.child.stdout.write(status(15)); await worker.endMedia();
+  f.child.stdout.write(output(8, Buffer.alloc(16))); f.child.stdout.write(output(9, recordingBody()));
+  f.child.stdout.write(output(14, recordingSummaryBody({ generated: 1600, rate: 16000, span: 6128000n })));
+  f.child.stdout.write(output(3, Buffer.alloc(0))); await worker.whenMediaDrained;
+  expect(summary).toHaveBeenCalledWith({ decodedVideoFrames: 90, selectedVideoFrames: 90, encodedVideoFrames: 90,
+    generatedAudioSamples: 1600, audioRate: 16000, inputFormat: 'mp4', preparedSpanUpperBoundUs: 6128000 });
+  const closed = worker.finishInput(); f.child.emit('close', 0); await closed; expect(worker.failed).toBe(false);
+});
+test.each(['missing', 'duplicate', 'decoded bound', 'selection', 'encoded mismatch', 'unexpected silence', 'wrong rate', 'wrong format', 'zero span', 'oversize span'])('finite summary rejects %s before successful media completion', async kind => {
+  const f = fixture(); const worker = new PrivateMediaWorker('/verified/worker', { recordingInit: async () => {}, recordingFragment: async () => {} }, f.launch);
+  await worker.configureRecording({ ...recordingConfig, inputFormat: 'mp4' }); f.child.stdout.write(status(15)); await worker.endMedia();
+  f.child.stdout.write(output(8, Buffer.alloc(16))); f.child.stdout.write(output(9, recordingBody()));
+  const changes = kind === 'decoded bound' ? { decoded: 9001 } : kind === 'selection' ? { selected: 91 } :
+    kind === 'encoded mismatch' ? { encoded: 89 } : kind === 'unexpected silence' ? { generated: 1 } :
+      kind === 'wrong rate' ? { rate: 16000 } : kind === 'wrong format' ? { format: 0 } :
+        kind === 'zero span' ? { span: 0n } : kind === 'oversize span' ? { span: 92000001n } : {};
+  if (kind !== 'missing') f.child.stdout.write(output(14, recordingSummaryBody(changes)));
+  if (kind === 'duplicate') f.child.stdout.write(output(14, recordingSummaryBody()));
+  f.child.stdout.write(output(3, Buffer.alloc(0))); await worker.whenClosed; expect(worker.failed).toBe(true);
+});
+test('old protocol STATUS cannot enable the current media worker contract', async () => {
+  const f = fixture(); const worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
+  await worker.configureRecording(recordingConfig);
+  const ready = expect(worker.whenReady).rejects.toThrow(); const old = status(15); old.writeUInt32BE(3, 12); f.child.stdout.write(old);
+  await ready; await worker.whenClosed; expect(worker.failed).toBe(true);
+});
 (realWorker ? test : test.skip).each([false, true])('native recording IPC drains genuine independently decodable fMP4, audio=%p', async audio => {
   const media = execFileSync(resolve('native/build/fixture'), [audio ? 'audio-latm-bundled' : 'video', '16', '16', '15', '90']);
   let init: Buffer | undefined; const fragments: Buffer[] = [];
@@ -265,7 +321,7 @@ test('recording accepts complete fragments above raw frame cap and preserves ord
   const init = jest.fn(async () => { order.push('init'); await new Promise<void>(resolve => { release = resolve; }); });
   const fragment = jest.fn(async (_fragment: RecordingFragment) => { order.push('fragment'); });
   const worker = new PrivateMediaWorker('/verified/worker', { recordingInit: init, recordingFragment: fragment }, f.launch);
-  await worker.configureRecording(recordingConfig); expect(f.writes[0].readUInt32BE(8)).toBe(64); expect(f.writes[0].readUInt32BE(64)).toBe(1);
+  await worker.configureRecording(recordingConfig); expect(f.writes[0].readUInt32BE(8)).toBe(72); expect(f.writes[0].readUInt32BE(64)).toBe(1);
   f.child.stdout.write(status(15)); f.child.stdout.write(output(8, Buffer.alloc(16)));
   const body = recordingBody(0, 2 * 1024 * 1024); const framed = output(9, body);
   for (let i = 0; i < framed.length; i += 65536) { f.child.stdout.write(framed.subarray(i, i + 65536)); }
@@ -354,7 +410,7 @@ test.each(['unready', 'live mode', 'short', 'invalid event', 'invalid score', 'u
 test('maximum codec frame tail coalesced with next frame remains valid across arbitrary fragments', async () => {
   const f = fixture(); const seen: Buffer[] = []; const worker = new PrivateMediaWorker('/verified/worker', { packet: async packet => { seen.push(Buffer.from(packet.data)); } }, f.launch);
   await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  const large = output(2, codecBody(MEDIA_WORKER_LIMITS.frameBytes - 60)); const status = Buffer.alloc(8); status.writeUInt32BE(3); status.writeUInt32BE(1, 4);
+  const large = output(2, codecBody(MEDIA_WORKER_LIMITS.frameBytes - 60)); const status = Buffer.alloc(8); status.writeUInt32BE(4); status.writeUInt32BE(1, 4);
   const next = output(1, status);
   f.child.stdout.write(large.subarray(0, large.length - 20));
   f.child.stdout.write(Buffer.concat([large.subarray(large.length - 20), next.subarray(0, 5)]));

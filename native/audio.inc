@@ -47,7 +47,27 @@ static void audio_convert(AVFrame *f,int flush,uint64_t *bytes) {
     audio_samples+=(uint64_t)n; if(audio_samples>300u*(uint32_t)audio_encoder->sample_rate)fatal("AUDIO_LIMIT");
     if(av_audio_fifo_write(audio_fifo,(void**)samples,n)!=n)fatal("AUDIO_MEMORY");
     av_freep(&samples[0]);av_freep(&samples);
-    audio_encode_fifo(flush,bytes);
+    audio_encode_fifo(flush==1,bytes);
+}
+static void audio_pad_tail(uint64_t *bytes) {
+    if(!audio_fifo || source_origin_us==AV_NOPTS_VALUE || recording_video_target_end==AV_NOPTS_VALUE)fatal("AUDIO_MISSING");
+    int64_t target=av_rescale_q(recording_video_target_end,AV_TIME_BASE_Q,audio_encoder->time_base);
+    int64_t end=audio_next_pts+av_audio_fifo_size(audio_fifo);
+    if(target<=end)return;
+    int64_t missing=target-end;
+    if(missing>2LL*audio_encoder->sample_rate)fatal("AUDIO_DISCONTINUITY");
+    while(missing>0) {
+        int n=missing>1024?1024:(int)missing,linesize;
+        uint8_t **samples=NULL;
+        if(av_samples_alloc_array_and_samples(&samples,&linesize,1,n,audio_encoder->sample_fmt,0)<0)fatal("MEMORY");
+        if(av_samples_set_silence(samples,0,n,1,audio_encoder->sample_fmt)<0 ||
+           av_audio_fifo_size(audio_fifo)+n>audio_encoder->sample_rate*2 ||
+           av_audio_fifo_write(audio_fifo,(void**)samples,n)!=n)fatal("AUDIO_MEMORY");
+        av_freep(&samples[0]);av_freep(&samples);
+        generated_audio_samples+=(uint32_t)n;audio_samples+=(uint32_t)n;missing-=n;
+        if(audio_samples>300u*(uint32_t)audio_encoder->sample_rate)fatal("AUDIO_LIMIT");
+        audio_encode_fifo(0,bytes);
+    }
 }
 static void audio_open_encoder(void) {
     if(audio_encoder)return;
@@ -105,7 +125,8 @@ static void audio_decode(AVPacket *p,uint64_t *bytes) {
 }
 static void audio_finish(uint64_t *bytes) {
     if(audio_decoder) {
-        audio_decode(NULL,bytes);audio_convert(NULL,1,bytes);
+        audio_decode(NULL,bytes);audio_convert(NULL,config[16] && config[17]?2:1,bytes);
+        if(config[16] && config[17]) { audio_pad_tail(bytes);audio_encode_fifo(1,bytes); }
         if(avcodec_send_frame(audio_encoder,NULL)<0) { fatal("AUDIO_ENCODE"); }
         audio_emit(bytes);
     } else if(config[6] && config[13])fatal("AUDIO_MISSING");

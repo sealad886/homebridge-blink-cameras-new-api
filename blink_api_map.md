@@ -1,10 +1,13 @@
 # Blink API Targets and Dynamic URL Construction
 
-This is the maintained, implementation-oriented map for Blink Android 57.1
-(`versionCode` 29715642) and plugin release `0.9.1`. It intentionally avoids
-duplicating the APK-wide endpoint catalog. See
-[`docs/blink_api_dossier.md`](docs/blink_api_dossier.md) for decompiled evidence,
-method signatures, and the full catalog.
+Last reviewed: 4 November 2026.
+
+This maintained implementation map describes the plugin's URL construction.
+Its original authentication evidence came from Blink Android 57.1 and release
+`0.9.1`; those bounded observations remain identified below. The canonical current
+static catalog is [Android 59.2](docs/api-contract/README.md). The
+[historical dossier](docs/blink_api_dossier.md) preserves the original decompiled
+evidence. Neither catalog replaces current typed runtime contracts or live proof.
 
 Blink's OAuth and REST interfaces are private and undocumented. Treat every
 host and request shape below as observed behavior, not a public compatibility
@@ -216,7 +219,40 @@ verification. Homebridge handles those as post-token recovery states, retains
 durable authentication, and uses user information plus the account homescreen
 as the final connection/device-discovery proof.
 
-## Legacy surfaces
+## Native USB clip discovery and download
+
+The upcoming saved-clip path uses the authenticated shared REST client. Its
+relative base is
+`v1/accounts/{account}/networks/{network}/sync_modules/{module}/local_storage`.
+The canonical methods in [`src/blink-api/client.ts`](src/blink-api/client.ts)
+perform this sequence under the recorder's persisted request context:
+
+| Stage | Relative route below that base |
+| --- | --- |
+| Request catalog | `POST manifest/request`, then poll the returned network command |
+| Read catalog | `GET manifest/request/{requestId}`; a pending response is not a complete catalog |
+| Prepare the exact clip | `POST manifest/{manifestId}/clip/request/{clipId}`, then poll its returned command |
+| Download prepared original | `GET` the same matching clip-request path as binary media |
+
+Do not replace this sequence with the older `local_storage/media/{commandId}`
+route. A delayed response is recovered through its existing request context,
+rather than blind duplicate POSTs. Native clips are never deleted by this path.
+
+[`src/blink-api/local-storage.ts`](src/blink-api/local-storage.ts) owns parsing
+and provider-name normalization. Clip IDs remain decimal strings; catalog size
+is a KiB-scale estimate, not an exact binary length. Command completion uses the
+actual `complete` value, not an assumed string status. Complete bounded binary
+responses bypass JSON/debug-body logging. Original capture strings remain part
+of native identity; the readiness projection alone normalizes display timestamps.
+
+The catalog is capped at 1,000 entries and need not be globally sorted or
+complete. The canonical recorder owns overlap, baselines, deduplication, cutovers
+and retries. Static route declarations, connected USB or camera storage flags do
+not prove a fresh file; see the [recording source evidence](docs/RECORDING.md#1-identify-the-native-storage-source)
+and [qualification record](docs/audits/2026-11-04-hsv-readiness-qualification.md).
+These references are not authorization for ad-hoc provider calls.
+
+## Legacy authentication surfaces
 
 The APK still contains a direct credential-shaped `OauthApi.postLogin` method;
 it is alternate/legacy evidence, not the supported Homebridge workflow, because

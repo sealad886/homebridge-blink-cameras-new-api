@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
 import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifact';
-import { Characteristic as HapCharacteristic } from 'hap-nodejs';
+import { Characteristic as HapCharacteristic } from '@homebridge/hap-nodejs';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 
 jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn() }));
@@ -1446,9 +1446,7 @@ describe('Accessory handlers', () => {
       jest.spyOn(service, 'getCharacteristic').mockReturnValue(characteristic as never);
       const changes: unknown[] = [];
       characteristic.on('change', change => changes.push(change.newValue));
-      const writeError = await new Promise<unknown>(resolve => {
-        characteristic.setValue(true, error => resolve(error ?? undefined));
-      });
+      const writeError = await characteristic.handleSetRequest(true).then(() => undefined, error => error);
       await nextTurn();
       expect(Boolean(writeError)).toBe(outcome === 'failure');
       expect(refresh).toHaveBeenCalledTimes(1);

@@ -5,12 +5,15 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { completeQualifiedPackage, QUALIFICATION_SELECTIONS } from './native-qualification.mjs';
+import { TARGETS } from './native-package.mjs';
 
 const entry = resolve('.github/scripts/publish.mjs');
 function fixture({ existing = false, existingImmutableRelease = false, failRelease = false, badSha = false, badTag = false, annotatedTag = false, staleChannel = false, version = '0.10.0-alpha.0', latest = '0.9.1' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'blink-publish-test-'));
   const packageBytes = Buffer.from('verified release fixture');
   const receipt = { name: 'test-package', version, sha: 'a'.repeat(40), integrity: 'sha512-' + createHash('sha512').update(packageBytes).digest('base64'), filename: join(root, 'release.tgz') };
+  receipt.native = { workers: Object.fromEntries(TARGETS.map(target => [target, createHash('sha256').update(target).digest('hex')])), source_bundle_sha256: 'e'.repeat(64) };
   const record = { name: receipt.name, gitHead: badSha ? 'b'.repeat(40) : receipt.sha, dist: { integrity: receipt.integrity } };
   const release = existingImmutableRelease ? {
     tag_name: `v${receipt.version}`,
@@ -22,8 +25,15 @@ function fixture({ existing = false, existingImmutableRelease = false, failRelea
   const statePath = join(root, 'state.json');
   writeFileSync(statePath, JSON.stringify(state));
   writeFileSync(receipt.filename, packageBytes);
-  writeFileSync(join(root, 'receipt.json'), JSON.stringify(receipt));
+  writeFileSync(join(root, 'package-receipt.json'), JSON.stringify(receipt));
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: receipt.name, version: receipt.version }));
+  const qualifications = join(root, 'received-qualifications'); mkdirSync(qualifications);
+  for (const target of TARGETS) writeFileSync(join(qualifications, target + '.json'), JSON.stringify({ schemaVersion: 2, target,
+    source_sha: receipt.sha, package_name: receipt.name, package_version: receipt.version, package_integrity: receipt.integrity,
+    source_bundle_sha256: receipt.native.source_bundle_sha256, worker_sha256: receipt.native.workers[target],
+    validation_receipt_sha256: 'd'.repeat(64), codec_receiver_verified: true, selections: [...QUALIFICATION_SELECTIONS] }));
+  completeQualifiedPackage({ artifactDirectory: root, qualificationDirectory: qualifications, sourceSha: receipt.sha,
+    mode: 'publish', ref: 'refs/heads/main', requestedVersion: receipt.version });
   writeFileSync(join(root, 'CHANGELOG.md'), '## ' + version + '\n\n- Fix token persistence and diagnostic safety.\n');
   const bin = join(root, 'bin');
   mkdirSync(bin);
@@ -73,13 +83,33 @@ process.stdout.write(output);
 process.exit(status);
 `;
   for (const command of ['git', 'npm', 'gh']) writeFileSync(join(bin, command), executable, { mode: 0o755 });
-  writeFileSync(join(root, 'fetch.cjs'), `const fs = require('node:fs'); global.fetch = async () => ({ ok: true, json: async () => JSON.parse(fs.readFileSync(process.env.TEST_STATE, 'utf8')).metadata });`);
+  writeFileSync(join(root, 'fetch.cjs'), `const fs = require('node:fs'); global.fetch = async () => { const state = JSON.parse(fs.readFileSync(process.env.TEST_STATE, 'utf8')); state.calls.push(['fetch','registry']); fs.writeFileSync(process.env.TEST_STATE, JSON.stringify(state)); return { ok: true, json: async () => state.metadata }; };`);
   return {
-    run: () => spawnSync(process.execPath, ['--require', join(root, 'fetch.cjs'), entry], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH, TEST_STATE: statePath, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.test/oidc', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc-token', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: receipt.sha, GITHUB_REPOSITORY: 'owner/repo', GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: '123', PACKAGE_RECEIPT: join(root, 'receipt.json'), PACKAGE_ARTIFACT_DIR: root, RELEASE_VERSION: receipt.version } }),
+    run: (overrides = {}) => spawnSync(process.execPath, ['--require', join(root, 'fetch.cjs'), entry], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH, TEST_STATE: statePath, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.test/oidc', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc-token', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: receipt.sha, GITHUB_REPOSITORY: 'owner/repo', GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: '123', PACKAGE_RECEIPT: join(root, 'package-receipt.json'), PACKAGE_ARTIFACT_DIR: root, RELEASE_MODE: 'publish', RELEASE_VERSION: receipt.version, ...overrides } }),
     state: () => JSON.parse(readFileSync(statePath, 'utf8')),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
+for (const environment of [{ RELEASE_MODE: undefined }, { RELEASE_MODE: 'build-only' }, { RELEASE_MODE: 'unknown' },
+  { GITHUB_REF: 'refs/heads/codex/hsv-saved-clip-prototype' }, { RELEASE_VERSION: '' }, { RELEASE_VERSION: '1.0.0-beta4' }]) {
+  test(`publisher refuses incomplete or nonpublication intent before every external stub: ${JSON.stringify(environment)}`, () => {
+    const f = fixture(); try {
+      const result = f.run(environment); assert.notEqual(result.status, 0);
+      assert.deepEqual(f.state().calls, [], 'No npm/git/gh/fetch call is allowed before explicit valid publication intent');
+    } finally { f.cleanup(); }
+  });
+}
+for (const mutation of ['aggregate-mode', 'qualification-receipt']) test(`publisher rechecks completed ${mutation} before external calls`, () => {
+  const f = fixture(); try {
+    const root = resolve(f.state().receipt.filename, '..');
+    const file = mutation === 'aggregate-mode' ? join(root, 'native-qualification-receipt.json')
+      : join(root, 'qualifications', TARGETS[0] + '.json');
+    const value = JSON.parse(readFileSync(file));
+    if (mutation === 'aggregate-mode') value.mode = 'build-only'; else value.validation_receipt_sha256 = 'b'.repeat(64);
+    writeFileSync(file, JSON.stringify(value));
+    assert.notEqual(f.run().status, 0); assert.deepEqual(f.state().calls, []);
+  } finally { f.cleanup(); }
+});
 test('rejects altered release artifact before publication', () => {
   const testCase = fixture();
   try {
@@ -98,7 +128,7 @@ for (const change of [
     const testCase = fixture();
     try {
       const state = testCase.state();
-      writeFileSync(join(resolve(state.receipt.filename, '..'), 'receipt.json'), JSON.stringify({ ...state.receipt, ...change }));
+      writeFileSync(join(resolve(state.receipt.filename, '..'), 'package-receipt.json'), JSON.stringify({ ...state.receipt, ...change }));
       const result = testCase.run();
       assert.notEqual(result.status, 0);
       assert(!testCase.state().calls.some(([command, action]) => command === 'npm' && action === 'publish'));

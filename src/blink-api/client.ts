@@ -12,6 +12,17 @@ import { BlinkAuth } from './auth';
 import { RequestOptions, OperationTimeoutError, checkRequestBudget, withinRequestBudget, budgetedDelay } from '../operation-budget';
 import { BlinkHttp, BlinkHttpError } from './http';
 import {
+  NativeStorageCommand,
+  NativeStorageManifestResult,
+  NativeStorageModule,
+  parseNativeStorageCommand,
+  parseNativeStorageManifest,
+  requireNativeClipId,
+  requireNativeManifestId,
+  requireNativeStorageModule,
+} from './local-storage';
+import { Buffer } from 'node:buffer';
+import {
   BLINK_PRODUCTION_BOOTSTRAP_TIERS,
   getRestBaseUrl,
   getSharedRestBaseUrl,
@@ -967,10 +978,64 @@ export class BlinkApi {
     requireRemoteId(networkId);
     requireRemoteId(commandId);
     const accountId = await this.ensureAccountId();
-    return this.sharedRootHttp.get<BlinkCommandStatus>(
+    const response = await this.sharedRootHttp.get<unknown>(
       `accounts/${accountId}/networks/${networkId}/commands/${commandId}`,
       options,
     );
+    if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('Blink returned invalid command status');
+    const status = response as BlinkCommandStatus;
+    if ((status.complete !== undefined && typeof status.complete !== 'boolean') ||
+      (status.status !== undefined && (typeof status.status === 'number' ? !Number.isFinite(status.status) :
+        !['complete', 'running', 'queued', 'failed'].includes(status.status))) ||
+      (status.polling_interval !== undefined && (!Number.isFinite(status.polling_interval) || status.polling_interval < 0))) {
+      throw new Error('Blink returned invalid command status');
+    }
+    return status;
+  }
+
+  /** Return command identity before polling so its context can be persisted. */
+  async requestLocalStorageManifest(module: NativeStorageModule, options?: RequestOptions): Promise<NativeStorageCommand> {
+    const target = requireNativeStorageModule(module);
+    const path = await this.nativeStoragePath(target, options);
+    const response = await this.sharedHttp.post<unknown>(`${path}/manifest/request`, undefined, [], { ...options, retryServerErrors: false });
+    return parseNativeStorageCommand(response, target.networkId);
+  }
+
+  async getLocalStorageManifest(module: NativeStorageModule, requestId: number, options?: RequestOptions): Promise<NativeStorageManifestResult> {
+    const target = requireNativeStorageModule(module);
+    requireRemoteId(requestId);
+    const path = await this.nativeStoragePath(target, options);
+    const response = await this.sharedHttp.get<unknown>(`${path}/manifest/request/${encodeURIComponent(String(requestId))}`, { ...options, responseBodyKind: 'rest' });
+    return parseNativeStorageManifest(response, target.networkId, requestId);
+  }
+
+  /** Preparation and command completion remain separate durable coordinator steps. */
+  async requestLocalStorageClip(module: NativeStorageModule, manifestId: string, clipId: string, options?: RequestOptions): Promise<NativeStorageCommand> {
+    const target = requireNativeStorageModule(module);
+    const suffix = this.nativeStorageClipSuffix(manifestId, clipId);
+    const path = await this.nativeStoragePath(target, options);
+    const response = await this.sharedHttp.post<unknown>(`${path}/${suffix}`, undefined, [], { ...options, retryServerErrors: false });
+    return parseNativeStorageCommand(response, target.networkId);
+  }
+
+  /** Fetch the original matching route; never use provider URLs or the old media/command route. */
+  async getPreparedLocalStorageClip(module: NativeStorageModule, manifestId: string, clipId: string, options?: RequestOptions): Promise<Buffer> {
+    const target = requireNativeStorageModule(module);
+    const suffix = this.nativeStorageClipSuffix(manifestId, clipId);
+    const path = await this.nativeStoragePath(target, options);
+    return this.sharedHttp.getBinary(`${path}/${suffix}`, options);
+  }
+
+  private nativeStorageClipSuffix(manifestId: string, clipId: string): string {
+    return `manifest/${encodeURIComponent(requireNativeManifestId(manifestId))}/clip/request/${encodeURIComponent(requireNativeClipId(clipId))}`;
+  }
+
+  private async nativeStoragePath(module: NativeStorageModule, options?: RequestOptions): Promise<string> {
+    checkRequestBudget(options);
+    const accountId = await withinRequestBudget(this.ensureAccountId(), options);
+    checkRequestBudget(options);
+    return `v1/accounts/${encodeURIComponent(String(accountId))}/networks/${encodeURIComponent(String(module.networkId))}`
+      + `/sync_modules/${encodeURIComponent(String(module.syncModuleId))}/local_storage`;
   }
 
   /**
@@ -989,7 +1054,7 @@ export class BlinkApi {
       checkRequestBudget(options);
       const status = await withinRequestBudget(this.getCommandStatus(networkId, commandId, options), options);
 
-      if (status.complete || status.status === 'complete') {
+      if (status.complete === true) {
         return status;
       }
 

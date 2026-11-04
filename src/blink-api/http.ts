@@ -13,6 +13,8 @@ import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
 import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { requireNativeClipId, requireNativeManifestId, requireNativeStorageModule } from './local-storage';
 import { isSensitiveDiagnosticKey, redactDiagnosticText as redactText, redactDiagnosticUrl as redactUrlForLogging } from './redaction';
 import {
   describeNetworkFailure,
@@ -26,6 +28,12 @@ export interface BlinkPostRequestOptions extends RequestOptions {
   /** Unit-returning endpoints do not require JSON. Body limits still apply. */
   responseType?: 'void';
 }
+
+export interface BlinkGetRequestOptions extends RequestOptions {
+  responseBodyKind?: 'rest' | 'command';
+}
+
+type InternalRequestOptions = Omit<BlinkPostRequestOptions, 'responseType'> & BlinkGetRequestOptions & { responseType?: 'void' | 'binary' };
 
 /**
  * Standard headers for all Blink API requests
@@ -158,8 +166,20 @@ export class BlinkHttp {
     }
   }
 
-  async get<T>(path: string, options?: RequestOptions): Promise<T> {
+  async get<T>(path: string, options?: BlinkGetRequestOptions): Promise<T> {
     return this.request<T>('GET', path, undefined, 0, true, [], options);
+  }
+
+  async getBinary(path: string, options?: RequestOptions): Promise<Buffer> {
+    // Only prepared relative clip routes receive the larger media budget.
+    const route = /^v1\/accounts\/[1-9][0-9]*\/networks\/([1-9][0-9]*)\/sync_modules\/([1-9][0-9]*)\/local_storage\/manifest\/([^/]+)\/clip\/request\/([^/]+)$/.exec(path);
+    if (!route) throw new Error('Blink binary request requires a prepared native clip route.');
+    requireNativeStorageModule({ networkId: Number(route[1]), syncModuleId: Number(route[2]) });
+    requireNativeManifestId(route[3]);
+    requireNativeClipId(route[4]);
+    return this.request<Buffer>('GET', path, undefined, 0, true, [], {
+      ...options, deadline: Math.min(options?.deadline ?? Infinity, Date.now() + 120_000), responseType: 'binary',
+    });
   }
 
   async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = [], options?: BlinkPostRequestOptions): Promise<T> {
@@ -189,7 +209,7 @@ export class BlinkHttp {
     attempt = 0,
     runPreflight = true,
     expectedErrorStatuses: readonly number[] = [],
-    options: BlinkPostRequestOptions = {},
+    options: InternalRequestOptions = {},
     retried406 = false,
   ): Promise<T> {
     checkRequestBudget(options);
@@ -221,7 +241,8 @@ export class BlinkHttp {
     }
 
     const startTime = Date.now();
-    const timeoutMs = Math.max(1, Math.min(30_000, (options.deadline ?? startTime + 30_000) - startTime));
+    const requestLimitMs = options.responseType === 'binary' ? 120_000 : 30_000;
+    const timeoutMs = Math.max(1, Math.min(requestLimitMs, (options.deadline ?? startTime + requestLimitMs) - startTime));
     const timeoutSignal = globalThis.AbortSignal.timeout(timeoutMs);
     const signal = options.signal ? globalThis.AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
     let response: Awaited<ReturnType<typeof fetch>>;
@@ -300,9 +321,27 @@ export class BlinkHttp {
       return undefined as T;
     }
 
+    // Media bytes never enter JSON parsing or response-body diagnostics.
+    if (options.responseType === 'binary') {
+      const rejectResponse = () => new BlinkHttpError('Blink API returned an invalid native clip response.', response.status, '', safeUrl, method,
+        undefined, undefined, 'response');
+      const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      if (response.status !== 200 || response.headers.has('content-range') || contentType !== 'video/mp4') {
+        await response.body?.cancel().catch(() => undefined);
+        throw rejectResponse();
+      }
+      const bytes = await readBoundedBody(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: 'clip' });
+      const length = response.headers.get('content-length');
+      let first = bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) ? 3 : 0;
+      while (first < bytes.length && [9, 10, 13, 32].includes(bytes[first])) first++;
+      if (!bytes.length || (length !== null && (!/^[0-9]+$/.test(length) || Number(length) !== bytes.length))
+        || first === bytes.length || [123, 91, 34, 60].includes(bytes[first])) throw rejectResponse();
+      return bytes as T;
+    }
+
     let responseData: T;
     try {
-      responseData = (await readBoundedJson(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: /(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command' })) as T;
+      responseData = (await readBoundedJson(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: options.responseBodyKind ?? (/(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command') })) as T;
     } catch {
       checkRequestBudget(options);
       const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,
@@ -311,8 +350,8 @@ export class BlinkHttp {
       throw error;
     }
 
-    if (this.debug) {
-      // Only log response body in debug mode (can be verbose)
+    if (this.debug && !path.includes('/local_storage/')) {
+      // Native catalogs contain private recording metadata and never enter diagnostics.
       this.logDebug(`[${requestId}] Response body:`, JSON.stringify(redactBody(responseData), null, 2).slice(0, 500) + '...');
     }
 
@@ -327,7 +366,7 @@ export class BlinkHttp {
     const cleaned = path.startsWith('/') ? path.substring(1) : path;
     const segments = cleaned.split('?')[0].split('/');
     for (let index = 0; index < segments.length - 1; index++) {
-      if (['accounts', 'clients', 'networks', 'cameras', 'owls', 'doorbells', 'commands'].includes(segments[index])
+      if (['accounts', 'clients', 'networks', 'sync_modules', 'cameras', 'owls', 'doorbells', 'commands'].includes(segments[index])
         && (!/^[1-9][0-9]*$/.test(segments[index + 1]) || !Number.isSafeInteger(Number(segments[index + 1])))) throw new Error('Blink API path contains an invalid identifier.');
     }
     return `${this.baseUrl}${cleaned}`;

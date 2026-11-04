@@ -9,6 +9,7 @@ import { Buffer } from 'node:buffer';
 import process from 'node:process';
 import console from 'node:console';
 import { TARGETS, collectSourceProof, regularFile, sha256, verifyNativePackage, verifyPackageIdentity } from './native-package.mjs';
+import { releaseIntent } from './release-policy.mjs';
 
 export const QUALIFICATION_SELECTIONS = Object.freeze(['audio-latm', 'audio-latm-bundled'].flatMap(mode =>
   ['opus:16000', 'opus:24000', 'pcma:8000', 'pcmu:8000'].map(audio => `${mode}:${audio}`)));
@@ -117,20 +118,63 @@ export async function qualifyPackage({ artifactDirectory, validationRoot, source
     const exercised = await exerciseInstalledCodec(installed, workerPath, validationRoot);
     // Confirm installed bytes and final npm bytes still match after all launches.
     verifyNativePackage(installed, proof); verifyPackageIdentity(artifact, receipt, sourceSha);
-    const result = { schemaVersion: 1, target, source_sha: sourceSha, package_integrity: receipt.integrity, worker_sha256: workerSha,
+    const result = { schemaVersion: 2, target, source_sha: sourceSha, package_name: installedManifest.name,
+      package_version: installedManifest.version, package_integrity: receipt.integrity, worker_sha256: workerSha,
       source_bundle_sha256: native.source_bundle_sha256, validation_receipt_sha256: sha256(regularFile(validationRoot, 'validation-receipt.json', 65536)),
       codec_receiver_verified: true, selections: exercised };
     writeFileSync(receiptPath, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' }); return result;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
-export function validateQualificationReceipts(rows, sourceSha, integrity, sourceBundleSha, workers) {
+export function validateQualificationReceipts(rows, sourceSha, integrity, sourceBundleSha, workers, name, version) {
+  assert.deepEqual(Object.keys(workers).sort(), [...TARGETS].sort(), 'Missing packaged worker identities');
   assert.equal(rows.length, TARGETS.length); assert.deepEqual(rows.map(row => row.target).sort(), [...TARGETS].sort());
   for (const row of rows) {
-    assert.equal(row.schemaVersion, 1); assert.equal(row.source_sha, sourceSha); assert.equal(row.package_integrity, integrity);
+    assert.equal(row.schemaVersion, 2); assert.equal(row.source_sha, sourceSha); assert.equal(row.package_integrity, integrity);
+    assert.equal(row.package_name, name); assert.equal(row.package_version, version);
     assert.equal(row.source_bundle_sha256, sourceBundleSha); assert.equal(row.codec_receiver_verified, true); assert.deepEqual(row.selections, selections);
     assert.match(row.worker_sha256, /^[a-f0-9]{64}$/); assert.match(row.validation_receipt_sha256, /^[a-f0-9]{64}$/);
-    if (workers) assert.equal(row.worker_sha256, workers[row.target], 'Qualified worker differs from publication artifact');
+    assert.equal(row.worker_sha256, workers[row.target], 'Qualified worker differs from publication artifact');
   }
+}
+
+function completionProof({ artifactDirectory, sourceSha, mode, ref, requestedVersion }) {
+  const receipt = JSON.parse(regularFile(artifactDirectory, 'package-receipt.json', 65536));
+  const intent = releaseIntent({ mode, ref, requestedVersion, manifestVersion: receipt.version });
+  verifyPackageIdentity(join(artifactDirectory, 'release.tgz'), receipt, sourceSha);
+  assert.match(receipt.native?.source_bundle_sha256, /^[a-f0-9]{64}$/, 'Missing source bundle identity');
+  const qualifications = join(artifactDirectory, 'qualifications');
+  assert.deepEqual(readdirSync(qualifications).sort(), TARGETS.map(target => `${target}.json`).sort());
+  const bytes = TARGETS.map(target => regularFile(qualifications, `${target}.json`, 65536));
+  const rows = bytes.map(value => JSON.parse(value));
+  validateQualificationReceipts(rows, sourceSha, receipt.integrity, receipt.native.source_bundle_sha256,
+    receipt.native.workers, receipt.name, receipt.version);
+  return { schemaVersion: 1, source_sha: sourceSha, mode: intent.mode, name: receipt.name, version: intent.version,
+    package_integrity: receipt.integrity, source_bundle_sha256: receipt.native.source_bundle_sha256,
+    workers: { ...receipt.native.workers }, qualified_targets: [...TARGETS],
+    qualification_receipts: Object.fromEntries(TARGETS.map((target, index) => [target,
+      { path: `qualifications/${target}.json`, sha256: sha256(bytes[index]) }])) };
+}
+
+/** Persist the same canonical package and all target evidence together, without publishing. */
+export function completeQualifiedPackage(options) {
+  const directory = options.qualificationDirectory;
+  assert.deepEqual(readdirSync(directory).sort(), TARGETS.map(target => `${target}.json`).sort());
+  const destination = join(options.artifactDirectory, 'qualifications'); mkdirSync(destination);
+  for (const target of TARGETS) {
+    regularFile(directory, `${target}.json`, 65536);
+    copyFileSync(join(directory, `${target}.json`), join(destination, `${target}.json`), constants.COPYFILE_EXCL);
+  }
+  const proof = completionProof(options);
+  writeFileSync(join(options.artifactDirectory, 'native-qualification-receipt.json'), JSON.stringify(proof, null, 2) + '\n', { flag: 'wx' });
+  return proof;
+}
+
+/** Recompute every binding before a credentialed publisher performs an external action. */
+export function verifyCompletedPackage(options) {
+  const stored = JSON.parse(regularFile(options.artifactDirectory, 'native-qualification-receipt.json', 65536));
+  const expected = completionProof(options);
+  assert.deepEqual(stored, expected, 'Completed package qualification differs from publication intent or evidence');
+  return expected;
 }
 function argumentsMap(argv) {
   assert(argv.length % 2 === 0, 'Expected explicit named arguments'); const options = {};
@@ -143,12 +187,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   else if (command === 'run') console.log(JSON.stringify(await qualifyPackage({ artifactDirectory: resolve(args['--artifact-directory']), validationRoot: resolve(args['--validation']),
     sourceRoot: resolve(args['--source-root']), sourceSha: args['--source-sha'], receiptPath: resolve(args['--receipt']) })));
   else if (command === 'aggregate') {
-    const artifactDirectory = resolve(args['--artifact-directory']); const receipt = JSON.parse(regularFile(artifactDirectory, 'package-receipt.json', 65536));
-    verifyPackageIdentity(join(artifactDirectory, 'release.tgz'), receipt, args['--source-sha']);
-    const directory = resolve(args['--qualifications']); assert.deepEqual(readdirSync(directory).sort(), TARGETS.map(target => `${target}.json`).sort());
-    const rows = TARGETS.map(target => JSON.parse(regularFile(directory, `${target}.json`, 65536)));
-    assert.deepEqual(Object.keys(receipt.native?.workers ?? {}).sort(), [...TARGETS].sort(), 'Missing packaged worker identities');
-    validateQualificationReceipts(rows, args['--source-sha'], receipt.integrity, receipt.native.source_bundle_sha256, receipt.native.workers);
-    console.log(JSON.stringify({ source_sha: receipt.sha, package_integrity: receipt.integrity, qualified_targets: TARGETS }));
+    console.log(JSON.stringify(completeQualifiedPackage({ artifactDirectory: resolve(args['--artifact-directory']),
+      qualificationDirectory: resolve(args['--qualifications']), sourceSha: args['--source-sha'], mode: args['--mode'],
+      ref: args['--ref'], requestedVersion: args['--version'] })));
   } else throw new Error('Expected prepare, run or aggregate');
 }

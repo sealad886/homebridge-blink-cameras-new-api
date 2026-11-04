@@ -1,9 +1,17 @@
-import { PlatformAccessory } from 'homebridge/lib/platformAccessory';
+import type { API } from 'homebridge';
+import path from 'node:path';
 import {
   CameraController, Characteristic, Formats, H264Level, H264Profile, HAPStatus, Perms, Service, SRTPCryptoSuites, uuid,
-} from 'hap-nodejs';
+} from '@homebridge/hap-nodejs';
 import { HomeKitAudit, logHomeKitEvent } from '../src/homekit-audit';
 import { createLogger } from './helpers/homebridge';
+
+// The host exposes this constructor through api.platformAccessory, not its
+// package's value exports. Load the installed host implementation for this test.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
+const { PlatformAccessory } = require(path.join(path.dirname(require.resolve('homebridge')), 'platformAccessory.js')) as {
+  PlatformAccessory: API['platformAccessory'];
+};
 
 const prefix = '[HomeKit audit] ';
 const connection = {} as NonNullable<Parameters<Characteristic['handleGetRequest']>[0]>;
@@ -131,7 +139,7 @@ describe('HomeKit audit on installed HAP', () => {
       expect.objectContaining({ event: 'Characteristic update', outcome: 'submitted to HAP', value: true }),
       expect.objectContaining({ event: 'Characteristic event', outcome: 'submitted to HAP', value: true }),
     ]);
-    characteristic.updateValue(false, undefined, { omitEventUpdate: true });
+    characteristic.updateValue(false, { omitEventUpdate: true });
     expect(records(log)).toHaveLength(2);
     audit.dispose();
   });

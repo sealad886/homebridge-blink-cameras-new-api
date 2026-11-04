@@ -13,7 +13,32 @@ describePosix('explicit secure media configuration migration', () => {
   let file: string;
   beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'blink-config-migration-')); file = join(directory, 'config.json'); });
   afterEach(() => rmSync(directory, { recursive: true, force: true }));
-  const run = (path: string) => spawnSync(process.execPath, [script, path], { encoding: 'utf8' });
+  const run = (path: string) => spawnSync(process.execPath, [script, path, '--apply'], { encoding: 'utf8' });
+
+  it('previews the saved-clip source conversion without writing a backup or changing the file', () => {
+    const bytes = '{ "platforms": [{"platform":"BlinkCameras", "hksvCameras":["camera:1"]}] }\n';
+    writeFileSync(file, bytes);
+    const result = spawnSync(process.execPath, [script, file], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect(readdirSync(directory)).toEqual(['config.json']);
+    expect(result.stdout).toMatch(/preview/i);
+  });
+
+  it('chooses saved clips only for implicit source and preserves explicit continuous/module settings', () => {
+    const source = { platforms: [{ platform: 'Other', hksvCameras: ['keep'] },
+      { platform: 'BlinkCameras', hksvCameras: ['camera:1'] },
+      { platform: 'BlinkCameras', hksvSource: 'continuous', syncModuleRecording: [{ syncModuleId: '20', source: 'continuous' }] }] };
+    const bytes = JSON.stringify(source); writeFileSync(file, bytes);
+    expect(run(file).status).toBe(0);
+    const converted = JSON.parse(readFileSync(file, 'utf8'));
+    expect(converted.platforms[0]).toEqual(source.platforms[0]);
+    expect(converted.platforms[1]).toEqual({ ...source.platforms[1], hksvSource: 'saved-clips' });
+    expect(converted.platforms[2]).toEqual(source.platforms[2]);
+    const files = readdirSync(directory);
+    expect(readFileSync(join(directory, files.find(name => name.includes('.secure-media-backup-'))!), 'utf8')).toBe(bytes);
+    expect(run(file).status).toBe(0); expect(readdirSync(directory)).toEqual(files);
+  });
 
   it('backs up exact original bytes privately and rewrites only Blink settings', () => {
     const other = { platform: 'OtherPlugin', ffmpegDebug: true, username: 'secret-user', audioCodec: 'aac-eld' };
@@ -40,7 +65,7 @@ describePosix('explicit secure media configuration migration', () => {
     const migrated = JSON.parse(readFileSync(file, 'utf8'));
     expect(migrated.bridge).toEqual(original.bridge);
     expect(migrated.platforms[0]).toEqual(other);
-    expect(migrated.platforms[1]).toEqual({ platform: 'BlinkCameras', password: 'secret-password', mediaDebug: true,
+    expect(migrated.platforms[1]).toEqual({ platform: 'BlinkCameras', hksvSource: 'saved-clips', password: 'secret-password', mediaDebug: true,
       audioCodec: 'opus', softwareEncodingPreset: 'ultrafast',
       audio: { codec: 'opus', enabled: true, bitrate: 24 }, video: { outputQuality: '720p15', maxBitrate: 4000 },
       custom: { preserve: true } });
