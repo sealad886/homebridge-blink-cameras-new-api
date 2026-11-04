@@ -21,6 +21,7 @@ function transform(document) {
   const platforms = (document.platforms ?? []).map(entry => {
     if (!object(entry) || entry.platform !== 'BlinkCameras') return entry;
     const next = { ...entry };
+    if (!Object.hasOwn(next, 'hksvSource')) next.hksvSource = 'saved-clips';
     for (const key of retired) delete next[key];
     if (Object.hasOwn(next, 'ffmpegDebug')) {
       if (!Object.hasOwn(next, 'mediaDebug')) next.mediaDebug = next.ffmpegDebug;
@@ -67,7 +68,7 @@ function writePrivate(filename, bytes, owner) {
   }
 }
 
-function migrate(filename) {
+function migrate(filename, apply) {
   if (process.platform === 'win32') {
     const error = new Error('POSIX owner-only permissions required');
     error.code = 'UNSUPPORTED_HOST';
@@ -84,6 +85,7 @@ function migrate(filename) {
     const bytes = readBounded(descriptor);
     const result = transform(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
     if (!result.changed) return false;
+    if (!apply) return true;
     // The exclusive backup is fully written and synced before any replacement is attempted.
     writePrivate(config + '.secure-media-backup-' + randomUUID() + '.json', bytes, opened);
     const destination = path.join(path.dirname(config), '.' + path.basename(config) + '.secure-media-' + randomUUID() + '.tmp');
@@ -102,15 +104,19 @@ function migrate(filename) {
   }
 }
 
-if (process.argv.length === 3 && process.argv[2] === '--help') {
-  process.stdout.write('Usage: node scripts/migrate-secure-media-config.cjs /explicit/config.json\nPOSIX only; backs up locally with owner-only permissions before atomic replacement.\n');
-} else if (process.argv.length !== 3) {
+const args = process.argv.slice(2);
+const apply = args.length === 2 && args[1] === '--apply';
+if (args.length === 1 && args[0] === '--help') {
+  process.stdout.write('Usage: node scripts/migrate-secure-media-config.cjs /explicit/config.json [--apply]\nDefault: preview only. --apply backs up exact bytes locally before atomic replacement (POSIX).\nImplicit recording sources become saved-clips; explicit continuous choices are preserved.\n');
+} else if (!(args.length === 1 && !args[0].startsWith('--')) && !apply) {
   process.stderr.write('Supply exactly one explicit configuration file. Use --help for usage.\n');
   process.exitCode = 2;
 } else {
   try {
-    const changed = migrate(process.argv[2]);
-    process.stdout.write(changed ? 'Migration complete; owner-only backup is beside the configuration file.\n' : 'No migration needed; configuration unchanged.\n');
+    const changed = migrate(args[0], apply);
+    process.stdout.write(changed ? apply ? 'Migration complete; owner-only backup is beside the configuration file.\n'
+      : 'Preview: configuration changes are available. Review source behavior, then rerun with --apply to back up and replace this file.\n'
+      : 'No migration needed; configuration unchanged.\n');
   } catch (error) {
     process.stderr.write(error.code === 'UNSUPPORTED_HOST' ? 'Migration unavailable: POSIX owner-only file permissions required.\n' :
       'Configuration migration failed; inspect local file permissions, JSON and any retained backup.\n');

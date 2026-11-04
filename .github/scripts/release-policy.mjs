@@ -1,5 +1,20 @@
 import assert from 'node:assert/strict';
 
+/** Resolve candidate intent without granting publication by omission. */
+export function releaseIntent({ mode = 'build-only', ref, requestedVersion = '', manifestVersion }) {
+  assert(mode === 'build-only' || mode === 'publish', 'Choose build-only or publish mode');
+  releaseTag(manifestVersion);
+  assert.equal(typeof requestedVersion, 'string', 'Requested version must be a string');
+  if (mode === 'publish') {
+    assert.equal(ref, 'refs/heads/main', 'Publication must run from main');
+    assert(requestedVersion.length > 0, 'Publication requires an explicit version');
+  }
+  const version = requestedVersion || manifestVersion;
+  releaseTag(version);
+  assert.equal(version, manifestVersion, 'Requested version differs from the source manifest');
+  return { mode, version };
+}
+
 export function releaseTag(version) {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.?(0|[1-9]\d*))?$/.exec(version);
   assert(match, `Unsupported release version: ${version}`);

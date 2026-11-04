@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Protocol version 3. Big-endian integers; header is magic[4], type32, length32.
+ * Protocol version 4. Big-endian integers; header is magic[4], type32, length32.
  * See README for codec metadata and lifecycle semantics. */
 #ifndef BLINK_PROTOCOL_H
 #define BLINK_PROTOCOL_H
-#define BLINK_PROTOCOL_VERSION 3u
+#define BLINK_PROTOCOL_VERSION 4u
 #define BLINK_INPUT_MAGIC "BMI1"
 #define BLINK_OUTPUT_MAGIC "BMO1"
 #define BLINK_HEADER_BYTES 12u
-#define BLINK_CONFIG_BYTES 64u
+#define BLINK_CONFIG_BYTES 72u
+#define BLINK_FINITE_INPUT_MAX (32u * 1024u * 1024u)
+#define BLINK_AUDIO_TAIL_MAX_US 2000000u
 #define BLINK_MP4_INIT_MAX (256u * 1024u)
 #define BLINK_MP4_FRAGMENT_MAX (8u * 1024u * 1024u)
 #define BLINK_MP4_METADATA_BYTES 24u
@@ -22,5 +24,6 @@ enum blink_input_type { BLINK_CONFIG=1, BLINK_MEDIA=2, BLINK_MEDIA_END=3, BLINK_
 enum blink_output_type { BLINK_STATUS=1, BLINK_VIDEO_PACKET=2, BLINK_OUTPUT_END=3,
                          BLINK_AUDIO_PACKET=4, BLINK_AUDIO_INFO=5, BLINK_MEDIA_CONSUMED=6, BLINK_SOURCE_INFO=7,
                          BLINK_MP4_INIT=8, BLINK_MP4_FRAGMENT=9, BLINK_PROTECTION_ACK=10,
-                         BLINK_PROTECTED_RTP=11, BLINK_PROTECTED_RTCP=12, BLINK_VIDEO_MOTION=13 };
+                         BLINK_PROTECTED_RTP=11, BLINK_PROTECTED_RTCP=12, BLINK_VIDEO_MOTION=13,
+                         BLINK_RECORDING_SUMMARY=14 };
 #endif

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { releaseTag, releaseNotes, registryMetadata, waitForPublished, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
+import { releaseTag, releaseNotes, releaseIntent, registryMetadata, waitForPublished, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
 import { verifyReleaseArtifact } from './release-artifact.mjs';
+import { verifyCompletedPackage } from './native-qualification.mjs';
 
-assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Releases must run from main');
+assert.equal(process.env.RELEASE_MODE, 'publish', 'Publication requires explicit publish mode');
+releaseIntent({ mode: process.env.RELEASE_MODE, ref: process.env.GITHUB_REF, requestedVersion: process.env.RELEASE_VERSION,
+  manifestVersion: JSON.parse(readFileSync('package.json', 'utf8')).version });
 
 const receipt = verifyReleaseArtifact({
   receiptPath: process.env.PACKAGE_RECEIPT,
@@ -13,6 +16,8 @@ const receipt = verifyReleaseArtifact({
   expectedVersion: process.env.RELEASE_VERSION,
 });
 const { name, version, sha, integrity, filename } = receipt;
+verifyCompletedPackage({ artifactDirectory: process.env.PACKAGE_ARTIFACT_DIR, sourceSha: process.env.GITHUB_SHA,
+  mode: process.env.RELEASE_MODE, ref: process.env.GITHUB_REF, requestedVersion: process.env.RELEASE_VERSION });
 assert.equal(sha, process.env.GITHUB_SHA);
 assert.equal(version, process.env.RELEASE_VERSION, 'Requested version differs from the source manifest');
 const tag = releaseTag(version);

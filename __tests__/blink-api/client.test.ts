@@ -1604,4 +1604,17 @@ describe('BlinkApi', () => {
 
     await expect(api.pollCommand(1, 2, 1)).rejects.toThrow('Blink command 2 failed');
   });
+  it('uses the explicit completion flag with numeric native command status', async () => {
+    const { api, http } = createApi(); api.accountId = 1;
+    http.get.mockResolvedValueOnce({ complete: false, status: 0, polling_interval: 0 })
+      .mockResolvedValueOnce({ complete: true, status: 0 });
+    expect(await api.pollCommand(4, 99, 2)).toMatchObject({ complete: true, status: 0 });
+    expect(http.get).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([{ complete: 'true' }, { complete: true, status: Infinity }, { status: {} }])('rejects malformed command status (%#)', async reply => {
+    const { api, http } = createApi(); api.accountId = 1; http.get.mockResolvedValue(reply);
+    await expect((api as unknown as BlinkApi).getCommandStatus(4, 99)).rejects.toThrow('invalid command status');
+  });
+
 });

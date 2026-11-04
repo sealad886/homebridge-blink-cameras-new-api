@@ -1,6 +1,6 @@
 # Configuration reference
 
-Last reviewed: 2 November 2026.
+Last reviewed: 4 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -23,7 +23,7 @@ The editor separates five tasks:
 | --- | --- |
 | Overview & connection | Sign in, inspect stored-session facts and test the Blink connection. |
 | Cameras in Home | Choose systems/cameras, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional feed limits. Excluded cameras remain visible here so you can include them again. |
-| HomeKit recording | Choose discovered cameras and review recording, motion and privacy prerequisites. |
+| HomeKit recording | Choose discovered cameras and review per-camera source, observed Home policy, initial clip scan and job progress. Selected-camera activity appears first; full setup remains available in a disclosure. |
 | Live viewing & sound | Allow live viewing, choose a picture preset and allow shared HomeKit audio. |
 | Advanced & troubleshooting | Polling, previews, exact tuning values, diagnostics and immediate account maintenance. |
 
@@ -48,19 +48,39 @@ Then use the camera's settings in Apple Home to allow **Stream & Allow Recording
 and choose recording-audio permission. HomeKit recordings are viewed in Apple
 Home; the plugin does not choose an iCloud Drive folder or confirm a saved clip.
 
-Recording permission starts continuous capture with a four-second memory buffer
-and local video-motion detection. This increases battery and network use. New
-motion events require the Blink system to be armed and camera motion enabled.
-Disarming Blink or turning camera motion off suppresses new events; the
-background feed and buffer may continue. Turning recording off in Home cancels
-recording capture and clears the buffer. Turning the camera off in Home also
-blocks live viewing and snapshots.
+**Saved Blink clips** (`hksvSource: "saved-clips"`) is the default. It uses native
+Blink motion and completed Sync Module USB clips without an idle live feed.
+Manual Live View, including opening a camera in Home, can still start a feed; see
+the [recording guide](RECORDING.md#source-and-sync-module-settings).
+Confirm that Blink is producing native **Local Storage** clips: daily **Cloud
+Clip Backup** to USB is a different storage mode, and a connected USB drive or a
+cloud clip in the Blink app does not prove this source is available. See
+[Blink's storage guidance](https://support.blinkforhome.com/en_US/514890).
 
-**Read motion events from Blink** only reads Blink cloud clip events. It does
-not control HSV's local motion detector. Live-view enablement is independent
-from recording-camera selection. Camera audio applies to both; Apple Home's
-recording-audio permission also applies. Live picture presets do not set the
-Home hub's recording format.
+**Continuous feed** is an explicit opt-in source. While Home recording is allowed,
+it keeps a live feed with a four-second memory buffer and local video-motion
+detection, increasing battery and network use even without motion. Disarming
+Blink or turning camera motion off suppresses new events but may leave this feed
+running. Turn recording off in Home to stop recording capture; turning the camera
+off in Home also blocks live viewing and snapshots.
+
+Follow the [recording guide](RECORDING.md) for the ordinary setup and fresh test.
+Wait for each camera's **Initial clip scan** before creating that event; existing
+catalog entries become a baseline rather than imported history. **Recording setup
+and activity** shows observed Home permissions or unknown values, effective audio,
+the scan and one coherent job timeline. Ring-only saved replay is unsupported;
+audio-off is valid video-only recording. Desired/applied settings revisions and
+report freshness prevent an unapplied draft from appearing ready. Missing/stale
+reports do not block a valid Save. Home playback remains a manual check around
+the delayed offer/import time.
+
+**Read motion events from Blink** reads cloud clip events. It is independent of
+completed USB clip discovery and continuous recording's local video-motion
+detector. `pollInterval` controls state/cloud polling; USB checks default to 30
+seconds and use the separate **Recording by Sync Module** interval. Live-view
+enablement remains independent from recording selection. Camera audio applies to
+both; Home's recording-audio permission must also allow it. Live picture presets
+do not set the Home hub's recording format.
 
 There is no four-camera recording-selection limit. The global upstream feed
 capacity is the known, included camera count; an offline camera remains known.
@@ -114,12 +134,14 @@ Add a platform entry to your Homebridge `config.json`:
 | `tier` | No | `prod` | Last Blink tier discovered from `v1/users/tier_info`; do not guess it from locale |
 | `sharedTier` | No | - | Advanced manual override for shared REST routing; defaults to `tier` and is intentionally hidden from the UI schema |
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
-| `pollInterval` | No | `60` | Seconds between state polls (min 15) |
+| `pollInterval` | No | `60` | Seconds between state/cloud-motion polls (min 15); completed USB clip checks use their separate module interval |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
-| `enableMotionPolling` | No | `true` | Read Blink cloud clip events; independent of HSV local video motion and capture permission |
+| `enableMotionPolling` | No | `true` | Read Blink cloud clip events for motion state; independent of completed USB clip discovery and continuous recording's local video motion |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
 | `hksvCameras` | No | `[]` | Cameras offered for HSV recording; the discovered picker writes qualified type/ID values. Home permissions and restart are additional steps. |
+| `hksvSource` | No | `saved-clips` | Default recording source: native completed Sync Module USB clips, or explicit opt-in `continuous` live capture; see the [recording guide](RECORDING.md#source-and-sync-module-settings) |
+| `syncModuleRecording` | No | `[]` | Optional entries with required `syncModuleId` and optional `source` / `pollIntervalSeconds`. Source inherits `hksvSource`; saved-clip polling defaults to 30 seconds and accepts whole numbers from 15–300. Omit entries to keep defaults implicit. |
 | `syncModuleFeedLimits` | No | `[]` | Optional `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. |
 | `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |

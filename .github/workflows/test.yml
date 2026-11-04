@@ -20,11 +20,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
@@ -45,7 +46,7 @@ jobs:
           VERIFY_PACKAGE_JAVASCRIPT_ONLY: '1'
         run: node .github/scripts/verify-package.mjs
       - name: Upload coverage to Codecov
-        if: matrix.node-version == 20
+        if: matrix.node-version == 22
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -165,10 +166,15 @@ jobs:
           name: native-source-inputs-${{ github.sha }}
           path: native/build/deps/downloads
       - name: Verify pinned sources and build private static prefix
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          # Assembly disabled explicitly for prototype CI; performance is not release evidence.
-          python native/dependencies/prepare.py --build-local --jobs 3 --disable-assembly --prefix-file native/build/deps/ci-prefix.txt
+          build_args=(--build-local --jobs 3)
+          if [[ "$NATIVE_TARGET" != linux-arm64 && "$NATIVE_TARGET" != darwin-arm64 ]]; then
+            build_args+=(--disable-assembly)
+          fi
+          python native/dependencies/prepare.py "${build_args[@]}" --prefix-file native/build/deps/ci-prefix.txt
       - name: Build and test private-pipe native prototype
         run: |
           set -euo pipefail

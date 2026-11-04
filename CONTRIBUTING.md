@@ -1,6 +1,6 @@
 # Contributing
 
-Last reviewed: 23 October 2026.
+Last reviewed: 4 November 2026.
 
 This guide owns contributor setup, local checks, and the pull-request workflow.
 For installation and operation, start with the [README](README.md). See the
@@ -8,7 +8,12 @@ For installation and operation, start with the [README](README.md). See the
 
 ## Development setup
 
-Use Node.js **20, 22, or 24**, matching `package.json` and the CI matrix, and npm.
+Use Node.js **22, 24, or 26**, matching `package.json` and the CI matrix, and npm.
+The development lockfile pins Homebridge **2.5.0** and scoped
+`@homebridge/hap-nodejs` **2.3.0**. Use a supported current LTS patch with that host;
+the plugin's public Homebridge minimum remains a separate package constraint.
+Select your project runtime explicitly rather than changing global aliases or
+another installation's runtime.
 A Blink account is unnecessary for unit tests; real-provider and Home testing
 require a separately configured test environment.
 
@@ -80,7 +85,10 @@ checklist in this guide.
 The main source areas are `src/platform.ts` (platform integration),
 `src/accessories/` (HomeKit handlers and media lifecycle), `src/blink-api/`
 (provider and authentication operations), and `src/homebridge-ui/` (settings and
-sign-in UI). Behavioral tests live in `__tests__/`; API-contract extraction and
+sign-in UI). `src/native-clip-recorder.ts` owns native discovery/jobs/media;
+`src/recording-readiness.ts` composes the shared report, and the platform publishes
+it. Reuse those owners for status and recovery rather than adding another recorder
+or archive. Behavioral tests live in `__tests__/`; API-contract extraction and
 validation are described in the [contract guide](docs/api-contract/README.md).
 
 ## Issues and pull requests
@@ -107,3 +115,8 @@ keywords in the default-branch PR that delivers that resolution.
 Version changes, release review, publication, and installation follow
 [docs/RELEASE.md](docs/RELEASE.md). A development build or merged PR does not by
 itself authorize publication or changes to a live Homebridge host.
+The canonical workflow defaults to a build-only five-target candidate; publishing
+requires explicit publish mode, main and an exact version. Physical testing uses
+the [ordinary GUI recording runbook](docs/RECORDING.md#set-up-and-test-the-first-recording)
+on a separately authorized test installation. A standalone diagnostic does not
+establish that normal onboarding works.

@@ -10,9 +10,9 @@
 
 ## Languages & Stack
 
-- TypeScript / JavaScript: Node 20/22/24, Homebridge, HAP, Jest, FFmpeg media pipeline.
+- TypeScript / JavaScript: Node 22/24/26; development Homebridge 2.5/HAP 2.3, Jest and the packaged media pipeline.
 - Python: bounded Pi evidence collection/reporting and repository checks.
-- C: native media prototypes; not accepted secure-worker runtime.
+- C: integrated private codec worker; published protocol3 and upcoming finite-MP4 protocol4 source have separate artifact qualification.
 - Build: npm, TypeScript, GitHub Actions; npm trusted publishing.
 - Persistence: existing configuration and authentication stores; no SQL database.
 
@@ -23,7 +23,7 @@
 
 ## Non-Negotiable Rules
 
-Repository/user instructions control. Preserve unrelated files, branches and worktrees. No new worktree. Host configuration, installation, restarts, pairing and persistence changes require explicit operator authorization. Preserve mandatory TLS, destination, resource and secret-redaction guards. F05/F06 remain open with the existing documented stable-specific disposition. Do not enable experimental talkback. Keep synthetic, release-artifact and physical acceptance evidence distinct. Use existing GitHub issues, review and CI publishing workflows. Retain explicitly requested evidence; do not duplicate canonical project plans here.
+Repository/user instructions control. Preserve unrelated files, branches and worktrees. No new worktree. Host configuration, installation, restarts, pairing and persistence changes require explicit operator authorization. Preserve mandatory TLS, destination, resource and secret-redaction guards. Finding dispositions belong to their source-specific release evidence; do not infer current status from an older bootstrap. Do not enable experimental talkback. Keep source, release-artifact and physical acceptance evidence distinct. Use existing GitHub issues, review and canonical CI build/publication workflows. Retain requested evidence; do not duplicate project plans here.
 
 ## Delivery state
 
@@ -31,6 +31,9 @@ The [security ledger](docs/plans/security-hardening.md) owns current acceptance
 and finding dispositions; GitHub issues and release PRs own outstanding work.
 Do not pin a task, camera name, host or RC-specific checklist in this bootstrap.
 Use the [release guide](docs/RELEASE.md) for promotion and observation criteria.
+The [recording guide](docs/RECORDING.md) owns normal setup/testing/recovery;
+[current HSV qualification](docs/audits/2026-11-04-hsv-readiness-qualification.md)
+owns the boundary between local/Pi evidence and retained Home recordings.
 
 ## Roster Selection
 

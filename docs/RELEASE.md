@@ -1,9 +1,13 @@
 # Release Guide
 
-All packages are built from reviewed GitHub source and published by
-`.github/workflows/publish.yml`. Installations, including prereleases and rollback,
-use exact versions from `https://registry.npmjs.org`; do not copy builds or install
-Git URLs or local tarballs on Homebridge.
+Last reviewed: 4 November 2026.
+
+`.github/workflows/publish.yml` owns both build-only candidates and publication
+from reviewed committed source. Its default is **build-only**; a source push or
+ordinary dispatch does not publish. Normal installations, prereleases and
+rollback use exact registry versions. Separately authorized isolated testing may
+use the exact qualified candidate tarball with its receipts; it must not silently
+replace an ordinary production installation or be confused with a registry version.
 
 ## Configure npm trusted publishing
 
@@ -52,6 +56,11 @@ See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and
 
 ## Prepare a version
 
+Version preparation is required for a new publication, not for a private
+build-only candidate. A candidate may retain the source version, including
+`1.0.0-beta3`; its source SHA and integrity identify its different bytes. Never
+attempt to overwrite that published version with the candidate.
+
 Use a minor bump for new compatible capabilities, a patch for compatible fixes.
 The supported progression is `X.Y.Z-alpha.0`, `X.Y.Z-beta.0`, `X.Y.Z-rc.0`, then
 `X.Y.Z`. Increment the prerelease number after changes within a stage. Freeze the
@@ -82,19 +91,45 @@ verified workers and corresponding sources staged by the canonical package job;
 an ordinary source checkout cannot substitute JavaScript-only smoke for it. Use a dedicated clean clone when the working checkout
 contains unrelated user files; never stash or delete those files to satisfy it.
 
-Publication requires an explicit dispatch on main with the exact version input.
-An ordinary source push does not publish. The workflow validates the requested
-version against the manifest and runs clean-install, lint, tests, build, and
-package loadability checks on Node.js 20, 22, and 24 before publication.
+The workflow first validates intent without publishing credentials, then runs
+clean-install, lint, tests, build and package smoke on Node.js 22, 24 and 26. A
+build-only run accepts no version input, or an exact valid version matching the
+checked-out manifest. It never edits the manifest. Publication additionally
+requires explicit `publish` mode, main and a nonempty exact version.
+
+After a coherent candidate commit and push have been separately approved, a
+build-only run can select that committed branch:
 
 ```sh
-gh workflow run publish.yml --ref main -f version=VERSION
+gh workflow run publish.yml --ref codex/hsv-saved-clip-prototype -f mode=build-only
 ```
 
-The release gates run before a read-only job installs dependencies, builds,
-verifies, and uploads the package. A separate `npm-release` job downloads the
-artifact, checks its integrity, source SHA, package name, and requested version,
-then obtains a short-lived publishing credential through OIDC. It
+Verify the run's head SHA against the intended commit. Every checkout and native
+receipt uses that SHA; local uncommitted files are not a valid corresponding-source
+substitute. This example does not authorize committing, pushing, dispatching or
+installing. Candidate generation precedes physical Home acceptance, so there is
+no circular requirement to test an unbuilt package first.
+
+Successful completion uploads `qualified-package-RUN_ID`, containing the exact
+`release.tgz`, package receipt, five target qualification receipts under
+`qualifications/`, and `native-qualification-receipt.json`. The aggregate binds
+source SHA, mode, actual package identity/integrity, source bundle, worker hashes
+and every qualification receipt. Preserve the complete artifact: hosted uploads
+are retained for seven days. Build-only has read-only repository permissions,
+no persisted checkout credentials and no release environment/OIDC grant.
+
+After release approval and the reviewed version change on main, publication is:
+
+```sh
+gh workflow run publish.yml --ref main -f mode=publish -f version=VERSION
+```
+
+Read-only jobs build/package the canonical five-target runtime, qualify that exact
+installed tar on every target, then complete the aggregate. Only explicit publish
+mode on main reaches the `npm-release` environment with repository write and OIDC
+permissions. It downloads the completed artifact, recomputes its proof and checks
+integrity, source SHA, package name and exact version before external publisher
+calls. It
 validates registry responses, serializes releases, publishes the verified package,
 and records source SHA and registry integrity. Existing versions must match their original source;
 a failed post-publish release-record step can be retried at that same revision.
@@ -118,10 +153,11 @@ must not move `latest` backwards.
 
 ## Native artifact preparation and qualification
 
-The secure media release pipeline is `gates → package → qualify (five targets) → publish`.
-The version remains blocked until the matching reviewed source and all required
-automated, security, performance and operator gates have supporting evidence.
-Adding these jobs does not supply a pass or authorize workflow dispatch.
+The pipeline is `intent → gates → package → qualify (five targets) → complete`,
+followed by `publish` only for explicit main publication. Candidate construction
+requires the automated artifact gates; publication/promotion additionally requires
+the applicable reviewed operator acceptance. A successful local suite does not
+supply five genuine target artifacts or authorize workflow dispatch.
 
 The reusable source gates build Linux x64/arm64, macOS arm64/x64 and Windows x64
 candidates. Each `native-candidate-TARGET-SHA` artifact contains one worker and its
@@ -174,16 +210,58 @@ a successful run for its exact final source and npm integrity. The
 [26 October beta checkpoint](plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
 records the observed five-host qualification for `0.11.0-beta.0`.
 
-The privileged main-only OIDC job requires all five jobs and independently checks
-their receipts against the exact publication tarball, source SHA, source-bundle
-hash and target worker hashes before publishing. It neither rebuilds nor repacks
-the qualified tarball. Candidate/distribution build receipts retain
+The read-only completion job requires the package and all five qualification
+jobs, aggregates their receipts and preserves them with the tar. The privileged
+explicit-publish/main-only job independently recomputes those bindings before
+publishing. It neither rebuilds nor repacks the qualified tarball.
+Candidate/distribution build receipts retain
 `distribution_ready: false`; separate qualification receipts record the observed
 target results without changing the immutable product bytes. Qualification alone
 does not close findings or record physical acceptance; the hardening ledger owns
 the combined F05/F06 remediation evidence and disposition. Preserve any release
 hold until its remaining gates are verified. Registry publication and subsequent
 authorized Homebridge installation/physical acceptance remain distinct stages.
+
+Published beta3 already contains protocol-3 workers for all five targets. The
+upcoming finite-MP4 USB recording path uses protocol 4 and needs five matching
+new artifacts plus corresponding source. A manually host-qualified worker and
+standalone replay result do not satisfy that normal candidate-package gate.
+See [current HSV qualification](audits/2026-11-04-hsv-readiness-qualification.md)
+for actual runtime and physical evidence.
+
+## Normal GUI end-to-end candidate test
+
+Use a separately authorized test host and an owner-only backup of configuration,
+authentication and accessory persistence. Record the candidate's run/source SHA,
+tar integrity, package/worker version and actual Homebridge/Node runtime. Preserve
+all candidate receipts. Install only that exact candidate; do not substitute
+protocol-3 assets or point the normal loader at a development executable.
+
+Follow the [recording setup and first-test runbook](RECORDING.md#set-up-and-test-the-first-recording)
+using the normal five-section GUI and existing camera accessories. No standalone
+diagnostic, special startup flags or second pairing is part of this acceptance.
+Record these outcomes:
+
+- Storage arrangement identified, selections/source/module correct, Save and
+  normal child restart work, and Home configuration/permissions are observed.
+- Each camera completes its initial clip scan before the fresh event. A new
+  native clip matches the test, downloads, prepares and is offered with coherent
+  capture/import times.
+- Home lists the event around offer time and plays its beginning, middle and end;
+  export important test footage for duration/content checks when practical.
+  ACK alone is not retention acceptance.
+- Recording/camera/audio changes cancel or constrain work as intended; clips
+  from a disallowed period do not catch up later. An uncertain offer is not
+  automatically duplicated.
+- A normal child restart preserves selection, identity and deduplication. Missing
+  or stale status does not prevent valid Save; recovery guidance matches reality.
+- A modest intended multi-camera burst has visible queue/expiry behavior. Record
+  the actual cadence and gaps; it does not establish sustained four-camera
+  continuous coverage or measured battery-life savings.
+
+Keep source/package qualification, native provider capture, Home retention and
+capacity results separate. Update the qualification record with actual outcomes;
+do not turn a pending physical check into a pass because a candidate launched.
 
 ## Homebridge upgrade and acceptance
 

@@ -228,7 +228,7 @@ export interface BlinkCommandResponse {
  */
 export interface BlinkCommandStatus {
   complete?: boolean;
-  status?: 'complete' | 'running' | 'queued' | 'failed';
+  status?: number | 'complete' | 'running' | 'queued' | 'failed';
   status_msg?: string;
   polling_interval?: number;
   commands?: BlinkCommandResponse[];

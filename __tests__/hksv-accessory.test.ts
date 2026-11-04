@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { test } from '@jest/globals';
-import * as hap from 'hap-nodejs';
+import * as hap from '@homebridge/hap-nodejs';
 import type { HAP, PlatformAccessory } from 'homebridge';
 import { OwlAccessory } from '../src/accessories/owl';
 import { DoorbellAccessory } from '../src/accessories/doorbell';
@@ -8,6 +8,8 @@ import { BlinkCameraSource, resolveStreamingConfig } from '../src/accessories/ca
 import { startRecordingSession } from '../src/accessories/recording-session';
 import { BlinkCameraRecordingDelegate, type RecordingSessionCallbacks } from '../src/accessories/camera-recording';
 import type { BlinkCamerasPlatform } from '../src/platform';
+import { RecordingBufferBudget, RecordingFragmentBuffer } from '../src/accessories/recording-buffer';
+import type { PreparedSavedClip } from '../src/accessories/saved-clip-preparation';
 import { createLogger } from './helpers/homebridge';
 
 jest.mock('../src/accessories/recording-session', () => ({ startRecordingSession: jest.fn() }));
@@ -36,7 +38,7 @@ function selectedConfiguration(triggers = 1): string {
   return hap.encode(1, recording, 2, video, 3, audio).toString('base64');
 }
 
-function fixture(hksvEnabled = true, kind: 'camera' | 'doorbell' = 'camera') {
+function fixture(hksvEnabled = true, kind: 'camera' | 'doorbell' = 'camera', source: 'saved-clips' | 'continuous' = 'continuous') {
   const sessions: Array<{ callbacks: RecordingSessionCallbacks; audio: boolean; signal: globalThis.AbortSignal; stop: jest.Mock }> = [];
   jest.mocked(startRecordingSession).mockImplementation(async (_subscribe, _configuration, audio, callbacks, signal) => {
     let close!: () => void; const whenClosed = new Promise<void>(resolve => { close = resolve; });
@@ -48,6 +50,8 @@ function fixture(hksvEnabled = true, kind: 'camera' | 'doorbell' = 'camera') {
     isHksvEnabled: () => hksvEnabled, isOperational: () => true, getDeviceInputQuality: () => 'auto', getDeviceMotionTimeout: () => 1000,
     isNetworkArmed: jest.fn().mockReturnValue(true),
     acquireCameraFeed: () => ({ release: jest.fn() }),
+    getRecordingSelection: () => ({ source, available: true, pollIntervalSeconds: 30, syncModuleId: '10' }),
+    registerRecordingTarget: jest.fn(), notifyRecordingPolicyChanged: jest.fn(), unregisterRecordingTarget: jest.fn().mockResolvedValue(undefined),
   } as unknown as BlinkCamerasPlatform;
   const accessory = Object.assign(new hap.Accessory('Test Camera', hap.uuid.generate(`hksv-${hksvEnabled}`)), { context: {} });
   const configure = jest.spyOn(accessory, 'configureController');
@@ -81,6 +85,36 @@ test('an accessory outside the opt-in has no recording services or recording cap
   expect(startRecordingSession).not.toHaveBeenCalled(); f.handler.triggerMotion();
   expect(f.motion.getCharacteristic(hap.Characteristic.MotionDetected).value).toBe(true);
   await f.handler.shutdown();
+});
+
+test('saved mode publishes one delayed event only after finite admission and streams its complete short clip on the existing sensor', async () => {
+  const f = fixture(true, 'camera', 'saved-clips'); await f.activate();
+  expect(startRecordingSession).not.toHaveBeenCalled(); f.handler.triggerMotion();
+  expect(f.motion.getCharacteristic(hap.Characteristic.MotionDetected).value).toBe(false);
+  const recording = f.management!.delegate as BlinkCameraRecordingDelegate, policy = recording.getPolicySnapshot();
+  const budget = new RecordingBufferBudget(), buffer = new RecordingFragmentBuffer(budget);
+  buffer.initialize(Buffer.concat([box('ftyp'), box('moov')]));
+  for (let i = 0; i < 2; i++) buffer.append({ sequence: i, startUs: BigInt(i) * 1000000n, durationUs: 1000000n,
+    keyframe: true, data: Buffer.concat([box('moof'), box('mdat')]) });
+  const pin = buffer.sealFinite(); let disposed = false;
+  const prepared: PreparedSavedClip = { buffer, pin, fragments: pin.fragments, configuration: policy.configuration.value!, audioActive: false,
+    sourceInfo: { width: 640, height: 360, fpsNumerator: 15, fpsDenominator: 1 },
+    summary: { decodedVideoFrames: 30, selectedVideoFrames: 30, encodedVideoFrames: 30, generatedAudioSamples: 0,
+      audioRate: 0, inputFormat: 'mp4', preparedSpanUpperBoundUs: 2000000 }, sourceSha256: 'a'.repeat(64), preparedSha256: 'b'.repeat(64),
+    preparedSpanUpperBoundUs: 2000000n, get disposed() { return disposed; }, dispose: () => { disposed = true; buffer.clear(); } };
+  let pinnedBeforeMotion = false;
+  f.motion.getCharacteristic(hap.Characteristic.MotionDetected).on('change', change => {
+    if (change.newValue) pinnedBeforeMotion = recording.status.state === 'recording' && budget.bytes > 0;
+  });
+  const result = recording.deliverSavedClip(prepared, { jobKey: 'fixture', cameraKey: 'camera:2', clipIdentity: 'opaque',
+    capturedAt: new Date(Date.now() - 60000).toISOString() }, policy, new AbortController().signal);
+  expect(pinnedBeforeMotion).toBe(true);
+  const packets = []; for await (const packet of recording.handleRecordingStreamRequest(14)) packets.push(packet);
+  expect(packets).toHaveLength(3); expect(packets.filter(packet => packet.isLast)).toHaveLength(1);
+  recording.acknowledgeStream(14); await jest.advanceTimersByTimeAsync(2000);
+  expect((await result).status).toBe('delivered'); expect(budget.bytes).toBe(0);
+  expect(f.motion.getCharacteristic(hap.Characteristic.MotionDetected).value).toBe(false);
+  expect(startRecordingSession).not.toHaveBeenCalled(); await f.handler.shutdown();
 });
 
 test('opt-in links the existing motion service and remains inactive until HomeKit selects and enables recording', async () => {

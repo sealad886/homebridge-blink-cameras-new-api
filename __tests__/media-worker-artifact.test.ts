@@ -13,7 +13,7 @@ let manifest: MediaWorkerManifest;
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'blink-worker-artifact-')));
-  manifest = { schemaVersion: 1, protocolVersion: 3, targets: {} as MediaWorkerManifest['targets'] };
+  manifest = { schemaVersion: 1, protocolVersion: 4, targets: {} as MediaWorkerManifest['targets'] };
   for (const target of targets) {
     const path = `native/${target}/worker${target.startsWith('win32') ? '.exe' : ''}`;
     const bytes = Buffer.from(`synthetic ${target}`);
@@ -69,7 +69,7 @@ it.each([
   expect(() => resolveMediaWorkerArtifact(root, invalid, 'linux', 'x64')).toThrow();
 });
 
-it.each([undefined, 2, 4])('refuses workers from an incompatible IPC protocol (%s)', protocolVersion => {
+it.each([undefined, 2, 3, 5])('refuses workers from an incompatible IPC protocol (%s)', protocolVersion => {
   const incompatible: Record<string, unknown> = { ...manifest, protocolVersion };
   if (protocolVersion === undefined) delete incompatible.protocolVersion;
   expect(() => resolveMediaWorkerArtifact(root, incompatible, 'linux', 'x64')).toThrow('Packaged media worker unavailable');

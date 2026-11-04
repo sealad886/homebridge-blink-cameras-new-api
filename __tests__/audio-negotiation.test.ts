@@ -1,9 +1,8 @@
-import * as realHap from 'hap-nodejs';
+import * as realHap from '@homebridge/hap-nodejs';
 import { Buffer } from 'node:buffer';
 import { HAP } from 'homebridge';
-import { decode, decodeWithLists } from 'hap-nodejs/dist/lib/util/tlv';
-import { AccessoryInfo } from 'hap-nodejs/dist/lib/model/AccessoryInfo';
-import { IdentifierCache } from 'hap-nodejs/dist/lib/model/IdentifierCache';
+import { AccessoryInfo, decode, decodeWithLists } from '@homebridge/hap-nodejs';
+import { IdentifierCache } from '@homebridge/hap-nodejs/dist/lib/model/IdentifierCache.js';
 import { BlinkCameraStreamingConfigInput, createCameraControllerOptions, refreshCameraAudioCapabilities } from '../src/accessories/camera-source';
 
 const hap = realHap as unknown as HAP;
@@ -105,9 +104,11 @@ describe('Real HAP audio negotiation', () => {
         characteristicIds: service.characteristics.map((characteristic) => characteristic.iid),
       }))).toEqual(identities);
 
-      changed.mockClear();
       const again = controller({ audio: { codec: 'opus' } });
       again.initWithServices(saved);
+      // Host restoration may emit its own service events. Repeating our refresh
+      // with unchanged capabilities must not add one or change the config hash.
+      changed.mockClear();
       refreshCameraAudioCapabilities(hap, streamServices(again));
       expect(info.checkForCurrentConfigurationNumberIncrement(advertisedConfiguration(streamServices(again)))).toBe(false);
       expect(changed).not.toHaveBeenCalled();

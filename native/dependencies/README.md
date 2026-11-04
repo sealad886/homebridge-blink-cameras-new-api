@@ -1,6 +1,14 @@
 # Pinned native source inputs
 
 See the [private media worker overview](../README.md) for scope and navigation.
+Last reviewed: 4 November 2026.
+
+Published beta3 contains five protocol-3 workers and corresponding source. The
+upcoming protocol-4 source needs new matching artifacts; old receipts cannot
+qualify changed bytes. The [canonical release workflow](../../docs/RELEASE.md#native-artifact-preparation-and-qualification)
+builds and packages all five targets, qualifies the installed exact tar and
+preserves the aggregate in build-only mode before any physical test. Only
+explicit publish mode on main can reach publication credentials.
 
 ## Windows system runtime notices
 
@@ -104,11 +112,13 @@ H.264/AAC/AAC-LATM parsing/decoding, libx264/libopus/PCM-law/AAC encoding, swsca
 swresample. GPL and version3 are enabled. Nonfree and libfdk_aac are disabled and
 checked after configure. Built-in AAC encoder is used; no FDK package is fetched.
 
-The protocol-3 recording source adds MP4 packaging and AAC-LC recording. Its
-five-target artifacts and corresponding-source archive must be regenerated and
-qualified before distribution. The existing published protocol-2 receipts do not
-qualify this source change. The runtime input whitelist remains MPEG-TS; compiling
-the MOV demuxer for the checker does not expose another worker input format.
+Protocol-4 adds finite MP4 input through bounded owned memory, alongside streaming
+MPEG-TS. The existing pinned recipe already includes the MOV demuxer and MP4 muxer;
+no new codec or external executable is needed. Its five-target artifacts and
+corresponding-source archive must be regenerated and qualified before
+distribution. Historical protocol-2/3 receipts do not qualify the changed worker
+or authorize a runtime fallback. See the [worker contract](../README.md#protocol-version-4)
+for forced-format, no-secondary-I/O, byte-credit and finite processing limits.
 
 Selected linked worker configuration is GPL-3.0-or-later; x264 headers explicitly
 say GPL-2.0-or-later. Opus and libSRTP carry BSD-style three-clause licenses. Checked
@@ -171,9 +181,10 @@ still build from the unchanged verified source pins. Actual package inventory is
 retained in the dependency receipt; compiler/tool versions are not claimed fixed
 by the action pin. No local package installation or service change is involved.
 
-`--disable-assembly` disables x264/FFmpeg assembly explicitly for candidate CI,
-avoiding assembler installation. This sacrifices performance and does not establish
-production real-time behavior. Opus may still use compiler-supported intrinsics.
+The `linux-arm64` and `darwin-arm64` candidate lanes enable compiler-supported
+x264/FFmpeg ARM assembly. The x64 and Windows lanes retain `--disable-assembly`,
+avoiding additional assembler installation. Opus may still use compiler-supported
+intrinsics. These build choices do not establish production real-time behavior.
 Verification decoders for Opus/PCMA/PCMU are selected to independently decode worker
 output; worker input remains explicitly restricted to H.264/AAC/AAC-LATM.
 

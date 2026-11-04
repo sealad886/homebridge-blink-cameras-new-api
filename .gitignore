@@ -75,6 +75,8 @@ homebridge-ui/server.js.map
 !/scripts/deploy-to-pi.sh
 !/scripts/blink-api-contract/
 !/scripts/blink-api-contract/**
+!/scripts/hsv-clip-replay/
+!/scripts/hsv-clip-replay/**
 # IDE and tracking files
 .copilot-tracking/
 *.txt

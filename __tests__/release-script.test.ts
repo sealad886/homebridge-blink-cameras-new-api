@@ -34,6 +34,13 @@ exit 0
     join(binDir, 'npm'),
     `#!/usr/bin/env bash
 printf 'npm %s\n' "$*" >> "$COMMAND_LOG_PATH"
+if [[ "$1" == "run" && "$2" == "build" ]]; then
+  touch built-test-artifact
+fi
+if [[ "$1" == "test" && ! -f built-test-artifact ]]; then
+  printf 'Tests require build output\n' >&2
+  exit 1
+fi
 if [[ "$1" == "pack" ]]; then
   touch sealad886-homebridge-blink-cameras-new-api-0.6.0.tgz
   printf 'sealad886-homebridge-blink-cameras-new-api-0.6.0.tgz\n'
@@ -92,7 +99,7 @@ describe('release script', () => {
     }
   });
 
-  it('runs validation checks without publishing or pushing', () => {
+  it('builds required test artifacts and validates without publishing or pushing', () => {
     const result = runReleaseScript();
     workspaceDirs.push(result.workspaceDir);
 
@@ -100,12 +107,12 @@ describe('release script', () => {
     expect(result.commands).toEqual([
       'git status --porcelain',
       'npm run lint',
-      'npm test',
       'npm run clean',
       'npm run build',
+      'npm test',
       'npm pack',
     ]);
-    expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f version=1.2.3-alpha.0');
+    expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f mode=publish -f version=1.2.3-alpha.0');
   });
 
   it('stops preflight on unrelated changes and preserves their contents', () => {
@@ -125,5 +132,6 @@ describe('release script', () => {
     expect(result.status).toBe(1);
     expect(result.commands).toEqual([]);
     expect(`${result.stdout}${result.stderr}`).toContain('The --yes local publish mode has been removed.');
+    expect(result.stderr).toContain('gh workflow run publish.yml --ref main -f mode=publish -f version=1.2.3-alpha.0');
   });
 });

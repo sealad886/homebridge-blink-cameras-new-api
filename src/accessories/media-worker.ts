@@ -6,6 +6,7 @@ import { withinRequestBudget } from '../operation-budget';
 import type { MediaPacketProtector } from './media-output';
 
 export const MEDIA_WORKER_LIMITS = Object.freeze({ frameBytes: 1024 * 1024, inputBytes: 65536,
+  finiteInputBytes: 32 * 1024 * 1024, finiteProcessingMs: 120000,
   recordingInitBytes: 256 * 1024, recordingFragmentBytes: 8 * 1024 * 1024, recordingQueueBytes: 16 * 1024 * 1024,
   outstanding: 1, requestMs: 2000, stopMs: 1000, lifetimeMs: 300000, lifetimeOutputBytes: 64 * 1024 * 1024 });
 export interface CodecPacket {
@@ -21,12 +22,21 @@ export interface MediaWorkerCallbacks {
   recordingInit?: (data: Buffer, signal: globalThis.AbortSignal) => Promise<void>;
   /** Borrowed media: copy retained data; buffers are erased after callback completion or abort. */
   recordingFragment?: (fragment: RecordingFragment, signal: globalThis.AbortSignal) => Promise<void>;
+  recordingSummary?: (summary: RecordingSourceSummary) => void;
+}
+export type MediaInputFormat = 'mpegts' | 'mp4';
+export type AudioTailPolicy = 'strict' | 'pad-bounded';
+export interface RecordingSourceSummary {
+  decodedVideoFrames: number; selectedVideoFrames: number; encodedVideoFrames: number;
+  generatedAudioSamples: number; audioRate: number; inputFormat: 'mp4';
+  preparedSpanUpperBoundUs: number;
 }
 export interface VideoMotionEvent { atUs: number; score: number; }
 export interface RecordingFragment { sequence: number; startUs: number; durationUs: number; keyframeStart: true; data: Buffer; }
 export interface RecordingWorkerConfiguration {
   width: number; height: number; fps: number; bitrate: number; maxFrames: number; preset: 0 | 1; profile: 0 | 1 | 2; level: 0 | 1 | 2;
   audioCodec: 0 | 4; audioRate: 0 | 16000 | 24000; audioBitrate: number; fragmentMs: number; iFrameIntervalMs: number;
+  inputFormat?: MediaInputFormat; audioTailPolicy?: AudioTailPolicy;
 }
 type RecordingOutput = { data: Buffer; fragment?: RecordingFragment };
 export interface SourceVideoInfo { width: number; height: number; fpsNumerator: number; fpsDenominator: number; }
@@ -55,6 +65,7 @@ export class PrivateMediaWorker {
   #sourceSeen = false;
   #lastMotionAt?: number; #motionEvents = 0; #maximumMotionEvents = 0;
   #recording = false; #fragmentMs = 0; #recordingInitSeen = false; #fragmentSequence = 0; #fragmentEnd?: number;
+  #finiteInput = false; #padAudioTail = false; #audioRate = 0; #summarySeen = false;
   #recordingQueue: RecordingOutput[] = []; #recordingBytes = 0;
   #activeRecording?: RecordingOutput;
   #resolveReady!: () => void; #rejectReady!: (error: Error) => void;
@@ -143,22 +154,29 @@ export class PrivateMediaWorker {
       }
     }
   }
-  async configure(values: readonly number[]): Promise<void> {
+  async configure(values: readonly number[], input: { format?: MediaInputFormat; audioTailPolicy?: AudioTailPolicy } = {}): Promise<void> {
+    const format = input.format ?? 'mpegts', tail = input.audioTailPolicy ?? 'strict';
     if (this.#configured || values.length !== 16 || values.some(n => !Number.isInteger(n) || n < 0 || n > 0xffffffff) || values[13] > 1) {
       throw new Error('Invalid codec configuration');
     }
-    const payload = Buffer.alloc(64); values.forEach((value, i) => payload.writeUInt32BE(value, i * 4));
+    if (!['mpegts', 'mp4'].includes(format) || !['strict', 'pad-bounded'].includes(tail) ||
+        (format === 'mp4' && values[13] !== 1) || (tail === 'pad-bounded' && (format !== 'mp4' || values[6] !== 4))) {
+      throw new Error('Invalid finite input configuration');
+    }
+    const payload = Buffer.alloc(72);
+    [...values, format === 'mp4' ? 1 : 0, tail === 'pad-bounded' ? 1 : 0].forEach((value, i) => payload.writeUInt32BE(value, i * 4));
     const write = this.#write(1, payload); this.#configured = true; this.#fps = values[2]; this.#recording = values[13] === 1; this.#fragmentMs = values[14];
+    this.#finiteInput = format === 'mp4'; this.#padAudioTail = tail === 'pad-bounded'; this.#audioRate = values[7];
     this.#maximumMotionEvents = values[4];
     this.#readyTimer = globalThis.setTimeout(() => this.#fail(), MEDIA_WORKER_LIMITS.requestMs); await write;
   }
   configureRecording(config: RecordingWorkerConfiguration): Promise<void> {
     return this.configure([config.width, config.height, config.fps, config.bitrate, config.maxFrames, config.preset,
       config.audioCodec, config.audioRate, config.audioCodec ? 1 : 0, config.audioBitrate, config.profile, config.level,
-      0, 1, config.fragmentMs, config.iFrameIntervalMs]);
+      0, 1, config.fragmentMs, config.iFrameIntervalMs], { format: config.inputFormat, audioTailPolicy: config.audioTailPolicy });
   }
   async media(bytes: Buffer): Promise<void> {
-    if (!this.#configured || this.#inputEnded || this.#mediaConsumption || !bytes.length || bytes.length > MEDIA_WORKER_LIMITS.inputBytes || this.#inputBytes + bytes.length > 128 * 1024 * 1024) { throw new Error('Invalid media input'); }
+    if (!this.#configured || this.#inputEnded || this.#mediaConsumption || !bytes.length || bytes.length > MEDIA_WORKER_LIMITS.inputBytes || this.#inputBytes + bytes.length > (this.#finiteInput ? MEDIA_WORKER_LIMITS.finiteInputBytes : 128 * 1024 * 1024)) { throw new Error('Invalid media input'); }
     let pending!: MediaConsumption;
     const consumed = new Promise<void>((resolve, reject) => {
       pending = { remaining: bytes.length, dispatched: false, resolve, reject,
@@ -177,7 +195,7 @@ export class PrivateMediaWorker {
   async endMedia(): Promise<void> {
     if (!this.#configured || this.#inputEnded || this.#mediaConsumption) { throw new Error('Invalid media EOF'); }
     const write = this.#write(3, Buffer.alloc(0)); this.#inputEnded = true;
-    this.#drainTimer = globalThis.setTimeout(() => this.#fail(), MEDIA_WORKER_LIMITS.requestMs); await write;
+    this.#drainTimer = globalThis.setTimeout(() => this.#fail(), this.#finiteInput ? MEDIA_WORKER_LIMITS.finiteProcessingMs : MEDIA_WORKER_LIMITS.requestMs); await write;
   }
   #mediaDrained(): void {
     if (this.#ended && !this.#consuming && !this.#codecQueue.length && !this.#recordingQueue.length && !this.#stopping) {
@@ -238,7 +256,7 @@ export class PrivateMediaWorker {
   #maximum(type: number): number | undefined {
     return ({ 1: 8, 2: MEDIA_WORKER_LIMITS.frameBytes - 12, 3: 0, 4: MEDIA_WORKER_LIMITS.frameBytes - 12,
       5: 4116, 6: 4, 7: 16, 8: MEDIA_WORKER_LIMITS.recordingInitBytes, 9: MEDIA_WORKER_LIMITS.recordingFragmentBytes + 24,
-      10: 4, 11: 2066, 12: 2070, 13: 16 } as Record<number, number>)[type];
+      10: 4, 11: 2066, 12: 2070, 13: 16, 14: 32 } as Record<number, number>)[type];
   }
   async #parse(): Promise<void> {
     if (this.#processing || this.#stopping) { return; } this.#processing = true;
@@ -276,6 +294,16 @@ export class PrivateMediaWorker {
               (this.#lastMotionAt !== undefined && atUs - this.#lastMotionAt < 1000000)) { throw new Error(); }
           this.#lastMotionAt = atUs; this.#motionEvents++;
           this.callbacks.motion?.({ atUs, score }, this.#cancel.signal);
+        } else if (type === 14) {
+          if (!this.#finiteInput || !this.#recording || !this.#ready || !this.#inputEnded || this.#ended || this.#summarySeen || size !== 32) { throw new Error(); }
+          const decodedVideoFrames = body.readUInt32BE(0), selectedVideoFrames = body.readUInt32BE(4), encodedVideoFrames = body.readUInt32BE(8);
+          const generatedAudioSamples = body.readUInt32BE(12), audioRate = body.readUInt32BE(16);
+          const preparedSpan = body.readBigUInt64BE(24);
+          if (!decodedVideoFrames || decodedVideoFrames > this.#maximumMotionEvents || !selectedVideoFrames || selectedVideoFrames > decodedVideoFrames ||
+              encodedVideoFrames !== selectedVideoFrames || audioRate !== this.#audioRate || body.readUInt32BE(20) !== 1 ||
+              generatedAudioSamples > 2 * audioRate || (!this.#padAudioTail && generatedAudioSamples) || preparedSpan < 1n || preparedSpan > 92000000n) { throw new Error(); }
+          this.#summarySeen = true;
+          this.callbacks.recordingSummary?.({ decodedVideoFrames, selectedVideoFrames, encodedVideoFrames, generatedAudioSamples, audioRate, inputFormat: 'mp4', preparedSpanUpperBoundUs: Number(preparedSpan) });
         } else if (type === 8 || type === 9) {
           if (!this.#recording || !this.#ready || this.#ended || !size || this.#recordingQueue.length >= 256 || this.#recordingBytes + size > MEDIA_WORKER_LIMITS.recordingQueueBytes) { throw new Error(); }
           let item: RecordingOutput;
@@ -300,10 +328,10 @@ export class PrivateMediaWorker {
             stream: type === 2 ? 1 : 2, keyframe: body.readUInt32BE(24) === 1, skipStart: body.readUInt32BE(40), skipEnd: body.readUInt32BE(44), data: body.subarray(48) });
           void this.#consume();
         } else if (type === 1) {
-          if (size !== 8 || !this.#configured || this.#ready || body.readUInt32BE(0) !== 3 || this.#fps < 1 || this.#fps > 30 || body.readUInt32BE(4) !== this.#fps) { throw new Error(); }
+          if (size !== 8 || !this.#configured || this.#ready || body.readUInt32BE(0) !== 4 || this.#fps < 1 || this.#fps > 30 || body.readUInt32BE(4) !== this.#fps) { throw new Error(); }
           this.#ready = true; globalThis.clearTimeout(this.#readyTimer); this.#resolveReady();
         } else if (type === 3) {
-          if (size || this.#ended || !this.#inputEnded || (this.#recording && !this.#fragmentSequence)) { throw new Error(); }
+          if (size || this.#ended || !this.#inputEnded || (this.#recording && !this.#fragmentSequence) || (this.#finiteInput && !this.#summarySeen)) { throw new Error(); }
           this.#ended = true; this.#mediaDrained();
         }
         else if (type === 5) {

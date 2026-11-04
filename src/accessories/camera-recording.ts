@@ -1,6 +1,10 @@
 import { Buffer } from 'node:buffer';
 import type { CameraRecordingConfiguration, CameraRecordingDelegate, CameraRecordingOptions, RecordingPacket } from 'homebridge';
 import type { VideoMotionEvent } from './media-worker';
+import type { RecordingSource } from '../settings';
+import type { PreparedSavedClip } from './saved-clip-preparation';
+import type { NativeClipCameraTarget, NativeClipDeliveryMetadata, NativeClipDeliveryResult, NativeClipPolicySnapshot } from '../native-clip-recorder';
+import { observedHomeBoolean, unknownHomeRecordingObservation, type HomeRecordingObservation } from '../recording-readiness';
 import {
   RecordingBufferBudget, RecordingBufferError, RecordingFragmentBuffer, sharedRecordingBufferBudget,
   type RecordingBufferPin, type RecordingFragment,
@@ -30,6 +34,9 @@ export type RecordingFailure = 'invalid_configuration' | 'capture_failed' | 'sta
   'invalid_media' | 'discontinuity' | 'recording_timeout' | 'shutdown_timeout';
 export interface RecordingStatus { state: RecordingState; reason?: RecordingFailure; }
 export interface CameraRecordingDelegateOptions {
+  source?: RecordingSource;
+  policyChanged?: () => void;
+  replayMotion?: (active: boolean, metadata: NativeClipDeliveryMetadata) => void;
   status?: (status: RecordingStatus) => void;
   videoMotion?: () => void;
   budget?: RecordingBufferBudget;
@@ -100,9 +107,27 @@ interface Event {
   unopenedTimer?: ReturnType<typeof globalThis.setTimeout>;
   acknowledgeTimer?: ReturnType<typeof globalThis.setTimeout>;
 }
+interface SavedEvent {
+  prepared: PreparedSavedClip;
+  metadata: NativeClipDeliveryMetadata;
+  epoch: string | number;
+  signal: globalThis.AbortSignal;
+  cancel: () => void;
+  resolve: (result: NativeClipDeliveryResult) => void;
+  streamId?: number;
+  started: boolean;
+  finished: boolean;
+  held: boolean;
+  transportUncertain: boolean;
+  acknowledgedAt?: string;
+  error?: Error;
+  unopened?: ReturnType<typeof globalThis.setTimeout>;
+  acknowledge?: ReturnType<typeof globalThis.setTimeout>;
+  hold?: ReturnType<typeof globalThis.setTimeout>;
+}
 
 /** Owns one continuously buffered generation and one bounded, pinned recording event. */
-export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
+export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate, NativeClipCameraTarget {
   #active = false;
   #cameraActive = true;
   #audioActive = false;
@@ -115,50 +140,184 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
   #operations: Promise<void> = Promise.resolve();
   #retirement: Promise<void> = Promise.resolve();
   #retry?: ReturnType<typeof globalThis.setTimeout>;
+  #source: RecordingSource;
+  #sourceAvailable = true;
+  #permissionEpoch = 0;
+  #configurationRevision = 0;
+  #saved?: SavedEvent;
+  #home = unknownHomeRecordingObservation();
+  #lastValidMotionAllowed: boolean | null = null;
   readonly #budget: RecordingBufferBudget;
   readonly #retryMs: number;
 
   constructor(private readonly startSession: StartRecordingSession, private readonly options: CameraRecordingDelegateOptions = {}) {
+    this.#source = options.source ?? 'continuous';
     this.#budget = options.budget ?? sharedRecordingBufferBudget;
     const retry = options.retryMs ?? CAMERA_RECORDING_LIMITS.retryMs;
     this.#retryMs = Number.isInteger(retry) && retry >= 1 ? retry : CAMERA_RECORDING_LIMITS.retryMs;
   }
 
   get status(): Readonly<RecordingStatus> { return { ...this.#status }; }
-  get ready(): boolean { return !!this.#generation?.buffer.ready; }
+  get ready(): boolean { return this.#source === 'saved-clips' ? this.#allowed() : !!this.#generation?.buffer.ready; }
   /** Suppress delayed provider clips whenever local recording motion owns capture. */
-  get videoMotionActive(): boolean { return this.#allowed(); }
+  get videoMotionActive(): boolean { return this.#source === 'continuous' && this.#allowed(); }
+  get defersProviderMotion(): boolean { return this.#source === 'saved-clips' && this.#active && this.#cameraActive; }
+  get source(): RecordingSource { return this.#source; }
+  getHomeRecordingObservation(): HomeRecordingObservation {
+    return { ...this.#home, triggerTypes: this.#home.triggerTypes ? [...this.#home.triggerTypes] : null,
+      effectiveAudioActive: this.#audioActive };
+  }
 
-  updateRecordingActive(active: boolean): void {
+  getPolicySnapshot(): NativeClipPolicySnapshot {
+    return { permission: { epoch: this.#permissionEpoch, recordingActive: this.#active && this.#source === 'saved-clips' && !this.#stopped,
+      cameraActive: this.#cameraActive && this.#available && this.#sourceAvailable, audioActive: this.#audioActive,
+      motionAllowed: this.#lastValidMotionAllowed === true },
+    configuration: { revision: this.#configurationRevision,
+      ...(this.#configuration ? { value: configurationCopy(this.#configuration) } : {}) } };
+  }
+
+  setRecordingSource(source: RecordingSource, available = true): void {
+    if (source === this.#source && available === this.#sourceAvailable) return;
+    this.#source = source; this.#sourceAvailable = available; this.#permissionEpoch++;
+    this.#cancel(); this.#policyChanged(); this.#schedule();
+  }
+
+  deliverSavedClip(prepared: PreparedSavedClip, metadata: NativeClipDeliveryMetadata,
+    policy: NativeClipPolicySnapshot, signal: globalThis.AbortSignal): Promise<NativeClipDeliveryResult> {
+    if (this.#configuration && !this.#configuration.eventTriggerTypes.includes(1)) {
+      return Promise.resolve({ status: 'not-offered', reason: 'unsupported-trigger-policy' });
+    }
+    if (this.#source !== 'saved-clips' || !this.#allowed() || this.#saved || this.#generation || signal.aborted || prepared.disposed) {
+      return Promise.resolve({ status: 'not-offered', reason: 'busy' });
+    }
+    if (policy.permission.epoch !== this.#permissionEpoch || policy.configuration.revision !== this.#configurationRevision ||
+        prepared.audioActive !== this.#audioActive || JSON.stringify(configurationCopy(prepared.configuration)) !== JSON.stringify(this.#configuration)) {
+      return Promise.resolve({ status: 'not-offered', reason: 'configuration-changed' });
+    }
+    if (!this.#configuration!.eventTriggerTypes.includes(1) || !prepared.fragments.length ||
+        prepared.preparedSpanUpperBoundUs <= 0n || prepared.preparedSpanUpperBoundUs > 92000000n || !this.options.replayMotion) {
+      return Promise.resolve({ status: 'not-offered', reason: 'configuration-changed' });
+    }
+    return new Promise(resolve => {
+      const event: SavedEvent = { prepared, metadata, epoch: this.#permissionEpoch, signal, resolve,
+        cancel: () => this.#retireSaved(event, { status: 'uncertain' }, new Error('Recording unavailable')),
+        started: false, finished: false, held: false, transportUncertain: false };
+      this.#saved = event;
+      signal.addEventListener('abort', event.cancel, { once: true });
+      event.unopened = globalThis.setTimeout(() => this.#endSavedTransport(event), CAMERA_RECORDING_LIMITS.unopenedEventMs);
+      event.hold = globalThis.setTimeout(() => {
+        event.held = true;
+        try { this.options.replayMotion?.(false, event.metadata); } catch { /* Motion observation cannot retain media. */ }
+        if (event.transportUncertain) this.#retireSaved(event, { status: 'uncertain' });
+        else if (event.acknowledgedAt) this.#retireSaved(event, { status: 'delivered', acknowledgedAt: event.acknowledgedAt });
+      }, Number((prepared.preparedSpanUpperBoundUs + 999n) / 1000n));
+      this.#setStatus({ state: 'recording' });
+      try { this.options.replayMotion!(true, metadata); }
+      catch { this.#retireSaved(event, { status: 'uncertain' }); }
+    });
+  }
+
+  /** Transport cleanup does not shorten the planned replay-motion span. */
+  #endSavedTransport(event: SavedEvent): void {
+    if (this.#saved !== event || event.transportUncertain) return;
+    event.transportUncertain = true; event.error = new Error('Recording unavailable');
+    globalThis.clearTimeout(event.unopened); globalThis.clearTimeout(event.acknowledge);
+    event.prepared.dispose();
+    // Retain the owner abort listener and camera reservation through the hold.
+    if (event.held) this.#retireSaved(event, { status: 'uncertain' });
+  }
+
+  #retireSaved(event: SavedEvent, result: NativeClipDeliveryResult, error?: Error): void {
+    if (this.#saved !== event) return;
+    this.#saved = undefined; event.error = error;
+    globalThis.clearTimeout(event.unopened); globalThis.clearTimeout(event.acknowledge); globalThis.clearTimeout(event.hold);
+    event.signal.removeEventListener('abort', event.cancel);
+    if (!event.held) { try { this.options.replayMotion?.(false, event.metadata); } catch { /* Observer only. */ } }
+    event.prepared.dispose(); event.resolve(result);
+    this.#setStatus({ state: this.#allowed() ? 'ready' : 'off' });
+  }
+
+  async *#savedStream(event: SavedEvent, streamId: number): AsyncGenerator<RecordingPacket> {
+    if (!Number.isSafeInteger(streamId) || streamId < 0 || event.started || event.transportUncertain || event.prepared.disposed || event.signal.aborted ||
+        event.epoch !== this.#permissionEpoch || !this.#permissionAllowed()) throw new Error('Recording unavailable');
+    event.started = true; event.streamId = streamId; globalThis.clearTimeout(event.unopened);
+    const fragmentCount = event.prepared.fragments.length;
+    try {
+      yield { data: event.prepared.pin.initialization, isLast: false };
+      for (let i = 0; i < fragmentCount; i++) {
+        if (event.error) throw event.error;
+        if (this.#saved !== event || !this.#permissionAllowed() || event.epoch !== this.#permissionEpoch) throw new Error('Recording unavailable');
+        const fragment = event.prepared.fragments[i], last = i === fragmentCount - 1;
+        if (last) {
+          event.finished = true;
+          event.acknowledge = globalThis.setTimeout(() => this.#endSavedTransport(event), CAMERA_RECORDING_LIMITS.acknowledgeMs);
+        }
+        yield { data: fragment.data, isLast: last };
+      }
+    } finally {
+      if (!event.finished && this.#saved === event) this.#endSavedTransport(event);
+    }
+  }
+
+  #policyChanged(): void { try { this.options.policyChanged?.(); } catch { /* Policy observer never owns capture. */ } }
+
+  updateRecordingActive(value: unknown): void {
+    const active = observedHomeBoolean(value); if (active === null) return;
+    const first = this.#home.recordingActive !== active; this.#home.recordingActive = active;
+    if (active === this.#active) { if (first) this.#policyChanged(); return; }
     this.#active = active;
+    this.#permissionEpoch++; this.#policyChanged();
     if (!active) this.#cancel();
     this.#schedule();
   }
   updateRecordingConfiguration(configuration: CameraRecordingConfiguration | undefined): void {
+    const before = JSON.stringify(this.#configuration);
     if (configuration === undefined) {
-      this.#configuration = undefined; this.#cancel(); this.#setStatus({ state: 'off' });
+      this.#home.configuration = 'not-configured'; this.#home.triggerTypes = null;
+      this.#configuration = undefined; if (this.#source === 'continuous') this.#cancel();
+      if (!this.#saved) this.#setStatus({ state: 'off' });
     } else {
-      try { this.#configuration = configurationCopy(configuration); }
-      catch { this.#configuration = undefined; this.#cancel(); this.#setStatus({ state: 'fault', reason: 'invalid_configuration' }); return; }
+      try {
+        this.#configuration = configurationCopy(configuration);
+        this.#home.configuration = 'configured'; this.#home.triggerTypes = [...this.#configuration.eventTriggerTypes];
+        const motion = this.#configuration.eventTriggerTypes.includes(1);
+        if (this.#lastValidMotionAllowed !== null && motion !== this.#lastValidMotionAllowed) {
+          this.#permissionEpoch++; if (!motion) this.#cancel();
+        }
+        this.#lastValidMotionAllowed = motion;
+      }
+      catch { this.#configuration = undefined; this.#home.configuration = 'invalid'; this.#home.triggerTypes = null;
+        this.#cancel(); this.#setStatus({ state: 'fault', reason: 'invalid_configuration' });
+        if (before !== undefined) this.#configurationRevision++; this.#policyChanged(); return; }
     }
+    if (JSON.stringify(this.#configuration) !== before) this.#configurationRevision++;
+    this.#policyChanged();
     this.#schedule();
   }
-  setCameraActive(active: boolean): void {
-    if (active === this.#cameraActive) return;
+  setCameraActive(value: unknown): void {
+    const active = observedHomeBoolean(value); if (active === null) return;
+    const first = this.#home.cameraActive !== active; this.#home.cameraActive = active;
+    if (active === this.#cameraActive) { if (first) this.#policyChanged(); return; }
     this.#cameraActive = active;
+    this.#permissionEpoch++; this.#policyChanged();
     if (!active) this.#cancel();
     this.#schedule();
   }
-  setAudioActive(active: boolean): void {
-    if (active === this.#audioActive) return;
+  setAudioActive(value: unknown, pluginEnabled = true): void {
+    const observed = observedHomeBoolean(value); if (observed === null) return;
+    const first = this.#home.audioActive !== observed; this.#home.audioActive = observed;
+    const active = observed && pluginEnabled;
+    if (active === this.#audioActive) { if (first) this.#policyChanged(); return; }
     this.#audioActive = active;
+    this.#permissionEpoch++; this.#policyChanged();
     // Revocation is immediate; newly permitted audio applies after an existing event.
-    if (!active) this.#cancel();
+    if (!active || this.#source === 'saved-clips') this.#cancel();
     this.#schedule();
   }
   setDeviceAvailable(available: boolean): void {
     if (available === this.#available) return;
     this.#available = available;
+    this.#permissionEpoch++; this.#policyChanged();
     if (!available) this.#cancel();
     this.#schedule();
   }
@@ -167,6 +326,7 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
   notifyMotion(): boolean { return this.#notify(1); }
   notifyDoorbell(): boolean { return this.#notify(2); }
   #notify(trigger: 1 | 2): boolean {
+    if (this.#source === 'saved-clips') return false;
     const generation = this.#generation;
     if (!this.#allowed() || !generation?.buffer.ready || !generation.configuration.eventTriggerTypes.includes(trigger)) return false;
     if (this.#event) {
@@ -186,6 +346,7 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
     } catch { this.#fail(generation, 'buffer_exhausted'); return false; }
   }
   endMotion(): void {
+    if (this.#source === 'saved-clips') return;
     const event = this.#event;
     if (!event || event.finished || event.ended) return;
     event.ended = true;
@@ -195,6 +356,7 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
   }
 
   async *handleRecordingStreamRequest(streamId: number): AsyncGenerator<RecordingPacket> {
+    if (this.#saved) { yield* this.#savedStream(this.#saved, streamId); return; }
     const event = this.#event;
     if (!Number.isSafeInteger(streamId) || streamId < 0 || !event || event.started || event.cancelled ||
         !this.#allowed() || event.generation !== this.#generation) throw new Error('Recording unavailable');
@@ -223,11 +385,21 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
     }
   }
   acknowledgeStream(streamId: number): void {
+    const saved = this.#saved;
+    if (saved?.finished && !saved.transportUncertain && saved.streamId === streamId) {
+      saved.acknowledgedAt = new Date().toISOString(); globalThis.clearTimeout(saved.acknowledge);
+      if (saved.held) this.#retireSaved(saved, { status: 'delivered', acknowledgedAt: saved.acknowledgedAt });
+      return;
+    }
     const event = this.#event;
     if (event?.started && event.finished && event.streamId === streamId) this.#releaseEvent(event);
   }
   closeRecordingStream(streamId: number, reason?: unknown): void {
     void reason;
+    if (this.#saved?.streamId === streamId) {
+      if (!this.#saved.acknowledgedAt) this.#endSavedTransport(this.#saved);
+      return;
+    }
     const event = this.#event;
     if (event?.started && event.streamId === streamId) this.#releaseEvent(event);
   }
@@ -245,7 +417,8 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
     finally { globalThis.clearTimeout(timer); }
   }
 
-  #allowed(): boolean { return !this.#stopped && this.#active && this.#cameraActive && this.#available && !!this.#configuration; }
+  #permissionAllowed(): boolean { return !this.#stopped && this.#active && this.#cameraActive && this.#available && this.#sourceAvailable; }
+  #allowed(): boolean { return this.#permissionAllowed() && !!this.#configuration; }
   #setStatus(status: RecordingStatus): void {
     if (this.#status.state === status.state && this.#status.reason === status.reason) return;
     this.#status = status;
@@ -258,6 +431,11 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
     });
   }
   async #reconcile(): Promise<void> {
+    if (this.#source === 'saved-clips') {
+      if (!this.#permissionAllowed()) this.#cancel();
+      if (!this.#saved) this.#setStatus({ state: this.#allowed() ? 'ready' : 'off' });
+      return;
+    }
     if (!this.#allowed()) { this.#cancel(); this.#setStatus({ state: 'off' }); return; }
     if (this.#retry) return;
     const current = this.#generation;
@@ -312,6 +490,7 @@ export class BlinkCameraRecordingDelegate implements CameraRecordingDelegate {
     }).catch(() => { this.#fail(generation, 'capture_failed'); return undefined; });
   }
   #cancel(error?: Error): void {
+    if (this.#saved) this.#retireSaved(this.#saved, { status: 'uncertain' }, error ?? new Error('Recording unavailable'));
     globalThis.clearTimeout(this.#retry); this.#retry = undefined;
     const event = this.#event;
     // HAP closes an interrupted recording when its generator throws. Returning

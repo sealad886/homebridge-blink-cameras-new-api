@@ -1,6 +1,6 @@
 # Sign-in and account verification
 
-Last reviewed: 23 October 2026.
+Last reviewed: 4 November 2026.
 
 This guide owns operator sign-in and stored-session recovery. Architecture and
 vendor routing belong to [ADR-001](adr/001-authentication.md).
@@ -26,8 +26,14 @@ a copyable callback in the address bar; no mobile fallback is verified here.
    clipboard write access, clear the copied callback address manually.
 5. If Blink asks for client or account verification after issuing tokens, enter
    that distinct post-token code in Homebridge. This is not Blink's hosted MFA.
-6. Wait for stored-token connection verification, then continue to the normal
-   plugin schema. Restart Homebridge and confirm the stored session reconnects.
+6. Wait for stored-token connection verification, then continue through the
+   normal five-section settings editor. Save intended settings, restart the
+   Blink child bridge and confirm the stored session reconnects.
+
+Successful sign-in/discovery does not enable Home recording. Continue with the
+[recording guide](RECORDING.md) for source eligibility, observed Home permissions,
+the initial clip scan and a fresh event. No standalone diagnostic pairing or
+special startup flag is required for normal recording setup.
 
 For PKCE, callback validation, owner-only token storage, OAuth routing and
 validation boundaries, see [ADR-001](adr/001-authentication.md).

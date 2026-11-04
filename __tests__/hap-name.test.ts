@@ -44,7 +44,7 @@ describe('device service names', () => {
   });
 
   it.each(['Switch', 'MotionSensor', 'Doorbell', 'SecuritySystem'])('publishes a warning-free configured label for real HAP %s services', (type) => {
-    const { Service, Characteristic } = require('hap-nodejs');
+    const { Service, Characteristic } = require('@homebridge/hap-nodejs');
     const { setHapServiceName, deviceServiceName } = require('../src/hap-name');
     const service = new Service[type]('SwitchCorner', 'motion-switch');
     const warning = jest.fn();
@@ -59,7 +59,7 @@ describe('device service names', () => {
 });
 
  it('preserves Home-assigned names while advancing generated labels', () => {
-   const { Service, Characteristic } = require('hap-nodejs');
+   const { Service, Characteristic } = require('@homebridge/hap-nodejs');
    const { setHapServiceName } = require('../src/hap-name');
    const service = new Service.Switch('Old Motion', 'motion-switch');
    setHapServiceName(service, Characteristic.Name, 'Corner Motion Detection', 'Blink Motion', Characteristic.ConfiguredName);

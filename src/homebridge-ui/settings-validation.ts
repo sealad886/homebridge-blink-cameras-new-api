@@ -2,7 +2,8 @@ import Ajv, { type ErrorObject } from 'ajv';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deriveFeedCapacity, matchesCameraIdentifier, SettingsConstraintError,
-  validateModuleFeedLimits, type FeedCapacity, type SettingsInventory } from '../settings-inventory';
+  validateModuleFeedLimits, validateRecordingSource, validateModuleRecording, recordingSettingsRevision, projectRecordingSelections,
+  type RecordingSelection, type FeedCapacity, type SettingsInventory } from '../settings-inventory';
 
 interface FieldMessage { path: string; code: string; message: string }
 export interface SettingsValidationResult {
@@ -11,6 +12,7 @@ export interface SettingsValidationResult {
   errors: FieldMessage[];
   warnings: FieldMessage[];
   capacity?: FeedCapacity;
+  recording?: { settingsRevision: string; selections: RecordingSelection[] };
 }
 
 // Homebridge adds presentation keywords to a standard inner JSON schema. Ignore
@@ -51,6 +53,18 @@ export class SettingsValidator {
       result.errors.push({ path: '/username', code: 'credentials', message: 'Username and password must be provided together.' });
     }
     const inventory = this.getInventory();
+    try {
+      validateRecordingSource(config.hksvSource);
+      const recording = validateModuleRecording(config.syncModuleRecording);
+      result.recording = { settingsRevision: recordingSettingsRevision(config), selections: projectRecordingSelections(inventory, config) };
+      for (const item of recording) if (!inventory?.syncModules.some(module => module.id === item.syncModuleId)) {
+        result.warnings.push({ path: '/syncModuleRecording', code: 'unresolved_module',
+          message: 'A saved recording override is not in current discovery and is preserved.' });
+      }
+    } catch (error) {
+      result.errors.push({ path: error instanceof SettingsConstraintError ? error.path : '/syncModuleRecording',
+        code: 'recording_source', message: error instanceof SettingsConstraintError ? error.message : 'Invalid recording source settings.' });
+    }
     try {
       const limits = validateModuleFeedLimits(config.syncModuleFeedLimits);
       if (inventory) {

@@ -18,10 +18,10 @@ def frame(kind, payload=b''):
     return b'BMI1' + struct.pack('!II', kind, len(payload)) + payload
 
 def config(**changes):
-    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, software_preset=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0, output_mode=0, fragment_ms=0, iframe_ms=0)
+    values = dict(width=16, height=16, fps=15, bitrate=100000, max_frames=10, software_preset=0, audio_codec=0, audio_rate=0, audio_channels=0, audio_bitrate=0, video_profile=0, video_level=0, audio_packet_ms=0, output_mode=0, fragment_ms=0, iframe_ms=0,input_format=0,audio_tail_policy=0)
     values.update(changes)
     if values['audio_codec']==1 and 'audio_packet_ms' not in changes:values['audio_packet_ms']=20
-    return frame(1, struct.pack('!16I', *values.values()))
+    return frame(1, struct.pack('!%dI'%len(values), *values.values()))
 
 def messages(data):
     result = []
@@ -50,6 +50,24 @@ def shift_pes_pts(media,start,ticks):
     value=(((pts[0]>>1)&7)<<30)|(pts[1]<<22)|((pts[2]>>1)<<15)|(pts[3]<<7)|(pts[4]>>1)
     value=(value+ticks)&((1<<33)-1)
     media[start+9:start+14]=bytes([0x21|((value>>30)<<1),(value>>22)&255,((value>>15)&127)*2+1,(value>>7)&255,(value&127)*2+1])
+
+def mp4_with_oversized_sample_table():
+    """Tiny malformed fixture: declared samples exceed the finite allocation cap."""
+    media=subprocess.check_output([str(binary('fixture')),'mp4-video','16','16','15','1'],timeout=5)
+    count=3000000
+    def rewrite(data):
+        result=bytearray();offset=0
+        while offset<len(data):
+            size,kind=struct.unpack('!I4s',data[offset:offset+8])
+            if size<8 or offset+size>len(data):raise AssertionError('invalid synthetic MP4 box')
+            body=data[offset+8:offset+size]
+            if kind in (b'moov',b'trak',b'mdia',b'minf',b'stbl'):body=rewrite(body)
+            elif kind==b'stts':body=struct.pack('!4I',0,1,count,1)
+            elif kind==b'stsc':body=struct.pack('!5I',0,1,1,count,1)
+            elif kind==b'stsz':body=struct.pack('!3I',0,1,count)
+            result.extend(struct.pack('!I4s',8+len(body),kind)+body);offset+=size
+        return bytes(result)
+    return rewrite(media)
 
 class WorkerTests(unittest.TestCase):
     @classmethod
@@ -104,6 +122,151 @@ class WorkerTests(unittest.TestCase):
         for body in fragments:
             decoded=self.decode_recording(init+body[24:])
             self.assertEqual(decoded['videoFrames'],15);self.assertEqual(decoded['audioTracks'],0)
+    def test_finite_mp4_input_replays_every_available_picture(self):
+        initialization,fragments=self.recording()
+        media=initialization+b''.join(body[24:] for body in fragments)
+        result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,
+            input_format=1,audio_tail_policy=0)+frame(2,media)+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout)
+        prepared=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+        self.assertEqual(self.decode_recording(prepared)['videoFrames'],90)
+    def test_finite_mp4_with_metadata_only_sample_preserves_all_pictures(self):
+        media=subprocess.check_output([str(binary('fixture')),'mp4-parameters','16','16','15','90'],timeout=5)
+        result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,
+            input_format=1)+frame(2,media)+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout)
+        self.assertEqual([struct.unpack('!6I',body[:24])[:3] for kind,body in rows if kind==14],[(90,90,90)])
+        prepared=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+        self.assertEqual(self.decode_recording(prepared)['videoFrames'],90)
+    def test_finite_mp4_keeps_source_timing_when_final_keyframe_has_variable_gap(self):
+        media=subprocess.check_output([str(binary('fixture')),'mp4-variable','16','16','15','91'],timeout=5)
+        source=self.decode_recording(media)
+        self.assertEqual(source['videoFrames'],91)
+        result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,
+            input_format=1)+frame(2,media)+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout)
+        prepared=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+        actual=self.decode_recording(prepared)
+        self.assertEqual(actual['videoFrames'],source['videoFrames'])
+        self.assertAlmostEqual(actual['lastVideoUs'],source['lastVideoUs'],delta=12)
+    def test_finite_mp4_downsampling_keeps_video_coverage_through_unsampled_source_end(self):
+        for count,selected in ((118,88),(120,90)):
+            with self.subTest(source_count=count):
+                media=subprocess.check_output([str(binary('fixture')),'mp4-video','16','16','20',str(count)],timeout=5)
+                result=self.run_worker(config(fps=15,output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=120,
+                    input_format=1)+frame(2,media)+frame(3))
+                self.assertEqual(result.returncode,0,result.stderr)
+                rows=messages(result.stdout);fragments=[body for kind,body in rows if kind==9]
+                _,start,duration,_=struct.unpack('!IqqI',fragments[-1][:24])
+                self.assertEqual(start+duration,count*50000)
+                self.assertEqual([struct.unpack('!6I',body[:24])[:3] for kind,body in rows if kind==14],[(count,selected,selected)])
+    def test_finite_mp4_tail_silence_requires_explicit_bounded_policy(self):
+        media=subprocess.check_output([str(binary('fixture')),'mp4-audio-tail','16','16','15','90'],timeout=5)
+        framed=b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
+        values=dict(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,input_format=1,
+            audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000)
+        strict=self.run_worker(config(**values)+framed)
+        self.assertEqual(strict.returncode,2);self.assertIn(b'AUDIO_DISCONTINUITY',strict.stderr)
+        padded=self.run_worker(config(**values,audio_tail_policy=1)+framed)
+        self.assertEqual(padded.returncode,0,padded.stderr)
+        rows=messages(padded.stdout)
+        summary=[struct.unpack('!6I',body[:24]) for kind,body in rows if kind==14]
+        self.assertEqual(len(summary),1);self.assertEqual(summary[0][:3],(90,90,90))
+        self.assertGreater(summary[0][3],0);self.assertLessEqual(summary[0][3],32000);self.assertEqual(summary[0][4:],(16000,1))
+        prepared=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+        decoded=self.decode_recording(prepared)
+        self.assertEqual(decoded['videoFrames'],90);self.assertEqual(decoded['audioTracks'],1)
+    def test_finite_mp4_tail_policy_does_not_repair_interior_or_excessive_gaps(self):
+        for mode in ('mp4-audio-gap','mp4-audio-longtail'):
+            with self.subTest(mode=mode):
+                media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','90'],timeout=5)
+                result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,input_format=1,
+                    audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000,audio_tail_policy=1)+frame(2,media)+frame(3))
+                self.assertEqual(result.returncode,2);self.assertIn(b'AUDIO_DISCONTINUITY',result.stderr)
+                self.assertFalse(any(kind==3 for kind,_ in messages(result.stdout)))
+    def test_finite_input_requires_recording_and_explicit_supported_policy(self):
+        for changes in (dict(input_format=2),dict(input_format=1),dict(audio_tail_policy=1),
+                        dict(output_mode=1,fragment_ms=4000,iframe_ms=1000,input_format=1,audio_tail_policy=1),
+                        dict(output_mode=1,fragment_ms=4000,iframe_ms=1000,input_format=1,audio_tail_policy=2)):
+            with self.subTest(changes=changes):
+                result=self.run_worker(config(**changes)+frame(3))
+                self.assertEqual(result.returncode,2);self.assertIn(b'INPUT_CONFIG',result.stderr)
+    def test_finite_mp4_forces_demuxer_and_rejects_truncated_media(self):
+        media=subprocess.check_output([str(binary('fixture')),'mp4-video','16','16','15','90'],timeout=5)
+        for invalid in (self.media,media[:len(media)//2],b'\x00\x00\x00\x20ftypisom'):
+            result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,input_format=1)+frame(2,invalid)+frame(3))
+            self.assertEqual(result.returncode,2)
+            self.assertFalse(any(kind==3 for kind,_ in messages(result.stdout)))
+    def test_finite_mp4_allocation_cap_preserves_source_geometry_limits(self):
+        for width,height,code in ((4096,2048,0),(4098,16,2),(4096,2050,2)):
+            with self.subTest(width=width,height=height):
+                media=subprocess.check_output([str(binary('fixture')),'mp4-video',str(width),str(height),'15','4'],timeout=15)
+                data=config(width=128,height=72,output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=4,input_format=1)
+                data+=b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
+                result=subprocess.run([str(WORKER)],input=data,capture_output=True,timeout=15)
+                self.assertEqual(result.returncode,code,result.stderr)
+                self.assertEqual((3,b'') in messages(result.stdout),code==0)
+                if not code:
+                    source=[struct.unpack('!4I',body)[:2] for kind,body in messages(result.stdout) if kind==7]
+                    self.assertEqual(source,[(width,height)])
+    def test_finite_mp4_copies_bounded_input_and_waits_for_end_while_stop_remains_available(self):
+        media=subprocess.check_output([str(binary('fixture')),'mp4-video','16','16','15','90'],timeout=5)
+        process=subprocess.Popen([str(WORKER)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,input_format=1));process.stdin.flush()
+            self.assertEqual(messages(process.stdout.read(20)),[(1,struct.pack('!II',4,15))])
+            process.stdin.write(frame(2,media));process.stdin.flush()
+            self.assertEqual(messages(process.stdout.read(16)),[(6,struct.pack('!I',len(media)))])
+            time.sleep(0.03)
+            process.stdin.write(frame(4));process.stdin.flush()
+            self.assertEqual(process.wait(timeout=1),0)
+            self.assertEqual(process.stdout.read(),b'')
+        finally:
+            if process.poll() is None:process.kill();process.wait()
+            process.stdin.close();process.stdout.close();process.stderr.close()
+    def test_finite_mp4_rejects_input_beyond_owned_memory_budget(self):
+        chunk=b'x'*65536
+        result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,input_format=1)+
+            frame(2,chunk)*512+frame(2,b'x')+frame(3))
+        self.assertEqual(result.returncode,2);self.assertIn(b'INPUT_LIMIT',result.stderr)
+        self.assertFalse(any(kind==3 for kind,_ in messages(result.stdout)))
+    def test_finite_mp4_rejects_external_tracks_and_out_of_range_sample_offsets(self):
+        media=subprocess.check_output([str(binary('fixture')),'mp4-video','16','16','15','90'],timeout=5)
+        def rewrite(data,external):
+            result=b'';offset=0
+            while offset<len(data):
+                size=struct.unpack('!I',data[offset:offset+4])[0];kind=data[offset+4:offset+8]
+                self.assertGreaterEqual(size,8);self.assertLessEqual(offset+size,len(data))
+                body=data[offset+8:offset+size]
+                if kind in (b'moov',b'trak',b'mdia',b'minf',b'dinf',b'stbl'):body=rewrite(body,external)
+                elif external and kind==b'dref':
+                    path=b'/unavailable-private-track.h264\0\0'
+                    alias=b'\0'*150+struct.pack('!HH',2,len(path))+path+struct.pack('!hH',-1,0)
+                    body=b'\0'*4+struct.pack('!I',1)+struct.pack('!I4sI',12+len(alias),b'alis',0)+alias
+                elif not external and kind==b'stco':body=body[:8]+struct.pack('!I',0xffffffff)+body[12:]
+                result+=struct.pack('!I4s',8+len(body),kind)+body;offset+=size
+            return result
+        for external in (False,True):
+            result=self.run_worker(config(output_mode=1,fragment_ms=4000,iframe_ms=1000,max_frames=100,input_format=1)+frame(2,rewrite(media,external))+frame(3))
+            self.assertEqual(result.returncode,2)
+            self.assertFalse(any(kind in (3,8,9) for kind,_ in messages(result.stdout)))
+    @unittest.skipUnless(os.environ.get('BLINK_NATIVE_CLIP_FIXTURE'),'private captured MP4 fixture not supplied')
+    def test_captured_mp4_parameter_packets_preserve_available_decoded_pictures(self):
+        media=Path(os.environ['BLINK_NATIVE_CLIP_FIXTURE']).read_bytes()
+        expected=int(os.environ.get('BLINK_NATIVE_CLIP_PICTURES','1801'))
+        self.assertLessEqual(len(media),32*1024*1024)
+        result=subprocess.run([str(WORKER)],input=config(width=128,height=72,fps=30,bitrate=200000,max_frames=9000,
+            output_mode=1,fragment_ms=4000,iframe_ms=1000,input_format=1)+
+            b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3),capture_output=True,timeout=120)
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout)
+        summaries=[struct.unpack('!6I',body[:24]) for kind,body in rows if kind==14]
+        self.assertEqual(summaries,[(expected,expected,expected,0,0,1)])
+        prepared=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+        self.assertEqual(self.decode_recording(prepared)['videoFrames'],expected)
     def test_recording_aac_lc_decodes_at_each_supported_rate_and_preserves_source_offset(self):
         for mode in ('audio','audio-latm-bundled'):
             for rate in (16000,24000):
@@ -213,15 +376,17 @@ class WorkerTests(unittest.TestCase):
             except BrokenPipeError:pass
             process.stdout.close();process.stderr.close()
     def test_fixture_stdout_preserves_binary_transport_packets(self):
+        # Fixed null-TS payload makes text-stream LF/CR translation and Ctrl-Z
+        # truncation observable without depending on encoded AAC/H264 bytes.
+        expected=b'\x47\x1f\xff\x10'+bytes(range(184))
+        transported=subprocess.check_output([str(binary('fixture')),'binary-transport'],timeout=5)
+        self.assertEqual(transported,expected)
         for mode in ([], ['audio'], ['audio-latm'], ['audio-latm-bundled']):
             with self.subTest(mode=mode):
                 media=subprocess.check_output([str(binary('fixture')),*mode],timeout=5)
                 self.assertGreater(len(media),0)
                 self.assertEqual(len(media)%188,0)
                 self.assertTrue(all(media[offset]==0x47 for offset in range(0,len(media),188)))
-                # Exercise bytes Windows text streams translate or treat as EOF.
-                self.assertIn(b'\n',media)
-                if mode:self.assertIn(b'\x1a',media)
     def test_srtp_and_srtcp_published_vectors_and_correlation(self):
         # Public libsrtp srtp_driver.c srtp_validate vectors at pinned commit.
         key=bytes.fromhex('e1f97a0d3e018be0d64fa32c06de41390ec675ad498afeebb6960b3aabe6')
@@ -328,7 +493,7 @@ class WorkerTests(unittest.TestCase):
         result = self.run_worker(data)
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = messages(result.stdout)
-        self.assertEqual(rows[0], (1, struct.pack('!II', 3, 15)))
+        self.assertEqual(rows[0], (1, struct.pack('!II', 4, 15)))
         packets = [body for kind, body in rows if kind == 2]
         self.assertEqual(len(packets), 4)
         pts=[struct.unpack('!q',p[:8])[0] for p in packets]
@@ -453,6 +618,23 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(source),60)
         self.assertEqual(selected,source[::2])
         self.assertGreater(source[0],0)
+    def test_recording_retains_native_rate_frames_with_submillisecond_clock_quantization(self):
+        media=bytearray(subprocess.check_output([str(binary('fixture')),'video','16','16','30','90','42'],timeout=5))
+        count=0
+        for offset in range(0,len(media),188):
+            if not media[offset+1]&0x40 or not media[offset+3]&0x10:continue
+            start=offset+4
+            if media[offset+3]&0x20:start+=1+media[start]
+            if media[start:start+3]==b'\0\0\1' and media[start+3]&0xf0==0xe0:
+                if count==1:shift_pes_pts(media,start,-3)
+                count+=1
+        self.assertEqual(count,90)
+        result=self.run_worker(config(fps=30,max_frames=90,output_mode=1,fragment_ms=4000,iframe_ms=1000)+frame(2,media)+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout)
+        prepared=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+        decoded=self.decode_recording(prepared)
+        self.assertEqual(decoded['videoFrames'],90)
     def test_output_fps_retains_negotiated_cadence_for_noninteger_source_ratios(self):
         for source_fps,expected_count in [(20,90),(25,72)]:
             with self.subTest(source_fps=source_fps):

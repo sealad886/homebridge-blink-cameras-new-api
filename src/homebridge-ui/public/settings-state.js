@@ -20,7 +20,7 @@
       this.host = host;
       this.revision = 0;
       this.inventoryRevision = undefined;
-      this.state = { pending: false, errors: [], warnings: [], error: '', dirty: false, accountAction: false };
+      this.state = { pending: false, valid: false, recording: null, errors: [], warnings: [], error: '', dirty: false, accountAction: false };
       this.running = null;
     }
     get config() { return this.blocks[this.index]; }
@@ -49,6 +49,7 @@
       if (this.state.accountAction) return;
       this.revision += 1;
       this.state.pending = true;
+      this.state.valid = false;
       this.state.dirty = JSON.stringify(this.blocks) !== this.baseline;
       this.state.error = '';
       this.host.saveEnabled(false);
@@ -65,10 +66,12 @@
           if (result.revision !== revision) throw new Error('validation revision');
           this.state.errors = result.errors || [];
           this.state.warnings = result.warnings || [];
+          this.state.recording = copy(result.recording || null);
           if (result.valid) {
             await this.host.stage(blocks);
             if (revision !== this.revision) continue;
             this.host.saveEnabled(true);
+            this.state.valid = true;
           }
         } catch {
           if (revision !== this.revision) continue;
@@ -101,7 +104,19 @@
     });
     return enabled ? [...next, camera.key] : next;
   }
-  const api = { Draft, resolveSelector, toggleSelection, deadline };
+  /** Applicability uses the server's revision; ordinary HTTP needs no browser hashing API. */
+  function recordingApplicability(state, result) {
+    if (state.pending) return 'checking';
+    if (!state.valid || state.error || state.errors.length) return 'settings-invalid';
+    if (state.dirty) return 'draft';
+    if (!state.recording?.settingsRevision) return 'projection-unavailable';
+    if (result?.state === 'unsupported') return 'restart-required';
+    if (!result || result.state !== 'available') return result?.state || 'missing';
+    if (result.health?.version !== 2 || result.health.settingsRevision !== state.recording.settingsRevision) return 'restart-required';
+    if (result.health.runtime !== 'running') return 'runtime-unavailable';
+    return 'applied';
+  }
+  const api = { Draft, resolveSelector, toggleSelection, recordingApplicability, deadline };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BlinkSettings = api;
 })(typeof window === 'object' ? window : globalThis);

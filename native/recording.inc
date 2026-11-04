@@ -13,7 +13,10 @@ static int64_t recording_start=AV_NOPTS_VALUE,recording_end,recording_last_video
 static int64_t recording_media_start=AV_NOPTS_VALUE,recording_media_end;
 static int64_t recording_first_video=AV_NOPTS_VALUE,recording_first_audio=AV_NOPTS_VALUE,recording_audio_end;
 static int64_t recording_audio_tolerance;
+static int64_t recording_video_target_end=AV_NOPTS_VALUE;
+static int64_t recording_all_start=AV_NOPTS_VALUE,recording_all_end,recording_audio_priming_us;
 static AVCodecContext *recording_video_encoder;
+static AVPacket *recording_finite_video;
 static AVPacket *recording_pending[64];
 static size_t recording_pending_count,recording_pending_bytes;
 static int recording_waiting_audio;
@@ -21,7 +24,8 @@ static int64_t recording_pending_start;
 static void recording_packet_internal(AVCodecContext *encoder,AVPacket *packet,uint32_t type,int incoming);
 static void recording_hold_video(AVPacket *packet,int64_t pts) {
     if(!recording_pending_count)recording_pending_start=pts;
-    if(pts-recording_pending_start>1000000 || recording_pending_count>=64 ||
+    int64_t wait_limit=config[16] && config[17]?BLINK_AUDIO_TAIL_MAX_US:1000000;
+    if(pts-recording_pending_start>wait_limit || recording_pending_count>=64 ||
        (size_t)packet->size>CAPACITY-recording_pending_bytes)fatal(recording_first_audio==AV_NOPTS_VALUE?"AUDIO_MISSING":"AUDIO_DISCONTINUITY");
     AVPacket *owned=av_packet_clone(packet);if(!owned)fatal("MEMORY");
     recording_pending[recording_pending_count++]=owned;recording_pending_bytes+=(size_t)packet->size;
@@ -88,6 +92,7 @@ static void recording_open(AVCodecContext *video,AVCodecContext *audio) {
     recording_video=stream->index;stream->time_base=video->time_base;
     if(avcodec_parameters_from_context(stream->codecpar,video)<0)fatal("MP4_PARAMETERS");
     if(audio) {
+        recording_audio_priming_us=av_rescale_q(audio->initial_padding,audio->time_base,AV_TIME_BASE_Q);
         stream=avformat_new_stream(recording,NULL);if(!stream)fatal("MEMORY");
         recording_audio=stream->index;stream->time_base=audio->time_base;
         if(avcodec_parameters_from_context(stream->codecpar,audio)<0)fatal("MP4_PARAMETERS");
@@ -108,6 +113,7 @@ static void recording_packet_internal(AVCodecContext *encoder,AVPacket *packet,u
     if(video && duration<=0)duration=av_rescale(1,1000000,config[2]);
     if(duration<=0 || duration>1000000 || pts>INT64_MAX-duration)fatal("MP4_TIMESTAMP");
     if(video) {
+        if(recording_video_target_end==AV_NOPTS_VALUE || pts+duration>recording_video_target_end)recording_video_target_end=pts+duration;
         if(recording_first_video==AV_NOPTS_VALUE)recording_first_video=pts;
         if(incoming) {
             if(recording_last_video!=AV_NOPTS_VALUE && (pts<=recording_last_video || pts-recording_last_video>(int64_t)config[15]*1000))fatal("VIDEO_DISCONTINUITY");
@@ -138,6 +144,8 @@ static void recording_packet_internal(AVCodecContext *encoder,AVPacket *packet,u
        (recording_first_audio-recording_first_video>recording_audio_tolerance ||
         recording_first_video-recording_first_audio>recording_audio_tolerance))fatal("AUDIO_DISCONTINUITY");
     if(video && recording_has_video && pts+duration>recording_end)recording_end=pts+duration;
+    if(recording_all_start==AV_NOPTS_VALUE || pts<recording_all_start)recording_all_start=pts;
+    if(pts+duration>recording_all_end)recording_all_end=pts+duration;
     if(recording_media_start==AV_NOPTS_VALUE) { recording_media_start=pts;recording_media_end=pts+duration; }
     if(pts<recording_media_start)recording_media_start=pts;
     if(pts+duration>recording_media_end)recording_media_end=pts+duration;
@@ -155,7 +163,26 @@ static void recording_packet_internal(AVCodecContext *encoder,AVPacket *packet,u
     }
 }
 static void recording_packet(AVCodecContext *encoder,AVPacket *packet,uint32_t type) {
+    if(config[16] && type==BLINK_VIDEO_PACKET) {
+        if(recording_finite_video) {
+            uint64_t duration=(uint64_t)packet->pts-(uint64_t)recording_finite_video->pts;
+            if(packet->pts<=recording_finite_video->pts || duration>(uint64_t)config[15]*1000)fatal("VIDEO_DISCONTINUITY");
+            recording_finite_video->duration=(int64_t)duration;
+            recording_packet_internal(encoder,recording_finite_video,type,1);
+            av_packet_free(&recording_finite_video);
+        }
+        recording_finite_video=av_packet_clone(packet);if(!recording_finite_video)fatal("MEMORY");
+        return;
+    }
     recording_packet_internal(encoder,packet,type,1);
+}
+static void recording_finish_video(void) {
+    if(!recording_finite_video)fatal("MP4_EMPTY");
+    uint64_t duration=(uint64_t)finite_source_video_end-(uint64_t)recording_finite_video->pts;
+    if(finite_source_video_end<=recording_finite_video->pts || duration>1000000)fatal("VIDEO_TIMESTAMP");
+    recording_finite_video->duration=av_rescale_q((int64_t)duration,AV_TIME_BASE_Q,recording_video_encoder->time_base);
+    recording_packet_internal(recording_video_encoder,recording_finite_video,BLINK_VIDEO_PACKET,1);
+    av_packet_free(&recording_finite_video);
 }
 static void recording_finish(void) {
     if(recording_pending_count)fatal(recording_first_audio==AV_NOPTS_VALUE?"AUDIO_MISSING":"AUDIO_DISCONTINUITY");

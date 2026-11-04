@@ -20,6 +20,7 @@ import { setTimeout, clearTimeout, setImmediate } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, refreshCameraAudioCapabilities, DeviceType } from './camera-source';
 import { BlinkCameraRecordingDelegate, createRecordingOptions } from './camera-recording';
 import { startRecordingSession } from './recording-session';
+import { observedHomeBoolean } from '../recording-readiness';
 
 export interface MotionDevice {
   id: number;
@@ -179,21 +180,35 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
     const controllerOptions = createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig);
     if (this.platform.isHksvEnabled(device, cameraSourceType)) {
+      const selection = this.platform.getRecordingSelection(device, cameraSourceType);
+      this.cameraSource.setAutomaticSnapshotCapture(selection.source !== 'saved-clips');
       this.recording = new BlinkCameraRecordingDelegate(
         (configuration, audio, callbacks, signal) => startRecordingSession(
           (sink, owner) => this.cameraSource.subscribeFeed(sink, owner), configuration, audio, callbacks, signal,
         ),
-        { videoMotion: () => {
+        { source: selection.source, policyChanged: () => {
+          this.platform.notifyRecordingPolicyChanged(this.device, this.cameraSourceType);
+        }, replayMotion: (active, metadata) => {
+          if (!active) { this.clearMotion(); return; }
+          if (this.motionTimeout) { clearTimeout(this.motionTimeout); this.motionTimeout = null; }
+          this.motionDetected = true;
+          this.motionService.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(true);
+          logHomeKitEvent(this.platform.log, this.accessory, { direction: 'bridge -> HAP', event: 'Saved clip replay motion',
+            service: 'Motion Sensor', characteristic: 'MotionDetected', value: true, outcome: 'submitted' });
+          this.platform.log.debug(`[${this.device.name}] Replaying native clip captured ${metadata.capturedAt}; Home ingestion is delayed`);
+        }, videoMotion: () => {
           if (this.isMotionServiceActive() && this.platform.isNetworkArmed(this.device.network_id)) {
             this.triggerMotion(this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType), 'video');
           }
         }, status: status => {
+          this.platform.notifyRecordingPolicyChanged(this.device, this.cameraSourceType);
           const message = `[${this.device.name}] HSV ${status.state}${status.reason ? `: ${status.reason}` : ''}`;
           if (status.state === 'fault') this.platform.log.warn(message);
           else this.platform.log.debug(message);
           if (status.state !== 'ready' && status.state !== 'recording') this.clearMotion();
         } },
       );
+      this.platform.registerRecordingTarget(device, cameraSourceType, this.recording);
       this.recording.setDeviceAvailable(this.platform.isOperational() && this.isDeviceAvailable());
       const recordingOptions = createRecordingOptions();
       if (cameraSourceType === 'doorbell') recordingOptions.overrideEventTriggerOptions = [2];
@@ -204,17 +219,20 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     this.accessory.configureController(this.cameraController);
     const recordingManagement = this.cameraController.recordingManagement;
     if (this.recording && recordingManagement) {
-      const bind = (service: Service, type: typeof Characteristic.RecordingAudioActive | typeof Characteristic.HomeKitCameraActive,
+      const bind = (service: Service, type: typeof Characteristic.Active | typeof Characteristic.RecordingAudioActive | typeof Characteristic.HomeKitCameraActive,
         apply: (active: boolean) => void): void => {
         const characteristic = service.getCharacteristic(type);
-        const changed = (change: CharacteristicChange): void => apply(Boolean(change.newValue));
+        const observe = (value: unknown): void => { const active = observedHomeBoolean(value); if (active !== null) apply(active); };
+        const changed = (change: CharacteristicChange): void => observe(change.newValue);
         characteristic.on('change', changed);
         this.recordingListeners.push(() => characteristic.removeListener('change', changed));
-        apply(Boolean(characteristic.value));
+        observe(characteristic.value);
       };
-      // HAP 0.14 stores recording audio on recordingManagementService.
+      // Recording audio and camera operation are independent observed Home permissions.
+      bind(recordingManagement.recordingManagementService, this.platform.Characteristic.Active,
+        active => this.recording?.updateRecordingActive(active));
       bind(recordingManagement.recordingManagementService, this.platform.Characteristic.RecordingAudioActive,
-        active => this.recording?.setAudioActive(active && this.platform.streamingConfig.audio.enabled));
+        active => this.recording?.setAudioActive(active, this.platform.streamingConfig.audio.enabled));
       bind(recordingManagement.operatingModeService, this.platform.Characteristic.HomeKitCameraActive,
         active => { this.cameraSource.setCameraActive(active); this.recording?.setCameraActive(active); });
     }
@@ -333,11 +351,16 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     }
 
     this.updateAvailability();
+    if (this.recording) {
+      const selection = this.platform.getRecordingSelection(this.device, this.cameraSourceType);
+      this.recording.setRecordingSource(selection.source, selection.available);
+      this.cameraSource.setAutomaticSnapshotCapture(selection.source !== 'saved-clips');
+    }
   }
 
   public updateAvailability(): void {
     this.recording?.setDeviceAvailable(this.platform.isOperational() && this.isDeviceAvailable());
-    if (this.recording && (!this.isMotionServiceActive() || !this.platform.isNetworkArmed(this.device.network_id))) this.clearMotion();
+    if (this.recording?.source === 'continuous' && (!this.isMotionServiceActive() || !this.platform.isNetworkArmed(this.device.network_id))) this.clearMotion();
     this.motionService
       .getCharacteristic(this.platform.Characteristic.StatusFault)
       .updateValue(this.motionFault || this.refreshFault || !this.platform.isOperational() || !this.isDeviceAvailable() ? 1 : 0);
@@ -349,6 +372,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   public usesVideoMotion(): boolean { return this.recording?.videoMotionActive ?? false; }
 
   triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType), source: 'provider' | 'video' = 'provider'): void {
+    if (source === 'provider' && this.recording?.defersProviderMotion) return;
     if (this.motionTimeout) {
       clearTimeout(this.motionTimeout);
     }
@@ -387,6 +411,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   public async shutdown(): Promise<void> {
     if (this.motionTimeout) { clearTimeout(this.motionTimeout); this.motionTimeout = null; }
     for (const remove of this.recordingListeners.splice(0)) remove();
+    if (this.recording) await this.platform.unregisterRecordingTarget(this.device, this.cameraSourceType);
     await Promise.all([this.recording?.stop(), this.cameraSource.shutdown()]);
   }
 }

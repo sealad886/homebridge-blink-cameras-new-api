@@ -1,6 +1,7 @@
 # Repository conventions
 
 This document owns the non-obvious packaging and UI identity invariants.
+Last reviewed: 4 November 2026.
 Contributor setup and checks belong to [CONTRIBUTING](../CONTRIBUTING.md);
 architecture, operations, and delivery have their own owners in the
 [documentation map](README.md).
@@ -11,6 +12,10 @@ Homebridge's publisher identity depends on npm registry metadata. A local
 archive can display a blank publisher handle (`@`); changing the package's
 `author` field does not substitute for registry identity. Supported release and
 installation paths use the published registry artifact.
+Separately authorized candidate testing may install the exact canonical
+build-only artifact on an isolated test host. Its source/integrity-bound receipts
+do not make a private same-version candidate a registry release or authorize a
+production install.
 
 The complete versioning, CI publication, artifact verification, and deployment
 procedure is owned by the [release guide](RELEASE.md). Do not duplicate it in
@@ -54,6 +59,14 @@ Diagnostics must follow the [logging specification](debug_logging_spec.md).
 Do not log raw control-plane payloads, unbounded per-message traces, secrets, or
 media while investigating IMMIS sequencing. Prefer bounded categories and
 counters through the existing diagnostic owners.
+
+Native saved-clip discovery, deduplication, queues and media belong to
+`src/native-clip-recorder.ts`. The platform composes/publishes one bounded report
+through `src/recording-readiness.ts`; the authenticated UI reads that local file
+and shares selection/revision helpers with validation. Do not add another
+recorder, provider poller, browser eligibility engine or video archive for status.
+The accepted [saved-clip ADR](adr/2026-11-03-native-clip-hsv.md) owns those contracts;
+the [recording guide](RECORDING.md) owns the operator journey.
 
 Two-way talk remains disabled; the current user-visible status is owned by the
 [streaming guide](streaming.md#two-way-talk-status). Protocol scaffolding in

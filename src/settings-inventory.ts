@@ -1,9 +1,65 @@
 import { createHash } from 'node:crypto';
 import { validateHomescreen } from './blink-api/domain-validation';
 import type { BlinkCameraKind, BlinkHomescreen } from './types';
+import { normalizeNativeCameraToken } from './blink-api/local-storage';
+import { DEFAULT_RECORDING_POLL_SECONDS, DEFAULT_RECORDING_SOURCE, type RecordingSource } from './settings';
 
 export type CameraKey = `${BlinkCameraKind}:${string}`;
 export interface ModuleFeedLimit { syncModuleId: string; maxFeeds: number }
+export interface ModuleRecording { syncModuleId: string; source?: RecordingSource; pollIntervalSeconds?: number }
+export interface CameraRecordingSelection {
+  source: RecordingSource; pollIntervalSeconds: number; syncModuleId?: string; available: boolean;
+  reason?: 'module-unavailable' | 'camera-name-ambiguous' | 'camera-unavailable';
+}
+export type RecordingSelectionReason = NonNullable<CameraRecordingSelection['reason']> | 'inventory-unavailable' |
+  'camera-excluded' | 'camera-unresolved' | 'camera-selector-ambiguous';
+export interface RecordingSelection extends Omit<CameraRecordingSelection, 'reason'> {
+  id: string; label: string; cameraKey?: CameraKey; moduleLabel?: string;
+  selection: 'available' | 'excluded' | 'unresolved' | 'ambiguous' | 'unavailable'; reason?: RecordingSelectionReason;
+}
+
+/** Shared local identity; the public report never exposes provider IDs or selectors. */
+export function recordingIdentity(value: string): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
+}
+
+/** Configuration applicability only; credentials, logging and inventory refresh times are excluded. */
+export function recordingSettingsRevision(config: Record<string, unknown>): string {
+  const source = validateRecordingSource(config.hksvSource);
+  const list = (key: string) => [...new Set(strings(config, key))].sort();
+  const overrides = validateModuleRecording(config.syncModuleRecording).map(row => ({ syncModuleId: row.syncModuleId,
+    source: row.source ?? source, pollIntervalSeconds: row.pollIntervalSeconds ?? DEFAULT_RECORDING_POLL_SECONDS,
+  })).sort((a, b) => a.syncModuleId.localeCompare(b.syncModuleId));
+  return createHash('sha256').update(JSON.stringify({ selected: list('hksvCameras'), source, overrides,
+    excludedDevices: list('excludeDevices'), excludedNetworks: list('excludedNetworks'), audio: config.enableAudio !== false,
+  })).digest('hex').slice(0, 24);
+}
+
+/** Every saved selection is represented; aliases for one known camera share one row. */
+export function projectRecordingSelections(inventory: SettingsInventory | undefined, config: Record<string, unknown>): RecordingSelection[] {
+  const source = validateRecordingSource(config.hksvSource), rows = new Map<string, RecordingSelection>();
+  for (const selector of strings(config, 'hksvCameras')) {
+    const matches = inventory?.cameras.filter(camera => matchesCameraIdentifier(camera, selector));
+    const camera = matches?.length === 1 ? matches[0] : undefined;
+    const id = recordingIdentity(camera?.key ?? `selector:${selector}`);
+    if (rows.has(id)) continue;
+    if (!camera) {
+      rows.set(id, { id, label: selector.replace(/\p{Cc}/gu, '').slice(0, 128) || 'Unavailable camera', source,
+        pollIntervalSeconds: DEFAULT_RECORDING_POLL_SECONDS, available: false,
+        selection: matches && matches.length > 1 ? 'ambiguous' : 'unresolved',
+        reason: !inventory ? 'inventory-unavailable' : matches && matches.length > 1 ? 'camera-selector-ambiguous' : 'camera-unresolved' });
+      continue;
+    }
+    const resolved = resolveCameraRecording(inventory!, camera.key, config);
+    const excluded = isInventoryCameraExcluded(camera, inventory!, config);
+    const module = inventory!.syncModules.find(value => value.id === resolved.syncModuleId);
+    rows.set(id, { ...resolved, id, label: camera.name.replace(/\p{Cc}/gu, '').slice(0, 128) || 'Camera', cameraKey: camera.key,
+      ...(module ? { moduleLabel: module.name ?? 'Sync Module' } : {}), available: resolved.available && !excluded,
+      selection: excluded ? 'excluded' : resolved.available ? 'available' : 'unavailable',
+      ...(excluded ? { reason: 'camera-excluded' as const } : {}) });
+  }
+  return [...rows.values()];
+}
 export interface SettingsCamera {
   key: CameraKey;
   id: string;
@@ -35,6 +91,58 @@ export interface FeedCapacity {
 }
 export class SettingsConstraintError extends Error {
   constructor(public readonly path: string, message: string) { super(message); }
+}
+
+export function validateRecordingSource(value: unknown, location = '/hksvSource'): RecordingSource {
+  if (value === undefined) return DEFAULT_RECORDING_SOURCE;
+  if (value !== 'saved-clips' && value !== 'continuous') throw new SettingsConstraintError(location, 'Choose a supported recording source.');
+  return value;
+}
+
+export function validateModuleRecording(value: unknown): ModuleRecording[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new SettingsConstraintError('/syncModuleRecording', 'Sync Module recording settings must be a list.');
+  const seen = new Set<string>();
+  return value.map((entry: unknown, index) => {
+    const location = `/syncModuleRecording/${index}`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new SettingsConstraintError(location, 'Invalid Sync Module recording settings.');
+    const row = entry as Record<string, unknown>;
+    if (typeof row.syncModuleId !== 'string' || !/^[1-9][0-9]{0,15}$/.test(row.syncModuleId) || !Number.isSafeInteger(Number(row.syncModuleId))) {
+      throw new SettingsConstraintError(`${location}/syncModuleId`, 'Choose a Sync Module.');
+    }
+    if (seen.has(row.syncModuleId)) throw new SettingsConstraintError(`${location}/syncModuleId`, 'A Sync Module can have only one recording override.');
+    const source = row.source === undefined ? undefined : validateRecordingSource(row.source, `${location}/source`);
+    const poll = row.pollIntervalSeconds;
+    if (poll !== undefined && (typeof poll !== 'number' || !Number.isInteger(poll) || poll < 15 || poll > 300)) {
+      throw new SettingsConstraintError(`${location}/pollIntervalSeconds`, 'Clip polling must be between 15 and 300 seconds.');
+    }
+    seen.add(row.syncModuleId);
+    return { syncModuleId: row.syncModuleId, ...(source === undefined ? {} : { source }),
+      ...(poll === undefined ? {} : { pollIntervalSeconds: poll as number }) };
+  });
+}
+
+/** Runtime and editor share source selection and full-inventory provider-name ambiguity checks. */
+export function resolveCameraRecording(inventory: SettingsInventory, key: string, config: Record<string, unknown>): CameraRecordingSelection {
+  const global = validateRecordingSource(config.hksvSource), overrides = validateModuleRecording(config.syncModuleRecording);
+  const camera = inventory.cameras.find(value => value.key === key);
+  const moduleId = camera?.moduleAssociation.state === 'unique' ? camera.moduleAssociation.candidateIds[0] : undefined;
+  const override = overrides.find(value => value.syncModuleId === moduleId);
+  const source = override?.source ?? global, pollIntervalSeconds = override?.pollIntervalSeconds ?? DEFAULT_RECORDING_POLL_SECONDS;
+  const result: CameraRecordingSelection = { source, pollIntervalSeconds, ...(moduleId ? { syncModuleId: moduleId } : {}), available: true };
+  if (!camera || isInventoryCameraExcluded(camera, inventory, config)) return { ...result, available: false, reason: 'camera-unavailable' };
+  if (!moduleId && (source === 'saved-clips' || overrides.some(value => camera.moduleAssociation.candidateIds.includes(value.syncModuleId) && value.source !== undefined))) {
+    return { ...result, available: false, reason: 'module-unavailable' };
+  }
+  if (source === 'saved-clips') {
+    try {
+      const token = normalizeNativeCameraToken(camera.name);
+      const matches = inventory.cameras.filter(value => value.networkId === camera.networkId &&
+        value.moduleAssociation.candidateIds.includes(moduleId!) && normalizeNativeCameraToken(value.name) === token);
+      if (matches.length !== 1) return { ...result, available: false, reason: 'camera-name-ambiguous' };
+    } catch { return { ...result, available: false, reason: 'camera-name-ambiguous' }; }
+  }
+  return result;
 }
 
 export function cameraKey(kind: BlinkCameraKind, id: number | string): CameraKey { return `${kind}:${id}`; }

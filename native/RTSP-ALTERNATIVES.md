@@ -1,5 +1,12 @@
 # Bounded RTSP architecture comparison
 
+> Historical architecture comparison retained from the native-runtime cutover.
+> The proposed next steps and open-gate wording below describe that investigation,
+> not the current implementation or an instruction to replace it. The owned
+> broker/private worker path is integrated in published beta3. Consult the
+> [current worker overview](README.md), [streaming guide](../docs/streaming.md) and
+> [release guide](../docs/RELEASE.md) for maintained contracts and operations.
+
 See the [native prototype overview](README.md) for scope and navigation.
 
 The private-pipe codec prototype is an executable ingredient, not RTSP protocol parity, F05/F06 resolution or a plugin runtime artifact. Codec/SRTP parity, generation ownership, automated calibration, security and all five target package gates precede runtime cutover. ADR-005 keeps unsupported talkback disabled and assigns physical acceptance to the operator after CI publication of an exact registry version.

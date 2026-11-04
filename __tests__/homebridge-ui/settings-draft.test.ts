@@ -11,6 +11,24 @@ function load() {
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const valid = (revision: number) => ({ revision, valid: true, errors: [], warnings: [] });
 
+it('uses only the latest server recording projection and never treats a draft or unapplied report as ready', async () => {
+  const { Draft, recordingApplicability } = load();
+  const recording = { settingsRevision: 'server-revision', selections: [{ id: 'camera-local', label: 'Camera' }] };
+  const host = { validate: jest.fn(async ({ revision }: any) => ({ ...valid(revision), recording })),
+    stage: jest.fn().mockResolvedValue(undefined), saveEnabled: jest.fn(), changed: jest.fn() };
+  const draft = new Draft([{ platform: 'BlinkCameras', name: 'Blink' }], host);
+  draft.retry(); expect(recordingApplicability(draft.state, null)).toBe('checking'); await draft.flush();
+  expect(draft.state.recording).toEqual(recording);
+  const health = { state: 'available', health: { version: 2, runtime: 'running', settingsRevision: 'server-revision' } };
+  expect(recordingApplicability(draft.state, health)).toBe('applied');
+  for (const state of ['missing', 'stale', 'unsupported', 'unavailable']) expect(recordingApplicability(draft.state, { state })).not.toBe('applied');
+  expect(recordingApplicability(draft.state, { ...health, health: { ...health.health, settingsRevision: 'old' } })).toBe('restart-required');
+  expect(recordingApplicability(draft.state, { ...health, health: { ...health.health, version: 1 } })).toBe('restart-required');
+  draft.set('name', 'Unsaved'); await draft.flush();
+  expect(recordingApplicability(draft.state, health)).toBe('draft');
+  expect(host.saveEnabled).toHaveBeenLastCalledWith(true);
+});
+
 it('preserves the final raw edit, unknown fields and other blocks, gating Save until staging acknowledges', async () => {
   const { Draft } = load();
   let finishStage: (() => void) | undefined;

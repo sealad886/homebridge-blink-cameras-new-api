@@ -1,6 +1,6 @@
 (function (root) {
   'use strict';
-  const { Draft, resolveSelector, toggleSelection, deadline } = root.BlinkSettings;
+  const { Draft, resolveSelector, toggleSelection, recordingApplicability, deadline } = root.BlinkSettings;
   const el = (tag, text, className) => {
     const node = document.createElement(tag);
     if (text !== undefined) node.textContent = text;
@@ -26,6 +26,18 @@
     let inventoryFailed = false;
     let accountReady = false;
     let sequence = 0;
+    let recordingHealth = null;
+    let healthLoading = false;
+    let recordingPanel = null;
+    const expanded = new Map();
+    const walkTests = new Set();
+    function rememberDetails(parent) {
+      parent?.querySelectorAll('details').forEach(detail => { if (detail.dataset.expansionKey) expanded.set(detail.dataset.expansionKey, detail.open); });
+    }
+    function details(key, summary, className = 'blink-details') {
+      const node = el('details', undefined, className); node.dataset.expansionKey = key;
+      node.open = expanded.get(key) || false; node.append(el('summary', summary)); return node;
+    }
     const draft = new Draft(blocks, {
       validate: payload => deadline(homebridge.request('/settings/validate', payload)),
       stage: data => deadline(homebridge.updatePluginConfig(data)),
@@ -41,7 +53,7 @@
         && !values('excludeDevices').some(value => resolveSelector(value, [camera]).length > 0
           || !/^(camera|owl|doorbell):/.test(value) && (value === network?.id || value === network?.name));
     }
-    function write(key, value) { draft.set(key, value); if (key === 'persistSnapshotCache') render(); }
+    function write(key, value) { draft.set(key, value); if (key === 'persistSnapshotCache' || key === 'hksvSource') render(); }
     function check(labelText, checked, onChange, disabled = false) {
       const label = el('label', undefined, 'blink-check');
       const input = el('input'); input.type = 'checkbox'; input.checked = checked;
@@ -97,14 +109,14 @@
         ? !(inventory?.networks || []).some(network => value === String(network.id) || value === network.name)
         : resolveSelector(objectKey ? value[objectKey] : value, cameras()).length !== 1);
       if (!entries.length) return;
-      const details = el('details', undefined, 'blink-details'); details.append(el('summary', networks ? 'Unavailable saved Blink systems' : 'Unresolved saved camera selections'));
-      details.append(el('p', 'These values are preserved. Missing or ambiguous selections are not silently removed.', 'blink-help'));
+      const detail = details(`unresolved:${key}`, networks ? 'Unavailable saved Blink systems' : 'Unresolved saved camera selections');
+      detail.append(el('p', 'These values are preserved. Missing or ambiguous selections are not silently removed.', 'blink-help'));
       entries.forEach(value => {
         const row = el('div', undefined, 'blink-unresolved'); row.append(el('span', String(objectKey ? value[objectKey] : value)));
         const remove = el('button', 'Remove selection', 'btn btn-sm btn-outline-secondary'); remove.type = 'button';
         remove.disabled = !accountReady || draft.state.accountAction; remove.addEventListener('click', () => { write(key, values(key).filter(item => item !== value)); render(); });
-        row.append(remove); details.append(row);
-      }); parent.append(details);
+        row.append(remove); detail.append(row);
+      }); parent.append(detail);
     }
     function inventoryTools(parent) {
       const row = el('div', undefined, 'blink-inventory-tools');
@@ -141,8 +153,7 @@
       renderModules(parent);
     }
     function cameraCard(parent, camera) {
-      const card = el('details', undefined, 'blink-camera');
-      card.append(el('summary', `${camera.name} · ${camera.kind === 'owl' ? 'Mini / Wi-Fi' : camera.kind} · ${camera.status || 'status unknown'}`));
+      const card = details(`camera:${camera.key}`, `${camera.name} · ${camera.kind === 'owl' ? 'Mini / Wi-Fi' : camera.kind} · ${camera.status || 'status unknown'}`, 'blink-camera');
       card.append(el('p', camera.key, 'blink-help'));
       card.append(check('Show this camera in Home', !values('excludeDevices').some(value => match(value, camera)), checked => {
         write('excludeDevices', toggleSelection(values('excludeDevices'), camera, !checked, cameras())); render();
@@ -161,10 +172,22 @@
       parent.append(card);
     }
     function renderRecording(parent) {
-      parent.append(el('p', 'Choose the cameras offered to HomeKit Secure Video. Clips are viewed in Apple Home; recording permission and iCloud storage are managed there.'));
-      const checklist = el('ol', undefined, 'blink-checklist');
-      ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home, allow Stream & Allow Recording for the camera and choose recording-audio permission.', 'For new motion events, arm the Blink system and enable motion for the camera in Blink.'].forEach(text => checklist.append(el('li', text)));
-      parent.append(checklist, el('p', 'Recording permission starts continuous capture with a four-second memory buffer and local video motion detection. This increases battery and network use. Live viewing can be disabled independently.', 'blink-help'));
+      const hasSelection = values('hksvCameras').length > 0;
+      parent.append(el('p', hasSelection ? 'Review current camera recording activity below. Recording permission and playback are managed in Apple Home.'
+        : 'Choose the cameras to offer to HomeKit Secure Video, using the setup steps below.'));
+      if (hasSelection) renderRecordingHealth(parent);
+      const setup = details('recording:setup', 'Recording setup and prerequisites', 'blink-details blink-recording-setup');
+      if (!expanded.has('recording:setup')) setup.open = !hasSelection;
+      const preflight = el('section', undefined, 'blink-recording-guide');
+      preflight.append(el('h3', 'Before the first recording'), el('p', 'For Saved Blink clips, confirm Blink is making native USB Local Storage clips. A connected USB drive can instead hold daily Cloud Clip Backups; those are a different source and do not establish that fresh native clips are available.', 'blink-help'));
+      const steps = el('ol', undefined, 'blink-checklist');
+      ['Select cameras and a recording source, then Save and restart the Blink child bridge. Reopen these settings after saving.',
+        'In Apple Home, enable Stream & Allow Recording for Home and Away as wanted. Choose a motion-enabled recording policy and your audio preference. Your Home hub and iCloud+ plan are checked in Home.',
+        'For saved clips, wait until each selected camera completes its initial clip scan. Then use its walk-test instructions below.',
+        'Confirm the new clip in Blink, then find the delayed recording in Home and play it. Export important clips through Home.'].forEach(text => steps.append(el('li', text)));
+      preflight.append(steps, el('p', 'Opening a camera tile in Home can start ordinary Live View and use battery, even when saved-clip recording has no idle video feed.', 'blink-help'));
+      setup.append(preflight); parent.append(setup);
+      scalar('hksvSource', parent);
       inventoryTools(parent);
       if (inventory) {
         cameras().forEach(camera => {
@@ -178,19 +201,46 @@
         parent.append(el('p', `Feed capacity for these settings: ${cameras().filter(included).length} cameras. Live viewers and recording share each camera's upstream feed. Blink may impose its own limits.`, 'blink-help'));
       }
       unresolved(parent, 'hksvCameras');
-      const privacy = el('details', undefined, 'blink-details'); privacy.append(el('summary', 'Motion, privacy and stopping capture'));
-      privacy.append(el('p', 'Turning off “Read motion events from Blink” only stops Blink clip polling. HomeKit recording uses local video motion. Disarming Blink or turning camera motion off suppresses new events; background capture and the buffer may continue. Turn recording off in Apple Home to cancel recording capture and clear the buffer. Turning the camera off in Home also blocks live viewing and snapshots.'));
+      renderModules(parent, true);
+      if (!hasSelection) renderRecordingHealth(parent);
+      const privacy = details('recording:privacy', 'Motion, privacy and stopping capture');
+      privacy.append(el('p', 'Home recording, camera-active and recording-audio permissions apply to replay as well as continuous capture. Turning recording off cancels pending replay and clears recording media; turning the camera off also blocks live viewing and snapshots. Saved-clip mode suppresses automatic snapshot captures and reuses existing previews, which may be old. Manual Live View and Refresh Snapshot remain explicit camera actions. “Read motion events from Blink” controls the separate motion poller; completed USB clip discovery has its own interval. Continuous mode may keep its feed and buffer running after Blink is disarmed; turn recording off in Home to stop it.'));
+      privacy.append(el('p', 'Saved clips arrive after Blink finishes recording, USB discovery, download and preparation. Home places them at import time, not original capture time. Replay motion can cause delayed notifications and automations. Native clip/retrigger gaps cannot be recovered; there is no historical backdating or true pre-event video.', 'blink-help'), el('p', 'Continuous mode keeps a live feed open while Home recording is allowed, with a four-second memory buffer and local video motion. It uses battery and network capacity even without motion. Saved-clip mode instead waits for completed native USB clips; if Blink records no clip there is no source to import.', 'blink-help'));
       parent.append(privacy);
     }
-    function renderModules(parent) {
-      const details = el('details', undefined, 'blink-details'); details.append(el('summary', 'Sync Module feed limits'));
-      details.append(el('p', 'Limits use a module’s Blink-system association, not a proven physical video path. Each actual module defaults to its included associated camera count. Leave blank to use that default.', 'blink-help'));
+    function changeModuleRecording(moduleId, field, value) {
+      const key = 'syncModuleRecording';
+      const existing = values(key).find(item => item.syncModuleId === moduleId);
+      const retained = values(key).filter(item => item.syncModuleId !== moduleId);
+      const next = { ...(existing || {}), syncModuleId: moduleId };
+      if (value === undefined || value === '' || value === 'inherit') delete next[field]; else next[field] = value;
+      if (Object.keys(next).length > 1) retained.push(next);
+      write(key, retained);
+      if (field === 'source') render();
+    }
+    function renderModules(parent, recording = false) {
+      const detail = details(recording ? 'modules:recording' : 'modules:feeds', recording ? 'Recording by Sync Module' : 'Sync Module feed limits');
+      detail.append(el('p', recording ? 'Modules inherit the default source. Override only the values you want to change. Completed USB clips require an unambiguous camera-to-module association.'
+        : 'Limits use a module’s Blink-system association, not a proven physical video path. Each actual module defaults to its included associated camera count. Leave blank to use that default.', 'blink-help'));
       const modules = inventory?.syncModules || [];
       modules.forEach(module => {
         const associated = cameras().filter(camera => camera.moduleAssociation.state === 'unique' && camera.moduleAssociation.candidateIds.includes(module.id) && included(camera));
         const ambiguous = cameras().some(camera => camera.moduleAssociation.state === 'ambiguous' && camera.moduleAssociation.candidateIds.includes(module.id));
         const row = el('div', undefined, 'blink-module'); row.append(el('h3', module.name || `Sync Module ${module.id}`));
         row.append(el('p', `Module ID ${module.id} · ${module.status} · ${ambiguous ? 'ambiguous system association' : `${associated.length} included cameras by system association`}`, 'blink-help'));
+        if (recording) {
+          const current = values('syncModuleRecording').find(item => item.syncModuleId === module.id);
+          scalar('syncModuleRecording', row, { property: { title: 'Recording source', type: 'string', enum: ['inherit', 'saved-clips', 'continuous'], enumNames: ['Use default recording source', 'Saved Blink clips', 'Continuous feed (opt in)'] },
+            value: current?.source || 'inherit', change: value => changeModuleRecording(module.id, 'source', value) });
+          const poll = scalar('syncModuleRecording', row, { property: properties.syncModuleRecording.items.properties.pollIntervalSeconds,
+            value: current?.pollIntervalSeconds, change: value => changeModuleRecording(module.id, 'pollIntervalSeconds', value) });
+          if ((current?.source || draft.config.hksvSource || 'saved-clips') === 'continuous') poll.disabled = true;
+          if (current) {
+            const reset = el('button', 'Use recording defaults', 'btn btn-sm btn-outline-secondary'); reset.type = 'button'; reset.disabled = !accountReady || draft.state.accountAction;
+            reset.addEventListener('click', () => { write('syncModuleRecording', values('syncModuleRecording').filter(item => item.syncModuleId !== module.id)); render(); }); row.append(reset);
+          }
+          detail.append(row); return;
+        }
         const current = values('syncModuleFeedLimits').find(item => item.syncModuleId === module.id);
         const input = scalar('syncModuleFeedLimits', row, { property: { ...properties.syncModuleFeedLimits.items.properties.maxFeeds, description: 'Blank uses the discovered camera count. Enter a positive whole number.' }, value: current?.maxFeeds,
           change: value => { const retained = values('syncModuleFeedLimits').filter(item => item.syncModuleId !== module.id); write('syncModuleFeedLimits', value === undefined ? retained : [...retained, { syncModuleId: module.id, maxFeeds: value }]); } });
@@ -200,16 +250,163 @@
           reset.addEventListener('click', () => { write('syncModuleFeedLimits', values('syncModuleFeedLimits').filter(item => item.syncModuleId !== module.id)); render(); });
           row.append(reset);
         }
-        details.append(row);
+        detail.append(row);
       });
-      values('syncModuleFeedLimits').filter(item => !modules.some(module => module.id === item.syncModuleId)).forEach(item => {
-        const row = el('div', undefined, 'blink-unresolved'); row.append(el('span', `Unavailable Sync Module ${item.syncModuleId}: ${item.maxFeeds}`));
+      const key = recording ? 'syncModuleRecording' : 'syncModuleFeedLimits';
+      values(key).filter(item => !modules.some(module => module.id === item.syncModuleId)).forEach(item => {
+        const row = el('div', undefined, 'blink-unresolved'); row.append(el('span', `Unavailable Sync Module ${item.syncModuleId}${recording ? '' : `: ${item.maxFeeds}`}`));
         const remove = el('button', 'Remove override', 'btn btn-sm btn-outline-secondary'); remove.type = 'button'; remove.disabled = !accountReady || draft.state.accountAction;
-        remove.addEventListener('click', () => { write('syncModuleFeedLimits', values('syncModuleFeedLimits').filter(value => value !== item)); render(); }); row.append(remove); details.append(row);
-      }); parent.append(details);
+        if (recording) remove.dataset.recordingRemove = item.syncModuleId;
+        remove.addEventListener('click', () => { write(key, values(key).filter(value => value !== item)); render(); }); row.append(remove); detail.append(row);
+      }); parent.append(detail);
+    }
+    const applicabilityCopy = {
+      checking: ['Checking these selections', 'Wait for settings validation to finish.'],
+      'settings-invalid': ['Review the settings first', 'Correct the validation errors or retry staging. Recording status does not prevent a valid Save.'],
+      draft: ['Changes are not applied', 'Save and restart the Blink child bridge, then reopen these settings before testing.'],
+      'projection-unavailable': ['Recording setup needs a restart', 'Restart the updated Blink child bridge and reopen settings to read its camera selections.'],
+      'restart-required': ['Restart required', 'Save your intended configuration, restart the Blink child bridge and refresh activity.'],
+      missing: ['No runtime report yet', 'Save and restart the Blink child bridge, then refresh activity.'],
+      stale: ['Runtime report is stale', 'Refresh activity and check that the Blink child bridge is running. The earlier status is shown only for reference.'],
+      unavailable: ['Runtime report could not be read', 'Check the child bridge logs and refresh activity. Settings can still be saved.'],
+      'runtime-unavailable': ['Recording runtime is not ready', 'Review Connection for sign-in or connection recovery, then refresh activity.'],
+    };
+    const stageCopy = {
+      'inventory-unavailable': ['Waiting for camera discovery', 'Refresh cameras from a working Blink connection; the saved selection is preserved.'],
+      'camera-excluded': ['Hidden from Home', 'Show this camera/system in Cameras, or remove its recording selection.'],
+      'camera-unresolved': ['Saved camera is unavailable', 'Refresh cameras, choose the intended camera, or remove this saved selection.'],
+      'camera-selector-ambiguous': ['Camera selection is ambiguous', 'Choose a specific discovered camera and remove the ambiguous saved selector.'],
+      'camera-unavailable': ['Camera is unavailable', 'Review Cameras and the Blink connection before testing.'],
+      'module-unavailable': ['Sync Module association is unavailable', 'Check discovery and the camera’s Blink system/Sync Module association. No continuous feed is started as a fallback.'],
+      'camera-name-ambiguous': ['USB camera name is ambiguous', 'Give the cameras distinct names in Blink, refresh discovery and restart the child bridge.'],
+      'home-recording-off': ['Recording is off in Home', 'In Home camera settings, allow Stream & Allow Recording for the locations you want.'],
+      'home-camera-off': ['Camera is disabled in Home', 'Enable the camera in Home before recording.'],
+      'home-policy-unknown': ['Waiting for Home permissions', 'Review Home camera recording options, then refresh activity. Missing observations are not permission denials.'],
+      'home-configuration-unknown': ['Waiting for Home recording setup', 'Configure recording in Home; the plugin has not observed a recording configuration yet.'],
+      'home-configuration-missing': ['Home recording is not configured', 'Choose Stream & Allow Recording and a recording policy in Home.'],
+      'home-configuration-invalid': ['Home recording configuration is unavailable', 'Reopen recording options in Home and check the child bridge logs.'],
+      'unsupported-trigger-policy': ['Choose a motion recording policy', 'Ring-only saved-clip recording is unsupported. Choose a motion-enabled policy in Home; no camera setting is changed here.'],
+      'baseline-pending': ['Initial clip scan in progress', 'Wait for this camera’s initial clip scan to finish before walking in front of it. Refresh activity to check progress.'],
+      'waiting-for-native-clip': ['Ready for a fresh motion test', 'The initial clip scan is complete. Use the walk-test instructions to check a new event.'],
+      queued: ['Clip is queued', 'The plugin will process eligible footage within its bounded queue. Refresh activity to follow progress.'],
+      'preparing-download': ['Blink is preparing the USB clip', 'Wait for Blink’s local-storage request to finish.'],
+      downloading: ['Downloading the native clip', 'The camera has already recorded; the completed file is being downloaded.'],
+      'preparing-media': ['Preparing video for Home', 'Preparation can take about a minute per one-minute clip on a Pi 5 and longer during a burst.'],
+      ready: ['Video is prepared', 'Waiting to offer this completed clip to Home. Preparation does not confirm a Home recording.'],
+      offered: ['Clip offered to Home', 'Check the Home timeline after ingestion. Sending media does not confirm retention.'],
+      delivered: ['Home hub acknowledged transport', 'Open Home, find the imported event and play it. The plugin cannot confirm iCloud retention.'],
+      uncertain: ['Home delivery is uncertain', 'Check Home manually before taking further action. This clip is not automatically offered again.'],
+      failed: ['Clip could not be processed', 'Review the reason below and the child bridge logs. The original remains in Blink.'],
+      expired: ['A queued Home copy expired', 'Review the original in Blink. Clips older than the 15-minute import window are skipped; original Blink clips remain.'],
+      cancelled: ['Pending work was cancelled', 'Review current permissions and selections. Only future eligible clips will be imported.'],
+      'continuous-off': ['Continuous capture is off', 'Review Home recording permissions and the child bridge logs.'],
+      'continuous-warming': ['Continuous feed is starting', 'Wait for the live recording buffer to become ready; this source uses idle camera power.'],
+      'continuous-ready': ['Continuous buffer is ready', 'Home handles recording from supported triggers. Check resulting clips manually in Home.'],
+      'continuous-recording': ['Continuous event is being sent', 'Review the resulting event in Home; transport is not retention confirmation.'],
+      'continuous-fault': ['Continuous capture needs attention', 'Check the child bridge logs and Blink connection; continuous mode can use battery between events.'],
+      'runtime-unavailable': applicabilityCopy['runtime-unavailable'],
+    };
+    const reasonCopy = {
+      'provider-unavailable': 'Blink did not make the source available. Check native USB Local Storage in Blink, its connection/space and the plugin connection.',
+      'command-pending': 'Blink is still preparing its response. The plugin uses bounded waits and retries; refresh activity later.',
+      'ambiguous-request': 'A request acknowledgement was lost. Check logs and Blink; the plugin avoids blindly repeating that clip request.',
+      'media-invalid': 'The downloaded source was not admissible. Check that the original plays in Blink and inspect the child bridge logs.',
+      'media-preparation-failed': 'The source could not be prepared for Home. Check its playback in Blink and the child bridge logs.',
+      'queue-pressure': 'More clips arrived than can be queued. Review Blink originals; busy cameras can outpace preparation and older Home copies can expire.',
+      'storage-pressure': 'The bounded local workspace is full. Existing work must finish or expire before more clips can be admitted; check logs if it persists.',
+      'metadata-pressure': 'The bounded discovery ledger is at capacity. Check the child bridge logs; native clips are not deleted.',
+      'configuration-unavailable': 'Home has not supplied a usable configuration. Review its recording options.',
+      'configuration-changed': 'Home changed the recording format. Eligible pending work can be prepared again without repeating an offered event.',
+      'target-busy': 'This camera is still finishing an earlier Home event. Pending clips wait within the import window.',
+      'permission-changed': 'Permissions changed and pending work was cancelled. Clips from the disallowed period are not uploaded later.',
+      'delivery-uncertain': 'Check the imported event in Home manually; an uncertain offer is not automatically duplicated.',
+      'camera-unmatched': 'A catalog entry could not be matched uniquely. Check discovered camera names and Sync Module association.',
+      'camera-unregistered': 'The camera selection is no longer active. Review the saved configuration.',
+      expired: 'The 15-minute eligibility window elapsed. The original stays in Blink.',
+      'unsupported-trigger-policy': stageCopy['unsupported-trigger-policy'][1],
+    };
+    function renderRecordingHealth(parent) {
+      recordingPanel = el('section', undefined, 'blink-recording-status'); parent.append(recordingPanel);
+    }
+    function paintRecordingHealth() {
+      if (!recordingPanel) return;
+      rememberDetails(recordingPanel); recordingPanel.replaceChildren();
+      const applicability = recordingApplicability(draft.state, recordingHealth);
+      const applied = applicability === 'applied';
+      const banner = applicabilityCopy[applicability];
+      recordingPanel.append(el('h3', 'Recording setup and activity'));
+      if (banner) recordingPanel.append(el('p', banner[0], 'blink-readiness-title'), el('p', banner[1], 'blink-help'));
+      if (healthLoading) recordingPanel.append(el('p', 'Reading local activity…', 'blink-help'));
+      const selections = draft.state.recording?.selections || [];
+      if (!selections.length) recordingPanel.append(el('p', values('hksvCameras').length
+        ? 'Waiting for the server to validate these recording selections.' : 'Select a camera above to set up its recording. No camera is selected.', 'blink-help'));
+      const health = recordingHealth?.health?.version === 2 ? recordingHealth.health : null;
+      selections.forEach(selection => {
+        const observed = health?.cameras.find(camera => camera.id === selection.id);
+        const card = el('section', undefined, 'blink-recording-camera'); card.append(el('h3', selection.label));
+        card.append(el('p', `${selection.source === 'continuous' ? 'Continuous feed (opt in)' : 'Saved Blink clips'} · ${selection.moduleLabel || 'Sync Module not associated'}`, 'blink-source-line'));
+        const stage = !selection.available ? selection.reason || 'camera-unavailable' : observed?.stage || 'home-configuration-unknown';
+        const [heading, action] = stageCopy[stage] || ['Status is unavailable', 'Refresh activity and check the child bridge logs.'];
+        card.append(el('p', applied ? heading : 'Readiness is not confirmed', 'blink-readiness-title'), el('p', applied ? action : banner?.[1] || 'Refresh activity after applying the configuration.', 'blink-help'));
+        if (!applied && observed) card.append(el('p', `Last observed: ${heading}. ${action}`, 'blink-help'));
+        if (!applied) card.append(el('p', 'The status below is reference only until the current settings and report apply.', 'blink-help'));
+        const home = observed?.home;
+        const flag = value => value === true ? 'on' : value === false ? 'off' : 'not observed';
+        card.append(el('p', `Home recording: ${flag(home?.recordingActive)} · camera: ${flag(home?.cameraActive)} · recording audio: ${flag(home?.audioActive)}${home ? ` · effective audio: ${home.effectiveAudioActive ? 'on' : 'off (video only)'}` : ''}`, 'blink-help'));
+        const baseline = observed?.baseline;
+        card.append(el('p', `Initial clip scan: ${baseline === 'complete' ? 'complete' : baseline === 'not-applicable' ? 'not applicable' : 'pending'}${observed?.baselineCompletedAt ? ` · ${formatTime(observed.baselineCompletedAt)}` : ''}`, 'blink-help'));
+        if (selection.source === 'saved-clips') {
+          card.append(el('p', observed?.nativeStorage === 'native-clip-observed'
+            ? `Native USB file downloaded ${formatTime(observed.nativeStorageObservedAt)}. This proves source-file availability, not the walk test or Home retention.`
+            : 'Native USB source-file availability has not been observed yet. A completed scan or armed camera is not capture proof.', 'blink-help'));
+          const canTest = applied && selection.available && observed?.available && observed.source === selection.source && observed.canTriggerFreshTest === true;
+          const test = el('button', 'Walk-test instructions', 'btn btn-sm btn-outline-secondary'); test.type = 'button';
+          test.dataset.walkTest = selection.id; test.disabled = !canTest;
+          test.addEventListener('click', () => { walkTests.has(selection.id) ? walkTests.delete(selection.id) : walkTests.add(selection.id); paintRecordingHealth(); });
+          card.append(test);
+          if (canTest && walkTests.has(selection.id)) card.append(el('p', 'Arm the Blink system and enable this camera’s motion detection in Blink. Walk across its view for 15–20 seconds. Confirm a new native clip in Blink, then refresh activity here. After the clip is offered, open its camera in Home, find the delayed event and play it. Confirm playback yourself; a hub acknowledgement is only transport evidence.', 'blink-walk-steps'));
+        }
+        if (observed?.reason && reasonCopy[observed.reason]) card.append(el('p', reasonCopy[observed.reason], 'blink-recovery'));
+        if (observed?.lastExpiredAt) card.append(el('p', `Last expired Home copy: ${formatTime(observed.lastExpiredAt)}. Review the original in Blink.`, 'blink-recovery'));
+        if (observed?.job) {
+          const timeline = details(`job:${selection.id}`, 'Clip timing and transport');
+          const times = el('dl', undefined, 'blink-recording-timeline');
+          for (const [label, key] of [['Original capture (Blink)', 'capturedAt'], ['Discovered', 'discoveredAt'], ['Downloaded', 'downloadedAt'],
+            ['Prepared for Home', 'preparedAt'], ['Offered to Home (delayed)', 'offeredAt'], ['Hub transport acknowledgement', 'acknowledgedAt'], ['Expired', 'expiredAt']]) {
+            times.append(el('dt', label), el('dd', formatTime(observed.job[key])));
+          }
+          timeline.append(times, el('p', 'All times above describe the same clip. Home ingestion is delayed; an offer or acknowledgement does not confirm a playable or retained recording.', 'blink-help')); card.append(timeline);
+        }
+        recordingPanel.append(card);
+      });
+      if (health) {
+        const resources = details('recording:resources', 'Queue, Sync Modules and local workspace');
+        resources.append(el('p', `${health.queue} queued · ${health.active} active · ${Math.ceil(health.mediaBytes / 1048576)} MiB stored · ${Math.ceil(health.reservedBytes / 1048576)} MiB reserved`, 'blink-help'));
+        health.modules.forEach(module => resources.append(el('p', `${module.label}: initial clip scan ${module.baseline === 'complete' ? 'complete' : module.baseline === 'not-applicable' ? 'not applicable' : 'pending'} · last catalog ${formatTime(module.lastCatalogAt)}${module.reason && reasonCopy[module.reason] ? ` · ${reasonCopy[module.reason]}` : ''}`, 'blink-help')));
+        resources.append(el('p', 'The initial clip scan establishes a baseline: clips already present are observed without importing history. Start the fresh walk test only after that scan completes.', 'blink-help'));
+        resources.append(el('p', 'Preparation and storage are bounded. Frequent clips across several cameras can outpace processing; Home copies older than 15 minutes can expire while Blink originals remain.', 'blink-help')); recordingPanel.append(resources);
+      }
+      const refresh = el('button', 'Refresh activity', 'btn btn-sm btn-outline-secondary'); refresh.type = 'button'; refresh.disabled = healthLoading || draft.state.accountAction;
+      refresh.addEventListener('click', refreshRecordingHealth); recordingPanel.append(refresh);
+      const connectionButton = el('button', 'Review Connection', 'btn btn-sm btn-outline-secondary'); connectionButton.type = 'button';
+      connectionButton.addEventListener('click', () => showSection(0)); recordingPanel.append(connectionButton);
+      const guide = el('a', 'Recording setup and recovery guide', 'blink-recording-guide-link');
+      guide.href = 'https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/RECORDING.md'; guide.target = '_blank'; guide.rel = 'noopener noreferrer'; recordingPanel.append(guide);
+    }
+    function formatTime(value) { return value ? new Date(value).toLocaleString() : 'Not observed'; }
+    async function refreshRecordingHealth() {
+      if (healthLoading) return;
+      healthLoading = true; render();
+      try {
+        const result = await deadline(homebridge.request('/settings/recording-health', {}));
+        if (!result || !['available', 'stale', 'missing', 'unavailable', 'unsupported'].includes(result.state)
+          || ['available', 'stale'].includes(result.state) && (!result.health || !Array.isArray(result.health.cameras) || !Array.isArray(result.health.modules))) throw new Error('Invalid activity report');
+        recordingHealth = result;
+      } catch { recordingHealth = { state: 'unavailable' }; }
+      finally { healthLoading = false; render(); }
     }
     function render() {
-      fields.replaceChildren(); sequence = 0;
+      rememberDetails(fields); recordingPanel = null; fields.replaceChildren(); sequence = 0;
       title.textContent = sections[active].title;
       connection.hidden = active !== 0;
       accountDetails.hidden = active !== sections.length - 1;
@@ -222,7 +419,7 @@
         const diagnostic = new Set(['debugAuth', 'mediaDebug', 'debugStreamPath']);
         keys.filter(key => !technical.has(key) && !diagnostic.has(key)).forEach(key => scalar(key, fields));
         for (const [name, members] of [['Live-view tuning', technical], ['Diagnostics', diagnostic]]) {
-          const detail = el('details', undefined, 'blink-details'); detail.append(el('summary', name)); keys.filter(key => members.has(key)).forEach(key => scalar(key, detail)); fields.append(detail);
+          const detail = details(`advanced:${name}`, name); keys.filter(key => members.has(key)).forEach(key => scalar(key, detail)); fields.append(detail);
         }
       } else keys.forEach(key => scalar(key, fields));
       refreshState(draft.state);
@@ -248,6 +445,7 @@
       fields.querySelectorAll('[data-setting]').forEach(input => input.setAttribute('aria-invalid', String(state.errors.some(error => error.path.startsWith(`/${input.dataset.setting}`)))));
       const warnings = document.getElementById('settingsWarnings'); warnings.replaceChildren(); warnings.hidden = !state.warnings.length;
       state.warnings.forEach(warning => warnings.append(el('p', warning.message)));
+      paintRecordingHealth();
     }
     async function refreshInventory() {
       inventoryStatus.textContent = 'Discovering cameras…';
@@ -266,11 +464,11 @@
       const button = el('button', section.title, 'btn blink-nav-button'); button.type = 'button';
       button.addEventListener('click', () => showSection(index)); nav.append(button);
     });
-    function showSection(index) { active = index; render(); title.focus(); }
+    function showSection(index) { active = index; render(); title.focus(); if (sections[index].items.includes('hksvCameras') && !recordingHealth) void refreshRecordingHealth(); }
     document.getElementById('retrySettings').addEventListener('click', () => draft.retry());
     render(); draft.retry();
     return {
-      draft, refreshInventory,
+      draft, refreshInventory, refreshRecordingHealth,
       showSection,
       get blocks() { return copy(draft.blocks); },
       beginAccountAction() {

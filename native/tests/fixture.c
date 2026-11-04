@@ -17,14 +17,28 @@ int main(int argc,char **argv){
 #ifdef _WIN32
     if(_setmode(_fileno(stdout),_O_BINARY)<0)return 2;
 #endif
+    if(argc==2 && !strcmp(argv[1],"binary-transport")) {
+        /* Deterministic null-TS packet exercises NUL/LF/CR/Ctrl-Z through the
+         * same stdout callback as muxed media, independent of codec output. */
+        uint8_t packet[188]={0x47,0x1f,0xff,0x10};
+        for(int i=4;i<188;i++)packet[i]=(uint8_t)(i-4);
+        return write_bytes(NULL,packet,(int)sizeof(packet))==(int)sizeof(packet) && !fflush(stdout)?0:2;
+    }
     int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
+    int mp4=argc>1 && !strncmp(argv[1],"mp4-",4);
+    int parameters=mp4 && !strcmp(argv[1],"mp4-parameters");
+    int variable_video=mp4 && !strcmp(argv[1],"mp4-variable");
+    int short_tail=mp4 && (!strcmp(argv[1],"mp4-audio-tail") || !strcmp(argv[1],"mp4-audio-longtail"));
+    int long_tail=mp4 && !strcmp(argv[1],"mp4-audio-longtail");
+    int audio_gap=mp4 && !strcmp(argv[1],"mp4-audio-gap");
     int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
-    int with_audio=latm || (argc>1 && strcmp(argv[1],"audio")==0);
+    int with_audio=latm || (argc>1 && strcmp(argv[1],"audio")==0) ||
+        (mp4 && (!strcmp(argv[1],"mp4-audio") || short_tail || audio_gap));
     int visual_motion=argc>1 && strcmp(argv[1],"motion")==0;
     int width=16,height=16,fps=15,count=4,offset=0;
     if(bundled)count=30;
     if(argc>2 || (argc>1 && !with_audio)) {
-        if((argc!=6 && argc!=7) || (!with_audio && !visual_motion && strcmp(argv[1],"video")))return 2;
+        if((argc!=6 && argc!=7) || (!with_audio && !visual_motion && !parameters && !variable_video && strcmp(argv[1],"video") && strcmp(argv[1],"mp4-video")))return 2;
         width=atoi(argv[2]);height=atoi(argv[3]);fps=atoi(argv[4]);count=atoi(argv[5]);
         if(argc==7)offset=atoi(argv[6]);
         if(width<2 || height<2 || width>8192 || height>8192 || (width&1) || (height&1) || fps<1 || fps>60 || count<1 || count>120)return 2;
@@ -35,14 +49,16 @@ int main(int argc,char **argv){
     if(!encoder) return 2;
     encoder->width=width;encoder->height=height;encoder->pix_fmt=AV_PIX_FMT_YUV420P;
     encoder->time_base=(AVRational){1,fps};encoder->framerate=(AVRational){fps,1};encoder->thread_count=1;encoder->max_b_frames=0;
+    if(mp4)encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
     AVDictionary *options=NULL;av_dict_set(&options,"preset","ultrafast",0);av_dict_set(&options,"tune","zerolatency",0);
     if(avcodec_open2(encoder,codec,&options)<0)return 2;
     av_dict_free(&options);
     AVFormatContext *format=NULL;
-    if(avformat_alloc_output_context2(&format,NULL,"mpegts",NULL)<0)return 2;
+    if(avformat_alloc_output_context2(&format,NULL,mp4?"mp4":"mpegts",NULL)<0)return 2;
     // Match the CLI's normal mux delay: several AAC access units share one PES.
     if(bundled)format->max_delay=700000;
-    format->pb=avio_alloc_context(av_malloc(32768),32768,1,NULL,NULL,write_bytes,NULL);
+    if(mp4) { if(avio_open_dyn_buf(&format->pb)<0)return 2; }
+    else format->pb=avio_alloc_context(av_malloc(32768),32768,1,NULL,NULL,write_bytes,NULL);
     if(!format->pb)return 2;
     AVStream *stream=avformat_new_stream(format,NULL);
     if(!stream || avcodec_parameters_from_context(stream->codecpar,encoder)<0)return 2;
@@ -52,6 +68,7 @@ int main(int argc,char **argv){
         const AVCodec *aac=avcodec_find_encoder(AV_CODEC_ID_AAC);audio=avcodec_alloc_context3(aac);if(!audio)return 2;
         audio->sample_rate=16000;audio->sample_fmt=AV_SAMPLE_FMT_FLTP;audio->bit_rate=32000;audio->time_base=(AVRational){1,16000};
         av_channel_layout_default(&audio->ch_layout,1);audio->thread_count=1;
+        if(mp4)audio->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
         if(avcodec_open2(audio,aac,NULL)<0)return 2;
         audio_stream=avformat_new_stream(format,NULL);if(!audio_stream || avcodec_parameters_from_context(audio_stream->codecpar,audio)<0)return 2;
         audio_stream->time_base=audio->time_base;
@@ -69,6 +86,13 @@ int main(int argc,char **argv){
     if(av_frame_get_buffer(frame,32)<0)return 2;
     int64_t audio_next=0;
     for(int i=0;i<=count;i++){
+        if(parameters && i==1) {
+            if(av_new_packet(packet,encoder->extradata_size)<0)return 2;
+            memcpy(packet->data,encoder->extradata,(size_t)encoder->extradata_size);
+            packet->stream_index=stream->index;packet->pts=packet->dts=av_rescale_q(i,encoder->time_base,stream->time_base)-1;
+            packet->duration=1;
+            if(av_interleaved_write_frame(format,packet)<0)return 2;
+        }
         if(i<count){
             if(av_frame_make_writable(frame)<0)return 2;
             for(int y=0;y<height;y++)memset(frame->data[0]+y*frame->linesize[0],32+(i%4)*32,(size_t)width);
@@ -80,14 +104,15 @@ int main(int argc,char **argv){
                 }
             }
             for(int y=0;y<height/2;y++){memset(frame->data[1]+y*frame->linesize[1],128,(size_t)width/2);memset(frame->data[2]+y*frame->linesize[2],128,(size_t)width/2);}
-            frame->pts=i+offset;
+            frame->pts=i+offset+(variable_video && i==count-1?1:0);
         }
         if(avcodec_send_frame(encoder,i<count?frame:NULL)<0)return 2;
         while(avcodec_receive_packet(encoder,packet)>=0){
+            if(packet->duration<=0)packet->duration=1;
             packet->stream_index=stream->index;av_packet_rescale_ts(packet,encoder->time_base,stream->time_base);
             if(av_interleaved_write_frame(format,packet)<0)return 2;
         }
-        if(with_audio){
+        if(with_audio && (i==count || !short_tail || i<count-fps*(long_tail?3:1))){
             /* Match duration on the shared clock; AAC and video frame sizes differ. */
             int64_t target=av_rescale_rnd(i+1,16000,fps,AV_ROUND_UP);
             do {
@@ -95,7 +120,7 @@ int main(int argc,char **argv){
                 if(av_frame_make_writable(audio_frame)<0)return 2;
                 float *samples=(float*)audio_frame->data[0];
                 for(int n=0;n<audio_frame->nb_samples;n++)samples[n]=(n%16<8)?0.15f:-0.15f;
-                audio_frame->pts=audio_next;audio_next+=audio->frame_size;
+                audio_frame->pts=audio_next+(audio_gap && i>=2*fps?1600:0);audio_next+=audio->frame_size;
             }
             if(avcodec_send_frame(audio,i<count?audio_frame:NULL)<0)return 2;
             while(avcodec_receive_packet(audio,packet)>=0){
@@ -108,5 +133,10 @@ int main(int argc,char **argv){
     av_frame_free(&audio_frame);avcodec_free_context(&audio);
     if(av_write_trailer(format)<0)return 2;
     av_frame_free(&frame);av_packet_free(&packet);avcodec_free_context(&encoder);
-    av_freep(&format->pb->buffer);avio_context_free(&format->pb);avformat_free_context(format);return 0;
+    if(mp4) {
+        uint8_t *data=NULL;int size=avio_close_dyn_buf(format->pb,&data);format->pb=NULL;
+        if(size<=0 || size>32*1024*1024 || write_bytes(NULL,data,size)!=size)return 2;
+        av_free(data);
+    } else { av_freep(&format->pb->buffer);avio_context_free(&format->pb); }
+    avformat_free_context(format);return 0;
 }

@@ -2,10 +2,10 @@ import { recordSecurityBoundaryEvent } from './network-diagnostics';
 import { Buffer } from 'node:buffer';
 import { RequestOptions, OperationTimeoutError, checkRequestBudget } from '../operation-budget';
 
-export type ResponseBodyKind = 'oauth-json' | 'oauth-html' | 'rest' | 'command' | 'thumbnail';
+export type ResponseBodyKind = 'oauth-json' | 'oauth-html' | 'rest' | 'command' | 'thumbnail' | 'clip';
 export const RESPONSE_BODY_LIMITS: Record<ResponseBodyKind, number> = {
   'oauth-json': 64 * 1024, 'oauth-html': 512 * 1024,
-  rest: 2 * 1024 * 1024, command: 256 * 1024, thumbnail: 5 * 1024 * 1024,
+  rest: 2 * 1024 * 1024, command: 256 * 1024, thumbnail: 5 * 1024 * 1024, clip: 32 * 1024 * 1024,
 };
 export class ResponseBodyError extends Error {
   constructor() { super('Blink response exceeded its resource boundary.'); this.name = 'ResponseBodyError'; recordSecurityBoundaryEvent('overflow'); }
@@ -27,7 +27,7 @@ export async function readBoundedBody(response: globalThis.Response, options: Re
   if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   active++; if (!authentication) ordinary++;
-  const deadline = Math.min(options.deadline ?? Infinity, Date.now() + 30_000);
+  const deadline = Math.min(options.deadline ?? Infinity, Date.now() + (options.kind === 'clip' ? 120_000 : 30_000));
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   let stopped = false;

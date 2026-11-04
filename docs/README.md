@@ -4,7 +4,7 @@ Start with the [user guide](../README.md). This map assigns one owner to each
 maintained topic. Update that owner first; use links elsewhere instead of copying
 procedures, settings tables or release decisions.
 
-Last reviewed: 26 October 2026.
+Last reviewed: 4 November 2026.
 
 ## Current guides and sources
 
@@ -12,6 +12,7 @@ Last reviewed: 26 October 2026.
 | --- | --- | --- |
 | Overview, installation and Home controls | [Root README](../README.md) | User entry point and accessory behavior |
 | Settings | [Configuration](configuration.md) | Examples, defaults and operator explanations; [schema](../config.schema.json) owns UI validation |
+| Recording setup, first clip and Home review | [Recording](RECORDING.md) | Native storage preflight, observed Home policy/initial scan, playback/export, recovery and capacity |
 | Sign-in and recovery | [Authentication](authentication.md) | Operator procedure; ADR-001 owns architecture |
 | Video/audio and quality | [Streaming](streaming.md) | Packaged codec requirements, migration, input/output profiles and talkback |
 | Faults and recovery | [Troubleshooting](troubleshooting.md) | Operator diagnosis |
@@ -25,6 +26,7 @@ Last reviewed: 26 October 2026.
 | Security status | [Hardening ledger](plans/security-hardening.md) | Requirements, findings, evidence and release dispositions |
 | Release operations | [Release guide](RELEASE.md) | CI publication, operator installation, rollback and acceptance |
 | Release history | [Changelog](../CHANGELOG.md) | Versioned shipped changes |
+| Current HSV qualification | [4 November readiness qualification](audits/2026-11-04-hsv-readiness-qualification.md) | Exact source/runtime/package evidence and remaining physical acceptance; not installation instructions |
 | Private media worker | [Native README](../native/README.md) | Integrated codec/IPC implementation and native evidence; release qualification remains gated |
 | Outstanding work | [GitHub issues](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues) | Search before adding tracking entries; local old TODOs are not active tracking |
 
@@ -64,7 +66,10 @@ Generated files under `api-contract/` and `graphify-out/` are derived artifacts.
 Regenerate them through their owning tool rather than editing duplicate facts.
 License and third-party notice texts retain their upstream wording.
 
-Latest review: [23 October documentation audit](audits/2026-10-23-documentation-audit.md).
+The [23 October documentation audit](audits/2026-10-23-documentation-audit.md)
+retains its historical findings. Current guides distinguish published beta3's
+protocol-3 runtime from the upcoming protocol-4 saved-clip candidate; the current
+qualification record above owns execution evidence.
 
 ## Documentation maintenance and validation
 

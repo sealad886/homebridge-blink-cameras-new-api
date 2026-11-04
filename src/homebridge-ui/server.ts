@@ -7,6 +7,7 @@ import type { BlinkHostedOAuthStart, BlinkLogger } from '../types';
 import { isBlinkHostedOAuthSupportCode } from '../blink-api/auth';
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { PLATFORM_NAME } from '../settings';
+import { readRecordingHealth } from './recording-health';
 import {
   type AuthStatus,
   type HostedAuthCompleteRequest,
@@ -84,6 +85,7 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
     this.registerRequest('/getNetworks', this.handleGetNetworks.bind(this));
     this.registerRequest('/settings/inventory', this.handleSettingsInventory.bind(this));
     this.registerRequest('/settings/validate', this.handleSettingsValidate.bind(this));
+    this.registerRequest('/settings/recording-health', this.handleRecordingHealth.bind(this));
     this.ready();
     this.logDebug('Custom UI server ready.');
   }
@@ -167,6 +169,12 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
 
   async handleSettingsValidate(payload: unknown) {
     return this.hostedAuthService.validateSettings(payload);
+  }
+
+  async handleRecordingHealth(payload: unknown) {
+    this.requireEmptyPayload(payload);
+    if (!this.homebridgeStoragePath) return { state: 'unavailable', checkedAt: new Date().toISOString() };
+    return readRecordingHealth(this.homebridgeStoragePath);
   }
 
   private requireEmptyPayload(payload: unknown): void {

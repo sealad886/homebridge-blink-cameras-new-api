@@ -1,6 +1,6 @@
 # Blink Debug Logging Specification
 
-Last reviewed: 30 October 2026.
+Last reviewed: 4 November 2026.
 
 This spec defines HomeKit bridge audit records and diagnostic information for authentication, HTTP, and streaming while protecting sensitive data.
 
@@ -86,9 +86,10 @@ name, model, person or automation origin here. Verified pairing usernames are
 used only in memory to derive aliases and are never logged or persisted. Session
 identifiers, network endpoints and controller keys are not inspected.
 
-Characteristic request observation is isolated in `src/homekit-audit.ts` because
-installed Homebridge 1.11.1 / hap-nodejs 0.14.0 marks its request entry points
-private. Real-HAP regression tests verify this dependency. A bounded warning
+Characteristic request observation is isolated in `src/homekit-audit.ts`.
+Current real-HAP tests use the pinned development Homebridge 2.5.0 and
+`@homebridge/hap-nodejs` 2.3.0 surface; historical older-host evidence retains its
+original scope. A bounded warning
 reports incomplete coverage when required hooks are unavailable. Instrumentation
 is limited to plugin-owned instances and follows restored, new and dynamically
 added services/characteristics; it does not patch global HAP prototypes.
@@ -114,6 +115,8 @@ HomeKit operations.
 - Format and log request bodies only when debug is enabled.
 - Log response status + elapsed time (include correlation ID).
 - Successful decoded response summaries are redacted and truncated to 500 characters in debug mode. This does not authorize raw provider-body collection or attaching debug logs without review. Error response bodies are discarded rather than included in exception diagnostics.
+- Native clip binary responses bypass JSON/debug-body logging. Retain bounded
+  byte/status/timing facts rather than response media or download capabilities.
 
 ## Authentication Diagnostics (debugAuth only)
 
@@ -213,7 +216,18 @@ transitions require debug logging. Reasons are fixed categories such as
 Footage, native diagnostic text, recording initialization data, fragments,
 capability URLs and HomeKit stream identifiers are never included.
 
-A `ready` state means the local buffer contains enough complete fragments.
-It does not confirm that a Home hub requested, acknowledged or saved a clip in
-iCloud. A discontinuity cancels the affected recording and rewarms the buffer;
-it cannot restore missing upstream footage.
+In continuous mode, `ready` means the local buffer contains enough complete
+fragments; discontinuity cancels the affected capture and rewarms that buffer.
+Saved-clip activity has separate discovery/download/preparation/offer stages.
+Its prepared `ready` state does not imply a continuous feed or a retained clip.
+Neither mode can restore missing upstream footage.
+
+The version-2 local readiness report separates raw observed Home policy (or
+unknown), effective audio, desired/applied settings revision, initial scan and
+one coherent job timeline. Provider capture times are normalized to UTC only
+for reporting; ledger identity is unchanged. Source-file download, motion,
+offer, ACK and uncertain close are distinct evidence. None confirms iCloud
+retention; an ordinary no-ACK close is not proof of failure and does not cause
+automatic duplicate replay. See [recording activity and recovery](RECORDING.md#recovery).
+Only the bounded sanitized report is served through the UI; the ledger, private
+media and capability URLs are not a second public diagnostics surface.
