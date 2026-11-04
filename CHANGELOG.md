@@ -38,10 +38,10 @@ owns subsequent acceptance and finding dispositions.
   delayed offers can trigger delayed Home notifications and automations. The
   activity panel preserves original capture time; historical timeline insertion
   is not implemented.
-- This version is prepared and unpublished. Five-target qualification exists for
-  the preceding source candidate; the final beta4 artifact must be built and
-  qualified again. Ordinary existing-camera setup, Home retention/playback and
-  multi-camera acceptance remain release gates, not outcomes inferred from CI.
+- This beta is intended for ordinary existing-camera testing. Final publication
+  uses a new five-target-qualified artifact; earlier candidate receipts do not
+  prove its bytes. Home retention/playback and multi-camera acceptance remain
+  pending and are not inferred from CI.
 
 ## [1.0.0-beta3] - 2026-11-02
 
