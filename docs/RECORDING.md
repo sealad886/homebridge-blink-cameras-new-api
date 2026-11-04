@@ -2,12 +2,12 @@
 
 Last reviewed: 4 November 2026.
 
-This guide describes the upcoming saved-clip recording and guided settings
-candidate, which is not yet published to npm. Published `1.0.0-beta3` already
-includes the packaged protocol-3 media worker and continuous HSV integration.
-The new USB import path needs matching protocol-4 artifacts; local/Pi preparation
-qualification is separate from the normal five-target candidate and full
-automatic recording/playback acceptance on existing accessories. See the
+This guide describes saved-clip recording and guided settings in `1.0.0-beta4`.
+The USB import path uses matching protocol-4 media workers, qualified on all five
+native targets before publication. This beta is intended for testing: ordinary
+existing-camera setup, full Home recording/playback and multi-camera acceptance
+remain pending. Local/Pi preparation and automated package qualification do not
+establish those outcomes. See the
 [current qualification record](audits/2026-11-04-hsv-readiness-qualification.md).
 
 Use the ordinary Homebridge settings page. Recording support attaches to selected

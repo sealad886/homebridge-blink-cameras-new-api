@@ -9,18 +9,18 @@ Last reviewed: 4 November 2026.
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
 
-## What's new — upcoming, unreleased
+## What's new in 1.0.0-beta4
 
-The next candidate adds **automatic HomeKit Secure Video import from completed
+This beta adds **automatic HomeKit Secure Video import from completed
 Blink USB clips**, guided per-camera setup and recording progress/recovery, and
 Node.js 22/24/26 support. Saved-clip recording avoids an idle recording feed;
 continuous recording remains a separate opt-in. The new activity panel separates
 Blink capture time, preparation, Home offer and transport acknowledgement.
 
-These changes are not in the current npm `1.0.0-beta3`. That published version
-already ships the five-target protocol-3 media worker and continuous HSV
-integration. The upcoming USB path uses protocol 4; a normal candidate and full
-automatic existing-camera/Home acceptance are still required. Start with the
+The USB import path uses matching protocol-4 media workers, with the five native
+targets qualified together for publication. This beta is intended for testing:
+ordinary existing-camera setup, complete Home retention/playback and multi-camera
+acceptance remain pending and are not inferred from automated qualification. Start with the
 [recording guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/RECORDING.md)
 for the new workflow and its limits. The
 [qualification record](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/audits/2026-11-04-hsv-readiness-qualification.md)
@@ -39,8 +39,8 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 - **Doorbell** service exposed for doorbell devices; automatic ring delivery is not implemented
 - **Switch** for enabling/disabling motion detection per device
 - **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
-- **Opt-in HomeKit Secure Video** with continuous capture in published beta3;
-  completed-USB-clip import is part of the upcoming candidate above
+- **Opt-in HomeKit Secure Video** using completed Blink USB clips by default,
+  with continuous capture available separately
 - **Connection monitor and retry control** for provider outages
 - **Optional TemperatureSensor** for traditional cameras reporting temperature;
   default off, with global and per-device settings
@@ -145,7 +145,7 @@ Never put passwords or verification codes into plugin settings.
 Plugin settings have five sections: **Overview & connection**, **Cameras in
 Home**, **HomeKit recording**, **Live viewing & sound**, and **Advanced &
 troubleshooting**. Choose cameras from discovery rather than entering IDs.
-Account maintenance and diagnostic recording are under Advanced. In the upcoming
+Account maintenance and diagnostic recording are under Advanced. In the
 recording panel, selected-camera activity appears first; setup instructions open
 for first use and remain available afterwards.
 
@@ -205,7 +205,7 @@ gain recording support; normal setup does not require a second test camera.
 Home manages recording permissions, the compatible home hub and iCloud+ plan.
 Clips are reviewed in Home's recording history, not as iCloud Drive files.
 
-The upcoming default **Saved Blink clips** source imports completed native Sync
+The default **Saved Blink clips** source imports completed native Sync
 Module USB recordings. Native **Local Storage** differs from daily **Cloud Clip
 Backup**; USB connection or armed status alone does not prove a usable source.
 Wait for the camera's initial clip scan before triggering a fresh test event.
@@ -256,9 +256,9 @@ See [CHANGELOG.md](CHANGELOG.md) for current release notes and migration history
 The JavaScript plugin is MIT - see [LICENSE](LICENSE). Native worker development
 sources are GPL-3.0-or-later; see [native/COPYING](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/native/COPYING) and the pinned
 dependency notices under [native/dependencies](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/native/dependencies/README.md).
-Published beta3 includes its five matching native workers and corresponding
-source. Changed protocol-4 workers require their own complete package and
-qualification before distribution.
+The beta4 package includes its five matching protocol-4 native workers and
+complete corresponding source. Each release requires its own complete package
+and five-target qualification before distribution.
 
 ## Credits
 
