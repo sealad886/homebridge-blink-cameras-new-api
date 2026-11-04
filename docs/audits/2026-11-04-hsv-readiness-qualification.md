@@ -1,5 +1,39 @@
 # HSV readiness implementation qualification — 4 November 2026
 
+## Current release-preparation checkpoint
+
+Read-only reconciliation on 4 November found that the earlier local handoff
+below has since advanced. Commit `10e2b2d44a052723de9388ca089592b48a8d985e`
+is present on `origin/codex/hsv-saved-clip-prototype` and passed build-only
+[run 41775973847](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/41775973847).
+All three Node lanes, five native builds, five ordinary installed-package
+qualifications, packaging and completion succeeded; publication was skipped.
+The earlier statements that dispatch and candidate generation had not run
+describe their original milestone, rather than the current release state.
+
+The retained `qualified-package-41775973847` artifact has ZIP SHA-256
+`71b14e4c01b35278fb8fadb841ec3a08e76a85ef4f4c716af7d53827ab001322`.
+Independent verification recomputed the package completion proof and native
+source/package bindings, including all five protocol-4 workers, 36 committed
+source files and four pinned dependency archives. The npm tarball SHA-256 is
+`7147ba8429cd6310057cc228701be8c1d75761fac44a058ebb235cef9c6af15a`;
+its immutable npm integrity is
+`sha512-V3D0NYobCRW6N6zkhqOZdpeEt4/PYTqpYKU0FUhg89TOk9FBM6fBk9CNJGGFtYGfR7KjXDb5ClB/Kbx5vbWv2g==`.
+This is an unpublished source-qualified candidate with manifest version
+`1.0.0-beta3`, not a replacement for the registry's different beta3 bytes.
+
+The next prepared prerelease is `1.0.0-beta4`, confirmed absent from all registry
+versions on 4 November. Its version/changelog changes require a new immutable
+source revision and final five-target build; the preceding candidate's receipts
+must not be represented as proof of that new artifact. Physical ordinary-camera
+setup and complete Home retention/playback remain pending.
+
+The effective `main` ruleset still requires `test (20)`, while the supported
+source matrix is Node 22/24/26. A proposed single-context correction to
+`test (26)` preserves the remaining rules and requires separate repository-setting
+authorization. No ruleset write, merge, tag, publication or plugin deployment is
+part of this checkpoint. The historical milestone evidence below is retained.
+
 ## Scope and state
 
 The operator approved guided setup, per-camera recording status and recovery,

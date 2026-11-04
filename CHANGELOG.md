@@ -7,6 +7,42 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.0.0-beta4] - 2026-11-04
+
+### Added
+- Import completed native Blink USB recordings into HomeKit Secure Video on
+  selected existing camera accessories. Establish an initial clip baseline,
+  prepare fresh clips, and retain bounded persistent deduplication without
+  deleting Blink originals.
+- Guide recording setup with per-camera source eligibility, applied-settings
+  status, observed Home recording permissions, and download, preparation, offer
+  and recovery activity. Keep valid settings saveable when status is unavailable.
+- Support Node.js 22, 24 and 26, with source and ordinary installed-package
+  qualification across the supported native targets.
+
+### Changed
+- Default recording to saved Blink clips. Continuous-feed recording remains a
+  separate opt-in; review the source and Sync Module settings after upgrading.
+  Saved-clip mode avoids an idle recording feed but requires fresh native files
+  from a supported Blink storage arrangement.
+- Require matching protocol-4 native workers for saved-clip preparation. Older
+  protocol-3 workers cannot be substituted into this package.
+- Remove Node.js 20 from supported runtimes. Upgrade Homebridge to a compatible
+  supported Node runtime before installing this candidate.
+
+### Upgrade and beta acceptance
+- Preserve HomeKit pairing and accessory persistence. Save the reviewed settings
+  and restart the Blink child bridge, then complete the initial clip scan before
+  generating a fresh recording event. Follow the [recording guide](docs/RECORDING.md).
+- Imported recordings reach Home after Blink capture and native preparation;
+  delayed offers can trigger delayed Home notifications and automations. The
+  activity panel preserves original capture time; historical timeline insertion
+  is not implemented.
+- This version is prepared and unpublished. Five-target qualification exists for
+  the preceding source candidate; the final beta4 artifact must be built and
+  qualified again. Ordinary existing-camera setup, Home retention/playback and
+  multi-camera acceptance remain release gates, not outcomes inferred from CI.
+
 ## [1.0.0-beta3] - 2026-11-02
 
 ### Fixed
