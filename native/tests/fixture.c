@@ -17,6 +17,13 @@ int main(int argc,char **argv){
 #ifdef _WIN32
     if(_setmode(_fileno(stdout),_O_BINARY)<0)return 2;
 #endif
+    if(argc==2 && !strcmp(argv[1],"binary-transport")) {
+        /* Deterministic null-TS packet exercises NUL/LF/CR/Ctrl-Z through the
+         * same stdout callback as muxed media, independent of codec output. */
+        uint8_t packet[188]={0x47,0x1f,0xff,0x10};
+        for(int i=4;i<188;i++)packet[i]=(uint8_t)(i-4);
+        return write_bytes(NULL,packet,(int)sizeof(packet))==(int)sizeof(packet) && !fflush(stdout)?0:2;
+    }
     int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
     int mp4=argc>1 && !strncmp(argv[1],"mp4-",4);
     int parameters=mp4 && !strcmp(argv[1],"mp4-parameters");

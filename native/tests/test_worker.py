@@ -376,15 +376,17 @@ class WorkerTests(unittest.TestCase):
             except BrokenPipeError:pass
             process.stdout.close();process.stderr.close()
     def test_fixture_stdout_preserves_binary_transport_packets(self):
+        # Fixed null-TS payload makes text-stream LF/CR translation and Ctrl-Z
+        # truncation observable without depending on encoded AAC/H264 bytes.
+        expected=b'\x47\x1f\xff\x10'+bytes(range(184))
+        transported=subprocess.check_output([str(binary('fixture')),'binary-transport'],timeout=5)
+        self.assertEqual(transported,expected)
         for mode in ([], ['audio'], ['audio-latm'], ['audio-latm-bundled']):
             with self.subTest(mode=mode):
                 media=subprocess.check_output([str(binary('fixture')),*mode],timeout=5)
                 self.assertGreater(len(media),0)
                 self.assertEqual(len(media)%188,0)
                 self.assertTrue(all(media[offset]==0x47 for offset in range(0,len(media),188)))
-                # Exercise bytes Windows text streams translate or treat as EOF.
-                self.assertIn(b'\n',media)
-                if mode:self.assertIn(b'\x1a',media)
     def test_srtp_and_srtcp_published_vectors_and_correlation(self):
         # Public libsrtp srtp_driver.c srtp_validate vectors at pinned commit.
         key=bytes.fromhex('e1f97a0d3e018be0d64fa32c06de41390ec675ad498afeebb6960b3aabe6')
