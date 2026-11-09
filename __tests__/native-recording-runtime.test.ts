@@ -121,10 +121,10 @@ describe('native recording runtime composition', () => {
     };
     const devices: NativeRecordingRuntimeOptions['devices'] = [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
         ...(overrides.nativeStorage === false ? {} : { nativeStorage: { moduleId: '20:30', syncModuleId: 30 } }),
-        settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true },
+        settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true, disableEarlyNotification: false },
         motion: publicMotion, recording: () => delegate }, ...(cornerDelegate ? [{
         binding: { accountId: 10, networkId: 20, providerId: 41, target: 'camera', cameraId: 'camera:41', nativeName: 'Corner native name' },
-        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true },
+        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true, disableEarlyNotification: false },
         motion: jest.fn(), recording: () => cornerDelegate,
       }] : [])];
     const options: NativeRecordingRuntimeOptions = { client: client as unknown as BlinkApi, scope, storagePath: overrides.storagePath ?? root,
@@ -332,7 +332,7 @@ describe('native recording runtime composition', () => {
     const options: NativeRecordingRuntimeOptions = { client: api, scope, storagePath: root,
       config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), matchingDevices: [],
       devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
-        settings: { exposeMotionDetected: true, homeKitSecureVideo: false }, motion: jest.fn(), recording: () => undefined }],
+        settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false }, motion: jest.fn(), recording: () => undefined }],
       eventSourceFactory: input => {
         const source = { options: input, setDemand: jest.fn().mockResolvedValue(undefined),
           reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };

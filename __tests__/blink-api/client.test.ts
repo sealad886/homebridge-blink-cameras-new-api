@@ -176,7 +176,7 @@ describe('BlinkApi', () => {
       return result;
     };
     it.each([
-      ['camera', 'v2/accounts/10/networks/5/cameras/7/config', { camera: { video_quality: 'standard' } }],
+      ['camera', 'v2/accounts/10/networks/5/cameras/7/config', { camera: [{ video_quality: 'standard' }] }],
       ['owl', 'v1/accounts/10/networks/5/owls/7/config', { video_quality: 'standard' }],
       ['doorbell', 'v1/accounts/10/networks/5/doorbells/7/config', { video_quality: 'standard' }],
     ] as const)('reads %s config with auto preserving vendor state', async (kind, endpoint, body) => {
@@ -191,9 +191,9 @@ describe('BlinkApi', () => {
     it('writes only requested vendor quality and confirms config after command completion', async () => {
       const { api, http } = createQualityApi();
       const client = api as unknown as BlinkApi;
-      http.get.mockResolvedValueOnce({ camera: { video_quality: 'standard', video_quality_support: ['best', 'standard'] } })
+      http.get.mockResolvedValueOnce({ camera: [{ video_quality: 'standard', video_quality_support: ['best', 'standard'] }] })
         .mockResolvedValueOnce({ complete: true, status: 0 })
-        .mockResolvedValueOnce({ camera: { video_quality: 'best' } });
+        .mockResolvedValueOnce({ camera: [{ video_quality: 'best' }] });
       http.post.mockResolvedValue({ id: 42 });
       await expect(client.setDeviceVideoQuality('camera', 5, 7, 'best')).resolves.toMatchObject({ quality: 'best' });
       expect(http.post).toHaveBeenCalledTimes(1);
@@ -207,7 +207,7 @@ describe('BlinkApi', () => {
       { video_quality: 'standard', video_quality_restricted: ['best'] },
     ])('refuses unsupported or restricted settings before mutation', async metadata => {
       const { api, http } = createQualityApi();
-      http.get.mockResolvedValue({ camera: metadata });
+      http.get.mockResolvedValue({ camera: [metadata] });
       await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow(/support|restrict/);
       expect(http.post).not.toHaveBeenCalled();
     });
@@ -221,7 +221,7 @@ describe('BlinkApi', () => {
 
     it('does not replay a POST after an ambiguous transport failure', async () => {
       const { api, http } = createQualityApi();
-      http.get.mockResolvedValue({ camera: { video_quality: 'standard' } });
+      http.get.mockResolvedValue({ camera: [{ video_quality: 'standard' }] });
       http.post.mockRejectedValue(new Error('Connection closed'));
       await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow('Connection closed');
       expect(http.post).toHaveBeenCalledTimes(1);
@@ -280,13 +280,13 @@ describe('BlinkApi', () => {
     });
 
     it.each([
-      {}, { camera: [] }, { camera: { video_quality: 'unknown' } },
-      { camera: { video_quality_support: Array(17).fill('best') } },
-      { camera: { video_quality_restricted: ['best', '../bad'] } },
+      {}, { camera: [] }, { camera: { video_quality: 'standard' } }, { camera: [{ video_quality: 'unknown' }] },
+      { camera: [{ video_quality_support: Array(17).fill('best') }] },
+      { camera: [{ video_quality_restricted: ['best', '../bad'] }] },
     ])('rejects malformed or oversized metadata without mutation', async body => {
       const { api, http } = createQualityApi();
       http.get.mockResolvedValue(body);
-      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow('video quality');
+      await expect((api as unknown as BlinkApi).setDeviceVideoQuality('camera', 5, 7, 'best')).rejects.toThrow(/config|video quality/);
       expect(http.post).not.toHaveBeenCalled();
     });
 
@@ -299,6 +299,176 @@ describe('BlinkApi', () => {
       expect(auth.ensureValidToken).not.toHaveBeenCalled();
       expect(http.get).not.toHaveBeenCalled();
       expect(http.post).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Early Notification config ownership', () => {
+    const metadata = (current = true, compatible = true) => ({
+      early_notification: current, early_notification_compatible: compatible,
+    });
+    const createEarlyApi = () => {
+      const result = createApi();
+      result.api.accountId = 10;
+      return { ...result, client: result.api as unknown as BlinkApi };
+    };
+
+    it.each([
+      ['camera', 'catalina', 'v2/accounts/10/networks/5/cameras/7/config'],
+      ['camera', 'catalina_indoor', 'v2/accounts/10/networks/5/cameras/7/config'],
+      ['camera', 'xt2', 'v2/accounts/10/networks/5/cameras/7/config'],
+      ['owl', 'owl', 'v1/accounts/10/networks/5/owls/7/config'],
+    ] as const)('reads supported %s model %s from its documented config record', async (kind, rawType, endpoint) => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValue(kind === 'camera' ? { camera: [metadata(), metadata(false, false)] } : metadata());
+      await expect(client.getDeviceEarlyNotification(kind, 5, 7, rawType)).resolves.toEqual({
+        supported: true, compatible: true, current: true, changed: false,
+      });
+      expect(http.get).toHaveBeenCalledWith(endpoint, expect.objectContaining({ deadline: expect.any(Number) }));
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, null, '', 'unknown', 'Owl', 'camera', 'mini', 'doorbell'])(
+      'does not infer capability or claim off for raw model %p', async rawType => {
+        const { client, http } = createEarlyApi();
+        await expect(client.setDeviceEarlyNotification('owl', 5, 7, rawType, false)).resolves.toEqual({
+          supported: false, changed: false,
+        });
+        expect(http.get).not.toHaveBeenCalled();
+        expect(http.post).not.toHaveBeenCalled();
+      });
+
+    it('requires explicit server compatibility even when the stored flag is false', async () => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValue({ camera: [metadata(false, false)] });
+      await expect(client.setDeviceEarlyNotification('camera', 5, 7, 'catalina', false)).resolves.toEqual({
+        supported: false, compatible: false, changed: false,
+      });
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('skips a supported flag already confirmed off without saving an original', async () => {
+      const { client, http } = createEarlyApi();
+      const beforeChange = jest.fn();
+      http.get.mockResolvedValue(metadata(false));
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false, { beforeChange })).resolves.toEqual({
+        supported: true, compatible: true, current: false, changed: false,
+      });
+      expect(beforeChange).not.toHaveBeenCalled();
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('awaits the original journal before a one-key owned POST, completion, and readback', async () => {
+      jest.useFakeTimers();
+      try {
+        const { client, http } = createEarlyApi();
+        let release!: () => void;
+        let originalCommitted = false;
+        const original = new Promise<void>(resolve => { release = resolve; });
+        const beforeChange = jest.fn(async () => { await original; originalCommitted = true; });
+        http.get.mockResolvedValueOnce({ camera: [metadata()] })
+          .mockResolvedValueOnce({ complete: true, status: 0 })
+          .mockResolvedValueOnce({ camera: [metadata(false)] });
+        http.post.mockImplementation(async () => {
+          expect(originalCommitted).toBe(true);
+          return { id: 42 };
+        });
+        const outcome = client.setDeviceEarlyNotification('camera', 5, 7, 'catalina', false, { beforeChange });
+        await jest.advanceTimersByTimeAsync(0);
+        expect(beforeChange).toHaveBeenCalledWith(true);
+        expect(http.post).not.toHaveBeenCalled();
+        release();
+        await expect(outcome).resolves.toEqual({ supported: true, compatible: true, current: false, changed: true });
+        expect(http.post).toHaveBeenCalledTimes(1);
+        expect(http.post).toHaveBeenCalledWith('v2/accounts/10/networks/5/cameras/7/config', { early_notification: false },
+          [409], expect.objectContaining({ retry: false }));
+        expect(http.get).toHaveBeenCalledWith('accounts/10/networks/5/commands/42', expect.objectContaining({ retry: false }));
+        expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+      } finally { jest.useRealTimers(); }
+    });
+
+    it('refuses the POST when committing the original fails', async () => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValue(metadata());
+      const beforeChange = jest.fn().mockRejectedValue(new Error('Original journal failed'));
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false, { beforeChange })).rejects.toThrow('Original journal failed');
+      expect(http.post).not.toHaveBeenCalled();
+      expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+    });
+
+    it('skips a write when fresh state no longer matches the compare guard', async () => {
+      const { client, http } = createEarlyApi();
+      const beforeChange = jest.fn();
+      http.get.mockResolvedValue(metadata(true));
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false, {
+        expectedCurrent: false, beforeChange,
+      })).resolves.toMatchObject({ current: true, changed: false });
+      expect(beforeChange).not.toHaveBeenCalled();
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('restores the original with the same compare guard and owned path', async () => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValueOnce(metadata(false)).mockResolvedValueOnce({ complete: true, status: 0 })
+        .mockResolvedValueOnce(metadata(true));
+      http.post.mockResolvedValue({ command_id: 42 });
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', true, { expectedCurrent: false }))
+        .resolves.toMatchObject({ current: true, changed: true });
+      expect(http.post).toHaveBeenCalledWith('v1/accounts/10/networks/5/owls/7/config', { early_notification: true },
+        [409], expect.objectContaining({ retry: false }));
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      {}, { early_notification: false }, { early_notification_compatible: true },
+      { early_notification: 0, early_notification_compatible: true },
+      { early_notification: false, early_notification_compatible: 'true' },
+    ])('refuses malformed or missing booleans without a mutation: %j', async body => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValue(body);
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false)).rejects.toThrow('Early Notification metadata');
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('requires readback after successful command completion before confirming off', async () => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValueOnce(metadata()).mockResolvedValueOnce({ complete: true, status: 0 })
+        .mockResolvedValueOnce(metadata());
+      http.post.mockResolvedValue({ id: 42 });
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false)).rejects.toThrow('not confirmed');
+      expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.get).toHaveBeenCalledTimes(3);
+    });
+
+    it.each(['transport', 'status'] as const)('fences an unknown %s outcome without replaying the POST', async failure => {
+      const { client, http } = createEarlyApi();
+      http.get.mockResolvedValueOnce(metadata()).mockResolvedValue({ complete: true });
+      if (failure === 'transport') http.post.mockRejectedValue(new Error('Connection closed'));
+      else http.post.mockResolvedValue({ id: 42 });
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false)).rejects.toThrow();
+      expect(client.getRemoteOperationState().stateCommand).toMatchObject({ kind: 'early-notification', phase: 'unresolved' });
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false)).rejects.toThrow('ownership-unavailable');
+      expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.get).toHaveBeenCalledTimes(failure === 'transport' ? 1 : 2);
+    });
+
+    it('serializes a fresh read behind an existing motion command', async () => {
+      jest.useFakeTimers();
+      try {
+        const { client, api, http } = createEarlyApi();
+        let release!: () => void;
+        http.post.mockImplementation(() => new Promise(resolve => { release = () => resolve({ id: 42 }); }));
+        http.get.mockImplementation((endpoint: string) => Promise.resolve(endpoint.includes('/commands/')
+          ? { complete: true, status: 0 } : metadata(false)));
+        const motion = api.enableCameraMotion(5, 8);
+        const read = client.getDeviceEarlyNotification('owl', 5, 7, 'owl');
+        await jest.advanceTimersByTimeAsync(0);
+        expect(http.get).not.toHaveBeenCalled();
+        release();
+        await jest.runAllTimersAsync();
+        await motion;
+        await expect(read).resolves.toMatchObject({ current: false, changed: false });
+        expect(http.post).toHaveBeenCalledTimes(1);
+      } finally { jest.useRealTimers(); }
     });
   });
 

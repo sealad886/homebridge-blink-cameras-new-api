@@ -26,17 +26,35 @@ export function validateCameraTemperature(value: unknown): number | undefined {
   return Math.round(celsius * 10) / 10;
 }
 
-/** Decode only the documented config owner, never traverse arbitrary provider data. */
-export function validateVideoQualityState(value: unknown, kind: BlinkCameraKind): BlinkVideoQualityState {
+/** Camera ConfigInfoResponse maps camera.firstOrNull(); Owl/Doorbell config is flat. */
+export function validateDeviceConfigRecord(value: unknown, kind: BlinkCameraKind): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Blink returned invalid video quality metadata.');
+    throw new Error('Blink returned invalid device config metadata.');
   }
   const response = value as Record<string, unknown>;
-  const config = kind === 'camera' ? response.camera : response;
+  const config = kind === 'camera' ? (Array.isArray(response.camera) ? response.camera[0] : undefined) : response;
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
-    throw new Error('Blink returned invalid video quality metadata.');
+    throw new Error('Blink returned invalid device config metadata.');
   }
-  const fields = config as Record<string, unknown>;
+  return config as Record<string, unknown>;
+}
+
+/** Exact CameraType values whose APK 61 capability classes enable earlyNotificationControl. */
+export function supportsEarlyNotificationControl(rawType: unknown): boolean {
+  return rawType === 'catalina' || rawType === 'catalina_indoor' || rawType === 'owl' || rawType === 'xt2';
+}
+
+export function validateEarlyNotificationState(value: unknown, kind: BlinkCameraKind): { current: boolean; compatible: boolean } {
+  const fields = validateDeviceConfigRecord(value, kind);
+  if (typeof fields.early_notification !== 'boolean' || typeof fields.early_notification_compatible !== 'boolean') {
+    throw new Error('Blink returned invalid Early Notification metadata.');
+  }
+  return { current: fields.early_notification, compatible: fields.early_notification_compatible };
+}
+
+/** Decode only the documented config owner, never traverse arbitrary provider data. */
+export function validateVideoQualityState(value: unknown, kind: BlinkCameraKind): BlinkVideoQualityState {
+  const fields = validateDeviceConfigRecord(value, kind);
   const quality = fields.video_quality;
   if (quality !== undefined && quality !== null && !isBlinkVideoQuality(quality)) {
     throw new Error('Blink returned unsupported video quality metadata.');

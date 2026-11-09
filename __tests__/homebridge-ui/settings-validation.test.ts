@@ -41,6 +41,43 @@ describe('full settings draft validation', () => {
     expect(result.valid).toBe(true); expect(result.capacity?.global).toBe(6);
   });
 
+  it('preserves optional and explicit false early notification choices at all scopes', () => {
+    for (const disableEarlyNotification of [undefined, false, true]) {
+      const config = { name: 'Blink', ...(disableEarlyNotification === undefined ? {} : { disableEarlyNotification }),
+        syncModuleSettingOverrides: [{ syncModuleId: '20' }],
+        deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: false }] };
+      const before = structuredClone(config);
+      expect(validator.validate({ revision: 1, config }).valid).toBe(true);
+      expect(config).toEqual(before);
+    }
+  });
+
+  it.each([
+    [{ name: 'Blink', disableEarlyNotification: 'false' }, '/disableEarlyNotification'],
+    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: ' ' }] }, '/syncModuleSettingOverrides/0/syncModuleId'],
+    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: 20 }] }, '/syncModuleSettingOverrides/0/syncModuleId'],
+    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: '20', disableEarlyNotification: 'true' }] }, '/syncModuleSettingOverrides/0/disableEarlyNotification'],
+    [{ name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: null }] }, '/deviceSettingOverrides/0/disableEarlyNotification'],
+    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: '20' }, { syncModuleId: '20', disableEarlyNotification: false }] }, '/syncModuleSettingOverrides/1/syncModuleId'],
+  ])('rejects invalid early notification settings at their field path: %j', (config, path) => {
+    const before = structuredClone(config);
+    const result = validator.validate({ revision: 1, config });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([expect.objectContaining({ path })]));
+    expect(config).toEqual(before);
+  });
+
+  it('preserves unresolved Sync Module settings as warnings, including without discovery', () => {
+    const config = { name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: 'unavailable-module', disableEarlyNotification: true }] };
+    for (const instance of [validator, new SettingsValidator(() => undefined)]) {
+      const result = instance.validate({ revision: 1, config });
+      expect(result.valid).toBe(true);
+      expect(result.warnings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: '/syncModuleSettingOverrides/0/syncModuleId', code: 'unresolved_selector' }),
+      ]));
+    }
+  });
+
   it('keeps unresolved saved selectors as warnings, but cannot validate explicit module limits without discovery', () => {
     const unavailable = new SettingsValidator(() => undefined);
     expect(unavailable.validate({ revision: 1, config: { name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'existing-camera', homeKitSecureVideo: true }] } }).valid).toBe(true);

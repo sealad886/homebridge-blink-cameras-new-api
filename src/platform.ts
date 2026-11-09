@@ -48,7 +48,8 @@ import { withResponseBudget } from './operation-budget';
 import { toHapError } from './hap-errors';
 import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
 import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recording-runtime';
-import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput } from './native-recording-config';
+import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput,
+  type NativeRecordingDeviceOverride, type NativeRecordingPolicyConfig } from './native-recording-config';
 import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
 import type { NativeRecordingPolicy } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
@@ -76,16 +77,13 @@ interface DeviceNameOverride {
   customName: string;
 }
 
-interface DeviceSettingOverride {
-  deviceIdentifier: string;
+interface DeviceSettingOverride extends NativeRecordingDeviceOverride {
   exposeTemperature?: boolean;
   inputQuality?: BlinkInputQuality;
   motionTimeout?: number;
-  exposeMotionDetected?: boolean;
-  homeKitSecureVideo?: boolean;
 }
 
-interface BlinkPlatformConfig extends PlatformConfig {
+interface BlinkPlatformConfig extends PlatformConfig, NativeRecordingPolicyConfig {
   exposeTemperature?: boolean;
   username?: string;
   password?: string;
@@ -101,7 +99,6 @@ interface BlinkPlatformConfig extends PlatformConfig {
   pollInterval?: number;
   motionTimeout?: number;
   nativeRecording?: NativeRecordingConfigInput;
-  exposeMotionDetected?: boolean;
   syncModuleFeedLimits?: ModuleFeedLimit[];
   excludeDevices?: string[];
   excludedNetworks?: string[];
@@ -295,7 +292,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         throw new Error('Invalid per-camera input quality');
       }
     }
-    nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { id: -1 }, this.config.exposeMotionDetected);
+    nativeRecordingDevicePolicy(this.config, { id: -1 });
     const hasUsername = Boolean(this.config.username?.trim());
     const hasPassword = Boolean(this.config.password?.trim());
 
@@ -521,7 +518,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       // Exclusions limit consumers, never the identities that can make a clip ambiguous.
       if (nativeStorage) matchingDevices.push({ ...binding, ...nativeStorage });
       if (!networks.has(device.network_id) || this.isDeviceExcluded(device, kind)) continue;
-      const settings = nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { ...device, kind }, this.config.exposeMotionDetected);
+      const settings = nativeRecordingDevicePolicy(this.config, { ...device, kind });
       devices.push({ binding, settings, ...(nativeStorage ? { nativeStorage } : {}),
       motion: () => map.get(device.id)?.triggerMotion(), recording: () => map.get(device.id)?.getNativeRecordingDelegate() });
       if (settings.homeKitSecureVideo && modules.length !== 1) this.log.warn(`[${device.name}] Automatic native recording requires one unambiguous Sync Module.`);
