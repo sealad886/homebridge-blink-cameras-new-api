@@ -4,7 +4,7 @@ Start with the [user guide](../README.md). This map assigns one owner to each
 maintained topic. Update that owner first; use links elsewhere instead of copying
 procedures, settings tables or release decisions.
 
-Last reviewed: 23 October 2026.
+Last reviewed: 9 November 2026.
 
 ## Current guides and sources
 
@@ -14,6 +14,8 @@ Last reviewed: 23 October 2026.
 | Settings | [Configuration](configuration.md) | Examples, defaults and operator explanations; [schema](../config.schema.json) owns UI validation |
 | Sign-in and recovery | [Authentication](authentication.md) | Operator procedure; ADR-001 owns architecture |
 | Video/audio and quality | [Streaming](streaming.md) | FFmpeg requirements, compatibility, input/output profiles and talkback |
+| Motion and native HomeKit recording | [Configuration](configuration.md#motion-and-homekit-recording) | Push subscription, completed USB clips, timing and Home policy; ADR-007 owns architecture |
+| Recording configuration conversion | [One-off migration](native-recording-config-migration.md) | Preview, private backup, atomic application and verified legacy keys |
 | Faults and recovery | [Troubleshooting](troubleshooting.md) | Operator diagnosis |
 | Diagnostic policy | [Logging specification](debug_logging_spec.md) | Controls, bounds and redaction |
 | Trusted evidence reproduction | [Pi evidence reporter](../scripts/pi-evidence/README.md) | Data-only bundles and trusted normalizer |
@@ -31,7 +33,8 @@ Last reviewed: 23 October 2026.
 Package engines, runtime source, tests and CI remain the executable authority.
 Prose must describe the revision it accompanies without claiming unverified
 provider, device or platform acceptance. The root README uses repository URLs for
-extended guides because `docs/` is not included in the current npm package.
+extended guides; only the standalone recording-migration guide is included in
+the package alongside its converter.
 
 ## Evidence, proposals and history
 

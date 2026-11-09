@@ -39,7 +39,9 @@
         "dist",
         "CHANGELOG.md",
         "config.schema.json",
-        "scripts/preuninstall.js"
+        "scripts/preuninstall.js",
+        "scripts/migrate-native-recording-config.cjs",
+        "docs/native-recording-config-migration.md"
     ],
     "homebridge": {
         "pluginAlias": "BlinkCameras",
@@ -55,10 +57,11 @@
         "access": "public"
     },
     "engines": {
-        "node": "^20.0.0 || ^22.0.0 || ^24.0.0",
+        "node": "^20.3.0 || ^22.0.0 || ^24.0.0",
         "homebridge": ">=1.11.1"
     },
     "dependencies": {
+        "@eneris/push-receiver": "4.4.0",
         "@homebridge/plugin-ui-utils": "^2.1.2",
         "async-lock": "^1.4.1"
     },

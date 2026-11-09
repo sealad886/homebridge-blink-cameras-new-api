@@ -2,7 +2,12 @@
 
 # @sealad886/homebridge-blink-cameras-new-api
 
-Last reviewed: 23 October 2026.
+Last reviewed: 9 November 2026.
+
+This branch contains the experimental event-driven recording redesign. It is
+based on stable 0.10.0 and has not been published or deployed to the working Pi.
+The [implementation ledger](docs/plans/event-driven-hsv-redesign.md) separates
+local verification, provider evidence and physical HomeKit acceptance.
 
 [![npm](https://img.shields.io/npm/v/%40sealad886%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api)
 [![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
@@ -22,12 +27,16 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 - **Doorbell** service exposed for doorbell devices; automatic ring delivery is not implemented
 - **Switch** for enabling/disabling motion detection per device
 - **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
+- **Optional HomeKit recording** from completed native Blink USB clips, scheduled
+  by push notifications; no continuous recording live view or idle USB scan
 - **Connection monitor and retry control** for provider outages
 
 The current static API catalog is recovered from Blink Android 59.2
 (`versionCode` 29823413), with Android 57.1 retained as the comparison and
 bounded live-evidence baseline. See the [API contract](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/api-contract/README.md). Blink can
 change these private interfaces without notice.
+The recording and push paths additionally follow the acquired Android 61.0
+[protocol trace](docs/audits/2026-11-09-blink61-recording-protocol.md).
 
 ## Contents
 
@@ -79,7 +88,7 @@ Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's 
 ## Requirements
 
 - Homebridge 1.11.1 or later
-- Node.js 20, 22 or 24 (see [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json))
+- Node.js 20.3+, 22 or 24 within the declared [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json)
 - A Blink account
 - For live streaming, an operator-managed FFmpeg executable with compatible
   video/audio encoders; see [streaming requirements](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#ffmpeg-requirements).
@@ -132,7 +141,7 @@ in the plugin (including a configured device-name override):
 | Home service | Example |
 | --- | --- |
 | Enable or disable motion detection | Test Camera Motion Detection |
-| Read-only motion sensor | Test Camera Motion Sensor |
+| Read-only motion sensor | Test Camera Motion Detected |
 | Request a snapshot, then automatically return Off | Test Camera Refresh Snapshot |
 | Doorbell service (automatic ring delivery unavailable) | Test Doorbell Doorbell |
 | Network arm/disarm | Example Network Security |
@@ -146,6 +155,27 @@ Home may retain a separate user-assigned name or cached tile label. Those labels
 can be edited in Home without removing or pairing the accessory again. A name
 chosen only in Home is not available to the plugin as a prefix for other services;
 set a device-name override in the plugin for a consistent prefix throughout.
+
+### Motion notifications and recording
+
+The plugin creates its own push receiver using the official app's public
+Firebase client parameters. No Firebase console access, service-account key or
+phone notification token is required. It registers the receiver token only on
+its own authenticated Blink client. A receiver is active when any camera exposes
+motion or selects HomeKit recording. Motion-only operation does not inspect USB
+storage.
+
+Set `homeKitSecureVideo` on the camera's `deviceSettingOverrides` entry, then
+allow recording in Apple Home. Native Blink USB recording must already work.
+Each new motion event schedules a bounded clip job, normally after 60 seconds.
+Once a matching video has downloaded and local preparation finishes, the plugin
+offers a finite recording stream to Home. Home controls whether it requests and
+retains that recording; a transport acknowledgement does not prove iCloud
+retention. This delayed path does not provide pre-event video or insert historic
+clips at a requested timeline position.
+
+See [configuration](docs/configuration.md#motion-and-homekit-recording) for
+timing, retries, privacy controls and the one-off configuration migration.
 
 ## Live streaming and quality
 

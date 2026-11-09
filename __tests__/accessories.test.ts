@@ -672,7 +672,7 @@ describe('Accessory handlers', () => {
     expect(accessory.getServiceById(hap.Service.Switch, 'motion-switch')).toBe(original);
     for (const [type, subtype, name] of [
       [hap.Service.Switch, 'motion-switch', 'Front door Motion Detection'],
-      [hap.Service.MotionSensor, 'motion-sensor', 'Front door Motion Sensor'],
+      [hap.Service.MotionSensor, 'motion-sensor', 'Front door Motion Detected'],
       [hap.Service.Switch, 'snapshot-refresh', 'Front door Refresh Snapshot'],
     ]) {
       const service = accessory.getServiceById(type, subtype)!;

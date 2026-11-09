@@ -83,6 +83,8 @@ export interface BlinkCameraStreamingConfig {
   snapshotCacheTTL?: number;
   /** Keep last successful snapshot indefinitely until manually refreshed */
   persistSnapshotCache?: boolean;
+  /** Read existing thumbnails for automatic requests; manual refresh still captures. */
+  passiveSnapshots?: boolean;
 }
 
 export type BlinkCameraStreamingConfigInput = Omit<
@@ -117,6 +119,7 @@ const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   verifyImmisTls: true,
   snapshotCacheTTL: 60,
   persistSnapshotCache: false,
+  passiveSnapshots: false,
 };
 
 export const resolveStreamingConfig = (
@@ -138,6 +141,7 @@ export const resolveStreamingConfig = (
     verifyImmisTls: true,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
+    passiveSnapshots: config?.passiveSnapshots ?? DEFAULT_STREAMING_CONFIG.passiveSnapshots,
     audio: {
       enabled: audio.enabled ?? DEFAULT_STREAMING_CONFIG.audio.enabled,
       twoWay,
@@ -342,8 +346,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private cachedSnapshotTime = 0;
   private lastSuccessfulCaptureTime = 0;
   private freshSnapshotPromise: Promise<Buffer> | null = null;
+  private freshSnapshotCaptures = false;
+  private manualSnapshotPromise: Promise<Buffer> | null = null;
   private snapshotFailureCooldownUntil = 0;
   private snapshotFailure: Error | null = null;
+  private snapshotFailureCaptured = false;
   private streamFailureCooldownUntil = 0;
   private remoteRetirement: Promise<void> = Promise.resolve();
   private readonly remoteAllocations = new Set<Promise<void>>();
@@ -379,8 +386,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
   /**
    * Handle snapshot request from HomeKit.
-   * Returns cached snapshots when valid/persistent; otherwise requests a fresh
-   * thumbnail from Blink and returns it as a JPEG buffer.
+   * Returns cached snapshots when valid/persistent. With native recording,
+   * automatic cache misses download the existing thumbnail without a capture.
    *
    * @param request - Snapshot request with width/height
    * @param callback - Callback to return image buffer or error
@@ -434,14 +441,23 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error('Camera is unavailable/offline');
     }
 
-    const buffer = await this.fetchFreshSnapshot();
+    const buffer = await this.fetchFreshSnapshot(true);
     this.log(`Snapshot cache refreshed manually (${buffer.length} bytes)`);
   }
 
-  private fetchFreshSnapshot(): Promise<Buffer> {
-    if (this.freshSnapshotPromise) return this.freshSnapshotPromise;
+  private fetchFreshSnapshot(capture = !this.streamingConfig.passiveSnapshots): Promise<Buffer> {
+    if (this.freshSnapshotPromise) {
+      if (!capture || this.freshSnapshotCaptures) return this.freshSnapshotPromise;
+      // A manual request must still capture if an automatic thumbnail read was
+      // already in progress. Concurrent manual requests share that next capture.
+      this.manualSnapshotPromise ??= this.freshSnapshotPromise.catch(() => undefined)
+        .then(() => this.fetchFreshSnapshot(true))
+        .finally(() => { this.manualSnapshotPromise = null; });
+      return this.manualSnapshotPromise;
+    }
 
-    if (this.snapshotFailure && Date.now() < this.snapshotFailureCooldownUntil) {
+    if (this.snapshotFailure && Date.now() < this.snapshotFailureCooldownUntil
+      && (!capture || this.snapshotFailureCaptured)) {
       return Promise.reject(this.snapshotFailure);
     }
 
@@ -450,7 +466,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const request = (async () => {
       try {
-        const buffer = await withResponseBudget(this.fetchSnapshotBuffer(Date.now() + 60_000), 60_000);
+        const buffer = await withResponseBudget(this.fetchSnapshotBuffer(Date.now() + 60_000, capture), 60_000);
         this.cacheSnapshot(buffer);
         this.snapshotFailure = null;
         this.snapshotFailureCooldownUntil = 0;
@@ -467,15 +483,18 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         // back online recover immediately instead of inheriting a network cooldown.
         if (this.isDeviceAvailable()) {
           this.snapshotFailure = failure;
+          this.snapshotFailureCaptured = capture;
           this.snapshotFailureCooldownUntil = Date.now() + SNAPSHOT_FAILURE_COOLDOWN_MS;
         }
         throw failure;
       } finally {
         this.freshSnapshotPromise = null;
+        this.freshSnapshotCaptures = false;
       }
     })();
 
     this.freshSnapshotPromise = request;
+    this.freshSnapshotCaptures = capture;
     return request;
   }
 
@@ -491,14 +510,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     this.cachedSnapshotTime = Date.now();
   }
 
-  private async fetchSnapshotBuffer(deadline: number): Promise<Buffer> {
-    const capture = await this.requestThumbnail({ deadline });
+  private async fetchSnapshotBuffer(deadline: number, requestCapture: boolean): Promise<Buffer> {
+    const capture = requestCapture ? await this.requestThumbnail({ deadline })
+      : { completed: false, thumbnail: this.getThumbnailUrl() };
     checkRequestBudget({ deadline });
     const url = capture.thumbnail;
     if (capture.completed) {
       this.lastSuccessfulCaptureTime = Date.now();
       this.log('Thumbnail capture completed');
-    } else {
+    } else if (requestCapture) {
       this.log('Thumbnail capture busy; downloading existing thumbnail');
     }
     if (!url) {

@@ -200,10 +200,17 @@ export async function writeOwnerOnlyJsonFile<T>(filePath: string, value: T): Pro
     ownsTempFile = true;
     await handle.writeFile(payload, { encoding: 'utf8' });
     await hardenOwnerOnlyFileMode(handle, tempPath);
+    // A remote command may follow this promise. Persist its intent before the
+    // caller can dispatch, including when the host loses power immediately.
+    await handle.sync();
     await handle.close();
     handle = null;
     await fs.rename(tempPath, filePath);
     ownsTempFile = false;
+    if (process.platform !== 'win32') {
+      const parent = await fs.open(directory, fsConstants.O_RDONLY);
+      try { await parent.sync(); } finally { await parent.close(); }
+    }
   } catch (error) {
     await handle?.close().catch(() => undefined);
     if (ownsTempFile) {
