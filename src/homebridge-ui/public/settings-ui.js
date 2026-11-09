@@ -244,14 +244,19 @@
       refreshState(draft.state);
     }
     function refreshState(state) {
-      status.textContent = state.accountAction ? 'Account action in progress. Settings are temporarily unavailable.' : state.pending ? 'Checking changes…' : state.dirty ? 'Unsaved changes. Save, then restart the Blink child bridge.' : 'Settings loaded. Changes take effect after Save and a child bridge restart.';
+      status.textContent = state.accountAction ? 'Account action in progress. Settings are temporarily unavailable.' : state.pending ? 'Checking changes…'
+        : state.error ? 'Settings could not be validated or staged. Retry before saving.'
+          : state.errors.length ? `${state.errors.length} settings error${state.errors.length === 1 ? '' : 's'}. Correct the fields below before saving.`
+            : state.dirty ? 'Unsaved changes. Save, then restart the Blink child bridge.' : 'Settings loaded. Changes take effect after Save and a child bridge restart.';
       connection.inert = state.accountAction;
       accountDetails.inert = state.accountAction;
       errors.replaceChildren(); errors.hidden = !state.error && !state.errors.length;
       if (state.error) errors.append(el('p', state.error));
       state.errors.forEach(error => {
         const key = error.path.split('/')[1];
-        const row = el('p', `${properties[key]?.title || 'Settings'}: ${error.message}`);
+        const field = properties[key]?.title;
+        const location = field && error.path ? `${field} (${error.path})` : field || error.path || 'Settings';
+        const row = el('p', `${location}: ${error.message}`);
         const section = sections.findIndex(item => item.items.includes(key));
         if (section >= 0 && section !== active) {
           const review = el('button', 'Review', 'btn btn-sm btn-outline-secondary'); review.type = 'button';
