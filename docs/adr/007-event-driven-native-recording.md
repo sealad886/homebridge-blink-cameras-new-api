@@ -161,8 +161,9 @@ companion journal under the existing private directory. It survives client
 re-login and ordinary stop. A camera already off needs no POST or saved original.
 When effective ownership ends, restore through the same queue only if a fresh
 read still equals the plugin-written false; preserve an external manual change.
-Unsetting a device that still inherits true does not end ownership. Drain this
-work with the runtime's existing recovery lifecycle before releasing its lease.
+Unsetting a device that still inherits true does not end ownership. Start the
+coalesced preference task after push demand or reconnect begins, independently of
+known-command recovery. Drain both tasks before releasing the runtime's lease.
 
 Blink documents delayed notifications with Early Notification off, but the
 inspected APK and retained payloads do not prove whether notification

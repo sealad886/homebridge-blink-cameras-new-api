@@ -107,6 +107,7 @@ export class NativeRecordingRuntime {
   private delivery?: Promise<void>;
   private stopping?: Promise<void>;
   private recovery?: Promise<void>;
+  private preferences?: Promise<void>;
   private cacheBytes = 0;
   private releaseOwnership?: () => Promise<void>;
   readonly directory: string;
@@ -236,6 +237,7 @@ export class NativeRecordingRuntime {
     }
     await this.source.setDemand({ motionAccessory: [...this.devices.values()].some(device => device.settings.exposeMotionDetected),
       hsv: [...this.devices.values()].some(device => device.settings.homeKitSecureVideo) });
+    this.startPreferenceReconciliation();
   }
 
   private reconcileKnownOperations(): Promise<void> {
@@ -261,7 +263,14 @@ export class NativeRecordingRuntime {
           status: 'verified-terminal', result: { status: 'skipped' } });
       } else this.options.report('recovery-required');
     }
-    await this.reconcileEarlyNotification();
+  }
+
+  private preferenceWorkAllowed(): boolean { return !this.stopped && !this.failed && this.currentScope(); }
+
+  private startPreferenceReconciliation(): void {
+    if (!this.preferenceWorkAllowed()) return;
+    this.preferences ??= this.reconcileEarlyNotification().catch(() => this.options.report('early-notification-faulted'))
+      .finally(() => { this.preferences = undefined; });
   }
 
   private async loadEarlyNotificationOriginals(): Promise<void> {
@@ -285,7 +294,7 @@ export class NativeRecordingRuntime {
   }
 
   private async saveEarlyNotificationOriginals(devices: EarlyNotificationOriginal[]): Promise<void> {
-    if (!this.earlyNotificationOriginals || !this.currentScope()) throw new Error('Early Notification originals unavailable');
+    if (!this.earlyNotificationOriginals || !this.preferenceWorkAllowed()) throw new Error('Early Notification originals unavailable');
     const next = { ...this.earlyNotificationOriginals, devices };
     await writeOwnerOnlyJsonFile(this.earlyNotificationPath, next);
     this.earlyNotificationOriginals = next;
@@ -293,7 +302,7 @@ export class NativeRecordingRuntime {
 
   /** Startup/configuration/operator retry only: never a per-motion preflight. */
   private async reconcileEarlyNotification(): Promise<void> {
-    if (!this.earlyNotificationOriginals || this.stopped || !this.currentScope()) return;
+    if (!this.earlyNotificationOriginals || !this.preferenceWorkAllowed()) return;
     const remote = this.options.client.getRemoteOperationState();
     if (remote.persistenceFailed || remote.liveView || remote.stateCommand || remote.storage.length) return;
     const desired = new Map<string, { device: NativeRuntimeDevice; identity: Omit<EarlyNotificationOriginal, 'original'> }>();
@@ -309,7 +318,7 @@ export class NativeRecordingRuntime {
     // Removed/excluded consumers still leave a durable original to restore.
     for (const original of [...this.earlyNotificationOriginals.devices]) {
       if (desired.has(settingKey(original))) continue;
-      if (this.stopped || !this.currentScope()) return;
+      if (!this.preferenceWorkAllowed()) return;
       try {
         const result = await this.options.client.setDeviceEarlyNotification(original.kind, original.networkId, original.deviceId,
           original.rawType, original.original, { expectedCurrent: false });
@@ -320,20 +329,20 @@ export class NativeRecordingRuntime {
       } catch { this.options.report('early-notification-restore-faulted'); }
     }
     for (const [key, { device, identity }] of desired) {
-      if (this.stopped || !this.currentScope()) return;
+      if (!this.preferenceWorkAllowed()) return;
       const binding = bindingKey(device.binding), previouslyOffSince = this.earlyNotificationOffSince.get(binding);
       this.earlyNotificationOffSince.delete(binding);
       try {
         const result = await this.options.client.setDeviceEarlyNotification(identity.kind, identity.networkId, identity.deviceId, identity.rawType, false, {
           beforeChange: async current => {
-            if (this.stopped || !this.currentScope() || current !== true) throw new Error('Early Notification ownership changed');
+            if (!this.preferenceWorkAllowed() || current !== true) throw new Error('Early Notification ownership changed');
             if (!this.earlyNotificationOriginals!.devices.some(row => settingKey(row) === key)) {
               await this.saveEarlyNotificationOriginals([...this.earlyNotificationOriginals!.devices, { ...identity, original: true }]);
             }
-            if (this.stopped || !this.currentScope()) throw new Error('Early Notification ownership changed');
+            if (!this.preferenceWorkAllowed()) throw new Error('Early Notification ownership changed');
           },
         });
-        if (result.supported && result.compatible && result.current === false && !this.stopped && this.currentScope()) {
+        if (result.supported && result.compatible && result.current === false && this.preferenceWorkAllowed()) {
           this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
           this.options.report('early-notification-confirmed-off');
         } else this.options.report('early-notification-unsupported');
@@ -345,8 +354,11 @@ export class NativeRecordingRuntime {
   async retryConnection(): Promise<void> {
     if (this.stopped) throw new Error('Native runtime stopped');
     await this.reconcileKnownOperations();
-    if (this.stopped || !this.active || ![...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) return;
-    await this.source.reconnect();
+    if (this.stopped) return;
+    if (this.active && [...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) {
+      await this.source.reconnect();
+    }
+    this.startPreferenceReconciliation();
   }
 
   policyChanged(cameraId: string, policy: NativeRecordingPolicy): Promise<void> {
@@ -382,10 +394,10 @@ export class NativeRecordingRuntime {
     if (this.deliveryTimer) globalThis.clearTimeout(this.deliveryTimer);
     this.deliveryTimer = undefined;
     this.stopping = (async () => {
-      const results = await Promise.allSettled([this.source?.stop(), this.recovery,
+      const results = await Promise.allSettled([this.source?.stop(), this.recovery, this.preferences,
         ...[...this.devices.values()].map(device => device.recording()?.invalidateDelivery()), ...this.policyChanges]);
-      // Recovery must settle its terminal coordinator receipt before shutdown
-      // closes the core and hands the shared state writer to a replacement.
+      // Recovery and preferences settle before shutdown closes the core and
+      // hands the shared state writer to a replacement.
       results.push(...await Promise.allSettled([this.core?.stop()]));
       await this.delivery;
       await this.writes;
