@@ -91,7 +91,7 @@ export class NativeRecordingRuntime {
   private readonly owners = new Map<string, NativeStorageOwner>();
   private readonly devices = new Map<string, NativeRuntimeDevice>();
   private readonly matchingDevices: readonly NativeMotionDevice[];
-  private readonly catalogs = new Map<string, NativeStorageCatalog>();
+  private readonly catalogs = new Map<string, { catalog: NativeStorageCatalog; startedAt: number }>();
   private readonly epochs = new Map<string, number>();
   private readonly enabledSince = new Map<string, number>();
   private readonly earlyNotificationOffSince = new Map<string, number>();
@@ -427,16 +427,16 @@ export class NativeRecordingRuntime {
 
   private matching(event: NativeRecordingObservation, fallbackAt?: number) {
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
-    const catalog = this.catalogs.get(event.moduleId);
-    if (!device || !catalog) return { status: 'missing' as const };
+    const cached = this.catalogs.get(event.moduleId);
+    if (!device || !cached) return { status: 'missing' as const };
     const camera: NativeMotionDevice = { ...device.binding, ...device.nativeStorage! };
-    return matchNativeClip({ catalog, camera,
+    return matchNativeClip({ catalog: cached.catalog, camera,
       devices: this.matchingDevices,
       // The provider has not proved whether a late notification's timestamp is
       // the clip start. Before the ordinary delay, import only an exact match.
       scope: { ...camera }, occurredAt: event.occurredAt,
-      // An early catalog cannot become fresh merely because local time passed.
-      toleranceMs: fallbackAt !== undefined && (this.state.catalogStartedAt[event.moduleId] ?? 0) < fallbackAt
+      // A refused newer request cannot make the old successful catalog fresh.
+      toleranceMs: fallbackAt !== undefined && cached.startedAt < fallbackAt
         ? 0 : this.options.config.matchToleranceMs,
       consumedClipIdentities: new Set(this.state.consumed) });
   }
@@ -465,7 +465,8 @@ export class NativeRecordingRuntime {
     let match = this.matching(event, request.fallbackAt);
     if (match.status !== 'matched') {
       const priorCatalogStart = this.state.catalogStartedAt[event.moduleId];
-      await this.commit(next => { next.catalogStartedAt[event.moduleId] = Date.now(); });
+      const startedAt = Date.now();
+      await this.commit(next => { next.catalogStartedAt[event.moduleId] = startedAt; });
       const result = await owner.readCatalog({ ...context, operationId: `${request.operationId}:catalog` }, { signal });
       if (result.status === 'unresolved') return { status: 'unresolved' };
       if (result.status !== 'ready') {
@@ -485,7 +486,7 @@ export class NativeRecordingRuntime {
         }
         return { status: 'skipped' };
       }
-      this.catalogs.set(event.moduleId, result.value);
+      this.catalogs.set(event.moduleId, { catalog: result.value, startedAt });
       match = this.matching(event, request.fallbackAt);
     }
     if (!allowed()) return { status: 'skipped' };

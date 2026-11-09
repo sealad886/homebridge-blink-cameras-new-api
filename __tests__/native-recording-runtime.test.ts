@@ -743,6 +743,26 @@ describe('native recording runtime composition', () => {
     expect(consumed).toEqual([expect.arrayContaining([102])]);
   });
 
+  it('does not promote the early cached clip when a fallback catalog request is refused', async () => {
+    const f = await setup({ earlyNotification: true });
+    await jest.advanceTimersByTimeAsync(10_000);
+    const occurredAt = Date.now();
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => (await f.state()).core?.queue[0]?.attempts === 0
+      && (await f.state()).core?.queue[0]?.eligibleAt === occurredAt + 60_000 && !(await f.state()).core?.operation);
+    f.transport.postEmpty.mockRejectedValueOnce(new BlinkHttpError('Sync Module busy', 409, '',
+      'https://rest-u000.immedia-semi.com/api/v1/example', 'POST'));
+    await jest.advanceTimersByTimeAsync(60_000);
+    await until(async () => f.events.includes('catalog-refused') && !(await f.state()).core?.operation);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    f.media.push({ ...f.media[0], id: 102, created_at: new Date(occurredAt).toISOString(),
+      media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/102/' });
+    await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));
+    const consumed = (await f.state()).consumed.map(value => JSON.parse(value));
+    expect(consumed).toEqual([expect.arrayContaining([102])]);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+  });
+
   it('reports PIR immediately, then downloads once and only triggers HSV after local preparation', async () => {
     const f = await setup();
     await f.push(); await f.push();
