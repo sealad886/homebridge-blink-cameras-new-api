@@ -1,6 +1,6 @@
 # Configuration reference
 
-Last reviewed: 2 November 2026.
+Last reviewed: 9 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -22,7 +22,7 @@ The editor separates five tasks:
 | Section | Use it for |
 | --- | --- |
 | Overview & connection | Sign in, inspect stored-session facts and test the Blink connection. |
-| Cameras in Home | Choose systems/cameras, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional feed limits. Excluded cameras remain visible here so you can include them again. |
+| Cameras in Home | Choose systems/cameras, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional live-view feed limits. Excluded cameras remain visible here so you can include them again. |
 | HomeKit recording | Choose discovered cameras and review recording, motion and privacy prerequisites. |
 | Live viewing & sound | Allow live viewing, choose a picture preset and allow shared HomeKit audio. |
 | Advanced & troubleshooting | Polling, previews, exact tuning values, diagnostics and immediate account maintenance. |
@@ -41,31 +41,14 @@ unrelated edits. Settings stay unavailable throughout the account request and
 its configuration save. Per-camera temperature offers **Use platform setting**, **Show**
 and **Hide**. Blank per-camera motion duration inherits the platform duration.
 
-## HomeKit recording and feed limits
+## Live-view feed limits
 
-Select cameras in **HomeKit recording**, Save and restart the Blink child bridge.
-Then use the camera's settings in Apple Home to allow **Stream & Allow Recording**
-and choose recording-audio permission. HomeKit recordings are viewed in Apple
-Home; the plugin does not choose an iCloud Drive folder or confirm a saved clip.
+HomeKit recording uses completed native clips as described
+[below](#motion-and-homekit-recording). Explicit live viewing retains independent
+upstream capacity limits. These limits do not schedule USB clip acquisition.
 
-Recording permission starts continuous capture with a four-second memory buffer
-and local video-motion detection. This increases battery and network use. New
-motion events require the Blink system to be armed and camera motion enabled.
-Disarming Blink or turning camera motion off suppresses new events; the
-background feed and buffer may continue. Turning recording off in Home cancels
-recording capture and clears the buffer. Turning the camera off in Home also
-blocks live viewing and snapshots.
-
-**Read motion events from Blink** only reads Blink cloud clip events. It does
-not control HSV's local motion detector. Live-view enablement is independent
-from recording-camera selection. Camera audio applies to both; Apple Home's
-recording-audio permission also applies. Live picture presets do not set the
-Home hub's recording format.
-
-There is no four-camera recording-selection limit. The global upstream feed
-capacity is the known, included camera count; an offline camera remains known.
-Live viewing and recording can share one camera's upstream feed. Each actual
-Sync Module defaults to the included camera count associated with its Blink
+The global live-view upstream feed capacity is the known, included camera count;
+an offline camera remains known. Each actual Sync Module defaults to the included camera count associated with its Blink
 system. Set an optional positive whole-number limit in the module details;
 **Use discovered default** removes that override. Blink may impose additional
 limits regardless of local capacity.
@@ -91,7 +74,7 @@ Add a platform entry to your Homebridge `config.json`:
       "trustDevice": true,
       "pollInterval": 60,
       "motionTimeout": 30,
-      "enableMotionPolling": true,
+      "exposeMotionDetected": true,
       "enableStreaming": true,
       "enableAudio": true
     }
@@ -116,11 +99,11 @@ Add a platform entry to your Homebridge `config.json`:
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
-| `enableMotionPolling` | No | `true` | Read Blink cloud clip events; independent of HSV local video motion and capture permission |
+| `exposeMotionDetected` | No | `true` | Publish motion sensors from Blink push events; per-camera overrides apply |
+| `nativeRecording` | No | See below | Bounded timing, matching and local storage policy for optional HomeKit recording |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
-| `hksvCameras` | No | `[]` | Cameras offered for HSV recording; the discovered picker writes qualified type/ID values. Home permissions and restart are additional steps. |
-| `syncModuleFeedLimits` | No | `[]` | Optional `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. |
+| `syncModuleFeedLimits` | No | `[]` | Optional live-view `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. These do not govern native clip acquisition. |
 | `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
 | `enableAudio` | No | `true` | Allow camera audio for live viewing and HSV; Home recording-audio permission must also allow it |
@@ -134,9 +117,16 @@ Add a platform entry to your Homebridge `config.json`:
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
-| `deviceSettingOverrides` | No | - | Array of per-device overrides such as `{ deviceIdentifier, motionTimeout, exposeTemperature }` (legacy `deviceSettings` is still accepted for motion timeout; see [input quality](streaming.md#input-and-output-quality)) |
+| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected` and `homeKitSecureVideo`; see below and [input quality](streaming.md#input-and-output-quality) |
 
-For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration) before restarting; retired CLI and AAC-ELD settings are rejected.
+For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration)
+before restarting; retired CLI and AAC-ELD settings are rejected. Upgrading from
+0.10.0 also requires reviewing the
+[native recording migration](native-recording-config-migration.md). Run the secure
+media converter first against the explicit complete Homebridge config path; it
+creates a private backup before replacement. Then preview the native recording
+converter, review its report and apply it only when ready. Neither tool contacts
+Blink or restarts Homebridge.
 
 Use **Cameras in Home** to select systems this instance should expose. Save and
 restart the Blink child bridge. Including a system restores it on discovery.
@@ -150,6 +140,89 @@ motion control; per-device `motionTimeout` remains supported.
 
 For stored-session validation, recovery and legacy credential migration, see
 [authentication](authentication.md).
+
+## Motion and HomeKit recording
+
+Motion comes from the plugin's own push receiver. The previous cloud-media
+polling path and `enableMotionPolling` setting are removed. Normal state polling
+still uses `pollInterval`; it does not prepare USB catalogs. The push subscription
+is active if any camera exposes motion or selects HomeKit recording. Hiding all
+motion sensors does not disable a separately selected recording camera.
+
+For example:
+
+```json
+{
+  "exposeMotionDetected": true,
+  "deviceSettingOverrides": [
+    {
+      "deviceIdentifier": "camera:123",
+      "homeKitSecureVideo": true,
+      "exposeMotionDetected": true
+    }
+  ],
+  "nativeRecording": {
+    "initialDelaySeconds": 60,
+    "retryIntervalSeconds": 5,
+    "maxRetries": 10,
+    "catalogRefreshSeconds": 60
+  }
+}
+```
+
+Use the actual camera identifier, serial or exact Blink name. Qualified
+`camera:123`, `owl:123` and `doorbell:123` identifiers disambiguate device types.
+The public sensor is named `<camera display name> Motion Detected`, preserving
+its existing HomeKit service identity. Public motion reports promptly. A separate
+internal recording trigger fires only after the finite local video is prepared,
+so Home does not wait for the Blink download on an open recording connection.
+
+`homeKitSecureVideo` defaults to `false`. It needs a supported camera with a
+known Sync Module association and working **native Local Storage** clips. A USB
+drive holding daily cloud backups does not establish this capability. Enable
+**Stream & Allow Recording** and the desired recording-audio permission in
+Apple Home. Changing the plugin setting never arms Blink or enables camera
+motion as a side effect.
+
+Each motion observation creates an independently delayed FIFO job. Matching uses
+the actual catalog's network, native device name and offset-bearing `created_at`
+timestamp; display aliases and invented URL filenames are not camera identity.
+The first attempt normally occurs after 60 seconds. Ten retries means at most
+11 attempts, subject to maximum job age and remote-command ownership.
+
+| `nativeRecording` field | Default | Allowed values / meaning |
+| --- | --- | --- |
+| `initialDelaySeconds` | `60` | Integer 0–3600; initial motion-to-acquisition delay |
+| `retryIntervalSeconds` | `5` | Integer 1–300; local missing-clip retry delay |
+| `maxRetries` | `10` | Integer 0–100; retries after the first attempt |
+| `matchToleranceSeconds` | `15` | Integer 0–300; maximum timestamp distance for an unambiguous match |
+| `catalogRefreshSeconds` | `60` | Integer 60–3600; minimum spacing between new catalog preparations for a module |
+| `maxQueuedJobs` | `128` | Integer 1–1024; bounded event backlog |
+| `maxJobAgeSeconds` | `900` | Integer 1–86400, at least the initial delay; expires undispatched jobs |
+| `maxCachedBytes` | `134217728` | Integer 33554432–1073741824; owned downloaded-file budget |
+
+Catalog cooldown is a conservative plugin policy, not a measured vendor rate
+limit. A five-second retry can reuse a completed catalog or wait locally; it
+cannot start another catalog preparation every five seconds. An uncertain
+provider operation blocks replacement requests even after a local timeout or
+restart. No polling interval or age limit proves that a remote command ended.
+
+The receiver identity and command/job state live in Homebridge's private
+`.blink-native-recording` directory. Keep that state with the auth cache across
+ordinary restarts. It contains private receiver credentials and is not a UI
+report. Logs describe transitions without requesting extra provider evidence.
+The plugin does not upload video, thumbnails or other data files to Blink.
+
+Recording/camera/audio policy changes cancel local work and fence late results.
+Already accepted provider operations remain owned until terminal proof is
+available; cancelling Home delivery does not cancel a remote command by guess.
+Completed local recordings are finite fMP4 streams. The Home hub decides whether
+to request or retain them. Delayed offers cannot establish pre-event recording,
+historic timeline insertion or successful iCloud retention.
+
+For earlier configuration, use the
+[one-off configuration migration](native-recording-config-migration.md). Review its dry run and
+backup before applying it; it is never run automatically on the Pi.
 
 ## Camera temperature
 
@@ -194,8 +267,10 @@ When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the 
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to request a fresh thumbnail capture.
 The switch resets to Off after the attempt, including failure; its reset alone does not prove a fresh capture. A busy capture can return an existing thumbnail; see [snapshot diagnostics](troubleshooting.md#blink-connection-failure-in-homekit).
 
-Concurrent fresh snapshot requests for the same camera share one capture and
-download, including requests from the manual refresh switch. For 15 seconds after
+For native-recording cameras, automatic requests read the existing thumbnail
+without a capture POST. The explicit refresh switch can still request a capture.
+Concurrent capture requests share one capture and download; a manual request
+arriving during a passive read waits and then performs its capture. For 15 seconds after
 a failed attempt, fresh requests return that failure without contacting Blink
 again. A later request can retry. Existing valid cached snapshots remain
 available while the camera is online. A cached image does not confirm current

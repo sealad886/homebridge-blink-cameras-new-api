@@ -13,6 +13,7 @@ static int64_t recording_start=AV_NOPTS_VALUE,recording_end,recording_last_video
 static int64_t recording_media_start=AV_NOPTS_VALUE,recording_media_end;
 static int64_t recording_first_video=AV_NOPTS_VALUE,recording_first_audio=AV_NOPTS_VALUE,recording_audio_end;
 static int64_t recording_audio_tolerance;
+static int64_t recording_fragment_target;
 static AVCodecContext *recording_video_encoder;
 static AVPacket *recording_pending[64];
 static size_t recording_pending_count,recording_pending_bytes;
@@ -78,6 +79,7 @@ static void recording_flush(void) {
 }
 static void recording_open(AVCodecContext *video,AVCodecContext *audio) {
     recording_video_encoder=video;
+    recording_fragment_target=config[13]==2?av_rescale_q(video->gop_size,(AVRational){1,(int)config[2]},AV_TIME_BASE_Q):1000000;
     if(avformat_alloc_output_context2(&recording,NULL,"mp4",NULL)<0 || !recording)fatal("MP4_MUXER");
     recording_data=av_malloc(BLINK_MP4_FRAGMENT_MAX);uint8_t *io_buffer=av_malloc(32768);
     if(!recording_data || !io_buffer)fatal("MEMORY");
@@ -116,7 +118,7 @@ static void recording_packet_internal(AVCodecContext *encoder,AVPacket *packet,u
         if(recording_waiting_audio) { recording_hold_video(packet,pts);return; }
         /* Scene cuts may introduce extra keyframes. Keep whole short GOPs together
          * instead of producing one-frame fragments with empty audio traf boxes. */
-        if((packet->flags&AV_PKT_FLAG_KEY) && recording_has_video && pts-recording_start>=1000000) {
+        if((packet->flags&AV_PKT_FLAG_KEY) && recording_has_video && pts-recording_start>=recording_fragment_target-1) {
             if(recording_audio>=0 && (recording_first_audio==AV_NOPTS_VALUE || recording_end-recording_audio_end>recording_audio_tolerance)) {
                 recording_waiting_audio=1;recording_hold_video(packet,pts);return;
             }

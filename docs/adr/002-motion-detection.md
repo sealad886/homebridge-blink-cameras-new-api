@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-007: Event-driven native recording](007-event-driven-native-recording.md)
+on 9 November 2026. The decision below describes the previous 0.10.0 polling
+implementation. The redesign removes that ingestion path and its configuration;
+normal device-state polling remains separate.
 
 ## Context
 

@@ -42,7 +42,7 @@ class PackageTests(unittest.TestCase):
         self.recipe_hash = hashlib.sha256(self.recipe).hexdigest()
         self.snapshot = {
             'native/worker.c': b'synthetic owned C',
-            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 3u\n',
+            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 4u\n',
             'native/Makefile': b'synthetic make',
             'native/COPYING': b'synthetic license',
             'native/dependencies/prepare.py': self.recipe,
@@ -73,7 +73,7 @@ class PackageTests(unittest.TestCase):
     def candidate(self, target, *, receipt_change=None, members=None):
         worker = ('synthetic ' + target).encode()
         receipt = {'target': target, 'source_sha': SHA, 'sha256': hashlib.sha256(worker).hexdigest(),
-                   'protocolVersion': 3,
+                   'protocolVersion': 4,
                    'dependencies': {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins},
                    'dynamic_dependencies': 'synthetic system import evidence', 'distribution_ready': False,
                    'limitations': ['synthetic fixture']}
@@ -98,7 +98,7 @@ class PackageTests(unittest.TestCase):
         runtime = self.root / 'native/runtime'
         manifest = json.loads((runtime / 'manifest.json').read_text())
         self.assertEqual(manifest['schemaVersion'], 1)
-        self.assertEqual(manifest['protocolVersion'], 3)
+        self.assertEqual(manifest['protocolVersion'], 4)
         self.assertEqual(set(manifest['targets']), set(TARGETS))
         for target in TARGETS:
             item = manifest['targets'][target]
@@ -188,14 +188,14 @@ class PackageTests(unittest.TestCase):
                 package.stage_package(self.root, self.inputs, SHA)
 
     def test_rejects_old_or_missing_candidate_protocol_and_source_mismatch(self):
-        for mutate in (lambda row: row.update(protocolVersion=2), lambda row: row.pop('protocolVersion'),
-                       lambda row: row.update(protocolVersion=3.0)):
+        for mutate in (lambda row: row.update(protocolVersion=3), lambda row: row.pop('protocolVersion'),
+                       lambda row: row.update(protocolVersion=4.0)):
             with self.subTest(mutate=mutate):
                 self.candidate('linux-x64', receipt_change=mutate)
                 with self.assertRaises(ValueError):
                     package.stage_package(self.root, self.inputs, SHA)
         self.candidate('linux-x64')
-        self.snapshot['native/protocol.h']=b'#define BLINK_PROTOCOL_VERSION 2u\n'
+        self.snapshot['native/protocol.h']=b'#define BLINK_PROTOCOL_VERSION 3u\n'
         with self.assertRaisesRegex(ValueError,'source protocol mismatch'):
             package.stage_package(self.root, self.inputs, SHA)
         self.fetch.assert_not_called()
@@ -325,9 +325,9 @@ class SourceSnapshotTests(unittest.TestCase):
         root = Path('/synthetic/project')
         expected = {
             'native/worker.c': b'committed C', 'native/Makefile': b'committed make', 'native/COPYING': b'license',
-            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 3u\n', 'native/audio.inc': b'audio',
+            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 4u\n', 'native/audio.inc': b'audio',
             'native/recording.inc': b'recording', 'native/output.inc': b'output', 'native/protection.inc': b'protection',
-            'native/tests/check-recording.c': b'checker', 'native/motion.inc': b'motion', 'native/tests/check-motion.c': b'motion checks',
+            'native/tests/check-recording.c': b'checker',
             'native/dependencies/prepare.py': b'recipe', 'native/dependencies/package.py': b'packager',
             'native/dependencies/source-inputs.json': b'{}', '.github/workflows/test.yml': b'CI',
             'native/dependencies/licenses/ffmpeg-LICENSE.md': b'notice',
@@ -352,15 +352,15 @@ class SourceSnapshotTests(unittest.TestCase):
                     package.source_files(Path('/synthetic/project'), SHA)
                 self.assertEqual(git.call_count, 1)
 
-    def test_refuses_each_missing_motion_helper_or_windows_notice_in_exact_source(self):
+    def test_refuses_each_missing_recording_helper_or_windows_notice_in_exact_source(self):
         names = ('native/worker.c', 'native/protocol.h', 'native/audio.inc', 'native/recording.inc',
-                 'native/output.inc', 'native/protection.inc', 'native/tests/check-recording.c', 'native/motion.inc', 'native/tests/check-motion.c',
+                 'native/output.inc', 'native/protection.inc', 'native/tests/check-recording.c',
                  'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
                  'native/dependencies/package.py', 'native/dependencies/source-inputs.json', '.github/workflows/test.yml',
                  'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/libsrtp-LICENSE',
                  'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING',
                  'native/dependencies/licenses/mingw-w64-runtime-COPYING', 'native/dependencies/licenses/gcc-COPYING.RUNTIME')
-        for missing in (*names[-2:], 'native/motion.inc', 'native/tests/check-motion.c'):
+        for missing in (*names[-2:], 'native/recording.inc', 'native/tests/check-recording.c'):
             with self.subTest(missing=missing):
                 expected = {name: b'notice' for name in names if name != missing}
                 listing = b''.join(f'100644 blob {"b" * 40} {len(data)}\t{name}\0'.encode() for name, data in expected.items())

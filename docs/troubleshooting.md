@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Last reviewed: 26 October 2026.
+Last reviewed: 9 November 2026.
 
 Start with the checks below. For safe collection/redaction use the
 [diagnostic specification](debug_logging_spec.md) and the
@@ -32,9 +32,29 @@ See [Apple's notification instructions](https://support.apple.com/en-ie/105042).
 HomeKit writes and fresh snapshot responses have a 12-second response limit.
 Started Blink commands may finish later; a timeout does not replay a mutation.
 Queued mutations that expire before starting are not sent. Thumbnail captures
-share the mutation queue until command completion, while reads and image
-downloads remain independent. An HTTP 409 is reconciled against fresh state or
-retried within bounded limits; exhausted conflicts return a HomeKit error.
+share durable ownership with mutations and storage work until command completion,
+while reads and image downloads remain independent. Ordinary controls can
+reconcile an explicit conflict against confirmed state within their bounds.
+Native-storage refusals defer locally; an unknown accepted outcome remains owned
+and does not authorize a replacement preparation.
+When Blink has already confirmed command completion, a failed media transfer is
+settled locally so later controls and recording jobs can proceed.
+Startup and explicit connection retry reconcile known ordinary and native
+command IDs within their existing bounds. Ordinary polling adds no ownership
+probes, and unknown IDs remain fenced.
+
+If Blink acknowledged closing an owned Live View but its status check was
+interrupted, startup or an explicit connection retry checks that known command's
+status within the existing bound. Recovery does not resend the close request.
+Unknown command IDs and unacknowledged closes retain their ownership fences.
+An explicit **Retry Blink Connection** also reopens a faulted motion receiver
+using its saved identity and acknowledgments. Ordinary polling keeps its current
+subscription.
+
+Startup also retires verified downloaded clips and private generated media
+remnants left by interrupted downloads before accounting for cache capacity.
+It preserves remote operation receipts, unexpected files and `.DS_Store`.
+Do not clear the private state directory to recover from a pending operation.
 
 Persistent snapshots remain manual-refresh images. Their download/cache age and
 last observed successful capture age are separate diagnostics. A busy capture
@@ -105,21 +125,40 @@ public diagnostic reports.
 
 ## Rate Limits (429)
 
-The plugin automatically backs off and retries. If you're hitting rate limits frequently:
+Eligible reads back off within their retry budget. Recording commands do not
+replay an ambiguous POST. If rate limits recur:
 
 - Increase `pollInterval` to reduce API calls
-- Set `enableMotionPolling` to `false` to reduce calls
+- Check whether a known remote operation is unresolved before retrying a control
+- Hide unwanted motion sensors with `exposeMotionDetected`; if HSV remains
+  selected, its push subscription stays active without idle storage requests
 
 ## Node.js Version
 
-This plugin requires Node.js 20, 22, or 24 LTS. Check your version:
+The declared Node.js ranges are 20.3+, 22, 24 or 26; see `package.json`. The push
+receiver uses `AbortSignal.any`, which is unavailable in Node 20.0–20.2.
+Check your version:
 
 ```bash
 node --version
 ```
 
+## Configuration migration required
+
+An upgrade from 0.10.0 can contain both retired secure-media and old recording
+settings. Follow the [secure media upgrade](streaming.md#upgrade-configuration)
+first, then the [native recording preview and application](native-recording-config-migration.md).
+Use the explicit full Homebridge config path. The first converter applies with a
+private backup; the second defaults to preview and requires `--apply` to replace.
+Both preserve unrelated configuration and make no Blink requests or service
+changes. The current `syncModuleFeedLimits` live-view setting remains valid.
+
 ## Motion Not Detected
 
-- Ensure `enableMotionPolling` is `true`
+- Ensure global/per-camera `exposeMotionDetected` is enabled for the public sensor
 - Check that the network is armed (motion events only trigger when armed)
-- Reduce `pollInterval` for faster detection (but more API calls)
+- Check the local push receiver status; reducing `pollInterval` does not speed up push
+- For HSV, check Home camera/recording permissions and whether native Blink Local
+  Storage clips are being saved. A motion alert does not establish a saved clip
+- If an accepted command is unresolved, preserve its private state and inspect
+  the known operation. Do not clear ownership or submit a replacement by guess

@@ -125,7 +125,7 @@ def write_worker_artifact(prefix, worker, output, source_sha):
     with worker.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     receipt = {'target': target, 'source_sha': source_sha, 'sha256': digest, 'dependencies': dependency,
-               'protocolVersion': 3,
+               'protocolVersion': 4,
                'dynamic_dependencies': dynamic, 'distribution_ready': False,
                'limitations': ['CI build/test artifact only; no minimum-OS clean-host or npm artifact acceptance',
                                'No corresponding-source distribution or integrated physical acceptance']}

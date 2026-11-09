@@ -12,8 +12,11 @@ import { TARGETS, collectSourceProof, regularFile, sha256, verifyNativePackage, 
 
 export const QUALIFICATION_SELECTIONS = Object.freeze(['audio-latm', 'audio-latm-bundled'].flatMap(mode =>
   ['opus:16000', 'opus:24000', 'pcma:8000', 'pcmu:8000'].map(audio => `${mode}:${audio}`)));
+export const FINITE_RECORDING_SELECTIONS = Object.freeze(['audio-16khz', 'audio-24khz', 'audio-disabled', '30fps-source-15fps-output']);
+export const RUNTIME_BOOTSTRAP_EXPECTATION = Object.freeze({ instances: 2, sourceStarts: 2, sourceStops: 2,
+  publicMotionEvents: 2, stateReloaded: true, syntheticDownloads: 1, networkAttempts: 0 });
 const selections = QUALIFICATION_SELECTIONS;
-const names = target => ['fixture', 'check-rtp'].map(name => name + (target === 'win32-x64' ? '.exe' : ''));
+const names = target => ['fixture', 'check-rtp', 'check-recording'].map(name => name + (target === 'win32-x64' ? '.exe' : ''));
 export function prepareValidation(build, output, target, sourceSha) {
   assert.equal(target, process.platform + '-' + process.arch); assert(TARGETS.includes(target)); assert.match(sourceSha, /^[a-f0-9]{40}$/);
   const files = Object.fromEntries(names(target).map(name => [name, sha256(regularFile(build, name))]));
@@ -87,6 +90,149 @@ export async function exerciseInstalledCodec(packageRoot, workerPath, validation
   }
   return results;
 }
+
+/** Prove the exact installed finite-file path, including seekable tail-moov MP4
+ * input, H264/AAC output, permission-off track omission and independent decode. */
+export async function exerciseInstalledRecording(packageRoot, validationRoot) {
+  const requireInstalled = createRequire(join(packageRoot, 'package.json'));
+  const { prepareNativeRecording, NativeRecordingMemoryBudget } = requireInstalled(join(packageRoot, 'dist/accessories/native-recording-preparation.js'));
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const scratch = mkdtempSync(join(tmpdir(), 'blink-finite-qualification-')); chmodSync(scratch, 0o700);
+  const results = [];
+  try {
+    const bytes = execFileSync(join(validationRoot, 'fixture' + suffix), ['audio-mp4', '320', '180', '15', '33'],
+      { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 });
+    assert(bytes.indexOf(Buffer.from('moov')) > bytes.indexOf(Buffer.from('mdat')), 'Fixture must require seeking to its tail moov');
+    const filePath = join(scratch, 'native-source.mp4'); writeFileSync(filePath, bytes, { mode: 0o600, flag: 'wx' });
+    const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
+      videoCodec: { type: 0, resolution: [320, 180, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
+      audioCodec: { type: 0, samplerate: 1, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
+    for (const selected of FINITE_RECORDING_SELECTIONS) {
+      const longSource = selected === '30fps-source-15fps-output';
+      const rate = selected === 'audio-16khz' ? 16000 : selected === 'audio-24khz' ? 24000 : 0;
+      const sourceBytes = longSource ? execFileSync(join(validationRoot, 'fixture' + suffix), ['video-mp4', '16', '16', '30', '1800'],
+        { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : bytes;
+      const selectedFile = longSource ? join(scratch, 'long-native-source.mp4') : filePath;
+      if (longSource) writeFileSync(selectedFile, sourceBytes, { mode: 0o600, flag: 'wx' });
+      const selectedConfiguration = { ...configuration,
+        videoCodec: { ...configuration.videoCodec, resolution: longSource ? [16, 16, 15] : configuration.videoCodec.resolution },
+        audioCodec: { ...configuration.audioCodec, samplerate: rate === 24000 ? 2 : 1 } };
+      const memory = new NativeRecordingMemoryBudget();
+      const prepared = await prepareNativeRecording({ filePath: selectedFile, expectedBytes: sourceBytes.length, expectedSha256: sha256(sourceBytes) },
+        selectedConfiguration, rate !== 0, new globalThis.AbortController().signal, { memory, admit: work => work() });
+      try {
+        assert(prepared.fragments.length > 1); assert(prepared.durationMs > (longSource ? 59999 : 2100) && prepared.durationMs <= (longSource ? 60000.1 : 2200.1));
+        assert(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= 1000.01));
+        const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
+        try {
+          assert.equal(sha256(output), prepared.preparedSha256);
+          const decoded = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
+            { input: output, env: {}, timeout: 5000, maxBuffer: 65536 }));
+          assert.equal(decoded.videoFrames, longSource ? 900 : 33); assert.equal(decoded.videoWidth, longSource ? 16 : 320); assert.equal(decoded.videoHeight, longSource ? 16 : 180);
+          assert.equal(decoded.audioTracks, rate ? 1 : 0);
+          assert.equal(decoded.audioSampleRate, rate);
+          assert.equal(decoded.audioChannels, rate ? 1 : 0);
+          assert.equal(sha256(readFileSync(selectedFile)), sha256(sourceBytes), 'Preparation must preserve Blink original');
+        } finally { output.fill(0); }
+        results.push(selected);
+      } finally { prepared.dispose(); assert.equal(memory.bytes, 0); }
+    }
+    bytes.fill(0); return results;
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}
+
+/** Real installed startup and persistence on each host's filesystem. All remote
+ * and child-process capabilities fail closed; the one SDK GET is an in-memory
+ * synthetic response used to exercise ordinary download-file promotion. */
+export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
+  const requireInstalled = createRequire(join(packageRoot, 'package.json'));
+  const scratch = mkdtempSync(join(tmpdir(), 'blink-runtime-qualification-')); chmodSync(scratch, 0o700);
+  const undo = [], runtimes = []; let networkAttempts = 0, syntheticDownloads = 0, sourceStarts = 0, sourceStops = 0, publicMotionEvents = 0;
+  const mediaUrl = 'https://rest-e001.immedia-semi.com/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/303/clip/request/404/';
+  const syntheticBytes = Buffer.from('qualification-only native clip bytes'); let allowDownload = false;
+  const denied = () => { networkAttempts++; throw new Error('Network or process activation is forbidden during offline runtime qualification'); };
+  const replace = (object, key, value = denied) => {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key); assert(descriptor && descriptor.configurable !== false);
+    Object.defineProperty(object, key, { ...descriptor, value }); undo.push(() => Object.defineProperty(object, key, descriptor));
+  };
+  try {
+    replace(globalThis, 'fetch', async (url, options = {}) => {
+      if (!allowDownload || String(url) !== mediaUrl || (options.method ?? 'GET') !== 'GET') return denied();
+      syntheticDownloads++; assert.equal(syntheticDownloads, 1); return new globalThis.Response(syntheticBytes);
+    });
+    for (const [name, methods] of [['node:http', ['request', 'get']], ['node:https', ['request', 'get']],
+      ['node:net', ['connect', 'createConnection']], ['node:tls', ['connect']],
+      ['node:dgram', ['createSocket']], ['node:dns', ['lookup', 'resolve', 'resolve4', 'resolve6', 'resolveAny', 'resolveTxt', 'resolveSrv']],
+      ['node:child_process', ['spawn', 'fork', 'exec', 'execFile', 'execSync', 'execFileSync', 'spawnSync']]]) {
+      const module = requireInstalled(name); for (const method of methods) replace(module, method);
+    }
+    replace(requireInstalled('node:net').Socket.prototype, 'connect');
+    const dns = requireInstalled('node:dns').promises;
+    for (const method of ['lookup', 'resolve', 'resolve4', 'resolve6', 'resolveAny', 'resolveTxt', 'resolveSrv']) replace(dns, method);
+    const { NativeRecordingRuntime } = requireInstalled(join(packageRoot, 'dist/native-recording-runtime.js'));
+    const { resolveNativeRecordingConfig } = requireInstalled(join(packageRoot, 'dist/native-recording-config.js'));
+    const { BLINK_FIREBASE_CLIENT } = requireInstalled(join(packageRoot, 'dist/blink-api/fcm-config.js'));
+    const scope = { accountId: 10, clientId: 11, tier: 'u000' }, sources = [];
+    const marker = 'qualification-persisted-message'; let saveRemote;
+    const client = { getCachedIdentity: () => ({ ...scope }), registerMotionNotificationKey: denied,
+      createNativeStorageTransport: () => ({ postEmpty: denied, getJson: denied, validateMediaUrl: denied, downloadMedia: denied }),
+      withNativeStorageAdmission: denied, setNativeStorageOwner() {},
+      configureRemoteOperationOwnership: options => { saveRemote = options.saveState; return async () => {}; },
+      reconcileKnownStateCommand: async () => ({ confirmed: true }), reconcileKnownLiveViews: async () => [],
+      getRemoteOperationState: () => ({ storage: [], persistenceFailed: false }) };
+    const options = { client, scope, storagePath: scratch, config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT,
+      appVersion: '61.0', report: event => assert(!event.includes('faulted'), 'Offline runtime must not fault'),
+      matchingDevices: [{ accountId: 10, networkId: 20, syncModuleId: 30, moduleId: '20:30', providerId: 40,
+        target: 'camera', cameraId: 'camera:40', nativeName: 'Qualification camera' }],
+      devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Qualification camera' },
+        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: false },
+        motion() { publicMotionEvents++; }, recording: () => undefined }],
+      eventSourceFactory: input => { sources.push(input); return {
+        async setDemand(demand) { sourceStarts++; assert.deepEqual(demand, { motionAccessory: true, hsv: false }); },
+        reconnect: denied,
+        async stop() { sourceStops++; },
+      }; },
+    };
+    for (let generation = 0; generation < 2; generation++) {
+      const runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime);
+      const source = sources[generation];
+      if (generation) assert.deepEqual(source.restoredState.persistentIds, [marker]);
+      await runtime.start();
+      await source.saveState({ version: 1, scope, firebase: { projectId: BLINK_FIREBASE_CLIENT.projectId,
+        appId: BLINK_FIREBASE_CLIENT.appId, messagingSenderId: BLINK_FIREBASE_CLIENT.messagingSenderId }, persistentIds: [marker] });
+      await saveRemote({});
+      const now = Date.now();
+      await source.onNotification({ persistentMessageId: `qualification-${generation}`, scope, receivedAt: now, activatedAt: now,
+        data: { category: 'motion', event_type: 'cam2sm_motion', camera: '40', target: 'camera', network: '20', created_at: new Date(now).toISOString() } },
+      new globalThis.AbortController().signal);
+      await runtime.stop();
+      const persisted = JSON.parse(readFileSync(join(runtime.directory, 'state.json')));
+      assert.deepEqual(persisted.scope, scope); assert.deepEqual(persisted.push.persistentIds, [marker]); assert.deepEqual(persisted.remoteOperations, {});
+    }
+    const { BlinkApi } = requireInstalled(join(packageRoot, 'dist/blink-api/client.js'));
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'qualification', tier: 'u001', sharedTier: 'e001' });
+    Object.assign(api.auth, { ensureValidToken: async () => {}, getPersistedTier: async () => 'u001', getPersistedSharedTier: async () => 'e001', getAccountId: () => 10,
+      getClientId: () => 90, getAuthHeaders: () => ({ Authorization: 'Bearer qualification-only' }) });
+    api.configureRemoteOperationOwnership({ restoredState: {}, saveState: async () => {} });
+    const storageScope = { accountId: 10, networkId: 20, syncModuleId: 30 };
+    api.setNativeStorageOwner(storageScope, { version: 1, operation: { ...storageScope, operationId: 'clip', kind: 'clip', phase: 'prepared',
+      commandId: 505, statusReads: 1, clip: { manifestId: 303, clip: { clipId: 404, networkId: 20, deviceName: 'qualification',
+        capturedAt: new Date().toISOString(), mediaUrl } } } });
+    const directory = join(scratch, 'sdk-download'); mkdirSync(directory, { mode: 0o700 });
+    const transport = api.createNativeStorageTransport({ scope: storageScope, directory });
+    allowDownload = true;
+    const downloaded = await api.withNativeStorageAdmission('clip', () => transport.downloadMedia(mediaUrl, { retry: false, maxBytes: 1024 }), {}, storageScope);
+    allowDownload = false;
+    assert.equal(downloaded.bytes, syntheticBytes.length); assert.equal(downloaded.sha256, sha256(syntheticBytes));
+    assert.deepEqual(readFileSync(downloaded.reference), syntheticBytes);
+    const result = { instances: runtimes.length, sourceStarts, sourceStops, publicMotionEvents, stateReloaded: true, syntheticDownloads, networkAttempts };
+    assert.deepEqual(result, RUNTIME_BOOTSTRAP_EXPECTATION); return result;
+  } finally {
+    await Promise.allSettled(runtimes.map(runtime => runtime.stop()));
+    for (const restore of undo.reverse()) restore();
+    syntheticBytes.fill(0); rmSync(scratch, { recursive: true, force: true });
+  }
+}
 function npmCli() {
   const directory = dirname(process.execPath);
   const candidate = [join(directory, 'node_modules/npm/bin/npm-cli.js'), join(directory, '../lib/node_modules/npm/bin/npm-cli.js')].find(path => existsSync(path));
@@ -114,12 +260,14 @@ export async function qualifyPackage({ artifactDirectory, validationRoot, source
     const installedRequire = createRequire(join(installed, 'package.json'));
     const { loadPackagedMediaWorker } = installedRequire(join(installed, 'dist/accessories/media-worker-artifact.js'));
     const workerPath = loadPackagedMediaWorker(installed);
+    const bootstrap = await exerciseInstalledRuntimeBootstrap(installed);
     const exercised = await exerciseInstalledCodec(installed, workerPath, validationRoot);
+    const finite = await exerciseInstalledRecording(installed, validationRoot);
     // Confirm installed bytes and final npm bytes still match after all launches.
     verifyNativePackage(installed, proof); verifyPackageIdentity(artifact, receipt, sourceSha);
     const result = { schemaVersion: 1, target, source_sha: sourceSha, package_integrity: receipt.integrity, worker_sha256: workerSha,
       source_bundle_sha256: native.source_bundle_sha256, validation_receipt_sha256: sha256(regularFile(validationRoot, 'validation-receipt.json', 65536)),
-      codec_receiver_verified: true, selections: exercised };
+      codec_receiver_verified: true, selections: exercised, finite_recording_verified: true, finite_selections: finite, runtime_bootstrap: bootstrap };
     writeFileSync(receiptPath, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' }); return result;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
@@ -128,6 +276,8 @@ export function validateQualificationReceipts(rows, sourceSha, integrity, source
   for (const row of rows) {
     assert.equal(row.schemaVersion, 1); assert.equal(row.source_sha, sourceSha); assert.equal(row.package_integrity, integrity);
     assert.equal(row.source_bundle_sha256, sourceBundleSha); assert.equal(row.codec_receiver_verified, true); assert.deepEqual(row.selections, selections);
+    assert.equal(row.finite_recording_verified, true); assert.deepEqual(row.finite_selections, FINITE_RECORDING_SELECTIONS);
+    assert.deepEqual(row.runtime_bootstrap, RUNTIME_BOOTSTRAP_EXPECTATION);
     assert.match(row.worker_sha256, /^[a-f0-9]{64}$/); assert.match(row.validation_receipt_sha256, /^[a-f0-9]{64}$/);
     if (workers) assert.equal(row.worker_sha256, workers[row.target], 'Qualified worker differs from publication artifact');
   }

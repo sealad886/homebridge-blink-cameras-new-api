@@ -1,6 +1,7 @@
 import Ajv, { type ErrorObject } from 'ajv';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { resolveNativeRecordingConfig } from '../native-recording-config';
 import { deriveFeedCapacity, matchesCameraIdentifier, SettingsConstraintError,
   validateModuleFeedLimits, type FeedCapacity, type SettingsInventory } from '../settings-inventory';
 
@@ -38,14 +39,22 @@ export class SettingsValidator {
     }
     const config = request.config as Record<string, unknown>;
     if (!validateSchema(config)) result.errors.push(...(validateSchema.errors ?? []).map(schemaError));
-    if (Array.isArray(config.hksvCameras)) {
-      config.hksvCameras.forEach((entry, index) => {
-        if (typeof entry === 'string' && !entry.trim()) result.errors.push({ path: `/hksvCameras/${index}`, code: 'selector', message: 'Choose a camera or remove the empty entry.' });
-      });
+    const nativeRetired = ['enableMotionPolling', 'hksvCameras', 'hksvSource', 'syncModuleRecording'];
+    for (const key of nativeRetired) if (Object.hasOwn(config, key)) {
+      result.errors.push({ path: `/${key}`, code: 'retired',
+        message: 'Run scripts/migrate-native-recording-config.cjs with the explicit config path to preview, then repeat with --apply.' });
+    }
+    if (!result.errors.some(error => error.path.startsWith('/nativeRecording'))) {
+      try { resolveNativeRecordingConfig(config.nativeRecording as Parameters<typeof resolveNativeRecordingConfig>[0]); }
+      catch (error) {
+        const field = error instanceof Error ? /nativeRecording\.([A-Za-z]+)/.exec(error.message)?.[1] : undefined;
+        result.errors.push({ path: `/nativeRecording${field ? `/${field}` : ''}`, code: 'native_recording',
+          message: 'Use valid native recording limits; maximum job age must cover the initial delay.' });
+      }
     }
     const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     for (const key of retired) if (Object.hasOwn(config, key)) {
-      result.errors.push({ path: `/${key}`, code: 'retired', message: 'This retired setting requires the secure-media configuration migration.' });
+      result.errors.push({ path: `/${key}`, code: 'retired', message: 'Run scripts/migrate-secure-media-config.cjs with the explicit full config path; it backs up locally before replacement.' });
     }
     if (Boolean(typeof config.username === 'string' && config.username.trim()) !== Boolean(typeof config.password === 'string' && config.password.trim())) {
       result.errors.push({ path: '/username', code: 'credentials', message: 'Username and password must be provided together.' });
@@ -65,7 +74,7 @@ export class SettingsValidator {
       result.errors.push({ path: error instanceof SettingsConstraintError ? error.path : '/syncModuleFeedLimits',
         code: 'feed_limit', message: error instanceof SettingsConstraintError ? error.message : 'Invalid camera feed limits.' });
     }
-    for (const key of ['hksvCameras', 'excludeDevices'] as const) {
+    for (const key of ['excludeDevices'] as const) {
       const entries = config[key];
       if (!Array.isArray(entries)) continue;
       entries.forEach((entry, index) => {
@@ -76,6 +85,23 @@ export class SettingsValidator {
           message: !inventory ? 'Discovery is unavailable; this saved selection is preserved.'
             : matches && matches.length > 1 ? 'This saved selector matches multiple cameras. Choose a specific camera.'
               : 'This saved selection is not in current discovery and is preserved.' });
+      });
+    }
+    if (Array.isArray(config.deviceSettingOverrides)) {
+      config.deviceSettingOverrides.forEach((value, index) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+        const row = value as Record<string, unknown>;
+        if (typeof row.deviceIdentifier !== 'string' || !row.deviceIdentifier.trim()) return;
+        const matches = inventory?.cameras.filter(camera => matchesCameraIdentifier(camera, row.deviceIdentifier as string));
+        if (!matches || matches.length !== 1) result.warnings.push({ path: `/deviceSettingOverrides/${index}/deviceIdentifier`,
+          code: matches && matches.length > 1 ? 'ambiguous_selector' : 'unresolved_selector',
+          message: !inventory ? 'Discovery is unavailable; this saved camera setting is preserved.'
+            : matches && matches.length > 1 ? 'This saved setting matches multiple cameras. Choose a specific camera.'
+              : 'This saved camera setting is not in current discovery and is preserved.' });
+        else if (row.homeKitSecureVideo === true && matches[0].moduleAssociation.state !== 'unique') {
+          result.warnings.push({ path: `/deviceSettingOverrides/${index}/homeKitSecureVideo`, code: 'storage_association',
+            message: 'Automatic native recording needs one unambiguous Sync Module association for this camera.' });
+        }
       });
     }
     result.valid = result.errors.length === 0;

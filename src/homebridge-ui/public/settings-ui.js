@@ -125,6 +125,7 @@
     }
     function renderCameras(parent) {
       inventoryTools(parent);
+      scalar('exposeMotionDetected', parent);
       if (inventory) {
         inventory.networks.forEach(network => {
           const excluded = values('excludedNetworks').some(value => value === String(network.id) || value === network.name);
@@ -151,6 +152,11 @@
         change: value => changeOverride('deviceNameOverrides', camera, 'customName', value) });
       const setting = overrideRecord('deviceSettingOverrides', camera);
       const definitions = properties.deviceSettingOverrides.items.properties;
+      scalar('deviceSettingOverrides', card, { property: { title: 'Motion Detected in Home', type: 'string', enum: ['inherit', 'yes', 'no'], enumNames: ['Use platform setting', 'Show', 'Hide'] },
+        value: setting?.exposeMotionDetected === undefined ? 'inherit' : setting.exposeMotionDetected ? 'yes' : 'no',
+        change: value => changeOverride('deviceSettingOverrides', camera, 'exposeMotionDetected', value === 'inherit' ? undefined : value === 'yes') });
+      scalar('deviceSettingOverrides', card, { property: definitions.homeKitSecureVideo, value: setting?.homeKitSecureVideo,
+        change: value => changeOverride('deviceSettingOverrides', camera, 'homeKitSecureVideo', value) });
       scalar('deviceSettingOverrides', card, { property: definitions.inputQuality, value: setting?.inputQuality,
         change: value => changeOverride('deviceSettingOverrides', camera, 'inputQuality', value) });
       scalar('deviceSettingOverrides', card, { property: { title: 'Temperature in Home', type: 'string', enum: ['inherit', 'yes', 'no'], enumNames: ['Use platform setting', 'Show', 'Hide'] },
@@ -161,29 +167,39 @@
       parent.append(card);
     }
     function renderRecording(parent) {
-      parent.append(el('p', 'Choose the cameras offered to HomeKit Secure Video. Clips are viewed in Apple Home; recording permission and iCloud storage are managed there.'));
+      parent.append(el('p', 'Offer completed Blink USB motion clips to HomeKit Secure Video. Apple Home manages recording permission, audio and iCloud retention.'));
       const checklist = el('ol', undefined, 'blink-checklist');
-      ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home, allow Stream & Allow Recording for the camera and choose recording-audio permission.', 'For new motion events, arm the Blink system and enable motion for the camera in Blink.'].forEach(text => checklist.append(el('li', text)));
-      parent.append(checklist, el('p', 'Recording permission starts continuous capture with a four-second memory buffer and local video motion detection. This increases battery and network use. Live viewing can be disabled independently.', 'blink-help'));
+      ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home, allow Stream & Allow Recording and choose recording-audio permission.', 'Keep native Blink motion recording enabled and the associated Sync Module USB storage available.'].forEach(text => checklist.append(el('li', text)));
+      parent.append(checklist, el('p', 'Motion notifications schedule a delayed clip check. No continuous camera feed or idle storage preparation is started. Home receives each saved clip after it is downloaded and prepared, so its timeline time can differ from native capture time.', 'blink-help'));
       inventoryTools(parent);
       if (inventory) {
         cameras().forEach(camera => {
-          const selected = values('hksvCameras').some(value => match(value, camera));
+          const selected = overrideRecord('deviceSettingOverrides', camera)?.homeKitSecureVideo === true;
           const network = inventory.networks.find(item => String(item.id) === String(camera.networkId));
           const gates = `${camera.enabled ? 'motion on' : 'motion off'} · ${network ? network.armed ? 'system armed' : 'system disarmed' : 'system state unknown'}`;
-          parent.append(check(`${camera.name} · ${camera.key} · ${gates}${included(camera) ? '' : ' · hidden from Home'}`, selected, checked => {
-            write('hksvCameras', toggleSelection(values('hksvCameras'), camera, checked, cameras())); render();
+          const storage = camera.moduleAssociation.state === 'unique' ? '' : ' · USB storage association unconfirmed';
+          parent.append(check(`${camera.name} · ${camera.key} · ${gates}${storage}${included(camera) ? '' : ' · hidden from Home'}`, selected, checked => {
+            changeOverride('deviceSettingOverrides', camera, 'homeKitSecureVideo', checked); render();
           }, !included(camera) && !selected));
         });
-        parent.append(el('p', `Feed capacity for these settings: ${cameras().filter(included).length} cameras. Live viewers and recording share each camera's upstream feed. Blink may impose its own limits.`, 'blink-help'));
       }
-      unresolved(parent, 'hksvCameras');
-      const privacy = el('details', undefined, 'blink-details'); privacy.append(el('summary', 'Motion, privacy and stopping capture'));
-      privacy.append(el('p', 'Turning off “Read motion events from Blink” only stops Blink clip polling. HomeKit recording uses local video motion. Disarming Blink or turning camera motion off suppresses new events; background capture and the buffer may continue. Turn recording off in Apple Home to cancel recording capture and clear the buffer. Turning the camera off in Home also blocks live viewing and snapshots.'));
+      unresolved(parent, 'deviceSettingOverrides', 'deviceIdentifier');
+      const timing = el('details', undefined, 'blink-details'); timing.append(el('summary', 'Clip timing and storage limits'));
+      Object.entries(properties.nativeRecording.properties).forEach(([key, property]) => {
+        const input = scalar('nativeRecording', timing, { property, value: draft.config.nativeRecording?.[key], change: value => {
+          const next = { ...(draft.config.nativeRecording || {}) };
+          if (value === undefined) delete next[key]; else next[key] = value;
+          write('nativeRecording', Object.keys(next).length ? next : undefined);
+        } });
+        input.dataset.setting = `nativeRecording/${key}`;
+      });
+      parent.append(timing);
+      const privacy = el('details', undefined, 'blink-details'); privacy.append(el('summary', 'Motion and recording privacy'));
+      privacy.append(el('p', 'Showing a Motion Detected sensor and offering clips to HomeKit are separate choices. Hiding the sensor does not disable recording. Turn recording or the camera off in Apple Home to cancel pending replay. This plugin does not arm Blink or change its motion settings to make a clip. Live viewing is independent.'));
       parent.append(privacy);
     }
     function renderModules(parent) {
-      const details = el('details', undefined, 'blink-details'); details.append(el('summary', 'Sync Module feed limits'));
+      const details = el('details', undefined, 'blink-details'); details.append(el('summary', 'Sync Module live-view feed limits'));
       details.append(el('p', 'Limits use a module’s Blink-system association, not a proven physical video path. Each actual module defaults to its included associated camera count. Leave blank to use that default.', 'blink-help'));
       const modules = inventory?.syncModules || [];
       modules.forEach(module => {
@@ -215,7 +231,7 @@
       accountDetails.hidden = active !== sections.length - 1;
       nav.querySelectorAll('button').forEach((button, index) => { button.setAttribute('aria-current', index === active ? 'page' : 'false'); button.classList.toggle('active', index === active); });
       const keys = sections[active].items;
-      if (keys.includes('hksvCameras')) renderRecording(fields);
+      if (keys.includes('nativeRecording')) renderRecording(fields);
       else if (keys.includes('excludeDevices')) renderCameras(fields);
       else if (active === sections.length - 1) {
         const technical = new Set(['maxStreams', 'audioCodec', 'audioBitrate', 'videoBitrate', 'softwareEncodingPreset']);

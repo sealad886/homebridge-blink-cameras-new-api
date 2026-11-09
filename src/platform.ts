@@ -33,7 +33,6 @@ import { AuthStateChangedError } from './blink-api/auth-storage';
 import { BlinkRestVerificationRequiredError } from './blink-api/client';
 import {
   BlinkHomescreen,
-  BlinkMediaClip,
   BlinkCameraKind,
 } from './types';
 import { cameraKey, matchesDeviceIdentifier as matchesIdentifier, projectSettingsInventory,
@@ -48,6 +47,12 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { withResponseBudget } from './operation-budget';
 import { toHapError } from './hap-errors';
 import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
+import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recording-runtime';
+import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput } from './native-recording-config';
+import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
+import type { NativeRecordingPolicy } from './accessories/native-recording-delegate';
+import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
+import type { NativeMotionDevice } from './blink-api/motion-events';
 import { HomeKitAudit } from './homekit-audit';
 
 const DEFAULT_POLL_INTERVAL = 60;
@@ -76,6 +81,8 @@ interface DeviceSettingOverride {
   exposeTemperature?: boolean;
   inputQuality?: BlinkInputQuality;
   motionTimeout?: number;
+  exposeMotionDetected?: boolean;
+  homeKitSecureVideo?: boolean;
 }
 
 interface BlinkPlatformConfig extends PlatformConfig {
@@ -93,8 +100,8 @@ interface BlinkPlatformConfig extends PlatformConfig {
   sharedTier?: string;
   pollInterval?: number;
   motionTimeout?: number;
-  enableMotionPolling?: boolean;
-  hksvCameras?: string[];
+  nativeRecording?: NativeRecordingConfigInput;
+  exposeMotionDetected?: boolean;
   syncModuleFeedLimits?: ModuleFeedLimit[];
   excludeDevices?: string[];
   excludedNetworks?: string[];
@@ -129,10 +136,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private readonly feedAdmission = new CameraFeedAdmission();
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private lastMediaCheck = new Date();
   private readonly pollInterval: number;
   private readonly motionTimeout: number;
-  private readonly enableMotionPolling: boolean;
+  private nativeRuntime?: NativeRecordingRuntime;
+  private nativeRuntimeKey?: string;
+  private conversionQueue: Promise<void> = Promise.resolve();
+  private readonly recordingMemory = new NativeRecordingMemoryBudget();
   private operational = false;
   private monitorActive = true;
   // Startup is unverified until Blink returns a usable homescreen. Keeping the
@@ -174,7 +183,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.config.pollInterval ?? DEFAULT_POLL_INTERVAL,
     );
     this.motionTimeout = (this.config.motionTimeout ?? DEFAULT_MOTION_TIMEOUT) * 1000;
-    this.enableMotionPolling = this.config.enableMotionPolling ?? true;
 
     this.streamingConfig = resolveStreamingConfig({
       enabled: this.config.enableStreaming ?? true,
@@ -243,6 +251,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
       }
+      void this.nativeRuntime?.stop().catch(() => this.log.error('Native recording shutdown could not complete.'));
       void this.shutdownMotionHandlers([
         ...this.cameraAccessories.values(),
         ...this.doorbellAccessories.values(),
@@ -253,12 +262,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   private validateConfig(): void {
-    const cameras = this.config.hksvCameras;
-    if (cameras !== undefined && (!Array.isArray(cameras) ||
-      cameras.some(entry => typeof entry !== 'string' || !entry.trim()) || new Set(cameras).size !== cameras.length)) {
-      throw new Error('Invalid hksvCameras: select unique, non-empty camera identifiers');
-    }
+    resolveNativeRecordingConfig(this.config.nativeRecording);
     validateModuleFeedLimits(this.config.syncModuleFeedLimits);
+    const nativeRetired = ['enableMotionPolling', 'hksvCameras', 'hksvSource', 'syncModuleRecording'];
+    if (nativeRetired.some(key => Object.hasOwn(this.config, key))) {
+      throw new Error('Retired motion/recording settings require scripts/migrate-native-recording-config.cjs: preview the explicit config path, then apply with --apply');
+    }
     const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     if (retired.some(key => Object.hasOwn(this.config, key))) {
       throw new Error('Retired streaming settings require the explicit scripts/migrate-secure-media-config.cjs migration');
@@ -272,7 +281,13 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (this.config.exposeTemperature !== undefined && typeof this.config.exposeTemperature !== 'boolean') {
       throw new Error('Invalid temperature setting');
     }
+    if (this.config.deviceSettingOverrides !== undefined && !Array.isArray(this.config.deviceSettingOverrides)) {
+      throw new Error('Invalid per-camera settings list');
+    }
     for (const override of this.config.deviceSettingOverrides ?? []) {
+      if (!override || typeof override.deviceIdentifier !== 'string' || !override.deviceIdentifier.trim()) {
+        throw new Error('Invalid per-camera deviceIdentifier: choose a camera or remove the empty entry');
+      }
       if (override.exposeTemperature !== undefined && typeof override.exposeTemperature !== 'boolean') {
         throw new Error('Invalid per-camera temperature setting');
       }
@@ -280,6 +295,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         throw new Error('Invalid per-camera input quality');
       }
     }
+    nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { id: -1 }, this.config.exposeMotionDetected);
     const hasUsername = Boolean(this.config.username?.trim());
     const hasPassword = Boolean(this.config.password?.trim());
 
@@ -329,10 +345,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private matchesDeviceIdentifier(device: { id: number; name?: string; serial?: string }, identifier: string, kind?: BlinkCameraKind): boolean {
     return matchesIdentifier(device, identifier, kind);
-  }
-
-  public isHksvEnabled(device: { id: number; name?: string; serial?: string }, kind?: BlinkCameraKind): boolean {
-    return (this.config.hksvCameras ?? []).some(entry => this.matchesDeviceIdentifier(device, entry, kind));
   }
 
   public acquireCameraFeed(kind: BlinkCameraKind, id: number): FeedLease { return this.feedAdmission.acquire(cameraKey(kind, id)); }
@@ -461,6 +473,84 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return this.operational;
   }
 
+  getNativeRecordingPreparation(): NativeRecordingPreparationOptions {
+    return { memory: this.recordingMemory,
+      admit: <T>(work: () => Promise<T>, signal: globalThis.AbortSignal) => this.admitRecordingConversion(work, signal) };
+  }
+
+  private async admitRecordingConversion<T>(work: () => Promise<T>, signal: globalThis.AbortSignal): Promise<T> {
+    const previous = this.conversionQueue;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    this.conversionQueue = previous.then(() => held);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const cancelled = () => { signal.removeEventListener('abort', cancelled); reject(new Error('Recording conversion cancelled')); };
+        signal.addEventListener('abort', cancelled, { once: true });
+        if (signal.aborted) cancelled();
+        previous.then(() => { signal.removeEventListener('abort', cancelled); resolve(); });
+      });
+      signal.throwIfAborted();
+      return await work();
+    } finally { release(); }
+  }
+
+  nativeRecordingPolicyChanged(kind: 'camera' | 'owl' | 'doorbell', id: number, policy: NativeRecordingPolicy): Promise<void> {
+    return this.nativeRuntime?.policyChanged(`${kind}:${id}`, policy) ?? Promise.resolve();
+  }
+
+  nativeRecordingDeliveryOutcome(outcome: string): void { this.nativeRuntime?.deliveryOutcome(outcome); }
+
+  private async prepareNativeRuntime(homescreen: BlinkHomescreen): Promise<void> {
+    const candidates = [...homescreen.cameras.map(device => ({ kind: device.type === 'owl' ? 'owl' as const : 'camera' as const, map: this.cameraAccessories, device })),
+      ...homescreen.doorbells.map(device => ({ kind: 'doorbell' as const, map: this.doorbellAccessories, device })),
+      ...homescreen.owls.map(device => ({ kind: 'owl' as const, map: this.owlAccessories, device }))];
+    const identity = this.apiClient.getCachedIdentity();
+    if (!identity?.accountId || !identity.clientId) { this.log.warn('Push motion waits for a cached authenticated account and client.'); return; }
+    const scope = { accountId: identity.accountId, clientId: identity.clientId, tier: identity.tier };
+    const networks = new Set(homescreen.networks.filter(network => !this.isNetworkExcluded(network) && !this.isDeviceExcluded(network)).map(network => network.id));
+    const devices: NativeRuntimeDevice[] = [];
+    const matchingDevices: NativeMotionDevice[] = [];
+    for (const { device, kind, map } of candidates) {
+      const modules = (homescreen.sync_modules ?? []).filter(module => module.network_id === device.network_id);
+      const binding = { accountId: scope.accountId, networkId: device.network_id, providerId: device.id,
+        // APK61 DeviceTarget wire values exactly match these canonical kinds.
+        target: kind, cameraId: `${kind}:${device.id}`, nativeName: device.name };
+      const nativeStorage = modules.length === 1
+        ? { moduleId: `${device.network_id}:${modules[0].id}`, syncModuleId: modules[0].id } : undefined;
+      // Exclusions limit consumers, never the identities that can make a clip ambiguous.
+      if (nativeStorage) matchingDevices.push({ ...binding, ...nativeStorage });
+      if (!networks.has(device.network_id) || this.isDeviceExcluded(device, kind)) continue;
+      const settings = nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { ...device, kind }, this.config.exposeMotionDetected);
+      devices.push({ binding, settings, ...(nativeStorage ? { nativeStorage } : {}),
+      motion: () => map.get(device.id)?.triggerMotion(), recording: () => map.get(device.id)?.getNativeRecordingDelegate() });
+      if (settings.homeKitSecureVideo && modules.length !== 1) this.log.warn(`[${device.name}] Automatic native recording requires one unambiguous Sync Module.`);
+    }
+    // A renamed or newly discovered excluded camera can make a formerly unique
+    // clip ambiguous. Motion-only consumers also need current bindings even when
+    // no storage module exists. Replace through the drained ownership handoff on
+    // identity changes; ordering and volatile status do not replace the runtime.
+    const key = JSON.stringify([scope, matchingDevices.map(device => JSON.stringify([
+      device.cameraId, device.nativeName, device.networkId, device.syncModuleId,
+    ])).sort(), devices.map(({ binding, settings }) => JSON.stringify([
+      binding.cameraId, binding.nativeName, binding.networkId, settings.exposeMotionDetected, settings.homeKitSecureVideo,
+    ])).sort()]);
+    if (this.nativeRuntimeKey === key) return;
+    if (this.nativeRuntime) await this.nativeRuntime.stop();
+    this.nativeRuntime = undefined;
+    this.nativeRuntimeKey = undefined;
+    const storagePath = this.api.user.storagePath();
+    this.nativeRuntime = await NativeRecordingRuntime.create({ client: this.apiClient, scope, devices, matchingDevices, storagePath,
+      config: resolveNativeRecordingConfig(this.config.nativeRecording), firebase: BLINK_FIREBASE_CLIENT, appVersion: BLINK_NOTIFICATION_APP_VERSION,
+      report: event => {
+        const message = `[NativeRecording] ${event}`;
+        if (event.includes('faulted') || event.endsWith('recovery-required')) this.log.warn(message);
+        else if (event === 'push-ready' || event === 'push-client-bound') this.log.info(message);
+        else this.log.debug(message);
+      } });
+    this.nativeRuntimeKey = key;
+  }
+
   public hapName(value: string | undefined, fallback: string): string {
     const normalized = toHapName(value, fallback);
     const adjustment = `${value ?? ''}\0${normalized}`;
@@ -489,13 +579,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
       if (!this.monitorActive) return false;
+      await this.prepareNativeRuntime(homescreen);
+      if (!this.monitorActive) return false;
       const registration = this.registerDevices(homescreen);
       if (registration) await registration;
       if (!this.monitorActive) return false;
       this.inventoryInitialized = true;
       this.startPolling();
       this.setConnectionHealthy();
-      return true;
+      if (this.nativeRuntime) await this.nativeRuntime.start();
+      return this.monitorActive;
     } catch (error) {
       if (!this.monitorActive) return false;
       this.log.error(
@@ -570,10 +663,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           return;
         }
         this.log.info('HomeKit requested Blink connection retry.');
+        const previousRuntime = this.nativeRuntime;
         try {
           await withResponseBudget(this.recoverConnection(
             !this.inventoryInitialized || this.connectionState === 'authentication-required',
-          ));
+          ).then(async recovered => {
+            // This continuation retains operator intent even when recovery joins
+            // a status poll or discovery. A replacement already starts fresh.
+            if (recovered && this.monitorActive && this.nativeRuntime === previousRuntime) await this.nativeRuntime?.retryConnection();
+          }));
         } catch (error) {
           throw toHapError(this.api.hap, error);
         } finally {
@@ -769,6 +867,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       }
       const homescreen = await this.apiClient.getHomescreen({ deadline: Date.now() + 25000, retryTransient: true });
       if (!this.monitorActive) return false;
+      await this.prepareNativeRuntime(homescreen);
       if (this.inventoryInitialized) {
         this.updateDeviceStates(homescreen);
       } else {
@@ -780,7 +879,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         this.inventoryInitialized = true;
       }
       this.setConnectionHealthy();
-      return true;
+      if (this.nativeRuntime) await this.nativeRuntime.start();
+      return this.monitorActive;
     } catch (error) {
       if (!this.monitorActive) return false;
       if (startedFaulted || authenticate) {
@@ -974,7 +1074,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   /**
    * Start polling for device state changes
    * Polls homescreen for armed/disarmed state and device status
-   * Optionally polls media for motion detection events
    */
   private startPolling(): void {
     if (this.pollTimer) {
@@ -988,7 +1087,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Poll device states from homescreen and check for motion events
+   * Poll device states from homescreen; native motion arrives independently
    */
   private async pollDeviceStates(): Promise<void> {
     if (!this.monitorActive || this.connectionState === 'authentication-required') {
@@ -998,10 +1097,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.recoverConnection(!this.inventoryInitialized);
       if (!this.monitorActive) return;
 
-      // Check for new motion events
-      if (this.enableMotionPolling) {
-        await this.checkMotionEvents();
-      }
     } catch (error) {
       if (this.firstFailedPoll === null) {
         this.firstFailedPoll = Date.now();
@@ -1052,72 +1147,4 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  /**
-   * Check for new motion events via media API
-   * Source: API Dossier - GET v4/accounts/{account_id}/unwatched_media + POST v4/accounts/{account_id}/media
-   */
-  private async checkMotionEvents(): Promise<void> {
-    try {
-      // First check if there are any unwatched clips (quick count endpoint)
-      const unwatchedResponse = await this.apiClient.getUnwatchedMedia();
-
-      if (unwatchedResponse.unwatched_clips === 0) {
-        // No new clips, nothing to do
-        return;
-      }
-
-      this.log.debug(`Found ${unwatchedResponse.unwatched_clips} unwatched clip(s), fetching details...`);
-
-      // Fetch actual media clips to process
-      const mediaResponse = await this.apiClient.getMedia({
-        startTime: this.lastMediaCheck.toISOString(),
-      });
-
-      if (!mediaResponse.media || !Array.isArray(mediaResponse.media)) {
-        this.log.debug('No media clips returned from API');
-        return;
-      }
-
-      for (const clip of mediaResponse.media) {
-        const clipDate = new Date(clip.created_at);
-
-        // Only process clips newer than our last check
-        if (clipDate > this.lastMediaCheck) {
-          this.processMotionClip(clip);
-        }
-      }
-
-      this.lastMediaCheck = new Date();
-    } catch (error) {
-      this.log.debug('Motion event check failed:', error);
-    }
-  }
-
-  /**
-   * Process a motion clip and trigger appropriate accessory
-   */
-  private processMotionClip(clip: BlinkMediaClip): void {
-    // Try camera first
-    const cameraHandler = this.cameraAccessories.get(clip.camera_id);
-    if (cameraHandler) {
-      if (!cameraHandler.usesVideoMotion()) cameraHandler.triggerMotion();
-      return;
-    }
-
-    // Try owl
-    const owlHandler = this.owlAccessories.get(clip.camera_id);
-    if (owlHandler) {
-      if (!owlHandler.usesVideoMotion()) owlHandler.triggerMotion();
-      return;
-    }
-
-    // Try doorbell
-    const doorbellHandler = this.doorbellAccessories.get(clip.camera_id);
-    if (doorbellHandler) {
-      if (!doorbellHandler.usesVideoMotion()) doorbellHandler.triggerMotion();
-      return;
-    }
-
-    this.log.debug(`Motion clip from unknown device: ${clip.camera_id}`);
-  }
 }

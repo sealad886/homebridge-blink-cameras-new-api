@@ -18,8 +18,8 @@ import { logHomeKitEvent } from '../homekit-audit';
 import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { setTimeout, clearTimeout, setImmediate } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, refreshCameraAudioCapabilities, DeviceType } from './camera-source';
-import { BlinkCameraRecordingDelegate, createRecordingOptions } from './camera-recording';
-import { startRecordingSession } from './recording-session';
+import { nativeRecordingDevicePolicy } from '../native-recording-config';
+import { NativeRecordingDelegate } from './native-recording-delegate';
 
 export interface MotionDevice {
   id: number;
@@ -34,10 +34,9 @@ export interface MotionDevice {
 
 export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   protected readonly switchService: Service;
-  protected readonly motionService: Service;
+  protected readonly motionService?: Service;
   protected readonly cameraController: CameraController;
   protected readonly cameraSource: BlinkCameraSource;
-  protected readonly recording?: BlinkCameraRecordingDelegate;
   private readonly recordingListeners: (() => void)[] = [];
   protected motionDetected = false;
   protected motionTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -48,6 +47,8 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   private motionIntentRevision = 0;
   private failedMotionTarget?: boolean;
   private inputQualityObservationPending = false;
+  private readonly nativeRecording?: NativeRecordingDelegate;
+  private homeKitCameraActive = true;
 
   protected isDeviceAvailable(): boolean {
     const status = this.device.status?.trim().toLowerCase();
@@ -79,8 +80,9 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     private readonly cameraSourceType: DeviceType,
   ) {
     const cameraName = this.accessory.displayName || device.name;
+    const nativePolicy = nativeRecordingDevicePolicy(this.platform.config?.deviceSettingOverrides, { ...device, kind: cameraSourceType }, this.platform.config?.exposeMotionDetected);
     const motionControlName = deviceServiceName(cameraName, 'Motion Detection');
-    const motionSensorName = deviceServiceName(cameraName, 'Motion Sensor');
+    const motionSensorName = deviceServiceName(cameraName, 'Motion Detected');
     const refreshName = deviceServiceName(cameraName, 'Refresh Snapshot');
 
     this.accessory.getService(this.platform.Service.AccessoryInformation)
@@ -108,14 +110,16 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       .onGet(() => this.device.enabled)
       .onSet(async (value) => this.setMotionEnabled(value));
 
-    this.motionService =
-      this.accessory.getServiceById(this.platform.Service.MotionSensor, 'motion-sensor') ||
+    const previousMotion = this.accessory.getServiceById(this.platform.Service.MotionSensor, 'motion-sensor');
+    if (!nativePolicy.exposeMotionDetected && previousMotion) this.accessory.removeService(previousMotion);
+    this.motionService = nativePolicy.exposeMotionDetected ? (
+      previousMotion ||
       this.accessory.addService(
         this.platform.Service.MotionSensor,
         motionSensorName,
         'motion-sensor',
-      );
-    setHapServiceName(
+      )) : undefined;
+    if (this.motionService) setHapServiceName(
       this.motionService,
       this.platform.Characteristic.Name,
       motionSensorName,
@@ -124,11 +128,11 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     );
 
     this.motionService
-      .getCharacteristic(this.platform.Characteristic.MotionDetected)
+      ?.getCharacteristic(this.platform.Characteristic.MotionDetected)
       .onGet(() => this.motionDetected);
 
     this.motionService
-      .getCharacteristic(this.platform.Characteristic.StatusActive)
+      ?.getCharacteristic(this.platform.Characteristic.StatusActive)
       .onGet(() => this.isMotionServiceActive());
 
     this.cameraSource = new BlinkCameraSource(
@@ -141,7 +145,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       () => this.device.thumbnail,
       () => this.platform.isOperational() && this.isDeviceAvailable(),
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
-      this.platform.streamingConfig,
+      { ...this.platform.streamingConfig, passiveSnapshots: nativePolicy.homeKitSecureVideo },
       (msg) => this.platform.log.error(`[${device.name}] ${msg}`),
       async (options) => {
         const quality = this.platform.getDeviceInputQuality(this.device, this.cameraSourceType);
@@ -178,32 +182,33 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     );
 
     const controllerOptions = createCameraControllerOptions(this.platform.api.hap, this.cameraSource, this.platform.streamingConfig);
-    if (this.platform.isHksvEnabled(device, cameraSourceType)) {
-      this.recording = new BlinkCameraRecordingDelegate(
-        (configuration, audio, callbacks, signal) => startRecordingSession(
-          (sink, owner) => this.cameraSource.subscribeFeed(sink, owner), configuration, audio, callbacks, signal,
-        ),
-        { videoMotion: () => {
-          if (this.isMotionServiceActive() && this.platform.isNetworkArmed(this.device.network_id)) {
-            this.triggerMotion(this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType), 'video');
-          }
-        }, status: status => {
-          const message = `[${this.device.name}] HSV ${status.state}${status.reason ? `: ${status.reason}` : ''}`;
-          if (status.state === 'fault') this.platform.log.warn(message);
-          else this.platform.log.debug(message);
-          if (status.state !== 'ready' && status.state !== 'recording') this.clearMotion();
-        } },
-      );
-      this.recording.setDeviceAvailable(this.platform.isOperational() && this.isDeviceAvailable());
-      const recordingOptions = createRecordingOptions();
-      if (cameraSourceType === 'doorbell') recordingOptions.overrideEventTriggerOptions = [2];
-      controllerOptions.recording = { options: recordingOptions, delegate: this.recording };
-      controllerOptions.sensors = { motion: this.motionService };
-    }
+    const previousRecordingMotion = this.accessory.getServiceById(this.platform.Service.MotionSensor, 'native-recording-motion');
+    if (nativePolicy.homeKitSecureVideo) {
+      const recordingMotion = previousRecordingMotion ?? this.accessory.addService(this.platform.Service.MotionSensor,
+        deviceServiceName(cameraName, 'Recording Activity'), 'native-recording-motion');
+      recordingMotion.setHiddenService(true);
+      this.nativeRecording = new NativeRecordingDelegate({
+        preparation: this.platform.getNativeRecordingPreparation(),
+        readyMotion: active => recordingMotion.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(active),
+        policyChanged: policy => this.platform.nativeRecordingPolicyChanged(cameraSourceType, device.id, policy),
+        deliveryOutcome: event => this.platform.nativeRecordingDeliveryOutcome(event.outcome),
+      });
+      controllerOptions.recording = {
+        delegate: this.nativeRecording,
+        options: { prebufferLength: 4000, mediaContainerConfiguration: { type: 0, fragmentLength: 4000 },
+          video: { type: 0, parameters: { profiles: [0, 1, 2], levels: [0, 1, 2] },
+            resolutions: [[1920, 1080, 30], [1920, 1080, 15], [1280, 720, 30], [1280, 720, 15]] },
+          audio: { codecs: [{ type: 0, audioChannels: 1, bitrateMode: 0, samplerate: [1, 2] }] } },
+      };
+      // The public PIR service is deliberately not the recording trigger. It
+      // signals immediately; this hidden linked service signals a prepared file.
+      controllerOptions.sensors = { motion: recordingMotion };
+    } else if (previousRecordingMotion) this.accessory.removeService(previousRecordingMotion);
     this.cameraController = new this.platform.api.hap.CameraController(controllerOptions);
     this.accessory.configureController(this.cameraController);
-    const recordingManagement = this.cameraController.recordingManagement;
-    if (this.recording && recordingManagement) {
+    const management = this.cameraController.recordingManagement;
+    if (this.nativeRecording && management) {
+      const recording = this.nativeRecording;
       const bind = (service: Service, type: typeof Characteristic.RecordingAudioActive | typeof Characteristic.HomeKitCameraActive,
         apply: (active: boolean) => void): void => {
         const characteristic = service.getCharacteristic(type);
@@ -212,11 +217,18 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
         this.recordingListeners.push(() => characteristic.removeListener('change', changed));
         apply(Boolean(characteristic.value));
       };
-      // HAP 0.14 stores recording audio on recordingManagementService.
-      bind(recordingManagement.recordingManagementService, this.platform.Characteristic.RecordingAudioActive,
-        active => this.recording?.setAudioActive(active && this.platform.streamingConfig.audio.enabled));
-      bind(recordingManagement.operatingModeService, this.platform.Characteristic.HomeKitCameraActive,
-        active => { this.cameraSource.setCameraActive(active); this.recording?.setCameraActive(active); });
+      bind(management.recordingManagementService, this.platform.Characteristic.RecordingAudioActive,
+        active => {
+          const allowed = active && this.platform.streamingConfig.audio.enabled;
+          recording.updateRecordingAudioActive(allowed);
+          if (active && !allowed) management.recordingManagementService.updateCharacteristic(
+            this.platform.Characteristic.RecordingAudioActive, false);
+        });
+      bind(management.operatingModeService, this.platform.Characteristic.HomeKitCameraActive, active => {
+        this.homeKitCameraActive = active;
+        this.cameraSource.setCameraActive(active);
+        recording.updateCameraActive(active && this.platform.isOperational() && this.isDeviceAvailable());
+      });
     }
     refreshCameraAudioCapabilities(this.platform.api.hap, this.accessory.services);
 
@@ -256,6 +268,8 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
 
   protected abstract enableMotionApi(options?: RequestOptions): Promise<void>;
   protected abstract disableMotionApi(options?: RequestOptions): Promise<void>;
+
+  getNativeRecordingDelegate(): NativeRecordingDelegate | undefined { return this.nativeRecording; }
 
   private async refreshSnapshot(value: CharacteristicValue): Promise<void> {
     if (value !== true) {
@@ -336,33 +350,30 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   }
 
   public updateAvailability(): void {
-    this.recording?.setDeviceAvailable(this.platform.isOperational() && this.isDeviceAvailable());
-    if (this.recording && (!this.isMotionServiceActive() || !this.platform.isNetworkArmed(this.device.network_id))) this.clearMotion();
+    this.nativeRecording?.updateCameraActive(this.homeKitCameraActive && this.platform.isOperational() && this.isDeviceAvailable());
+    if (!this.isMotionServiceActive()) this.clearMotion();
     this.motionService
-      .getCharacteristic(this.platform.Characteristic.StatusFault)
+      ?.getCharacteristic(this.platform.Characteristic.StatusFault)
       .updateValue(this.motionFault || this.refreshFault || !this.platform.isOperational() || !this.isDeviceAvailable() ? 1 : 0);
     this.motionService
-      .getCharacteristic(this.platform.Characteristic.StatusActive)
+      ?.getCharacteristic(this.platform.Characteristic.StatusActive)
       .updateValue(this.isMotionServiceActive());
   }
 
-  public usesVideoMotion(): boolean { return this.recording?.videoMotionActive ?? false; }
-
-  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType), source: 'provider' | 'video' = 'provider'): void {
+  triggerMotion(timeoutMs = this.platform.getDeviceMotionTimeout(this.device, this.cameraSourceType)): void {
+    if (!this.motionService) return;
     if (this.motionTimeout) {
       clearTimeout(this.motionTimeout);
     }
 
-    // Pin pre-event fragments before HAP can request the recording stream.
-    this.recording?.notifyMotion();
     this.motionDetected = true;
     this.motionService
-      .getCharacteristic(this.platform.Characteristic.MotionDetected)
+      ?.getCharacteristic(this.platform.Characteristic.MotionDetected)
       .updateValue(true);
 
     logHomeKitEvent(this.platform.log, this.accessory, {
       direction: 'Blink -> bridge',
-      event: source === 'video' ? 'Video motion detected' : 'Motion detected',
+      event: 'Motion detected',
       service: 'Motion Sensor',
       characteristic: 'MotionDetected',
       value: true,
@@ -376,17 +387,16 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     if (this.motionTimeout) { clearTimeout(this.motionTimeout); this.motionTimeout = null; }
     if (!this.motionDetected) return;
     this.motionDetected = false;
-    this.motionService.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(false);
+    this.motionService?.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(false);
     logHomeKitEvent(this.platform.log, this.accessory, {
       direction: 'bridge -> HAP', event: 'Motion cleared', service: 'Motion Sensor',
       characteristic: 'MotionDetected', value: false, outcome: 'submitted',
     });
-    this.recording?.endMotion();
   }
 
   public async shutdown(): Promise<void> {
     if (this.motionTimeout) { clearTimeout(this.motionTimeout); this.motionTimeout = null; }
     for (const remove of this.recordingListeners.splice(0)) remove();
-    await Promise.all([this.recording?.stop(), this.cameraSource.shutdown()]);
+    await Promise.all([this.nativeRecording?.stop(), this.cameraSource.shutdown()]);
   }
 }

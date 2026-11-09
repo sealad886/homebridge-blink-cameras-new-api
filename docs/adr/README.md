@@ -9,8 +9,9 @@ revision and environment.
 | ADR | Decision |
 | --- | --- |
 | [001: Hosted authentication](001-authentication.md) | OAuth/PKCE, callback validation, token storage and routing |
-| [002: Motion detection](002-motion-detection.md) | Polling and event behavior |
+| [002: Motion detection](002-motion-detection.md) | Historical polling decision, superseded by ADR-007 |
 | [003: Command recovery](003-blink-command-recovery.md) | Coordination, response deadlines and confirmed state |
 | [004: Session ownership](004-stream-session-ownership.md) | Generation ownership, cancellation and retirement |
 | [005: Media network feasibility](005-secure-media-network-feasibility.md) | Destination authority, native boundary and closure gates |
 | [006: Stream quality](006-stream-quality-authority.md) | Per-camera input and system-wide output authority |
+| [007: Event-driven native recording](007-event-driven-native-recording.md) | Provider observations, bounded acquisition ownership and finite HomeKit delivery |

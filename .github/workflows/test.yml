@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        node-version: [20, 22, 24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,7 +196,7 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             native_worker="$(cygpath -m "$native_worker.exe")"
           fi
-          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-resource-bounds.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
+          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/native-recording-preparation.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-resource-bounds.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
       - name: Verify actual RTSP connection boundaries in an isolated network
         if: matrix.target == 'linux-x64'
         run: |
@@ -248,7 +248,7 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, 'native/dependencies')
           import prepare
-          for name in ('fixture', 'check-rtp'):
+          for name in ('fixture', 'check-rtp', 'check-recording'):
               prepare.audit_dependencies(Path('native/build') / (name + ('.exe' if os.name == 'nt' else '')),
                   platform.system(), os.environ.copy())
           PY

@@ -57,22 +57,6 @@ class WorkerTests(unittest.TestCase):
         cls.media = subprocess.check_output([str(binary('fixture'))], timeout=5)
     def run_worker(self, data):
         return subprocess.run([str(WORKER)], input=data, capture_output=True, timeout=5)
-    def test_visual_motion_rejects_noise_brightness_and_single_frame_glitches(self):
-        result=subprocess.run([str(binary('check-motion'))],capture_output=True,timeout=5)
-        self.assertEqual(result.returncode,0,result.stderr)
-        self.assertLess(json.loads(result.stdout)['stateBytes'],4096)
-    def test_recording_motion_pulses_are_confirmed_bounded_and_never_sent_by_live_codec(self):
-        media=subprocess.check_output([str(binary('fixture')),'motion','128','72','15','90'],timeout=5)
-        framed=b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
-        recording=self.run_worker(config(width=128,height=72,max_frames=100,output_mode=1,fragment_ms=4000,iframe_ms=1000)+framed)
-        self.assertEqual(recording.returncode,0,recording.stderr)
-        events=[struct.unpack('!QII',body) for kind,body in messages(recording.stdout) if kind==13]
-        self.assertTrue(events,'physical scene change must reach the recording parent without clip polling')
-        self.assertTrue(all(1000000<=at and 20<=score<=1000 and event==1 for at,score,event in events))
-        self.assertTrue(all(b[0]-a[0]>=1000000 for a,b in zip(events,events[1:])))
-        live=self.run_worker(config(width=128,height=72,max_frames=100)+framed)
-        self.assertEqual(live.returncode,0,live.stderr)
-        self.assertFalse(any(kind==13 for kind,_ in messages(live.stdout)))
     def recording(self, mode='video', rate=0, offset=0, audio_enabled=None):
         media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','90',str(offset)],timeout=5)
         enabled=(mode!='video') if audio_enabled is None else audio_enabled
@@ -96,6 +80,47 @@ class WorkerTests(unittest.TestCase):
         checked=subprocess.run([str(binary('check-recording'))],input=data,capture_output=True,timeout=5)
         self.assertEqual(checked.returncode,0,checked.stderr)
         return json.loads(checked.stdout)
+    def test_finite_progressive_mp4_input_is_seekable_and_independently_decodes(self):
+        for rate,fragment_ms in ((rate,fragment) for rate in (0,16000,24000) for fragment in (1000,4000)):
+            audio=rate!=0
+            with self.subTest(audio_rate=rate,fragment_ms=fragment_ms):
+                media=subprocess.check_output([str(binary('fixture')),'audio-mp4' if audio else 'video-mp4','16','16','15','90'],timeout=5)
+                self.assertGreater(media.index(b'moov'),media.index(b'mdat'),'fixture must require seeking to media before its tail moov')
+                options=dict(output_mode=2,fragment_ms=fragment_ms,iframe_ms=1000,max_frames=100)
+                if audio:options.update(audio_codec=4,audio_rate=rate,audio_channels=1,audio_bitrate=32000)
+                result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                self.assertEqual(result.returncode,0,result.stderr)
+                rows=messages(result.stdout)
+                self.assertFalse(any(kind==13 for kind,_ in rows),'saved-file conversion must not infer new motion')
+                credits=[struct.unpack('!I',body)[0] for kind,body in rows if kind==6]
+                self.assertEqual(credits[-1],len(media))
+                output=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+                decoded=self.decode_recording(output)
+                self.assertEqual(decoded['videoFrames'],90)
+                self.assertEqual(decoded['audioTracks'],int(audio))
+    def test_finite_mp4_mode_rejects_wrong_container_without_output(self):
+        result=self.run_worker(config(output_mode=2,fragment_ms=4000,iframe_ms=1000)+frame(2,self.media)+frame(3))
+        self.assertEqual(result.returncode,2)
+        self.assertFalse(any(kind in (8,9) for kind,_ in messages(result.stdout)))
+    def test_finite_mp4_accepts_no_bytes_after_end(self):
+        result=self.run_worker(config(output_mode=2,fragment_ms=4000,iframe_ms=1000)+frame(3)+frame(2,b'x'))
+        self.assertEqual(result.returncode,2)
+        self.assertFalse(any(kind==3 for kind,_ in messages(result.stdout)))
+    def test_finite_mp4_input_is_bounded_before_demux(self):
+        limit=32*1024*1024
+        data=config(output_mode=2,fragment_ms=4000,iframe_ms=1000)+frame(2,bytes(65536))*(limit//65536)+frame(2,b'x')
+        result=self.run_worker(data)
+        self.assertEqual(result.returncode,2)
+        self.assertIn(b'INPUT_LIMIT',result.stderr)
+        self.assertFalse(any(kind in (8,9,3) for kind,_ in messages(result.stdout)))
+    def test_finite_output_duration_is_independent_of_decoded_frame_budget(self):
+        media=subprocess.check_output([str(binary('fixture')),'video-mp4','16','16','30','2701'],timeout=5)
+        data=config(output_mode=2,fragment_ms=4000,iframe_ms=1000,max_frames=9000)
+        data+=b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3)
+        result=self.run_worker(data)
+        self.assertEqual(result.returncode,2)
+        self.assertIn(b'RECORDING_DURATION',result.stderr)
+        self.assertFalse(any(kind==3 for kind,_ in messages(result.stdout)))
     def test_recording_fragments_decode_independently_and_keep_video_timing(self):
         init,fragments=self.recording(offset=30)
         decoded=self.decode_recording(init+b''.join(b[24:] for b in fragments))
@@ -328,7 +353,7 @@ class WorkerTests(unittest.TestCase):
         result = self.run_worker(data)
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = messages(result.stdout)
-        self.assertEqual(rows[0], (1, struct.pack('!II', 3, 15)))
+        self.assertEqual(rows[0], (1, struct.pack('!II', 4, 15)))
         packets = [body for kind, body in rows if kind == 2]
         self.assertEqual(len(packets), 4)
         pts=[struct.unpack('!q',p[:8])[0] for p in packets]

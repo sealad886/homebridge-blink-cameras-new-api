@@ -60,7 +60,9 @@ int main(void) {
     if(result!=AVERROR_EOF)return 2;
     for(unsigned i=0;i<format->nb_streams;i++)if(decode(decoders[i],NULL,(int)i==video?&video_frames:&audio_frames,(int)i==video?&unused:&samples))return 2;
     if(video<0 || !video_frames || (audio>=0 && !samples))return 2;
-    printf("{\"videoFrames\":%d,\"audioTracks\":%d,\"audioSamples\":%lld,\"firstVideoUs\":%lld,\"lastVideoUs\":%lld}\n",video_frames,audio>=0,(long long)samples,(long long)first_pts,(long long)last_pts);
+    printf("{\"videoFrames\":%d,\"videoWidth\":%d,\"videoHeight\":%d,\"audioTracks\":%d,\"audioSampleRate\":%d,\"audioChannels\":%d,\"audioSamples\":%lld,\"firstVideoUs\":%lld,\"lastVideoUs\":%lld}\n",
+        video_frames,decoders[video]->width,decoders[video]->height,audio>=0,audio>=0?decoders[audio]->sample_rate:0,
+        audio>=0?decoders[audio]->ch_layout.nb_channels:0,(long long)samples,(long long)first_pts,(long long)last_pts);
     for(unsigned i=0;i<format->nb_streams;i++)avcodec_free_context(&decoders[i]);
     av_packet_free(&packet);avformat_close_input(&format);av_freep(&io->buffer);avio_context_free(&io);free(in.data);return 0;
 }

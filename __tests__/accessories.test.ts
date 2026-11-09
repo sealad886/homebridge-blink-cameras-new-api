@@ -33,7 +33,7 @@ jest.mock('node:dgram', () => {
 });
 
 type PlatformStub = Pick<BlinkCamerasPlatform,
-  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isHksvEnabled' | 'isNetworkArmed' | 'updateMotionAvailability' | 'acquireCameraFeed'>;
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isNetworkArmed' | 'updateMotionAvailability' | 'acquireCameraFeed'>;
 
 // Capabilities stand in for the native codec and vendor transport. Public HAP
 // callbacks still own preparation, selection, cancellation and reservation.
@@ -422,7 +422,6 @@ describe('Accessory handlers', () => {
       isOperational: () => true,
       getDeviceInputQuality: jest.fn().mockReturnValue('auto'),
       isTemperatureEnabled: jest.fn().mockReturnValue(false),
-      isHksvEnabled: jest.fn().mockReturnValue(false),
       isNetworkArmed: jest.fn().mockReturnValue(true),
       updateMotionAvailability: jest.fn(),
       acquireCameraFeed: jest.fn(() => ({ release: jest.fn() })),
@@ -950,7 +949,7 @@ describe('Accessory handlers', () => {
     expect(accessory.getServiceById(hap.Service.Switch, 'motion-switch')).toBe(original);
     for (const [type, subtype, name] of [
       [hap.Service.Switch, 'motion-switch', 'Front door Motion Detection'],
-      [hap.Service.MotionSensor, 'motion-sensor', 'Front door Motion Sensor'],
+      [hap.Service.MotionSensor, 'motion-sensor', 'Front door Motion Detected'],
       [hap.Service.Switch, 'snapshot-refresh', 'Front door Refresh Snapshot'],
     ]) {
       const service = accessory.getServiceById(type, subtype)!;

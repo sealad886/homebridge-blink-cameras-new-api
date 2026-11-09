@@ -88,7 +88,7 @@ it('does not bind missing or malformed selectors to a sole camera without a seri
 it('allows six recording cameras and enforces positive exact module limits through the canonical schema', () => {
   const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8')).schema;
   const validate = new Ajv({ strict: false }).compile(schema);
-  const config = { name: 'Blink', hksvCameras: Array.from({ length: 6 }, (_, n) => `camera:${n}`), syncModuleFeedLimits: [{ syncModuleId: '10', maxFeeds: 6 }] };
+  const config = { name: 'Blink', deviceSettingOverrides: Array.from({ length: 6 }, (_, n) => ({ deviceIdentifier: `camera:${n}`, homeKitSecureVideo: true })), syncModuleFeedLimits: [{ syncModuleId: '10', maxFeeds: 6 }] };
   expect(validate(config)).toBe(true);
   for (const maxFeeds of [0, -1, 1.5, '2']) expect(validate({ ...config, syncModuleFeedLimits: [{ syncModuleId: '10', maxFeeds }] })).toBe(false);
 });

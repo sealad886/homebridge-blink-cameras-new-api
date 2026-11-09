@@ -2,7 +2,7 @@
 
 Status: accepted and implemented; release acceptance is tracked in the hardening ledger
 
-Date: 2026-10-02
+Date: 2026-10-02; durable ownership extended 2026-11-09
 
 ## Context
 
@@ -13,19 +13,30 @@ failed polls and recovery attempts; historical network root cause is unknown.
 
 ## Decision
 
-Extend the existing account-wide coordinator to network, motion, and thumbnail
-capture operations. Hold it through returned command completion. Status reads and
+Extend the existing account-wide coordinator to network, motion, quality,
+thumbnail, Live View and native-storage operations. Persist an intent before
+dispatch and the accepted command identity before observing completion. Hold
+ownership through strict terminal proof. Status reads and
 JPEG downloads remain outside it. Retain 300 ms spacing and bounded conflict
 retries. Reconcile motion conflicts against matching fresh device/network/type
 and requested enabled state. An explicit resolved/value result supports void
 operations without confusing success with missing reconciliation.
 
-Every remote command has a bounded execution budget of at most 60 seconds.
+Ordinary command execution has a bounded local budget of at most 60 seconds.
 HomeKit callers wait at most 12 seconds. Pending expired mutations are not sent;
 started work may complete later and update confirmed state. No automatic POST
 replay follows ambiguous transport failure. Safe homescreen polling gets one
 transient transport retry within 25 seconds. Existing HTTP response retry policy
-remains unchanged.
+remains in force for eligible reads; owned mutation POSTs use one HTTP attempt.
+
+Local timeout, abort, restart, a refused status GET or malformed completion does
+not establish that a dispatched mutation ended. The shared private account state
+retains ordinary-command, Live View and per-module storage ownership. An
+unresolved owner blocks a replacement mutation or storage preparation. Ordinary
+commands have a persisted total 60-read observation budget; startup reconciliation
+can make one remaining-budget GET for an existing command ID and never resends
+the POST. Native-storage's separate 30-read budget and official parent/child
+workflow are specified in [ADR-007](007-event-driven-native-recording.md).
 
 The existing stable contact sensor and Retry switch own connection presentation.
 The contact monitor stays active during a cloud outage, but reports disconnected

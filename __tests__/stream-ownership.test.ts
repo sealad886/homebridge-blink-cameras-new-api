@@ -102,7 +102,7 @@ describe('generation-owned streaming', () => {
   beforeEach(() => { jest.clearAllMocks(); mockDelayBind = false; mockBinds.length = 0; });
   afterEach(() => { jest.useRealTimers(); });
 
-  it('starts six distinct synthetic vendor feeds under inventory-derived admission', async () => {
+  it('starts six distinct synthetic live viewers under inventory-derived admission', async () => {
     const inventory = projectSettingsInventory({ account: { account_id: 1 },
       networks: [{ id: 1, name: 'System', armed: true }], sync_modules: [{ id: 9, network_id: 1, status: 'online' }],
       cameras: Array.from({ length: 6 }, (_, i) => ({ id: i + 1, network_id: 1, name: `Camera ${i}`, enabled: true })),
@@ -110,31 +110,36 @@ describe('generation-owned streaming', () => {
     });
     const admission = new CameraFeedAdmission(); admission.configure(inventory, {});
     const sources = inventory.cameras.map(camera => fixture({}, () => admission.acquire(camera.key), { networkId: 1, deviceId: Number(camera.id) }));
-    const feeds = await Promise.all(sources.map(f => f.source.subscribeFeed({ write: async () => {}, end: async () => {}, fail: () => {} }, new globalThis.AbortController().signal)));
-    sources.forEach((f, index) => expect(f.api.startCameraLiveview).toHaveBeenCalledWith(1, index + 1));
-    await Promise.all(feeds.map(feed => feed.stop())); await flush();
-    for (let id = 1; id <= 6; id++) admission.acquire(cameraKey('camera', id)).release();
+    try {
+      await Promise.all(sources.map(async f => { await f.prepare(); expect(await f.start()).toBeUndefined(); }));
+      sources.forEach((f, index) => expect(f.api.startCameraLiveview).toHaveBeenCalledWith(1, index + 1));
+      await Promise.all(sources.map(f => f.stop())); await flush();
+      for (let id = 1; id <= 6; id++) admission.acquire(cameraKey('camera', id)).release();
+    } finally { await Promise.all(sources.map(f => f.cleanup())); }
   });
 
   it('releases admission after provider allocation fails, without starting a transport', async () => {
     const release = jest.fn(); const f = fixture({}, () => ({ release }));
     f.api.startCameraLiveview.mockRejectedValueOnce(new Error('private-provider-detail'));
-    await expect(f.source.subscribeFeed({ write: async () => {}, end: async () => {}, fail: () => {} }, new globalThis.AbortController().signal)).rejects.toThrow(/unavailable/);
-    await flush(); expect(release).toHaveBeenCalledTimes(1); expect(f.transports).toHaveLength(0);
-    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain('private-provider-detail');
+    try {
+      await f.prepare(); expect(await f.start()).toBeInstanceOf(Error);
+      await flush(); expect(release).toHaveBeenCalledTimes(1); expect(f.transports).toHaveLength(0);
+      expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain('private-provider-detail');
+    } finally { await f.cleanup(); }
   });
 
-  it('counts shared live/recording consumers as one upstream lease until actual transport closure', async () => {
+  it('counts simultaneous live viewers as one upstream lease until actual transport closure', async () => {
     const release = jest.fn(); const acquire = jest.fn(() => ({ release }));
-    const f = fixture({}, acquire); f.state.closeTransport = false;
-    const sink = () => ({ write: jest.fn(async () => {}), end: jest.fn(async () => {}), fail: jest.fn() });
-    const first = await f.source.subscribeFeed(sink(), new globalThis.AbortController().signal);
-    const second = await f.source.subscribeFeed(sink(), new globalThis.AbortController().signal);
-    expect(acquire).toHaveBeenCalledTimes(1); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
-    await first.stop(); expect(release).not.toHaveBeenCalled();
-    const stop = second.stop(); await flush(); expect(release).not.toHaveBeenCalled();
-    f.transports[0].close(); await stop; expect(release).toHaveBeenCalledTimes(1);
-    await second.stop(); expect(release).toHaveBeenCalledTimes(1);
+    const f = fixture({ maxStreams: 2 }, acquire); f.state.closeTransport = false;
+    try {
+      await f.prepare('first'); expect(await f.start('first')).toBeUndefined();
+      await f.prepare('second'); expect(await f.start('second')).toBeUndefined();
+      expect(acquire).toHaveBeenCalledTimes(1); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
+      await f.stop('first'); expect(release).not.toHaveBeenCalled();
+      const stopping = f.stop('second'); await flush(); expect(release).not.toHaveBeenCalled();
+      f.transports[0].close(); await stopping; await flush(); expect(release).toHaveBeenCalledTimes(1);
+      await f.stop('second'); expect(release).toHaveBeenCalledTimes(1);
+    } finally { await f.cleanup(); }
   });
 
   it('retains admission across cancelled late allocation and its bounded remote retirement', async () => {
@@ -143,18 +148,16 @@ describe('generation-owned streaming', () => {
     let complete!: () => void;
     f.api.startCameraLiveview.mockReturnValueOnce(new Promise(resolve => { allocate = resolve; }));
     f.api.completeCommand.mockReturnValueOnce(new Promise<void>(resolve => { complete = resolve; }));
-    const abort = new globalThis.AbortController();
-    const started = f.source.subscribeFeed({ write: async () => {}, end: async () => {}, fail: () => {} }, abort.signal);
-    const rejected = expect(started).rejects.toThrow(/unavailable/i);
-    await flush(); abort.abort(); await rejected; expect(release).not.toHaveBeenCalled();
-    allocate({ server: immis, command_id: 99 }); await flush();
-    expect(f.api.completeCommand).toHaveBeenCalledWith(1, 99, expect.anything());
-    expect(release).not.toHaveBeenCalled();
-    complete(); await flush(); expect(release).toHaveBeenCalledTimes(1);
-    await f.source.shutdown();
+    try {
+      await f.prepare(); const started = f.start(); await flush();
+      await f.stop(); expect(await started).toBeInstanceOf(Error); expect(release).not.toHaveBeenCalled();
+      allocate({ server: immis, command_id: 99 }); await flush();
+      expect(f.api.completeCommand).toHaveBeenCalledWith(1, 99, expect.anything());
+      expect(release).not.toHaveBeenCalled(); complete(); await flush(); expect(release).toHaveBeenCalledTimes(1);
+    } finally { complete?.(); await f.cleanup(); }
   });
 
-  it('reopens only after the previous upstream lease has completed retirement', async () => {
+  it('reopens a live viewer only after the previous upstream lease has completed retirement', async () => {
     const inventory = projectSettingsInventory({ account: { account_id: 1 }, networks: [{ id: 1, name: 'System', armed: true }],
       sync_modules: [], cameras: [{ id: 2, network_id: 1, name: 'Camera', enabled: true }], owls: [], doorbells: [] });
     const admission = new CameraFeedAdmission(); admission.configure(inventory, {});
@@ -162,13 +165,12 @@ describe('generation-owned streaming', () => {
     let complete!: () => void;
     f.api.startCameraLiveview.mockResolvedValue({ server: immis, command_id: 55 });
     f.api.completeCommand.mockReturnValueOnce(new Promise<void>(resolve => { complete = resolve; }));
-    const sink = { write: async () => {}, end: async () => {}, fail: () => {} };
-    const first = await f.source.subscribeFeed(sink, new globalThis.AbortController().signal);
-    await first.stop();
-    const second = f.source.subscribeFeed(sink, new globalThis.AbortController().signal);
-    await flush(); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
-    complete(); const reopened = await second;
-    expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(2); await reopened.stop(); await flush();
+    try {
+      await f.prepare(); expect(await f.start()).toBeUndefined(); await f.stop();
+      await f.prepare(); const second = f.start(); await flush(); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
+      complete(); expect(await second).toBeUndefined(); expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(2);
+      await f.stop(); await flush();
+    } finally { complete?.(); await f.cleanup(); }
   });
 
   it('stops one-way IMMIS by retiring its owned consumer without talkback commands', async () => {
