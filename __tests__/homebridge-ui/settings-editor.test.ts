@@ -41,7 +41,7 @@ function mount(config: Record<string, unknown>, validate?: (payload: unknown) =>
   };
   const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8'));
   const editor = context.window.BlinkSettingsUI.mount(homebridge, schema, [{ platform: 'BlinkCameras', name: 'Blink', ...config }]);
-  return { editor, homebridge, elements };
+  return { editor, homebridge, elements, schema };
 }
 function earlyNotificationControl(parent: Element): Element {
   const label = parent.querySelectorAll('label').find(item => item.textContent === 'Disable Early Notification')!;
@@ -50,13 +50,15 @@ function earlyNotificationControl(parent: Element): Element {
 
 it('identifies every blocking field and stages only after canonical validation succeeds', async () => {
   const validator = new SettingsValidator(() => undefined);
-  const { editor, homebridge, elements } = mount({ enableMotionPolling: false, hksvCameras: ['camera:1'],
+  const { editor, homebridge, elements, schema } = mount({ enableMotionPolling: false, hksvCameras: ['camera:1'],
     deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: 'yes' }] }, payload => validator.validate(payload));
   editor.draft.set('name', 'Updated Blink'); await editor.draft.flush();
   const paths = editor.draft.state.errors.map((error: { path: string }) => error.path);
-  expect(paths).toEqual(expect.arrayContaining(['/enableMotionPolling', '/hksvCameras', '/deviceSettingOverrides/0/homeKitSecureVideo']));
+  const nestedPath = '/deviceSettingOverrides/0/homeKitSecureVideo';
+  expect(paths).toEqual(expect.arrayContaining(['/enableMotionPolling', '/hksvCameras', nestedPath]));
   const messages = elements.get('settingsErrors')!.querySelectorAll('p').map(item => item.textContent);
   for (const path of paths) expect(messages.some(message => message.includes(path))).toBe(true);
+  expect(messages.find(message => message.includes(nestedPath))).toContain(schema.schema.properties.deviceSettingOverrides.title);
   expect(elements.get('draftStatus')!.textContent).toContain(String(paths.length));
   expect(elements.get('draftStatus')!.textContent).not.toMatch(/Unsaved changes/);
   expect(homebridge.updatePluginConfig).not.toHaveBeenCalled();
@@ -70,6 +72,9 @@ it('identifies every blocking field and stages only after canonical validation s
   expect(editor.draft.state.errors).toEqual([]);
   expect(elements.get('settingsErrors')!.hidden).toBe(true);
   expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(1);
+  expect(homebridge.updatePluginConfig).toHaveBeenLastCalledWith([expect.objectContaining({
+    name: 'Updated Blink', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true }],
+  })]);
   expect(homebridge.enableSaveButton).toHaveBeenCalledTimes(1);
 });
 
