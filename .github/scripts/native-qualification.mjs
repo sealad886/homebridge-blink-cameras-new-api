@@ -189,6 +189,7 @@ export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
         motion() { publicMotionEvents++; }, recording: () => undefined }],
       eventSourceFactory: input => { sources.push(input); return {
         async setDemand(demand) { sourceStarts++; assert.deepEqual(demand, { motionAccessory: true, hsv: false }); },
+        reconnect: denied,
         async stop() { sourceStops++; },
       }; },
     };

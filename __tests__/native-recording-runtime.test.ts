@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createHash, randomUUID } from 'node:crypto';
+import { createECDH, createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -10,8 +10,8 @@ import { BlinkApi, type BlinkRemoteOperationOwnership } from '../src/blink-api/c
 import type { BlinkAuth } from '../src/blink-api/auth';
 import { BLINK_FIREBASE_CLIENT } from '../src/blink-api/fcm-config';
 import { BlinkHttpError } from '../src/blink-api/http';
-import type { FcmEventSourceOptions } from '../src/blink-api/fcm/source';
-import type { FcmNotification, FcmReceiverState } from '../src/blink-api/fcm/types';
+import { FcmEventSource, type FcmEventSourceOptions } from '../src/blink-api/fcm/source';
+import { FCM_BUNDLE_ID, type Credentials, type FcmNotification, type FcmReceiverState, type FcmWorkerHandle, type WorkerCommand } from '../src/blink-api/fcm/types';
 import type { NativeStorageTransport, NativeStoredMedia } from '../src/blink-api/native-storage';
 import type { NativeMotionDevice } from '../src/blink-api/motion-events';
 import { writeOwnerOnlyJsonFile } from '../src/blink-api/secure-json-file';
@@ -59,7 +59,7 @@ describe('native recording runtime composition', () => {
 
   async function setup(overrides: { config?: NativeRecordingConfigInput; exposure?: boolean; hsv?: boolean;
     prepare?: typeof prepareNativeRecording; storagePath?: string; nativeStorage?: boolean; secondCamera?: boolean;
-    matchingDevices?: readonly NativeMotionDevice[] } = {}) {
+    matchingDevices?: readonly NativeMotionDevice[]; eventSourceFactory?: NativeRecordingRuntimeOptions['eventSourceFactory'] } = {}) {
     let runtime: NativeRecordingRuntime | undefined, source!: FcmEventSourceOptions;
     let remoteSave!: (state: BlinkRemoteOperationOwnership) => Promise<void>;
     let directory = '', nextCommand = 100, insideProvider = false;
@@ -100,7 +100,7 @@ describe('native recording runtime composition', () => {
         return { reference: await fs.realpath(reference), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
       }),
     };
-    const setDemand = jest.fn().mockResolvedValue(undefined), stopSource = jest.fn().mockResolvedValue(undefined);
+    const setDemand = jest.fn().mockResolvedValue(undefined), reconnectSource = jest.fn().mockResolvedValue(undefined), stopSource = jest.fn().mockResolvedValue(undefined);
     const releaseOwnership = jest.fn().mockResolvedValue(undefined);
     const client = {
       getCachedIdentity: jest.fn(() => ({ ...scope, sharedTier: 'u001' })),
@@ -129,7 +129,7 @@ describe('native recording runtime composition', () => {
     const options: NativeRecordingRuntimeOptions = { client: client as unknown as BlinkApi, scope, storagePath: overrides.storagePath ?? root,
       config: resolveNativeRecordingConfig(overrides.config), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: event => events.push(event),
       devices, matchingDevices: overrides.matchingDevices ?? devices.flatMap(device => device.nativeStorage ? [{ ...device.binding, ...device.nativeStorage }] : []),
-      eventSourceFactory: input => { source = input; return { setDemand, stop: stopSource }; },
+      eventSourceFactory: input => { source = input; return overrides.eventSourceFactory?.(input) ?? { setDemand, reconnect: reconnectSource, stop: stopSource }; },
     };
     runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime); await runtime.start();
     const notification = (id = 'motion-1', values: Record<string, string> = {}): FcmNotification => ({
@@ -141,9 +141,88 @@ describe('native recording runtime composition', () => {
     const rebind = async (next: Partial<NativeRecordingRuntimeOptions> = {}) => {
       runtime = await NativeRecordingRuntime.create({ ...options, ...next }); runtimes.push(runtime); await runtime.start(); return runtime;
     };
-    return { runtime, delegate, prepare, transport, client, source, setDemand, stopSource, events, publicMotion, readyMotion,
+    return { runtime, delegate, prepare, transport, client, source, setDemand, reconnectSource, stopSource, events, publicMotion, readyMotion,
       media, notification, push, state, remoteSave, cornerReady, releaseOwnership, rebind };
   }
+
+  it('restores an exhausted real receiver on explicit retry without rebinding or losing durable ownership and acknowledgments', async () => {
+    class Worker implements FcmWorkerHandle {
+      private message?: (value: unknown) => void;
+      readonly send = jest.fn<void, [WorkerCommand]>();
+      readonly stop = jest.fn(async () => undefined);
+      onMessage(listener: (value: unknown) => void) { this.message = listener; }
+      onExit(_listener: () => void) { /* The controlled worker exits only through stop(). */ }
+      emit(value: unknown) { this.message?.(value); }
+    }
+    const key = createECDH('prime256v1'); key.setPrivateKey(Buffer.alloc(32, 1));
+    const credentials: Credentials = {
+      gcm: { androidId: '12345', securityToken: '67890', appId: 'owned-instance', token: 'owned-gcm-token' },
+      fcm: { token: 'owned-fcm-token', installation: { token: 'installation-auth', refreshToken: 'installation-refresh', fid: 'owned-fid',
+        createdAt: 1, expiresIn: 604800000 } },
+      keys: { privateKey: key.getPrivateKey('base64'), publicKey: key.getPublicKey('base64'), authSecret: Buffer.alloc(16, 2).toString('base64') },
+      config: { projectId: BLINK_FIREBASE_CLIENT.projectId, bundleId: FCM_BUNDLE_ID, vapidKey: '' },
+    };
+    const workers: Worker[] = []; let receiver!: FcmEventSource;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn().mockRejectedValue(new Error('Unexpected external request'));
+    try {
+      const f = await setup({ hsv: false, eventSourceFactory: options => {
+        receiver = new FcmEventSource({ ...options, maxFailures: 2, retryBaseMs: 100, random: () => 0.5,
+          spawnWorker: () => { const worker = new Worker(); workers.push(worker); return worker; } });
+        return receiver;
+      } });
+      const activate = async (worker: Worker) => {
+        worker.emit({ type: 'credentials', credentials });
+        await until(() => worker.send.mock.calls.some(([message]) => message.type === 'credentials-accepted'));
+        worker.emit({ type: 'ready' }); await until(() => receiver.getStatus().connected);
+      };
+      const enabledAt = Date.now();
+      const notify = (worker: Worker, id: string, createdAt = Date.now()) => worker.emit({ type: 'notification', persistentId: id,
+        receivedAt: Date.now(), data: f.notification(id, { created_at: new Date(createdAt).toISOString() }).data });
+      await activate(workers[0]); notify(workers[0], 'before-outage');
+      await until(() => workers[0].send.mock.calls.some(([message]) => message.type === 'ack'));
+      expect(f.publicMotion).toHaveBeenCalledTimes(1);
+      const ownership: BlinkRemoteOperationOwnership = { stateCommand: { reservationId: 'unknown-arm', accountId: 10, networkId: 20,
+        kind: 'arm', phase: 'unresolved', statusReads: 0 } };
+      await f.remoteSave(ownership);
+      workers[0].emit({ type: 'failure', reason: 'transport-error', retryable: true });
+      await until(() => workers[0].stop.mock.calls.length === 1);
+      await jest.advanceTimersByTimeAsync(100); expect(workers).toHaveLength(2);
+      workers[1].emit({ type: 'failure', reason: 'transport-error', retryable: true });
+      await until(() => receiver.getStatus().faulted);
+      await jest.advanceTimersByTimeAsync(3_600_000);
+      await f.runtime.start(); await f.runtime.start();
+      expect(workers).toHaveLength(2); expect(receiver.getStatus().faulted).toBe(true);
+      expect(f.events).toContain('push-faulted:transport-error');
+
+      await f.runtime.reconnectEvents(); expect(workers).toHaveLength(3);
+      expect(workers[2].send).toHaveBeenCalledWith({ type: 'start', firebase: BLINK_FIREBASE_CLIENT, credentials, persistentIds: ['before-outage'] });
+      await activate(workers[2]);
+      notify(workers[2], 'before-outage'); notify(workers[2], 'during-outage', enabledAt + 1);
+      await until(() => workers[2].send.mock.calls.filter(([message]) => message.type === 'ack').length === 2);
+      expect(f.publicMotion).toHaveBeenCalledTimes(2);
+      expect(receiver.snapshot().persistentIds).toEqual(['before-outage', 'during-outage']);
+      expect(f.client.registerMotionNotificationKey).toHaveBeenCalledTimes(1);
+      expect((await f.state()).remoteOperations).toEqual(ownership);
+      expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.transport.getJson).not.toHaveBeenCalled();
+      expect(f.transport.downloadMedia).not.toHaveBeenCalled(); expect(globalThis.fetch).not.toHaveBeenCalled();
+      // A deliberate retry of a healthy connection also retains this enabled period.
+      await f.runtime.reconnectEvents(); expect(workers).toHaveLength(4);
+      expect(workers[2].stop).toHaveBeenCalledTimes(1);
+      expect(workers[3].send).toHaveBeenCalledWith(expect.objectContaining({ type: 'start', credentials,
+        persistentIds: ['before-outage', 'during-outage'] }));
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  it('keeps no-demand recovery quiet and rejects reconnect after permanent shutdown', async () => {
+    const f = await setup({ exposure: false, hsv: false });
+    await f.runtime.start(); await f.runtime.reconnectEvents();
+    expect(f.setDemand).toHaveBeenCalledTimes(1); expect(f.reconnectSource).not.toHaveBeenCalled();
+    expect(f.transport.postEmpty).not.toHaveBeenCalled();
+    await f.runtime.stop();
+    await expect(f.runtime.reconnectEvents()).rejects.toThrow('Native runtime stopped');
+    expect(f.reconnectSource).not.toHaveBeenCalled();
+  });
 
   it.each([
     { accountId: 10, clientId: 11, tier: 'u000' },
@@ -156,7 +235,7 @@ describe('native recording runtime composition', () => {
     const demand = jest.fn().mockResolvedValue(undefined), report = jest.fn();
     const options: NativeRecordingRuntimeOptions = { client: api, scope, devices: [], matchingDevices: [], storagePath: root,
       config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report,
-      eventSourceFactory: () => ({ setDemand: demand, stop: jest.fn().mockResolvedValue(undefined) }) };
+      eventSourceFactory: () => ({ setDemand: demand, reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }) };
     const first = await NativeRecordingRuntime.create(options); runtimes.push(first); await first.start(); await first.stop();
     identity.mockReturnValue({ ...nextScope, sharedTier: nextScope.tier });
     const replacement = await NativeRecordingRuntime.create({ ...options, scope: nextScope }); runtimes.push(replacement); await replacement.start();
@@ -193,7 +272,7 @@ describe('native recording runtime composition', () => {
       });
       const runtime = await NativeRecordingRuntime.create({ client: api, scope, devices: [], matchingDevices: [], storagePath: root,
         config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report,
-        eventSourceFactory: () => ({ setDemand: demand, stop: jest.fn().mockResolvedValue(undefined) }) });
+        eventSourceFactory: () => ({ setDemand: demand, reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }) });
       runtimes.push(runtime); await runtime.start();
       if (scenario.acknowledged) {
         expect(globalThis.fetch).toHaveBeenCalledTimes(1);
@@ -235,7 +314,7 @@ describe('native recording runtime composition', () => {
     let source!: FcmEventSourceOptions;
     const options: NativeRecordingRuntimeOptions = { client: api, scope, devices: [], matchingDevices: [], storagePath: root,
       config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(),
-      eventSourceFactory: input => { source = input; return { setDemand: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }; } };
+      eventSourceFactory: input => { source = input; return { setDemand: jest.fn().mockResolvedValue(undefined), reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }; } };
     try {
       globalThis.fetch = jest.fn().mockResolvedValueOnce(new Response(null, { status: 204 }))
         .mockResolvedValueOnce(new Response(JSON.stringify({ complete: true, status: 0 }), { headers: { 'content-type': 'application/json' } }));
@@ -291,7 +370,7 @@ describe('native recording runtime composition', () => {
     const demand = jest.fn().mockResolvedValue(undefined);
     const runtime = await NativeRecordingRuntime.create({ client: api, scope: nextScope, devices: [], matchingDevices: [], storagePath: root,
       config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(),
-      eventSourceFactory: () => ({ setDemand: demand, stop: jest.fn().mockResolvedValue(undefined) }) });
+      eventSourceFactory: () => ({ setDemand: demand, reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }) });
     runtimes.push(runtime); await runtime.start();
     await expect(api.withNativeStorageAdmission('idle-proof', async () => 'admitted', {},
       { accountId: 10, networkId: 20, syncModuleId: 30 })).resolves.toBe('admitted');

@@ -661,10 +661,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           return;
         }
         this.log.info('HomeKit requested Blink connection retry.');
+        const previousRuntime = this.nativeRuntime;
         try {
           await withResponseBudget(this.recoverConnection(
             !this.inventoryInitialized || this.connectionState === 'authentication-required',
-          ));
+          ).then(async recovered => {
+            // This continuation retains operator intent even when recovery joins
+            // a status poll or discovery. A replacement already starts fresh.
+            if (recovered && this.monitorActive && this.nativeRuntime === previousRuntime) await this.nativeRuntime?.reconnectEvents();
+          }));
         } catch (error) {
           throw toHapError(this.api.hap, error);
         } finally {

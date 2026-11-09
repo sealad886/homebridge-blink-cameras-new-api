@@ -42,6 +42,9 @@ If Blink acknowledged closing an owned Live View but its status check was
 interrupted, startup or an explicit connection retry checks that known command's
 status within the existing bound. Recovery does not resend the close request.
 Unknown command IDs and unacknowledged closes retain their ownership fences.
+An explicit **Retry Blink Connection** also reopens a faulted motion receiver
+using its saved identity and acknowledgments. Ordinary polling keeps its current
+subscription.
 
 Startup also retires verified downloaded clips and private generated media
 remnants left by interrupted downloads before accounting for cache capacity.

@@ -54,7 +54,7 @@ export interface NativeRecordingRuntimeOptions {
   appVersion: string;
   report(event: string): void;
   /** Explicit offline transport qualification; production uses the isolated receiver. */
-  eventSourceFactory?: (options: FcmEventSourceOptions) => Pick<FcmEventSource, 'setDemand' | 'stop'>;
+  eventSourceFactory?: (options: FcmEventSourceOptions) => Pick<FcmEventSource, 'setDemand' | 'reconnect' | 'stop'>;
 }
 
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
@@ -69,7 +69,7 @@ const observationKey = (event: NativeRecordingObservation): string => JSON.strin
 export class NativeRecordingRuntime {
   private state!: NativeRecordingRuntimeState;
   private core!: NativeRecordingCoordinator;
-  private source!: Pick<FcmEventSource, 'setDemand' | 'stop'>;
+  private source!: Pick<FcmEventSource, 'setDemand' | 'reconnect' | 'stop'>;
   private readonly owners = new Map<string, NativeStorageOwner>();
   private readonly devices = new Map<string, NativeRuntimeDevice>();
   private readonly matchingDevices: readonly NativeMotionDevice[];
@@ -225,6 +225,13 @@ export class NativeRecordingRuntime {
     }
     await this.source.setDemand({ motionAccessory: [...this.devices.values()].some(device => device.settings.exposeMotionDetected),
       hsv: [...this.devices.values()].some(device => device.settings.homeKitSecureVideo) });
+  }
+
+  /** Explicit operator retry; ordinary status recovery keeps its current subscription. */
+  async reconnectEvents(): Promise<void> {
+    if (this.stopped) throw new Error('Native runtime stopped');
+    if (!this.active || ![...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) return;
+    await this.source.reconnect();
   }
 
   policyChanged(cameraId: string, policy: NativeRecordingPolicy): Promise<void> {

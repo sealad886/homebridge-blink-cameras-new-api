@@ -31,7 +31,7 @@ describe('platform native recording and ordinary command ownership', () => {
   let directory: string;
   let api: ReturnType<typeof createApi>;
   let client: BlinkApi;
-  let source: { setDemand: jest.Mock; stop: jest.Mock };
+  let source: { setDemand: jest.Mock; reconnect: jest.Mock; stop: jest.Mock };
   let createRuntime: jest.SpyInstance<ReturnType<typeof NativeRecordingRuntime.create>, Parameters<typeof NativeRecordingRuntime.create>>;
 
   beforeEach(async () => {
@@ -48,7 +48,7 @@ describe('platform native recording and ordinary command ownership', () => {
     jest.spyOn(internals.auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer offline-fixture' });
     jest.spyOn(client, 'login').mockResolvedValue(undefined);
     (BlinkApiConstructor as jest.Mock).mockImplementation(() => client);
-    source = { setDemand: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
+    source = { setDemand: jest.fn().mockResolvedValue(undefined), reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
     (FcmEventSource as jest.Mock).mockImplementation(() => source);
     createRuntime = jest.spyOn(NativeRecordingRuntime, 'create');
     jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected external request'));
@@ -75,13 +75,75 @@ describe('platform native recording and ordinary command ownership', () => {
     return platform;
   }
 
+  function retryControl(platform: BlinkCamerasPlatform): MockCharacteristic {
+    const accessory = platform.accessories.find(item => item.context.blinkConnectionRetry)!;
+    return accessory.getServiceById(platform.Service.Switch, 'blink-connection-retry')!
+      .getCharacteristic(platform.Characteristic.On) as unknown as MockCharacteristic;
+  }
+
   async function refresh(platform: BlinkCamerasPlatform, homescreen: BlinkHomescreen): Promise<void> {
     jest.mocked(client.getHomescreen).mockResolvedValue(homescreen);
-    const accessory = platform.accessories.find(item => item.context.blinkConnectionRetry)!;
-    const retry = accessory.getServiceById(platform.Service.Switch, 'blink-connection-retry')!
-      .getCharacteristic(platform.Characteristic.On) as unknown as MockCharacteristic;
-    await expect(retry.onSetHandler!(true)).resolves.toBeUndefined();
+    await expect(retryControl(platform).onSetHandler!(true)).resolves.toBeUndefined();
   }
+
+  it('retains the public receiver retry when it joins an ordinary in-flight status poll', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', exposeMotionDetected: true });
+    let releaseHomescreen!: (value: BlinkHomescreen) => void;
+    jest.mocked(client.getHomescreen).mockImplementationOnce(() => new Promise(resolve => { releaseHomescreen = resolve; }));
+    const poll = (platform as unknown as { pollDeviceStates: () => Promise<void> }).pollDeviceStates.bind(platform);
+    const pendingPoll = poll();
+    await waitFor(() => jest.mocked(client.getHomescreen).mock.calls.length === 2);
+    const retry = retryControl(platform);
+    await retry.onSetHandler!(false);
+    const pendingRetry = retry.onSetHandler!(true);
+    expect(source.reconnect).not.toHaveBeenCalled();
+    releaseHomescreen(homescreen);
+    await Promise.all([pendingPoll, pendingRetry]);
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(client.getHomescreen).toHaveBeenCalledTimes(2);
+    expect(source.setDemand).toHaveBeenCalledTimes(1);
+    expect(source.reconnect).toHaveBeenCalledTimes(1);
+    expect(retry.value).toBe(false);
+    await poll();
+    expect(source.reconnect).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('joins startup discovery without reconnecting the newly initialized receiver', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    let releaseHomescreen!: (value: BlinkHomescreen) => void;
+    jest.spyOn(client, 'getHomescreen').mockImplementation(() => new Promise(resolve => { releaseHomescreen = resolve; }));
+    const log = createLogger();
+    const platform = new BlinkCamerasPlatform(log as unknown as Logger,
+      { platform: 'BlinkCameras', enableStreaming: false, persistAuth: false, exposeMotionDetected: true }, api as unknown as API);
+    api.emit('didFinishLaunching');
+    await waitFor(() => jest.mocked(client.getHomescreen).mock.calls.length === 1);
+    const pendingRetry = retryControl(platform).onSetHandler!(true);
+    releaseHomescreen(homescreen);
+    await pendingRetry;
+    expect(platform.isOperational()).toBe(true);
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(client.getHomescreen).toHaveBeenCalledTimes(1);
+    expect(source.setDemand).toHaveBeenCalledTimes(1);
+    expect(source.reconnect).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not reconnect the receiver when Blink recovery fails', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', exposeMotionDetected: true });
+    jest.mocked(client.getHomescreen).mockRejectedValueOnce(new Error('offline'));
+    const retry = retryControl(platform);
+    await expect(retry.onSetHandler!(true)).rejects.toMatchObject({ hapStatus: -70402 });
+    expect(retry.value).toBe(false);
+    expect(source.reconnect).not.toHaveBeenCalled();
+    expect(source.setDemand).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])('persists network arm/disarm without eligible cameras (all excluded: %s)', async excluded => {
     const homescreen = emptyHomescreen();
