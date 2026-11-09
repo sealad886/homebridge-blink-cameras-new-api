@@ -68,7 +68,9 @@ const server = http.createServer(async (request, response) => {
 });
 if (process.argv[2] === '--check') {
   if (!validator.validate({ revision: 0, config: initialConfig }).valid) throw new Error('Invalid synthetic preview settings.');
-  console.log('Generated preview and production inline scripts parse; initial settings pass canonical validation. No server started.');
+  const moduleSettings = { ...initialConfig, syncModuleFeedLimits: [{ syncModuleId: inventory.syncModules[0].id, maxFeeds: 1 }] };
+  if (!validator.validate({ revision: 1, config: moduleSettings }).valid) throw new Error('Invalid synthetic preview Sync Module feed limit.');
+  console.log('Generated preview and production inline scripts parse; initial settings and module feed limits pass canonical validation. No server started.');
 }
 else {
   const port = Number(process.argv[2] || 8766);
