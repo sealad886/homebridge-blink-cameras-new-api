@@ -342,7 +342,7 @@
             },
             "disableEarlyNotification": {
               "title": "Disable Early Notification",
-              "description": "Override the Sync Module or plugin choice for this camera. On lets the plugin turn Blink Early Notification off on supported cameras and removes the initial saved-clip delay for newly confirmed-off motion. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
+              "description": "Override the Sync Module or plugin choice for this camera. On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
               "type": "boolean"
             },
             "homeKitSecureVideo": {
@@ -372,7 +372,7 @@
             },
             "disableEarlyNotification": {
               "title": "Disable Early Notification",
-              "description": "Override the plugin choice for this Sync Module's cameras. On lets the plugin turn Blink Early Notification off on supported cameras and removes the initial saved-clip delay for newly confirmed-off motion. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
+              "description": "Override the plugin choice for this Sync Module's cameras. On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
               "type": "boolean"
             }
           }
@@ -413,7 +413,7 @@
       },
       "disableEarlyNotification": {
         "title": "Disable Early Notification",
-        "description": "On lets the plugin turn Blink Early Notification off on supported cameras and removes the initial saved-clip delay for newly confirmed-off motion. Off or unset uses the normal delay. Sync Module and camera settings can override this choice. Sync Module cooldown and FIFO order still apply.",
+        "description": "On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off or unset uses the normal delay. Sync Module and camera settings can override this choice. Sync Module cooldown and FIFO order still apply.",
         "type": "boolean"
       },
       "nativeRecording": {

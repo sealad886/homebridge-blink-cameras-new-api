@@ -4,6 +4,7 @@ import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 import type { BlinkApi, BlinkRemoteOperationOwnership } from './blink-api/client';
+import { supportsEarlyNotificationControl } from './blink-api/domain-validation';
 import { FcmEventSource, type FcmEventSourceOptions } from './blink-api/fcm/source';
 import type { FcmNotification, FcmReceiverState, FcmScope, FirebaseConfig } from './blink-api/fcm/types';
 import { decodeBlinkMotionMessage, isBlinkMotionDevice, isNativeMotionDevice, type BlinkMotionDevice, type NativeMotionDevice } from './blink-api/motion-events';
@@ -14,9 +15,12 @@ import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type Nativ
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
 import type { NativeRecordingConfig, NativeRecordingDevicePolicy } from './native-recording-config';
 import type { NativeRecordingDelegate, NativeRecordingPolicy } from './accessories/native-recording-delegate';
+import type { BlinkCameraKind } from './types';
 
 export interface NativeRuntimeDevice {
   binding: BlinkMotionDevice;
+  /** Provider model identity, separate from the camera/owl endpoint family. */
+  rawType?: string;
   nativeStorage?: { moduleId: string; syncModuleId: number };
   settings: NativeRecordingDevicePolicy;
   motion(): void;
@@ -24,7 +28,19 @@ export interface NativeRuntimeDevice {
 }
 type RuntimeClient = Pick<BlinkApi, 'getCachedIdentity' | 'registerMotionNotificationKey' | 'createNativeStorageTransport'
   | 'withNativeStorageAdmission' | 'setNativeStorageOwner' | 'configureRemoteOperationOwnership' | 'reconcileKnownStateCommand'
-  | 'reconcileKnownLiveViews' | 'getRemoteOperationState'>;
+  | 'reconcileKnownLiveViews' | 'getRemoteOperationState' | 'setDeviceEarlyNotification'>;
+interface EarlyNotificationOriginal {
+  kind: BlinkCameraKind;
+  networkId: number;
+  deviceId: number;
+  rawType: string;
+  original: true;
+}
+interface EarlyNotificationOriginals {
+  version: 1;
+  scope: { accountId: number; tier: string };
+  devices: EarlyNotificationOriginal[];
+}
 interface DownloadedAsset {
   reference: string; bytes: number; sha256: string; identity: string; capturedAt: string;
   moduleId: string; cameraId: string; jobId: string; policyEpoch: number; cameraGeneration: number;
@@ -64,6 +80,8 @@ const CACHE_ARTIFACT = new RegExp(`^(?:native-${CACHE_UUID}\\.mp4|\\.native-${CA
 const clone = <T>(value: T): T => globalThis.structuredClone(value);
 const bindingKey = (binding: BlinkMotionDevice): string => JSON.stringify([binding.providerId, binding.target, binding.networkId]);
 const observationKey = (event: NativeRecordingObservation): string => JSON.stringify([event.moduleId, event.cameraId, event.eventId]);
+const settingKey = (device: Pick<EarlyNotificationOriginal, 'kind' | 'networkId' | 'deviceId'>): string =>
+  JSON.stringify([device.kind, device.networkId, device.deviceId]);
 
 /** Account composition: one writer, one FIFO, per-module protocol owners, no idle catalogs. */
 export class NativeRecordingRuntime {
@@ -76,6 +94,8 @@ export class NativeRecordingRuntime {
   private readonly catalogs = new Map<string, NativeStorageCatalog>();
   private readonly epochs = new Map<string, number>();
   private readonly enabledSince = new Map<string, number>();
+  private readonly earlyNotificationOffSince = new Map<string, number>();
+  private earlyNotificationOriginals?: EarlyNotificationOriginals;
   private readonly policyEpochs = new Map<string, number>();
   private readonly policyChanges = new Set<Promise<void>>();
   private writes: Promise<void> = Promise.resolve();
@@ -93,6 +113,7 @@ export class NativeRecordingRuntime {
   private cachePath: string;
   get cacheDirectory(): string { return this.cachePath; }
   private readonly statePath: string;
+  private readonly earlyNotificationPath: string;
 
   private constructor(private readonly options: NativeRecordingRuntimeOptions) {
     if (!Number.isSafeInteger(options.scope.accountId) || options.scope.accountId <= 0 || !Number.isSafeInteger(options.scope.clientId)
@@ -100,6 +121,8 @@ export class NativeRecordingRuntime {
     this.directory = path.join(options.storagePath, '.blink-native-recording', `${options.scope.accountId}-${options.scope.clientId}-${options.scope.tier}`);
     this.cachePath = path.join(this.directory, 'downloads');
     this.statePath = path.join(this.directory, 'state.json');
+    // Originals belong to the account, not the replaceable authenticated client.
+    this.earlyNotificationPath = path.join(path.dirname(this.directory), `.early-notification-${options.scope.accountId}-${options.scope.tier}.json`);
     if (!Array.isArray(options.matchingDevices) || options.matchingDevices.length > 1000
       || options.matchingDevices.some(device => !isNativeMotionDevice(device) || device.accountId !== options.scope.accountId
         || device.moduleId !== `${device.networkId}:${device.syncModuleId}`)) throw new Error('Invalid native matching inventory');
@@ -125,6 +148,7 @@ export class NativeRecordingRuntime {
     await this.privateDirectory(this.directory);
     await this.privateDirectory(this.cacheDirectory);
     this.cachePath = await fs.realpath(this.cacheDirectory);
+    await this.loadEarlyNotificationOriginals();
     await this.assertPriorScopesSettled();
     try {
       const stat = await fs.lstat(this.statePath);
@@ -172,7 +196,7 @@ export class NativeRecordingRuntime {
       restoredState: this.state.core, initialDelayMs: this.options.config.initialDelayMs,
       retryIntervalMs: this.options.config.retryIntervalMs, maxRetries: this.options.config.maxRetries,
       maxQueuedJobs: this.options.config.maxQueuedJobs, maxJobAgeMs: this.options.config.maxJobAgeMs,
-      earliestAcquisitionAt: event => this.earliest(event),
+      earliestAcquisitionAt: (event, fallbackAt) => this.earliest(event, fallbackAt),
       acquire: (request, signal) => this.acquire(request, signal),
       saveState: core => this.commit(next => { next.core = clone(core); }),
       onError: () => this.options.report('acquisition-faulted'),
@@ -236,6 +260,84 @@ export class NativeRecordingRuntime {
         await this.core.resolveOperation({ moduleId: job.observation.moduleId, operationId: operation.operationId,
           status: 'verified-terminal', result: { status: 'skipped' } });
       } else this.options.report('recovery-required');
+    }
+    await this.reconcileEarlyNotification();
+  }
+
+  private async loadEarlyNotificationOriginals(): Promise<void> {
+    try {
+      const stat = await fs.lstat(this.earlyNotificationPath), uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_STATE_BYTES
+        || (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o777) !== 0o600))) throw new Error('Unsafe Early Notification originals');
+      const state = await readOwnerOnlyJsonFile<EarlyNotificationOriginals>(this.earlyNotificationPath);
+      if (!state || state.version !== 1 || state.scope?.accountId !== this.options.scope.accountId || state.scope?.tier !== this.options.scope.tier
+        || !Array.isArray(state.devices) || state.devices.length > 1000
+        || state.devices.some(device => !device || !['camera', 'owl', 'doorbell'].includes(device.kind)
+          || !Number.isSafeInteger(device.networkId) || device.networkId <= 0 || !Number.isSafeInteger(device.deviceId) || device.deviceId <= 0
+          || !supportsEarlyNotificationControl(device.rawType) || device.original !== true)
+        || new Set(state.devices.map(settingKey)).size !== state.devices.length) throw new Error('Invalid Early Notification originals');
+      this.earlyNotificationOriginals = state;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') {
+        this.earlyNotificationOriginals = { version: 1, scope: { accountId: this.options.scope.accountId, tier: this.options.scope.tier }, devices: [] };
+      } else this.options.report('early-notification-state-faulted');
+    }
+  }
+
+  private async saveEarlyNotificationOriginals(devices: EarlyNotificationOriginal[]): Promise<void> {
+    if (!this.earlyNotificationOriginals || !this.currentScope()) throw new Error('Early Notification originals unavailable');
+    const next = { ...this.earlyNotificationOriginals, devices };
+    await writeOwnerOnlyJsonFile(this.earlyNotificationPath, next);
+    this.earlyNotificationOriginals = next;
+  }
+
+  /** Startup/configuration/operator retry only: never a per-motion preflight. */
+  private async reconcileEarlyNotification(): Promise<void> {
+    if (!this.earlyNotificationOriginals || this.stopped || !this.currentScope()) return;
+    const remote = this.options.client.getRemoteOperationState();
+    if (remote.persistenceFailed || remote.liveView || remote.stateCommand || remote.storage.length) return;
+    const desired = new Map<string, { device: NativeRuntimeDevice; identity: Omit<EarlyNotificationOriginal, 'original'> }>();
+    for (const device of this.devices.values()) {
+      if (!device.settings.disableEarlyNotification) continue;
+      const kind = device.binding.target;
+      if (!['camera', 'owl', 'doorbell'].includes(kind) || !supportsEarlyNotificationControl(device.rawType)) {
+        this.options.report('early-notification-unsupported'); continue;
+      }
+      const identity = { kind: kind as BlinkCameraKind, networkId: device.binding.networkId, deviceId: device.binding.providerId, rawType: device.rawType! };
+      desired.set(settingKey(identity), { device, identity });
+    }
+    // Removed/excluded consumers still leave a durable original to restore.
+    for (const original of [...this.earlyNotificationOriginals.devices]) {
+      if (desired.has(settingKey(original))) continue;
+      if (this.stopped || !this.currentScope()) return;
+      try {
+        const result = await this.options.client.setDeviceEarlyNotification(original.kind, original.networkId, original.deviceId,
+          original.rawType, original.original, { expectedCurrent: false });
+        if (result.supported && result.current === original.original) {
+          await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals.devices.filter(row => settingKey(row) !== settingKey(original)));
+          this.options.report('early-notification-restored');
+        }
+      } catch { this.options.report('early-notification-restore-faulted'); }
+    }
+    for (const [key, { device, identity }] of desired) {
+      if (this.stopped || !this.currentScope()) return;
+      const binding = bindingKey(device.binding), previouslyOffSince = this.earlyNotificationOffSince.get(binding);
+      this.earlyNotificationOffSince.delete(binding);
+      try {
+        const result = await this.options.client.setDeviceEarlyNotification(identity.kind, identity.networkId, identity.deviceId, identity.rawType, false, {
+          beforeChange: async current => {
+            if (this.stopped || !this.currentScope() || current !== true) throw new Error('Early Notification ownership changed');
+            if (!this.earlyNotificationOriginals!.devices.some(row => settingKey(row) === key)) {
+              await this.saveEarlyNotificationOriginals([...this.earlyNotificationOriginals!.devices, { ...identity, original: true }]);
+            }
+            if (this.stopped || !this.currentScope()) throw new Error('Early Notification ownership changed');
+          },
+        });
+        if (result.supported && result.compatible && result.current === false && !this.stopped && this.currentScope()) {
+          this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
+          this.options.report('early-notification-confirmed-off');
+        } else this.options.report('early-notification-unsupported');
+      } catch { this.options.report('early-notification-faulted'); }
     }
   }
 
@@ -314,22 +416,32 @@ export class NativeRecordingRuntime {
     const key = observationKey(observation);
     const previousEpoch = this.epochs.get(key);
     if (previousEpoch === undefined) this.epochs.set(key, recording.policy.epoch);
-    const result = await this.core.observe(observation, this.core.cameraGeneration(observation.moduleId, observation.cameraId));
+    const confirmedOffSince = this.earlyNotificationOffSince.get(bindingKey(device.binding));
+    const initialDelayMs = device.settings.disableEarlyNotification && confirmedOffSince !== undefined && observation.occurredAt >= confirmedOffSince
+      ? 0 : this.options.config.initialDelayMs;
+    const fallbackAt = observation.occurredAt + this.options.config.initialDelayMs;
+    const result = await this.core.observe(observation, this.core.cameraGeneration(observation.moduleId, observation.cameraId),
+      { initialDelayMs, ...(initialDelayMs === 0 && fallbackAt > Date.now() ? { fallbackAt } : {}) });
     if (result !== 'accepted') { if (previousEpoch === undefined) this.epochs.delete(key); this.options.report(`motion-job-${result}`); }
   }
 
-  private matching(event: NativeRecordingObservation) {
+  private matching(event: NativeRecordingObservation, fallbackAt?: number) {
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
     const catalog = this.catalogs.get(event.moduleId);
     if (!device || !catalog) return { status: 'missing' as const };
     const camera: NativeMotionDevice = { ...device.binding, ...device.nativeStorage! };
     return matchNativeClip({ catalog, camera,
       devices: this.matchingDevices,
-      scope: { ...camera }, occurredAt: event.occurredAt, toleranceMs: this.options.config.matchToleranceMs,
+      // The provider has not proved whether a late notification's timestamp is
+      // the clip start. Before the ordinary delay, import only an exact match.
+      scope: { ...camera }, occurredAt: event.occurredAt,
+      // An early catalog cannot become fresh merely because local time passed.
+      toleranceMs: fallbackAt !== undefined && (this.state.catalogStartedAt[event.moduleId] ?? 0) < fallbackAt
+        ? 0 : this.options.config.matchToleranceMs,
       consumedClipIdentities: new Set(this.state.consumed) });
   }
 
-  private earliest(event: NativeRecordingObservation): number {
+  private earliest(event: NativeRecordingObservation, fallbackAt?: number): number {
     if (!this.active) return Date.now() + 1000;
     const remote = this.options.client.getRemoteOperationState();
     if (remote.persistenceFailed || remote.liveView || remote.stateCommand || remote.storage.length || !this.currentScope()) return Date.now() + 1000;
@@ -337,7 +449,7 @@ export class NativeRecordingRuntime {
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
     if (!device?.recording()?.available || this.state.downloads.some(asset => asset.cameraId === event.cameraId)
       || this.cacheBytes + 32 * 1024 * 1024 > this.options.config.maxCachedBytes) return Date.now() + 1000;
-    if (this.matching(event).status === 'matched') return Date.now();
+    if (this.matching(event, fallbackAt).status === 'matched') return Date.now();
     return Math.max(Date.now(), (this.state.catalogStartedAt[event.moduleId] ?? 0) + this.options.config.catalogRefreshMs);
   }
 
@@ -350,7 +462,7 @@ export class NativeRecordingRuntime {
       && this.core.isCameraGenerationCurrent(event.moduleId, event.cameraId, request.cameraGeneration);
     if (!device || !owner || policyEpoch === undefined || !allowed()) return { status: 'skipped' };
     const context = { accountId: device.binding.accountId, networkId: device.binding.networkId, syncModuleId: device.nativeStorage!.syncModuleId };
-    let match = this.matching(event);
+    let match = this.matching(event, request.fallbackAt);
     if (match.status !== 'matched') {
       const priorCatalogStart = this.state.catalogStartedAt[event.moduleId];
       await this.commit(next => { next.catalogStartedAt[event.moduleId] = Date.now(); });
@@ -374,7 +486,7 @@ export class NativeRecordingRuntime {
         return { status: 'skipped' };
       }
       this.catalogs.set(event.moduleId, result.value);
-      match = this.matching(event);
+      match = this.matching(event, request.fallbackAt);
     }
     if (!allowed()) return { status: 'skipped' };
     if (match.status === 'missing') return { status: 'missing' };

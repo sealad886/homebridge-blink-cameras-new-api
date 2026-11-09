@@ -50,7 +50,7 @@ leave provider ownership before local media preparation and Home delivery.
 flowchart LR
   P[Own FCM receiver] --> V[Validate account and camera]
   V --> M[Public Motion Detected sensor]
-  V --> Q[Delayed ready FIFO]
+  V --> Q[Ready FIFO]
   Q --> C[Shared account command admission]
   C --> B[Official native-storage workflow]
   B --> F[Private completed video]
@@ -74,6 +74,7 @@ local conversion callback into provider acquisition.
 | Scoped persistence and composition with discovered devices | `NativeRecordingRuntime`, using the existing owner-only JSON writer |
 | Finite local conversion and Home transport lifecycle | `native-recording-preparation.ts`, canonical private codec worker, `NativeRecordingDelegate` |
 | Configured policy and HomeKit service assembly | `native-recording-config.ts`, platform and existing `MotionBase` |
+| Opt-in Early Notification setting management and saved originals | `NativeRecordingRuntime` and the existing queued `BlinkApi` settings workflow |
 
 These boundaries retain different necessary lifetimes: Google transport,
 recording demand, accepted provider operations and local Home delivery. They do
@@ -139,6 +140,43 @@ consumer delivery cannot be qualified. It would require explicit device access,
 reliable notification identity/time semantics and authenticated local delivery.
 No relay is installed, and no generic Blink SSE/webhook endpoint is claimed.
 
+## Optional Early Notification management
+
+`disableEarlyNotification` is an optional plugin, Sync Module or device boolean.
+The canonical policy resolver applies device, uniquely associated module, then
+plugin precedence; explicit false masks inherited true. Unsetting deletes the
+value and resumes inheritance. This setting is independent of motion exposure
+and HSV selection, so changing either consumer does not lose a managed original.
+
+For effective true, use APK61's positive device capability and the config's
+`early_notification_compatible` field before changing `early_notification` to
+false. Both setting reads and the minimal JSON control POST use the existing
+account queue and durable command owner. The shared config decoder handles the
+camera-array and flat Owl response forms for this setting and video quality.
+Unsupported or unconfirmed devices retain ordinary recording delay; no settings
+request is added to the notification handler.
+
+Before an actual change, durably save the original in an account-and-tier-scoped
+companion journal under the existing private directory. It survives client
+re-login and ordinary stop. A camera already off needs no POST or saved original.
+When effective ownership ends, restore through the same queue only if a fresh
+read still equals the plugin-written false; preserve an external manual change.
+Unsetting a device that still inherits true does not end ownership. Drain this
+work with the runtime's existing recovery lifecycle before releasing its lease.
+
+Blink documents delayed notifications with Early Notification off, but the
+inspected APK and retained payloads do not prove whether notification
+`created_at` denotes recording start or completion. Native pushes carry no
+usable clip identity (`video` is zero in the retained samples). Keep `occurredAt`
+unchanged. Only observations after a confirmed off setting qualify for an
+opportunistic immediate attempt, which requires an exact provider-timestamp
+match. If none is available, defer until the ordinary configured initial-delay
+time and a catalog prepared at or after it, then use the existing fuzzy matcher
+and availability retries. An older early catalog stays exact-only. One early
+attempt cannot consume all missing-clip retries before that fallback. This is a
+conservative scheduling rule, not proof that notification receipt establishes
+successful camera-to-USB transfer.
+
 ## Validate observations and match actual catalog metadata
 
 Native USB notifications use `category=motion`, `event_type=cam2sm_motion` and
@@ -174,8 +212,8 @@ registration lifecycle and may require a child-bridge restart.
 
 ## Delayed jobs, fairness and bounded reuse
 
-Each distinct provider event receives its own delayed job; repeated delivery of
-one event is deduplicated before acquisition. The defaults are a 60-second
+Each distinct provider event receives its own scheduled job; repeated delivery of
+one event is deduplicated before acquisition. The ordinary defaults are a 60-second
 initial delay, five-second missing retry and ten retries after the first attempt.
 They are configurable plugin policies, not Blink timing guarantees.
 
@@ -229,7 +267,8 @@ A refused status GET is never proof that the preceding POST was refused.
 | Catalog preparation | One empty POST, at most 30 total known-parent status GETs at two-second spacing, then one first-child catalog GET on success |
 | Selected clip | One empty POST, at most 30 total known-command status GETs, then one validated provider-returned file GET on success |
 | Ordinary accepted command | Its existing workflow, with a durable total status-read ceiling of 60; deadline expiry retains ownership |
-| Startup recovery | At most one remaining-budget GET per known pending command; no replacement POST, catalog/file retrieval or guessed `/done` |
+| Known-command recovery | At most one remaining-budget GET per known pending command; no replacement POST, catalog/file retrieval or guessed `/done` |
+| Opt-in Early Notification reconciliation | Fresh supported-device config GET; only a needed change adds its owned settings POST/status workflow and readback. Default policy with no saved originals adds no settings requests. |
 | Local conversion, HAP callbacks and cache expiry | No new acquisition requests |
 
 Status success requires `complete=true` and numeric `status=0`; nonzero numeric
@@ -260,15 +299,18 @@ newer Homebridge/Node environment is a separate runtime qualification.
 HAP's [0.14.0 recording delegate](https://github.com/homebridge/HAP-NodeJS/blob/v0.14.0/src/lib/controller/CameraController.ts#L200-L307)
 accepts initialization and media packets, not a URL/file-import command. Announce
 internal recording motion only after local preparation, then answer the Home
-hub's request with paced finite packets and one final marker. Public PIR motion
-remains immediate. A hub ACK establishes transport acknowledgement, not iCloud
-retention, historic timeline insertion or true pre-event video.
+hub's request with paced finite packets and one final marker. Public motion
+follows provider delivery independently of media preparation. A hub ACK
+establishes transport acknowledgement, not iCloud retention, historic timeline
+insertion or true pre-event video.
 
 Capture Home recording/camera/audio policy before acquisition and recheck it
 through download, preparation, offer and stream. Revocation cancels local demand
 and media, fences late completion and prevents disabled-period replay. Keep any
 already accepted provider obligation for minimal safe reconciliation. Policy
-changes do not clear remote owners or change Blink settings.
+changes do not clear remote owners. Home recording privacy choices do not change
+Blink settings; explicit Early Notification management follows the separate
+opt-in policy above.
 
 Scoped state and receiver credentials use one serialized durable writer under an
 owned private directory with 0600 files. Dispatch/transition diagnostics are

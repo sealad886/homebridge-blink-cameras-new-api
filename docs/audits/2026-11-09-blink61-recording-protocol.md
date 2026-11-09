@@ -168,6 +168,36 @@ This does **not** prove the whole APK/native libraries can contain no other chan
 
 Evidence: `jadx61-registration/...NotificationTokenModule.java:29–32`; `...BlinkAdmMessagingHandlerJob.java:31–47`; `dex61-registration/token-transport-selector.smali`; `alternate-channel-string-candidates.json`; `alternate-channel-literal-callers.tsv`; `dex61-registration/streaming-signalling-module.smali:149–194,311–337,402–503`; `braze-event-stream.smali:66–101`; `braze-stream-caller.smali:322–389` and its DUST/Braze logging statements.
 
+## APK61-S11 — Early Notification control and timestamp limits
+
+Focused DEX inspection of `CameraApi.getCameraConfig/postCameraConfig` and
+`OwlApi.getOwlConfig/postOwlConfig` establishes camera config GET/POST
+`v2/accounts/{account}/networks/{network}/cameras/{camera}/config` and Owl config
+GET/POST `v1/accounts/{account}/networks/{network}/owls/{owl}/config`. The mapped
+boolean fields are `early_notification` and `early_notification_compatible`;
+`toUpdateCameraBody` and `UpdateOwlBody` allow a minimal
+`{"early_notification":false}` control body. Camera config is the first record
+of a `camera` array; Owl config is flat. The POST returns the ordinary command
+workflow, not an uploaded video or thumbnail.
+
+`DeviceSettingsMotionViewModel` gates this control on server compatibility and
+the device module's positive `earlyNotificationControl` capability. Inspected
+positive capability modules are Catalina Outdoor/Indoor, original Owl and XT2;
+other types must not be assumed writable from the generic API family alone.
+The plugin also requires a compatible config and confirmed off readback before
+changing scheduling. This static trace does not qualify uninspected models or
+firmware, and no live setting was changed during the feature work.
+
+The fourteen retained `cam2sm_motion` payloads in
+`receiver-proof/project-routing/wire-0001.private.json` through `wire-0014.private.json`
+and the final `default-worker/notification.private.json` contain `video="0"`,
+an opaque `unique_id`, and no usable native clip ID or duration. Their
+`created_at` values cannot be causally paired with the retained USB catalogs,
+which are from an earlier day. The native handler uses that value for display
+and a live-view deeplink, without proving recording-start or save-completion
+semantics. Immediate acquisition therefore uses exact timestamp matching first
+and retains the normal delayed workflow when that does not identify a clip.
+
 ## Catalog filename and matching boundary
 
 The selected Media model exposes provider media identity, creation time, device/network identity and media URLs. It does not guarantee a physical USB filename. The coordinating agent's catalog readback reports opaque API clip-request URLs rather than USB basenames. Therefore a timestamp parser for a physical USB filename cannot be applied to that observed API catalog. Event-to-clip matching should use canonical account/network/device identity and the provider creation timestamp with explicit offset/date/timezone context and a bounded tolerance. A physical filename is an optional separately verified evidence source. Motion time and provider `created_at` must not be silently treated as identical; DST ambiguity, delayed saves and competing nearby clips must remain visible.
