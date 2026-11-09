@@ -11,22 +11,22 @@ const inventory = projectSettingsInventory({ networks: [{ id: 10, name: 'System'
 describe('full settings draft validation', () => {
   const validator = new SettingsValidator(() => inventory);
 
-  it('accepts six qualified recording cameras, absent/empty recording selection and unknown fields without mutation', () => {
-    const config = { name: 'Blink', hksvCameras: inventory.cameras.map(camera => camera.key),
+  it('accepts six qualified recording cameras, absent/empty recording overrides and unknown fields without mutation', () => {
+    const config = { name: 'Blink', deviceSettingOverrides: inventory.cameras.map(camera => ({ deviceIdentifier: camera.key, homeKitSecureVideo: true })),
       _bridge: { username: 'private-existing-value' }, futureSetting: { keep: true } };
     const original = structuredClone(config);
     expect(validator.validate({ revision: 1, config }).valid).toBe(true);
     expect(config).toEqual(original);
     expect(validator.validate({ revision: 2, config: { name: 'Blink' } }).valid).toBe(true);
-    expect(validator.validate({ revision: 3, config: { name: 'Blink', hksvCameras: [] } }).valid).toBe(true);
+    expect(validator.validate({ revision: 3, config: { name: 'Blink', deviceSettingOverrides: [] } }).valid).toBe(true);
   });
 
   it('rejects invalid values in any section without coercion or defaults', () => {
-    const config = { name: 'Blink', videoBitrate: '1200', pollInterval: 1, hksvCameras: [' '], enableAudio: 'false' };
+    const config = { name: 'Blink', videoBitrate: '1200', pollInterval: 1, deviceSettingOverrides: [{ deviceIdentifier: ' ' }], enableAudio: 'false' };
     const before = structuredClone(config);
     const result = validator.validate({ revision: 9, config });
     expect(result.revision).toBe(9); expect(result.valid).toBe(false);
-    expect(result.errors.map(error => error.path)).toEqual(expect.arrayContaining(['/videoBitrate', '/pollInterval', '/hksvCameras/0', '/enableAudio']));
+    expect(result.errors.map(error => error.path)).toEqual(expect.arrayContaining(['/videoBitrate', '/pollInterval', '/deviceSettingOverrides/0/deviceIdentifier', '/enableAudio']));
     expect(config).toEqual(before);
     expect(JSON.stringify(result)).not.toContain('1200');
   });
@@ -43,8 +43,8 @@ describe('full settings draft validation', () => {
 
   it('keeps unresolved saved selectors as warnings, but cannot validate explicit module limits without discovery', () => {
     const unavailable = new SettingsValidator(() => undefined);
-    expect(unavailable.validate({ revision: 1, config: { name: 'Blink', hksvCameras: ['existing-camera'] } }).valid).toBe(true);
-    const stale = validator.validate({ revision: 2, inventoryRevision: 'stale', config: { name: 'Blink', hksvCameras: ['existing-camera'] } });
+    expect(unavailable.validate({ revision: 1, config: { name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'existing-camera', homeKitSecureVideo: true }] } }).valid).toBe(true);
+    const stale = validator.validate({ revision: 2, inventoryRevision: 'stale', config: { name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'existing-camera', homeKitSecureVideo: true }] } });
     expect(stale.warnings.length).toBeGreaterThan(0);
     expect(unavailable.validate({ revision: 3, config: { name: 'Blink', syncModuleFeedLimits: [{ syncModuleId: '20', maxFeeds: 1 }] } }).valid).toBe(false);
   });
@@ -58,4 +58,20 @@ describe('full settings draft validation', () => {
     expect(result.errors.map(error => error.code)).toEqual(expect.arrayContaining(['credentials', 'retired']));
     expect(JSON.stringify(result)).not.toContain('private-user-value'); expect(JSON.stringify(result)).not.toContain('private-path-value');
   });
+
+  it('checks native retry/age bounds without mutating the draft', () => {
+    const config = { name: 'Blink', nativeRecording: { initialDelaySeconds: 120, maxJobAgeSeconds: 60 } };
+    const before = structuredClone(config);
+    const result = validator.validate({ revision: 1, config });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: '/nativeRecording/maxJobAgeSeconds' })]));
+    expect(config).toEqual(before);
+  });
+
+  it('shows the native migration path for old motion/recording settings', () => {
+    const result = validator.validate({ revision: 1, config: { name: 'Blink', enableMotionPolling: false, hksvCameras: ['camera:1'] } });
+    expect(result.valid).toBe(false);
+    expect(result.errors.filter(error => error.code === 'retired').every(error => error.message.includes('migrate-native-recording-config.cjs'))).toBe(true);
+  });
+
 });

@@ -2,7 +2,7 @@
 
 # @sealad886/homebridge-blink-cameras-new-api
 
-Last reviewed: 23 October 2026.
+Last reviewed: 9 November 2026.
 
 [![npm](https://img.shields.io/npm/v/%40sealad886%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api)
 [![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
@@ -18,12 +18,12 @@ Last reviewed: 23 October 2026.
 Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Blink devices as proper HomeKit accessories:
 
 - **SecuritySystem** for arm/disarm control of networks
-- **MotionSensor** for motion detection events
+- **MotionSensor** for authenticated Blink push motion events
 - **Doorbell** service exposed for doorbell devices; automatic ring delivery is not implemented
 - **Switch** for enabling/disabling motion detection per device
 - **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
-- **Opt-in HomeKit Secure Video** with a four-second memory prebuffer;
-  physical Apple home hub and iCloud recording acceptance remains pending
+- **Opt-in HomeKit Secure Video** from completed native Blink USB clips;
+  physical Apple home hub and retained-recording acceptance remains pending
 - **Connection monitor and retry control** for provider outages
 - **Optional TemperatureSensor** for traditional cameras reporting temperature;
   default off, with global and per-device settings
@@ -91,7 +91,7 @@ Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's 
 ## Requirements
 
 - Homebridge 1.11.1 or later
-- Node.js 20, 22 or 24 (see [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json))
+- Node.js 20.3+, 22, 24 or 26 (see [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json))
 - A Blink account
 - For live streaming, the matching private codec worker supplied in the package; see [streaming requirements](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#packaged-codec-requirements).
 
@@ -111,6 +111,18 @@ npm install -g @sealad886/homebridge-blink-cameras-new-api
 ```
 
 Restart Homebridge after installing.
+
+For this prerelease, select the exact beta version in Homebridge UI, or use the
+Homebridge service command:
+
+```sh
+hb-service add @sealad886/homebridge-blink-cameras-new-api@1.1.0-beta.0
+```
+
+Use the [release guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/RELEASE.md)
+for backup, child-bridge restart, verification and rollback. Beta publication does
+not update a Homebridge installation; the stable npm channel remains separate.
+
 
 ## Sign-in and account verification
 
@@ -149,7 +161,7 @@ in the plugin (including a configured device-name override):
 | Home service | Example |
 | --- | --- |
 | Enable or disable motion detection | Test Camera Motion Detection |
-| Read-only motion sensor | Test Camera Motion Sensor |
+| Read-only motion sensor | Test Camera Motion Detected |
 | Request a snapshot, then automatically return Off | Test Camera Refresh Snapshot |
 | Doorbell service (automatic ring delivery unavailable) | Test Doorbell Doorbell |
 | Network arm/disarm | Example Network Security |
@@ -178,59 +190,67 @@ See [streaming and quality](https://github.com/sealad886/homebridge-blink-camera
 
 Talkback remains disabled. See the [talkback guard](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#two-way-talk-status).
 
-The next beta remains blocked until private-worker secret handling and owned RTSP
-destination enforcement are verified against its release artifacts. The [stable 0.10.0 residual-risk decision](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
-accepts these risks for that release only; it does not mark them fixed.
+The release workflow verifies the exact packaged workers, their corresponding
+source and installed behavior on all five supported targets. The
+[hardening ledger](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md)
+records security evidence and remaining acceptance limits.
 
 ## HomeKit Secure Video
 
-Recording is disabled by default. Select cameras explicitly with `hksvCameras`
-in plugin settings, using up to four exact Blink names, numeric IDs as strings,
-or serial numbers. Stable IDs or serial numbers avoid changes when a camera is
-renamed. For example:
+Recording is disabled by default. Enable **HomeKit recording** for a camera in
+plugin settings, Save and restart the Blink child bridge. Then allow **Stream &
+Allow Recording** and the desired recording-audio permission in Apple Home.
+The camera must already save native Local Storage motion clips to its associated
+Blink Sync Module. A USB drive containing daily cloud backups does not establish
+that capability.
 
 ```json
 {
-  "hksvCameras": ["123456"],
-  "enableMotionPolling": false
+  "exposeMotionDetected": true,
+  "deviceSettingOverrides": [
+    { "deviceIdentifier": "camera:123", "homeKitSecureVideo": true }
+  ],
+  "nativeRecording": {
+    "initialDelaySeconds": 60,
+    "retryIntervalSeconds": 5,
+    "maxRetries": 10
+  }
 }
 ```
 
-Restart the child bridge after changing the selection. In Apple Home, allow
-recording for each selected camera. HomeKit recording permission and camera-active
-controls govern background capture; removing recording permission stops recording
-and clears retained fragments. Recording audio follows Home's recording-audio
-permission and the plugin's audio setting. Live-view permission is separate:
-`enableStreaming: false` does not disable opted-in recording.
+Use the actual discovered camera identity. The plugin owns a push receiver and
+registers its delivery token against its existing authenticated Blink client.
+Firebase console access and phone/tablet notification tokens are not required.
+A public sensor named **<camera name> Motion Detected** reports motion promptly;
+its existing service identity is preserved. Motion exposure and recording are
+independent options: either one keeps the shared push receiver active.
 
-An active recording camera keeps a Blink live feed open and shares that feed with
-HomeKit live viewers. This increases battery use, bandwidth, and host encoding
-work. Begin with one camera; simultaneous capture across different Blink cameras
-has not been qualified. Blink can end sessions or refuse new ones, so reconnection
-and session rollover can leave gaps. Buffering cannot recover video the camera
-or provider never sends and does not guarantee lossless or continuous recording.
+For an enabled recording camera, each motion event schedules a delayed native
+clip lookup. Ready jobs run in FIFO order, missing clips requeue within bounded
+limits, and each Sync Module's catalog refresh interval prevents rapid repeated
+preparation. An unresolved accepted operation remains owned across a timeout or
+restart instead of causing a replacement POST. Normal state polling prepares no
+USB catalogs. No video, thumbnail or other data file is uploaded to Blink.
 
-The prebuffer retains four seconds before a local video motion trigger. The
-recording worker compares small luminance samples from decoded frames, compensates
-for uniform brightness shifts, and confirms changes across consecutive frames.
-This fixed detector is not person or object recognition; scene-specific sensitivity
-and physical motion-to-iCloud playback still need qualification. Motion events are
-published only after the buffer is ready, the Blink network is armed, and that
-camera's motion switch is enabled. HomeKit recording and camera permissions also
-apply. While this recording policy is active, delayed Blink clip-polling events
-are suppressed for that camera. `enableMotionPolling` remains optional for other
-cameras and is not required for HSV. Continuous live view may affect Blink's own
-motion recording; this interaction needs physical testing. Recordings use memory only: retained
-fragments are limited to 32 MiB per camera and 64 MiB across cameras, with bounded
-transport and worker queues. Exhaustion or discontinuity fails the recording and
-clears the affected buffer instead of concealing a gap.
+The completed video is downloaded before a finite local recording is offered to
+HomeKit. Recording uses the packaged codec worker; ordinary live viewing remains
+a separate, explicit operation. The public motion indication is separate from
+the internal recording trigger, which fires after local media is ready. Home's
+camera, recording and audio permissions fence delayed and active work.
 
-Apple requires a compatible home hub and an eligible iCloud+ plan. Clips appear
-in the Home app's recording history, rather than as files in iCloud Drive; see
-[Apple's HomeKit Secure Video guide](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud).
-This local implementation still needs physical motion-to-home-hub-to-iCloud
-acceptance, including playback and privacy controls. Automated tests and a working
-live stream alone do not establish that iCloud saved a clip.
+This delayed offer does not establish pre-event recording or insert a clip at an
+arbitrary historical point in Home's timeline. The home hub decides whether to
+request and retain it. Apple requires a compatible home hub and an eligible
+iCloud+ plan; see [Apple's HomeKit Secure Video guide](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud).
+Native Blink clip retrieval, Home retention/playback and full Pi runtime are
+operator acceptance steps for this beta. Receiving motion alone proves none of
+those outcomes, and the historical persistent-recording lock's cause remains
+unproven.
+
+The [recording configuration guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#motion-and-homekit-recording)
+owns timing and resource settings. Before upgrading an older HSV configuration,
+preview the [one-off migration](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/native-recording-config-migration.md).
+It creates a private original-byte backup before an explicitly requested change.
 
 ## Troubleshooting
 
@@ -262,7 +282,8 @@ See [CHANGELOG.md](CHANGELOG.md) for current release notes and migration history
 The JavaScript plugin is MIT - see [LICENSE](LICENSE). Native worker development
 sources are GPL-3.0-or-later; see [native/COPYING](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/native/COPYING) and the pinned
 dependency notices under [native/dependencies](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/native/dependencies/README.md).
-The native worker is not enabled or distributed in the current npm runtime.
+Release packages include verified target workers and complete corresponding source
+under the native license and dependency notices.
 
 ## Credits
 

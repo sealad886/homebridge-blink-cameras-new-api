@@ -61,11 +61,9 @@ export class DoorbellAccessory extends MotionDeviceBase<BlinkDoorbell> {
   triggerRing(): void {
     const { ProgrammableSwitchEvent } = this.platform.Characteristic;
 
-    this.recording?.notifyDoorbell();
     this.doorbellService
       .getCharacteristic(ProgrammableSwitchEvent)
       .updateValue(ProgrammableSwitchEvent.SINGLE_PRESS);
-    if (!this.motionDetected) this.recording?.endMotion();
 
     logHomeKitEvent(this.platform.log, this.accessory, {
       direction: 'Blink -> bridge',

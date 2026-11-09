@@ -9,6 +9,8 @@ import { execFileSync } from 'node:child_process';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import process from 'node:process';
+import { clearTimeout } from 'node:timers';
 
 describe('owner-only JSON files', () => {
   let directory: string;
@@ -60,6 +62,51 @@ describe('owner-only JSON files', () => {
       expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
     }
     expect((await fs.readdir(directory)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  itIfPosix('does not acknowledge a durable intent before the file and directory are flushed', async () => {
+    let fileStarted!: () => void, directoryStarted!: () => void;
+    let releaseFile!: () => void, releaseDirectory!: () => void;
+    const fileFlushStarted = new Promise<void>(resolve => { fileStarted = resolve; });
+    const directoryFlushStarted = new Promise<void>(resolve => { directoryStarted = resolve; });
+    const fileGate = new Promise<void>(resolve => { releaseFile = resolve; });
+    const directoryGate = new Promise<void>(resolve => { releaseDirectory = resolve; });
+    const realOpen = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      const directoryHandle = (await handle.stat()).isDirectory();
+      const sync = handle.sync.bind(handle);
+      jest.spyOn(handle, 'sync').mockImplementation(async () => {
+        if (directoryHandle) { directoryStarted(); await directoryGate; }
+        else { fileStarted(); await fileGate; }
+        await sync();
+      });
+      return handle;
+    });
+    let acknowledged = false;
+    const write = writeOwnerOnlyJsonFile(filePath, { intent: 'pending' }).then(() => { acknowledged = true; });
+    await fileFlushStarted;
+    expect(acknowledged).toBe(false);
+    releaseFile();
+    await directoryFlushStarted;
+    expect(acknowledged).toBe(false);
+    releaseDirectory();
+    await write;
+    expect(acknowledged).toBe(true);
+    expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).toEqual({ intent: 'pending' });
+  });
+
+  it('retains the previous state when flushing a replacement fails', async () => {
+    await writeOwnerOnlyJsonFile(filePath, { intent: 'previous' });
+    const realOpen = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      if ((await handle.stat()).isFile()) jest.spyOn(handle, 'sync').mockRejectedValue(new Error('flush failed'));
+      return handle;
+    });
+    await expect(writeOwnerOnlyJsonFile(filePath, { intent: 'replacement' })).rejects.toThrow('flush failed');
+    expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).toEqual({ intent: 'previous' });
+    expect((await fs.readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
   it('rejects a symlink without reading its target', async () => {

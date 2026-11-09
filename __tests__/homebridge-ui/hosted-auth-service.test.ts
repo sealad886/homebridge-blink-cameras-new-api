@@ -674,7 +674,7 @@ describe('HostedAuthService', () => {
     expect(inventory.cameras[0].key).toBe('camera:3');
     expect(JSON.stringify(inventory)).not.toContain('provider-secret');
     const before = await fs.readFile(authStoragePath, 'utf8');
-    expect(service.validateSettings({ revision: 1, config: { name: 'Blink', hksvCameras: ['camera:3'] } }).valid).toBe(true);
+    expect(service.validateSettings({ revision: 1, config: { name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'camera:3', homeKitSecureVideo: true }] } }).valid).toBe(true);
     expect(service.validateSettings({ revision: 2, config: { name: 'Blink', pollInterval: 1 } }).valid).toBe(false);
     expect(api.getHomescreen).toHaveBeenCalledTimes(1); expect(api.login).toHaveBeenCalledTimes(1);
     expect(await fs.readFile(authStoragePath, 'utf8')).toBe(before);

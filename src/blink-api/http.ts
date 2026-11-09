@@ -1,4 +1,5 @@
-import { readBoundedBody, readBoundedJson } from './response-body';
+import { Buffer } from 'node:buffer';
+import { readBoundedBody, readBoundedJson, type ResponseBodyKind } from './response-body';
 /**
  * Blink HTTP Client
  *
@@ -20,11 +21,15 @@ import {
   NetworkFailureDiagnostic,
 } from './network-diagnostics';
 
-export interface BlinkPostRequestOptions extends RequestOptions {
-  /** Disable replay after an ambiguous server response for stateful commands. */
-  retryServerErrors?: boolean;
+export interface BlinkHttpRequestOptions extends RequestOptions {
+  /** A single wire attempt: no authentication, rate-limit, refusal or server-error replay. */
+  retry?: false;
+  maxResponseBytes?: number;
+  responseKind?: ResponseBodyKind;
   /** Unit-returning endpoints do not require JSON. Body limits still apply. */
-  responseType?: 'void';
+  responseType?: 'void' | 'binary';
+  /** Recheck a captured client scope after async authentication and immediately before dispatch. */
+  beforeDispatch?: () => void;
 }
 
 /**
@@ -129,6 +134,12 @@ export class BlinkHttpError extends Error {
   }
 }
 
+/** A typed refusal of a new POST is different from an accepted command's failed GET. */
+export function isBlinkPostRefusal(error: unknown): error is BlinkHttpError {
+  return error instanceof BlinkHttpError && error.failure === 'http' && error.method === 'POST'
+    && error.status >= 400 && error.status < 500 && error.status !== 408;
+}
+
 export class BlinkHttp {
   private baseUrl: string;
   private readonly log: BlinkLogger;
@@ -158,16 +169,21 @@ export class BlinkHttp {
     }
   }
 
-  async get<T>(path: string, options?: RequestOptions): Promise<T> {
+  async get<T>(path: string, options?: BlinkHttpRequestOptions): Promise<T> {
     return this.request<T>('GET', path, undefined, 0, true, [], options);
   }
 
-  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = [], options?: BlinkPostRequestOptions): Promise<T> {
+  async post<T>(path: string, body?: unknown, expectedErrorStatuses: readonly number[] = [], options?: BlinkHttpRequestOptions): Promise<T> {
     return this.request<T>('POST', path, body, 0, true, expectedErrorStatuses, options);
   }
 
   async delete<T>(path: string): Promise<T> {
     return this.request<T>('DELETE', path);
+  }
+
+  async getBinary(path: string, options: BlinkHttpRequestOptions = {}): Promise<Buffer> {
+    return this.request<Buffer>('GET', path, undefined, 0, true, [],
+      { ...options, responseType: 'binary', responseKind: 'native-media' });
   }
 
   /**
@@ -189,13 +205,23 @@ export class BlinkHttp {
     attempt = 0,
     runPreflight = true,
     expectedErrorStatuses: readonly number[] = [],
-    options: BlinkPostRequestOptions = {},
+    options: BlinkHttpRequestOptions = {},
     retried406 = false,
   ): Promise<T> {
     checkRequestBudget(options);
+    if (options.maxResponseBytes !== undefined && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes < 1)) {
+      throw new Error('Blink response byte limit is invalid.');
+    }
     const url = this.buildUrl(path);
     if (runPreflight) {
-      await withinRequestBudget(this.auth.ensureValidToken(), options);
+      try { await withinRequestBudget(this.auth.ensureValidToken(), options); }
+      catch (error) {
+        // Preserve the authentication error type while proving that this resource request was never dispatched.
+        if (error instanceof Error && Object.isExtensible(error)) {
+          Object.defineProperty(error, 'dispatched', { value: false, configurable: true });
+        }
+        throw error;
+      }
       checkRequestBudget(options);
     }
 
@@ -220,6 +246,13 @@ export class BlinkHttp {
       this.logDebug(`[${requestId}] ${method} ${safeUrl} (retry attempt ${attempt})`);
     }
 
+    try { options.beforeDispatch?.(); checkRequestBudget(options); }
+    catch (error) {
+      if (error instanceof Error && Object.isExtensible(error)) {
+        Object.defineProperty(error, 'dispatched', { value: false, configurable: true });
+      }
+      throw error;
+    }
     const startTime = Date.now();
     const timeoutMs = Math.max(1, Math.min(30_000, (options.deadline ?? startTime + 30_000) - startTime));
     const timeoutSignal = globalThis.AbortSignal.timeout(timeoutMs);
@@ -246,7 +279,7 @@ export class BlinkHttp {
     this.logDebug(`[${requestId}] Response status: ${response.status} (${elapsed}ms)`);
 
     // Token expired or session invalid - refresh once and retry
-    if ((response.status === 401 || response.status === 403) && attempt < 1) {
+    if (options.retry !== false && (response.status === 401 || response.status === 403) && attempt < 1) {
       this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
       await response.body?.cancel().catch(() => undefined);
       await withinRequestBudget(this.auth.refreshTokens(), options);
@@ -255,14 +288,14 @@ export class BlinkHttp {
 
     // Observed provider 406 refusals can recover on the same read without
     // changing routing or authentication. Retry once; never replay a mutation.
-    if (response.status === 406 && method === 'GET' && !retried406) {
+    if (options.retry !== false && response.status === 406 && method === 'GET' && !retried406) {
       await response.body?.cancel().catch(() => undefined);
       await budgetedDelay(1000, options);
       return this.request<T>(method, path, body, attempt, false, expectedErrorStatuses, options, true);
     }
 
     // Rate limited - exponential backoff
-    if (response.status === 429 && attempt < 3) {
+    if (options.retry !== false && response.status === 429 && attempt < 3) {
       const delay = 1000 * Math.pow(2, attempt);
       this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);
@@ -271,7 +304,7 @@ export class BlinkHttp {
     }
 
     // Server error - linear backoff
-    if (response.status >= 500 && attempt < 2 && (method !== 'POST' || options.retryServerErrors !== false)) {
+    if (options.retry !== false && response.status >= 500 && attempt < 2) {
       const delay = 500 * (attempt + 1);
       this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
       await response.body?.cancel().catch(() => undefined);
@@ -295,14 +328,18 @@ export class BlinkHttp {
       throw error;
     }
 
+    const bodyOptions = { ...options, maxBytes: options.maxResponseBytes,
+      deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal };
     if (options.responseType === 'void') {
-      await readBoundedBody(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: 'command' });
+      await readBoundedBody(response, { ...bodyOptions, kind: 'command' });
       return undefined as T;
     }
+    if (options.responseType === 'binary') return await readBoundedBody(response, { ...bodyOptions, kind: 'native-media' }) as T;
 
     let responseData: T;
     try {
-      responseData = (await readBoundedJson(response, { ...options, deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal, kind: /(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command' })) as T;
+      responseData = (await readBoundedJson(response, { ...bodyOptions, kind: options.responseKind ??
+        (/(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command') })) as T;
     } catch {
       checkRequestBudget(options);
       const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,

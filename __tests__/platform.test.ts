@@ -26,6 +26,7 @@ type MockedBlinkApi = jest.Mocked<{
   disableOwlMotion: jest.Mock;
   getUnwatchedMedia: jest.Mock;
   getSharedRestRootUrl: jest.Mock;
+  getCachedIdentity: jest.Mock;
   getCameraTemperature: jest.Mock;
 }>;
 
@@ -44,6 +45,7 @@ const buildBlinkApi = (): MockedBlinkApi => ({
   disableOwlMotion: jest.fn(),
   getUnwatchedMedia: jest.fn().mockResolvedValue({ media: [] }),
   getSharedRestRootUrl: jest.fn().mockReturnValue('https://rest-e006.immedia-semi.com'),
+  getCachedIdentity: jest.fn().mockReturnValue({ accountId: null, clientId: null, tier: 'e006', sharedTier: 'e006' }),
   getCameraTemperature: jest.fn().mockResolvedValue(20),
 });
 
@@ -141,7 +143,7 @@ describe('BlinkCamerasPlatform', () => {
       cameras: [{ id: 2, network_id: 1, name: 'Camera', enabled: true }] });
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
-      ...config, enableStreaming: false, enableMotionPolling: false, exposeTemperature: true,
+      ...config, enableStreaming: false, exposeTemperature: true,
     }, hapApi);
     const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
     await expect(discover()).resolves.toBe(true);
@@ -252,7 +254,7 @@ describe('BlinkCamerasPlatform', () => {
     ['doorbells', '2', 5000],
     ['owls', 'Motion Device', 5000],
     ['cameras', 'unmatched-device', 30000],
-  ] as const)('applies configured motion duration to polled %s events (%s)', async (kind, identifier, duration) => {
+  ] as const)('applies configured motion duration to provider-origin %s indications (%s)', async (kind, identifier, duration) => {
     // Node's timers module retains its own functions; route them through Jest's clock.
     const timers = jest.requireActual<typeof import('timers')>('timers');
     jest.spyOn(timers, 'setTimeout').mockImplementation(globalThis.setTimeout);
@@ -267,16 +269,15 @@ describe('BlinkCamerasPlatform', () => {
       cameras: [], doorbells: [], owls: [], sync_modules: [],
       [kind]: [device],
     });
-    blinkApi.getUnwatchedMedia.mockResolvedValue({ unwatched_clips: 1 });
-    Object.assign(blinkApi, { getMedia: jest.fn().mockResolvedValue({ media: [{
-      camera_id: 2, created_at: new Date(Date.now() + 1000).toISOString(),
-    }] }) });
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
       ...config, enableStreaming: false, motionTimeout: 30,
       deviceSettingOverrides: [{ deviceIdentifier: identifier, motionTimeout: 5 }],
     }, hapApi);
     await (platform as unknown as { discoverDevices: () => Promise<void> }).discoverDevices();
-    await (platform as unknown as { checkMotionEvents: () => Promise<void> }).checkMotionEvents();
+    const handlers = platform as unknown as Record<string, Map<number, { triggerMotion(): void }>>;
+    const map = kind === 'cameras' ? 'cameraAccessories' : kind === 'owls' ? 'owlAccessories' : 'doorbellAccessories';
+    handlers[map].get(2)!.triggerMotion();
+    expect(blinkApi.getUnwatchedMedia).not.toHaveBeenCalled();
     const accessory = platform.accessories.find((item) => item.context.device?.id === 2);
     const motion = accessory?.getServiceById(hapApi.hap.Service.MotionSensor, 'motion-sensor')
       ?.getCharacteristic(hapApi.hap.Characteristic.MotionDetected);
@@ -799,7 +800,7 @@ describe('BlinkCamerasPlatform', () => {
 
     expect(cached.UUID).toBe(uuid);
     expect(cached.displayName).toBe('Corner (ABC-123');
-    expect(motion.displayName).toBe('Corner (ABC-123 Motion Sensor');
+    expect(motion.displayName).toBe('Corner (ABC-123 Motion Detected');
     expect(hapApi.registerPlatformAccessories).not.toHaveBeenCalled();
   });
 

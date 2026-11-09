@@ -1,6 +1,7 @@
 import { testResponse } from '../helpers/response';
+import { Buffer } from 'node:buffer';
 import { OperationTimeoutError } from '../../src/operation-budget';
-import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
+import { BlinkHttp, BlinkHttpError, isBlinkPostRefusal } from '../../src/blink-api/http';
 import {
   BlinkAuth,
   BlinkHostedReauthenticationRequiredError,
@@ -8,7 +9,19 @@ import {
 import { BlinkAuthStorage, BlinkConfig, BlinkLogger } from '../../src/types';
 import { describeNetworkFailure } from '../../src/blink-api/network-diagnostics';
 
+const { Response, AbortController } = globalThis;
+
 describe('BlinkHttp', () => {
+  it.each([
+    ['POST', 401, 'http', true], ['POST', 409, 'http', true], ['POST', 429, 'http', true],
+    ['POST', 408, 'http', false], ['POST', 500, 'http', false], ['GET', 409, 'http', false],
+    ['POST', 409, 'network', false], ['POST', 409, 'response', false],
+  ] as const)('classifies definite new-operation refusal for %s/%s/%s', (method, status, failure, expected) => {
+    const error = new BlinkHttpError('Fixture refusal', status, '', 'https://rest-u000.immedia-semi.com/', method,
+      undefined, undefined, failure);
+    expect(isBlinkPostRefusal(error)).toBe(expected);
+    expect(isBlinkPostRefusal(new Error(`HTTP ${status}`))).toBe(false);
+  });
   const mockAuth = () => {
     const auth = {
       ensureValidToken: jest.fn().mockResolvedValue(undefined),
@@ -91,7 +104,7 @@ describe('BlinkHttp', () => {
     (fetch as jest.Mock).mockResolvedValue(new Response(null, { status }));
     const http = new BlinkHttp(mockAuth(), mockConfig);
     await expect(http.post<void>('accounts/1/networks/2/commands/3/done', undefined, [],
-      { responseType: 'void', retryServerErrors: false })).resolves.toBeUndefined();
+      { responseType: 'void', retry: false })).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -148,7 +161,48 @@ describe('BlinkHttp', () => {
     const http = new BlinkHttp(mockAuth(), mockConfig);
     (fetch as jest.Mock).mockResolvedValueOnce(response(500));
     await expect(http.post('v2/accounts/1/networks/2/cameras/3/config', { video_quality: 'best' }, [],
-      { retryServerErrors: false })).rejects.toMatchObject({ status: 500 });
+      { retry: false })).rejects.toMatchObject({ status: 500 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 403, 406, 429, 500])('a bounded GET opts out of every replay at HTTP %s', async status => {
+    const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+    (fetch as jest.Mock).mockResolvedValue(response(status));
+    await expect(http.get('accounts/1/networks/2/commands/3', { retry: false })).rejects.toMatchObject({ status });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(auth.refreshTokens).not.toHaveBeenCalled();
+  });
+
+  it('preserves an authentication error type and marks that no resource request was dispatched', async () => {
+    const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+    const failure = new BlinkHostedReauthenticationRequiredError();
+    (auth.ensureValidToken as jest.Mock).mockRejectedValue(failure);
+    await expect(http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false }))
+      .rejects.toMatchObject({ dispatched: false });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(http.get('accounts/1/homescreen')).rejects.toBe(failure);
+  });
+
+  it('bounds binary GETs and does not include the downloaded bytes in diagnostic logs', async () => {
+    const messages: unknown[][] = []; const log = (...args: unknown[]) => { messages.push(args); };
+    const http = new BlinkHttp(mockAuth(), { ...mockConfig, debugAuth: true,
+      logger: { info: log, debug: log, warn: log, error: log } });
+    (fetch as jest.Mock).mockResolvedValueOnce(new Response('synthetic-media-secret'));
+    await expect(http.getBinary('v1/example', { retry: false, maxResponseBytes: 100 }))
+      .resolves.toEqual(Buffer.from('synthetic-media-secret'));
+    expect(JSON.stringify(messages)).not.toContain('synthetic-media-secret');
+    (fetch as jest.Mock).mockResolvedValueOnce(new Response(Buffer.alloc(11), { headers: { 'content-length': '1' } }));
+    await expect(http.getBinary('v1/example', { retry: false, maxResponseBytes: 10 })).rejects.toThrow('resource boundary');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies the caller byte limit to catalog JSON and rejects invalid limits before authentication', async () => {
+    const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+    await expect(http.get('v1/example', { maxResponseBytes: 0 })).rejects.toThrow('byte limit');
+    expect(auth.ensureValidToken).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+    (fetch as jest.Mock).mockResolvedValueOnce(response(200, { padding: 'x'.repeat(100) }));
+    await expect(http.get('v1/example', { maxResponseBytes: 20, responseKind: 'native-catalog', retry: false }))
+      .rejects.toMatchObject({ failure: 'response' });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 

@@ -7,6 +7,55 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.0] - 2026-11-09
+
+### Changed
+- Replace continuous HomeKit recording capture and cloud-media motion polling
+  with a plugin-owned push receiver and delayed retrieval of completed native
+  Blink USB motion clips. Motion exposure and per-camera HomeKit recording each
+  activate the shared subscription; idle recording prepares no USB catalogs.
+- Name public motion sensors `<camera name> Motion Detected` while preserving
+  their HomeKit service identity. Public motion reports independently from the
+  internal recording trigger, which is raised after finite local media is ready.
+- Schedule independent ready FIFO jobs with configurable delay, missing-clip
+  retries, catalog cooldown and bounded local resources. Match canonical camera
+  identities and offset-bearing capture timestamps rather than guessing URL
+  filenames. Preserve unresolved remote ownership through timeout and restart.
+- Prepare completed private MP4 files with the packaged codec worker and offer
+  finite fMP4 recordings under plugin audio and Home camera/recording/audio
+  permissions. Explicit live viewing retains the existing secure transport
+  and capacity controls.
+- Automatic snapshots for recording cameras read existing thumbnails; explicit
+  manual refresh can request a capture. No video, image or other data file is
+  uploaded to Blink. Normal control and workflow metadata POSTs remain supported.
+
+### Upgrade
+- Use global/per-camera `exposeMotionDetected`, per-camera `homeKitSecureVideo`
+  and `nativeRecording` timing/resource settings. Preview the explicit one-off
+  native-recording configuration migration; application preserves exact original
+  bytes in a private backup. The live-view `syncModuleFeedLimits` setting remains
+  valid and is preserved.
+- Retain the current settings editor, temperature sensors, arm/disarm intent
+  handling, verified native packaging, destination checks and hosted sign-in.
+  A valid existing Blink session can register the new receiver without signing
+  in again. Firebase administration and copied phone/tablet tokens are not needed.
+- Require Node.js 20.3+ in the 20.x line; support 22, 24 and 26. Native protocol 4
+  packages require newly built, hash-bound workers and corresponding source for
+  every supported target; previous native artifacts are refused.
+
+### Beta evidence and limits
+- Publish this prerelease on the `beta` channel, preserving stable `latest`.
+  Registry publication does not install it on Homebridge; installation remains
+  operator-owned.
+- An owned receiver received authenticated real native motion events using one
+  Blink registration POST and no camera/Sync Module commands. Source tests and
+  component delivery do not establish a saved native USB clip or Home retention.
+- Full installed Pi operation, continued native recording, Home-hub requests,
+  retained playback and policy/recovery acceptance remain unverified. This beta
+  uses a delayed offer; it does not claim pre-event capture or arbitrary historic
+  insertion into Home's recording timeline. The original persistent USB recording
+  lock's cause remains unproven.
+
 ## [1.0.0-beta3] - 2026-11-02
 
 ### Fixed

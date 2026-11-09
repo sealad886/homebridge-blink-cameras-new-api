@@ -4,7 +4,7 @@
   "singular": true,
   "customUi": true,
   "customUiPath": "./dist/homebridge-ui",
-  "headerDisplay": "Choose cameras, live viewing and HomeKit Secure Video recording.",
+  "headerDisplay": "Choose cameras, motion notifications, live viewing and native Blink clips for HomeKit Secure Video.",
   "footerDisplay": "For help, see the [README](https://github.com/sealad886/homebridge-blink-cameras-new-api#readme).",
   "schema": {
     "type": "object",
@@ -100,8 +100,8 @@
         "default": false
       },
       "pollInterval": {
-        "title": "Check Blink for changes every (seconds)",
-        "description": "How often to poll Blink for state changes. Minimum 15 seconds.",
+        "title": "Poll Interval (seconds)",
+        "description": "How often to refresh Blink status and camera settings. Motion detection uses push notifications independently of this interval. Minimum 15 seconds.",
         "type": "integer",
         "default": 60,
         "minimum": 15,
@@ -114,12 +114,6 @@
         "default": 30,
         "minimum": 5,
         "maximum": 300
-      },
-      "enableMotionPolling": {
-        "title": "Read motion events from Blink",
-        "description": "Reads Blink cloud clip events. HomeKit recording uses local video motion instead; turning this off does not stop recording capture.",
-        "type": "boolean",
-        "default": true
       },
       "snapshotCacheTTL": {
         "title": "Snapshot Cache Duration (seconds)",
@@ -146,18 +140,6 @@
         "description": "Enable HomeKit live video streaming.",
         "type": "boolean",
         "default": true
-      },
-      "hksvCameras": {
-        "title": "Cameras selected for HomeKit recording",
-        "description": "Choose discovered cameras. Apple Home recording permission enables continuous capture and a four-second memory buffer, increasing battery and network use. Local video motion requires the Blink system armed and camera motion enabled. Save, then restart the Blink child bridge.",
-        "type": "array",
-        "default": [],
-        "uniqueItems": true,
-        "items": {
-          "type": "string",
-          "pattern": "\\S",
-          "title": "Camera Name / ID / Serial"
-        }
       },
       "mediaDebug": {
         "title": "Media diagnostics",
@@ -317,9 +299,11 @@
           ],
           "properties": {
             "deviceIdentifier": {
-              "title": "Device Serial / ID",
-              "description": "The device serial number or numeric ID to configure",
-              "type": "string"
+              "title": "Camera Name / Serial / ID",
+              "description": "Exact Blink name, serial, numeric ID, or qualified ID such as camera:123, owl:123, or doorbell:123. The first matching row applies.",
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "inputQuality": {
               "title": "Camera Input Quality",
@@ -350,6 +334,17 @@
               "minimum": 5,
               "maximum": 300,
               "description": "Motion timeout in seconds for this device"
+            },
+            "exposeMotionDetected": {
+              "title": "Expose Motion Detected Sensor",
+              "description": "Override the global motion sensor choice for this camera. Leave unset to inherit it.",
+              "type": "boolean"
+            },
+            "homeKitSecureVideo": {
+              "title": "Enable HomeKit Secure Video",
+              "description": "Offer saved Blink USB motion clips to HomeKit Secure Video for this camera. Requires native Blink motion recording, one associated Sync Module, USB local storage, and recording permission in Apple Home. Save and restart the Blink child bridge after changing this setting.",
+              "type": "boolean",
+              "default": false
             }
           }
         }
@@ -380,6 +375,83 @@
             }
           }
         }
+      },
+      "exposeMotionDetected": {
+        "title": "Expose Motion Detected Sensors",
+        "description": "Expose each camera's Blink motion notifications as a HomeKit Motion Detected sensor. Per-device settings can override this choice. Cameras selected for HomeKit Secure Video still receive motion notifications when their sensor is hidden.",
+        "type": "boolean",
+        "default": true
+      },
+      "nativeRecording": {
+        "title": "Saved USB Clip Recording",
+        "description": "Timing and local cache limits for cameras enabled for HomeKit Secure Video in Per-Device Settings. Motion notifications schedule discovery of completed Blink USB clips. Recording permissions are managed in Apple Home.",
+        "type": "object",
+        "properties": {
+          "initialDelaySeconds": {
+            "title": "Initial Clip Discovery Delay (seconds)",
+            "description": "Wait after a motion notification before looking for the saved USB clip.",
+            "type": "integer",
+            "default": 60,
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "retryIntervalSeconds": {
+            "title": "Missing Clip Retry Interval (seconds)",
+            "description": "Wait before retrying when a completed catalog has no matching clip. Catalog refreshes also obey the minimum refresh interval.",
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 300
+          },
+          "maxRetries": {
+            "title": "Missing Clip Retry Limit",
+            "description": "Maximum retries after the first discovery attempt. An operation with an unknown outcome remains blocked instead of starting a replacement command.",
+            "type": "integer",
+            "default": 10,
+            "minimum": 0,
+            "maximum": 100
+          },
+          "matchToleranceSeconds": {
+            "title": "Clip Capture Time Tolerance (seconds)",
+            "description": "Maximum difference between the Blink motion timestamp and the saved clip's capture timestamp.",
+            "type": "integer",
+            "default": 15,
+            "minimum": 0,
+            "maximum": 300
+          },
+          "catalogRefreshSeconds": {
+            "title": "Minimum Catalog Refresh Interval (seconds)",
+            "description": "Minimum time between USB catalog preparations for one Sync Module. Jobs share a recent completed catalog.",
+            "type": "integer",
+            "default": 60,
+            "minimum": 60,
+            "maximum": 3600
+          },
+          "maxQueuedJobs": {
+            "title": "Maximum Queued Motion Recordings",
+            "description": "Maximum number of waiting or active motion recordings across the account.",
+            "type": "integer",
+            "default": 128,
+            "minimum": 1,
+            "maximum": 1024
+          },
+          "maxJobAgeSeconds": {
+            "title": "Maximum Recording Job Age (seconds)",
+            "description": "Discard a motion recording after this age. Must be at least the initial clip discovery delay.",
+            "type": "integer",
+            "default": 900,
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "maxCachedBytes": {
+            "title": "Maximum Local Clip Cache (bytes)",
+            "description": "Limit private downloaded clips on the Homebridge host. Default is 128 MiB; allowed range is 32 MiB to 1 GiB.",
+            "type": "integer",
+            "default": 134217728,
+            "minimum": 33554432,
+            "maximum": 1073741824
+          }
+        }
       }
     }
   },
@@ -395,6 +467,7 @@
       "type": "fieldset",
       "title": "Cameras in Home",
       "items": [
+        "exposeMotionDetected",
         "excludedNetworks",
         "excludeDevices",
         "deviceNameOverrides",
@@ -406,7 +479,7 @@
       "type": "fieldset",
       "title": "HomeKit recording",
       "items": [
-        "hksvCameras"
+        "nativeRecording"
       ]
     },
     {
@@ -429,7 +502,6 @@
         "softwareEncodingPreset",
         "pollInterval",
         "motionTimeout",
-        "enableMotionPolling",
         "snapshotCacheTTL",
         "persistSnapshotCache",
         "exposeTemperature",

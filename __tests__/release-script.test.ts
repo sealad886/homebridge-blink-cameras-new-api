@@ -97,14 +97,16 @@ describe('release script', () => {
     workspaceDirs.push(result.workspaceDir);
 
     expect(result.status).toBe(0);
-    expect(result.commands).toEqual([
+    expect(result.commands).toEqual(expect.arrayContaining([
       'git status --porcelain',
       'npm run lint',
-      'npm test',
       'npm run clean',
       'npm run build',
+      'npm test',
       'npm pack',
-    ]);
+    ]));
+    expect(result.commands.indexOf('npm run build')).toBeLessThan(result.commands.indexOf('npm test'));
+    expect(result.commands.some(command => /^(?:npm publish|git push)\b/.test(command))).toBe(false);
     expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f version=1.2.3-alpha.0');
   });
 

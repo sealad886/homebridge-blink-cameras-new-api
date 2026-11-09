@@ -49,18 +49,19 @@ it('renders a valid zero-selection recording picker without adding a blank selec
   editor.showSection(2);
   const checkboxes = elements.get('sectionFields')!.querySelectorAll('input').filter(input => input.type === 'checkbox');
   expect(checkboxes).toHaveLength(2); expect(checkboxes.every(input => !input.checked)).toBe(true);
-  expect(editor.draft.config).not.toHaveProperty('hksvCameras');
+  expect(editor.draft.config).not.toHaveProperty('deviceSettingOverrides');
   editor.draft.set('pollInterval', 120); await editor.draft.flush();
   expect(homebridge.updatePluginConfig).toHaveBeenLastCalledWith([expect.objectContaining({ unrelated: 'kept', pollInterval: 120 })]);
-  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('hksvCameras');
+  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('deviceSettingOverrides');
 });
 
 it('keeps excluded cameras discoverable and re-includes one while preserving unavailable exclusions', async () => {
   const { editor, elements } = mount({ excludeDevices: ['camera:1', 'unavailable'], extension: true });
   editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
-  const checks = elements.get('sectionFields')!.querySelectorAll('input').filter(input => input.type === 'checkbox');
-  expect(checks).toHaveLength(3); expect(checks[1].checked).toBe(false);
-  checks[1].checked = true; checks[1].handlers.change(); await editor.draft.flush();
+  const card = elements.get('sectionFields')!.querySelectorAll('details').find(item => item.querySelectorAll('p').some(text => text.textContent === 'camera:1'))!;
+  const included = card.querySelector('input')!;
+  expect(included.checked).toBe(false);
+  included.checked = true; included.handlers.change(); await editor.draft.flush();
   expect(editor.draft.config.excludeDevices).toEqual(['unavailable']); expect(editor.draft.config.extension).toBe(true);
 });
 
@@ -91,7 +92,9 @@ it('reserves qualified camera exclusions even when a Blink system has the same n
 it('offers explicit temperature inheritance and preserves unknown per-camera keys when editing overrides', async () => {
   const { editor, elements } = mount({ exposeTemperature: true, deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', vendorExtension: 7, motionTimeout: 45 }] });
   editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
-  const temperature = elements.get('sectionFields')!.querySelectorAll('select').find(input => input.children.some(option => option.value === 'inherit'))!;
+  const fields = elements.get('sectionFields')!;
+  const label = fields.querySelectorAll('label').find(item => item.textContent === 'Temperature in Home')!;
+  const temperature = fields.querySelectorAll('select').find(input => input.id === label.htmlFor)!;
   expect(temperature.value).toBe('inherit');
   temperature.value = 'no'; temperature.handlers.change(); await editor.draft.flush();
   expect(editor.draft.config.deviceSettingOverrides).toEqual([{ deviceIdentifier: 'camera:1', vendorExtension: 7, motionTimeout: 45, exposeTemperature: false }]);
@@ -100,11 +103,11 @@ it('offers explicit temperature inheritance and preserves unknown per-camera key
 });
 
 it('retains the last camera list and selectors when discovery fails', async () => {
-  const { editor, homebridge, elements } = mount({ hksvCameras: ['missing', 'owl:1'] });
+  const { editor, homebridge, elements } = mount({ deviceSettingOverrides: [{ deviceIdentifier: 'missing', homeKitSecureVideo: true }, { deviceIdentifier: 'owl:1', homeKitSecureVideo: true }] });
   editor.setAccountReady(true); await tick(); await editor.draft.flush();
   homebridge.request.mockImplementation(async () => { throw new Error('synthetic discovery failure'); });
   await editor.refreshInventory(); editor.showSection(2);
-  expect(editor.draft.config.hksvCameras).toEqual(['missing', 'owl:1']);
+  expect(editor.draft.config.deviceSettingOverrides).toEqual([{ deviceIdentifier: 'missing', homeKitSecureVideo: true }, { deviceIdentifier: 'owl:1', homeKitSecureVideo: true }]);
   expect(elements.get('sectionFields')!.querySelectorAll('input').filter(input => input.type === 'checkbox')).toHaveLength(2);
   expect(elements.get('inventoryStatus')!.textContent).toMatch(/preserved/i);
 });
@@ -234,4 +237,39 @@ it('ends Loading and hides account/settings actions when the required host API i
   expect(nodes.get('draftStatus')!.textContent).not.toMatch(/Loading/);
   for (const id of ['settingsNavigation', 'connectionFlow', 'sectionFields', 'accountMaintenance']) expect(nodes.get(id)!.hidden).toBe(true);
   expect(nodes.get('retryLoad')!.hidden).toBe(false);
+});
+
+
+it('saves HSV through a qualified per-camera override without losing other camera settings', async () => {
+  const { editor, elements } = mount({ deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', exposeTemperature: true, vendorExtension: 7 }] });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  const choices = elements.get('sectionFields')!.querySelectorAll('input').filter(input => input.type === 'checkbox');
+  choices[0].checked = true; choices[0].handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config.deviceSettingOverrides).toEqual([{ deviceIdentifier: 'camera:1', exposeTemperature: true, vendorExtension: 7, homeKitSecureVideo: true }]);
+  expect(editor.draft.config).not.toHaveProperty('hksvCameras');
+});
+
+it('edits nested native recording bounds without creating empty camera selector rows', async () => {
+  const { editor, elements } = mount({ nativeRecording: { initialDelaySeconds: 90 }, unrelated: true });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  const retry = elements.get('sectionFields')!.querySelectorAll('input').find(input => input.dataset.setting === 'nativeRecording/maxRetries')!;
+  retry.value = '0'; retry.handlers.input(); await editor.draft.flush();
+  expect(editor.draft.config.nativeRecording).toEqual({ initialDelaySeconds: 90, maxRetries: 0 });
+  expect(editor.draft.config.unrelated).toBe(true);
+  expect(editor.draft.config).not.toHaveProperty('deviceSettingOverrides');
+});
+
+
+it('changes per-camera motion exposure independently of HSV and preserves inheritance', async () => {
+  const { editor, elements } = mount({ exposeMotionDetected: false,
+    deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true, inputQuality: 'saver' }] });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
+  const card = elements.get('sectionFields')!.querySelectorAll('details').find(item => item.querySelectorAll('p').some(text => text.textContent === 'camera:1'))!;
+  const label = card.querySelectorAll('label').find(item => item.textContent === 'Motion Detected in Home')!;
+  const motion = card.querySelectorAll('select').find(input => input.id === label.htmlFor)!;
+  motion.value = 'yes'; motion.handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config.deviceSettingOverrides).toEqual([{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true, inputQuality: 'saver', exposeMotionDetected: true }]);
+  motion.value = 'inherit'; motion.handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config.deviceSettingOverrides).toEqual([{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true, inputQuality: 'saver' }]);
+  expect(editor.draft.config.exposeMotionDetected).toBe(false);
 });

@@ -20,7 +20,7 @@ function fixture(stalled = false) {
 }
 const flush = async () => { for (let i = 0; i < 4; i++) { await Promise.resolve(); } };
 function consumptionAck(bytes: number): Buffer { const body = Buffer.alloc(4); body.writeUInt32BE(bytes); return output(6, body); }
-function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(3); body.writeUInt32BE(fps, 4); return output(1, body); }
+function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(4); body.writeUInt32BE(fps, 4); return output(1, body); }
 function sourceInfo(width: number, height: number, numerator = 0, denominator = 1): Buffer {
   const body = Buffer.alloc(16); [width, height, numerator, denominator].forEach((n, i) => body.writeUInt32BE(n, i * 4)); return output(7, body);
 }
@@ -307,20 +307,6 @@ test('recording callback buffers are erased after consumption and immediately on
   expect(active).toEqual(Buffer.alloc(16)); await stopped;
 });
 
-function motionBody(atUs = 2000000n, score = 120, event = 1): Buffer {
-  const body = Buffer.alloc(16); body.writeBigUInt64BE(atUs); body.writeUInt32BE(score, 8); body.writeUInt32BE(event, 12); return body;
-}
-test('confirmed recording motion exposes bounded metadata with cancellation, never frame bytes', async () => {
-  const f = fixture(), motion = jest.fn();
-  const worker = new PrivateMediaWorker('/verified/worker', { motion }, f.launch);
-  await worker.configureRecording(recordingConfig); f.child.stdout.write(status(15));
-  f.child.stdout.write(output(13, motionBody())); f.child.stdout.write(output(13, motionBody(3000000n, 40)));
-  expect(motion).toHaveBeenCalledTimes(2);
-  expect(motion.mock.calls[0][0]).toEqual({ atUs: 2000000, score: 120 });
-  const signal = motion.mock.calls[0][1] as globalThis.AbortSignal;
-  await worker.stop(); expect(signal.aborted).toBe(true);
-  f.child.stdout.write(output(13, motionBody(4000000n))); expect(motion).toHaveBeenCalledTimes(2);
-});
 test.each(['stdin', 'stdout', 'stderr'] as const)('a broken %s pipe cancels recording callbacks and erases borrowed media', async pipe => {
   const f = fixture(); let borrowed: Buffer | undefined, signal: globalThis.AbortSignal | undefined;
   const worker = new PrivateMediaWorker('/verified/worker', {
@@ -336,25 +322,10 @@ test.each(['stdin', 'stdout', 'stderr'] as const)('a broken %s pipe cancels reco
   await worker.whenClosed; expect(worker.failed).toBe(true); expect(signal?.aborted).toBe(true);
   expect(borrowed?.every(byte => byte === 0)).toBe(true);
 });
-test.each(['unready', 'live mode', 'short', 'invalid event', 'invalid score', 'unsafe timestamp', 'too frequent', 'regression'])(
-  'recording motion rejects %s instead of dispatching an invalid trigger', async kind => {
-    const f = fixture(), motion = jest.fn();
-    const worker = new PrivateMediaWorker('/verified/worker', { motion }, f.launch);
-    if (kind === 'live mode') await worker.configure([2, 2, 15, 20000, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    else await worker.configureRecording(recordingConfig);
-    if (kind !== 'unready') f.child.stdout.write(status(15));
-    if (kind === 'too frequent' || kind === 'regression') f.child.stdout.write(output(13, motionBody()));
-    const body = kind === 'short' ? Buffer.alloc(15) : kind === 'invalid event' ? motionBody(2000000n, 120, 0) :
-      kind === 'invalid score' ? motionBody(2000000n, 1001) : kind === 'unsafe timestamp' ? motionBody(9007199254740992n) :
-      kind === 'too frequent' ? motionBody(2999999n) : kind === 'regression' ? motionBody(1000000n) : motionBody();
-    f.child.stdout.write(output(13, body)); await worker.whenClosed; expect(worker.failed).toBe(true);
-    expect(motion).toHaveBeenCalledTimes(kind === 'too frequent' || kind === 'regression' ? 1 : 0);
-  },
-);
 test('maximum codec frame tail coalesced with next frame remains valid across arbitrary fragments', async () => {
   const f = fixture(); const seen: Buffer[] = []; const worker = new PrivateMediaWorker('/verified/worker', { packet: async packet => { seen.push(Buffer.from(packet.data)); } }, f.launch);
   await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  const large = output(2, codecBody(MEDIA_WORKER_LIMITS.frameBytes - 60)); const status = Buffer.alloc(8); status.writeUInt32BE(3); status.writeUInt32BE(1, 4);
+  const large = output(2, codecBody(MEDIA_WORKER_LIMITS.frameBytes - 60)); const status = Buffer.alloc(8); status.writeUInt32BE(4); status.writeUInt32BE(1, 4);
   const next = output(1, status);
   f.child.stdout.write(large.subarray(0, large.length - 20));
   f.child.stdout.write(Buffer.concat([large.subarray(large.length - 20), next.subarray(0, 5)]));

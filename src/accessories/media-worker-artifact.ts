@@ -8,7 +8,7 @@ export const MEDIA_WORKER_TARGETS = Object.freeze(['linux-arm64', 'linux-x64', '
 export type MediaWorkerTarget = typeof MEDIA_WORKER_TARGETS[number];
 export interface MediaWorkerManifest {
   schemaVersion: 1;
-  protocolVersion: 3;
+  protocolVersion: 4;
   targets: Record<MediaWorkerTarget, { path: string; sha256: string }>;
 }
 
@@ -24,7 +24,7 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 
 /** Closed five-target package contract; validation does not establish binary/codec acceptance. */
 export function validateMediaWorkerManifest(value: unknown): MediaWorkerManifest {
-  if (!record(value) || !exactKeys(value, ['schemaVersion', 'protocolVersion', 'targets']) || value.schemaVersion !== 1 || value.protocolVersion !== 3 ||
+  if (!record(value) || !exactKeys(value, ['schemaVersion', 'protocolVersion', 'targets']) || value.schemaVersion !== 1 || value.protocolVersion !== 4 ||
       !record(value.targets) || !exactKeys(value.targets, MEDIA_WORKER_TARGETS)) throw unavailable();
   const targets = {} as MediaWorkerManifest['targets'];
   const paths = new Set<string>();
@@ -39,7 +39,7 @@ export function validateMediaWorkerManifest(value: unknown): MediaWorkerManifest
     paths.add(artifact.path.toLowerCase());
     targets[target] = { path: artifact.path, sha256: artifact.sha256 };
   }
-  return { schemaVersion: 1, protocolVersion: 3, targets };
+  return { schemaVersion: 1, protocolVersion: 4, targets };
 }
 
 /**

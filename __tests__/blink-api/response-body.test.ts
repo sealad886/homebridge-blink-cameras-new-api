@@ -1,6 +1,9 @@
 import { readBoundedBody, readBoundedJson, RESPONSE_BODY_LIMITS, ResponseBodyError } from '../../src/blink-api/response-body';
 import { OperationTimeoutError } from '../../src/operation-budget';
 import { requireRemoteId, validateHomescreen } from '../../src/blink-api/domain-validation';
+import { Buffer } from 'node:buffer';
+
+const { Response, AbortController, ReadableStream } = globalThis;
 
 it('accepts exact byte limit and rejects stream overflow despite misleading length', async () => {
   const limit = RESPONSE_BODY_LIMITS['oauth-json'];
@@ -58,4 +61,21 @@ it('does not consume admissions when an already locked response rejects', async 
   }
   reader.releaseLock();
   await expect(readBoundedBody(new Response('{}'), { kind: 'rest' })).resolves.toHaveLength(2);
+});
+
+it('allows the observed 1000-row native catalog structure within its explicit resource limits', async () => {
+  const media = Array.from({ length: 1000 }, (_, id) => Object.fromEntries(
+    Array.from({ length: 30 }, (__, field) => [`field_${field}`, field === 0 ? id + 1 : null])));
+  const body = JSON.stringify({ manifest_id: 303, media });
+  await expect(readBoundedJson(new Response(body), { kind: 'native-catalog' })).resolves.toMatchObject({ manifest_id: 303 });
+  await expect(readBoundedJson(new Response(body), { kind: 'rest' })).rejects.toBeInstanceOf(ResponseBodyError);
+});
+
+it('clamps per-request byte bounds without allowing the native media ceiling to be raised', async () => {
+  await expect(readBoundedBody(new Response(Buffer.alloc(11)), { kind: 'native-media', maxBytes: 10 }))
+    .rejects.toBeInstanceOf(ResponseBodyError);
+  await expect(readBoundedBody(new Response('small', { headers: {
+    'content-length': String(RESPONSE_BODY_LIMITS['native-media'] + 1),
+  } }), { kind: 'native-media', maxBytes: RESPONSE_BODY_LIMITS['native-media'] * 2 }))
+    .rejects.toBeInstanceOf(ResponseBodyError);
 });

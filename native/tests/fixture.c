@@ -19,15 +19,16 @@ int main(int argc,char **argv){
 #endif
     int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
     int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
-    int with_audio=latm || (argc>1 && strcmp(argv[1],"audio")==0);
-    int visual_motion=argc>1 && strcmp(argv[1],"motion")==0;
+    int mp4=argc>1 && (!strcmp(argv[1],"video-mp4") || !strcmp(argv[1],"audio-mp4"));
+    int with_audio=latm || (argc>1 && (!strcmp(argv[1],"audio") || !strcmp(argv[1],"audio-mp4")));
     int width=16,height=16,fps=15,count=4,offset=0;
     if(bundled)count=30;
     if(argc>2 || (argc>1 && !with_audio)) {
-        if((argc!=6 && argc!=7) || (!with_audio && !visual_motion && strcmp(argv[1],"video")))return 2;
+        if((argc!=6 && argc!=7) || (!with_audio && strcmp(argv[1],"video") && strcmp(argv[1],"video-mp4")))return 2;
         width=atoi(argv[2]);height=atoi(argv[3]);fps=atoi(argv[4]);count=atoi(argv[5]);
         if(argc==7)offset=atoi(argv[6]);
-        if(width<2 || height<2 || width>8192 || height>8192 || (width&1) || (height&1) || fps<1 || fps>60 || count<1 || count>120)return 2;
+        if(width<2 || height<2 || width>8192 || height>8192 || (width&1) || (height&1) || fps<1 || fps>60 || count<1 ||
+           (mp4?(count>9000 || (int64_t)width*height*count>64*1024*1024):count>120))return 2;
     }
     av_log_set_callback(quiet);
     const AVCodec *codec=avcodec_find_encoder_by_name("libx264");
@@ -35,14 +36,16 @@ int main(int argc,char **argv){
     if(!encoder) return 2;
     encoder->width=width;encoder->height=height;encoder->pix_fmt=AV_PIX_FMT_YUV420P;
     encoder->time_base=(AVRational){1,fps};encoder->framerate=(AVRational){fps,1};encoder->thread_count=1;encoder->max_b_frames=0;
+    if(mp4)encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
     AVDictionary *options=NULL;av_dict_set(&options,"preset","ultrafast",0);av_dict_set(&options,"tune","zerolatency",0);
     if(avcodec_open2(encoder,codec,&options)<0)return 2;
     av_dict_free(&options);
     AVFormatContext *format=NULL;
-    if(avformat_alloc_output_context2(&format,NULL,"mpegts",NULL)<0)return 2;
+    if(avformat_alloc_output_context2(&format,NULL,mp4?"mp4":"mpegts",NULL)<0)return 2;
     // Match the CLI's normal mux delay: several AAC access units share one PES.
     if(bundled)format->max_delay=700000;
-    format->pb=avio_alloc_context(av_malloc(32768),32768,1,NULL,NULL,write_bytes,NULL);
+    if(mp4) { if(avio_open_dyn_buf(&format->pb)<0)return 2; }
+    else format->pb=avio_alloc_context(av_malloc(32768),32768,1,NULL,NULL,write_bytes,NULL);
     if(!format->pb)return 2;
     AVStream *stream=avformat_new_stream(format,NULL);
     if(!stream || avcodec_parameters_from_context(stream->codecpar,encoder)<0)return 2;
@@ -51,6 +54,7 @@ int main(int argc,char **argv){
     if(with_audio){
         const AVCodec *aac=avcodec_find_encoder(AV_CODEC_ID_AAC);audio=avcodec_alloc_context3(aac);if(!audio)return 2;
         audio->sample_rate=16000;audio->sample_fmt=AV_SAMPLE_FMT_FLTP;audio->bit_rate=32000;audio->time_base=(AVRational){1,16000};
+        if(mp4)audio->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
         av_channel_layout_default(&audio->ch_layout,1);audio->thread_count=1;
         if(avcodec_open2(audio,aac,NULL)<0)return 2;
         audio_stream=avformat_new_stream(format,NULL);if(!audio_stream || avcodec_parameters_from_context(audio_stream->codecpar,audio)<0)return 2;
@@ -72,18 +76,12 @@ int main(int argc,char **argv){
         if(i<count){
             if(av_frame_make_writable(frame)<0)return 2;
             for(int y=0;y<height;y++)memset(frame->data[0]+y*frame->linesize[0],32+(i%4)*32,(size_t)width);
-            if(visual_motion) {
-                for(int y=0;y<height;y++)memset(frame->data[0]+y*frame->linesize[0],32,(size_t)width);
-                if(i>=2*fps) {
-                    int left=i<4*fps?width/8:((i/fps)%2?width/2:width/8);
-                    for(int y=height/3;y<2*height/3;y++)memset(frame->data[0]+y*frame->linesize[0]+left,200,(size_t)width/4);
-                }
-            }
             for(int y=0;y<height/2;y++){memset(frame->data[1]+y*frame->linesize[1],128,(size_t)width/2);memset(frame->data[2]+y*frame->linesize[2],128,(size_t)width/2);}
             frame->pts=i+offset;
         }
         if(avcodec_send_frame(encoder,i<count?frame:NULL)<0)return 2;
         while(avcodec_receive_packet(encoder,packet)>=0){
+            if(packet->duration<=0)packet->duration=1;
             packet->stream_index=stream->index;av_packet_rescale_ts(packet,encoder->time_base,stream->time_base);
             if(av_interleaved_write_frame(format,packet)<0)return 2;
         }
@@ -107,6 +105,12 @@ int main(int argc,char **argv){
     }
     av_frame_free(&audio_frame);avcodec_free_context(&audio);
     if(av_write_trailer(format)<0)return 2;
+    if(mp4) {
+        uint8_t *bytes=NULL;int size=avio_close_dyn_buf(format->pb,&bytes);format->pb=NULL;
+        if(size<=0 || size>32*1024*1024 || fwrite(bytes,1,(size_t)size,stdout)!=(size_t)size)return 2;
+        av_free(bytes);
+    }
     av_frame_free(&frame);av_packet_free(&packet);avcodec_free_context(&encoder);
-    av_freep(&format->pb->buffer);avio_context_free(&format->pb);avformat_free_context(format);return 0;
+    if(format->pb) { av_freep(&format->pb->buffer);avio_context_free(&format->pb); }
+    avformat_free_context(format);return 0;
 }

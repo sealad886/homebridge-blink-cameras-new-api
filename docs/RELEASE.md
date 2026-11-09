@@ -85,7 +85,7 @@ contains unrelated user files; never stash or delete those files to satisfy it.
 Publication requires an explicit dispatch on main with the exact version input.
 An ordinary source push does not publish. The workflow validates the requested
 version against the manifest and runs clean-install, lint, tests, build, and
-package loadability checks on Node.js 20, 22, and 24 before publication.
+package loadability checks on Node.js 20, 22, 24, and 26 before publication.
 
 ```sh
 gh workflow run publish.yml --ref main -f version=VERSION
@@ -184,6 +184,32 @@ does not close findings or record physical acceptance; the hardening ledger owns
 the combined F05/F06 remediation evidence and disposition. Preserve any release
 hold until its remaining gates are verified. Registry publication and subsequent
 authorized Homebridge installation/physical acceptance remain distinct stages.
+
+## 1.1.0-beta.0 event-driven recording checkpoint
+
+This release keeps the `beta` npm channel separate from stable `latest`. The
+maintainer requested registry publication and will update the Pi manually.
+The source integrates the current secure-media packaging and release gates;
+it does not publish the earlier stable-based private tarball.
+Public Firebase app/project parameters are application identifiers recovered from
+the official APK, not sender or administrative credentials. Generated receiver
+keys, account tokens, raw motion payloads and private diagnostic evidence remain
+outside the source and npm artifact. The package gate requires the isolated FCM
+worker and both migration tools and rejects private/runtime-state files.
+
+Protocol 4 adds finite MP4 preparation to the canonical private worker. Its
+bounded parent-supplied input has no provider URL or network transport. The exact
+release requires new workers, source hashes, package integrity and all five
+installed-target qualifications. Previous protocol artifacts cannot be reused.
+
+The owned receiver has received real native-motion messages, including a fresh
+production-worker observation, using an existing Blink session. This qualifies
+that component only. The completed beta still needs installation/readback,
+continued native USB recording, actual new clip bytes, finite Home requests,
+retained/playable recordings and privacy/recovery observations. Record these
+separately under the stage-specific acceptance rules below. Notification arrival
+or a transport ACK must not be substituted for clip or iCloud retention evidence.
+The original persistent USB recording lock's cause remains unproven.
 
 ## Homebridge upgrade and acceptance
 
