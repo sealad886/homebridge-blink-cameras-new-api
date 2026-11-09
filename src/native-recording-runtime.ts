@@ -86,6 +86,7 @@ export class NativeRecordingRuntime {
   private delivering = false;
   private delivery?: Promise<void>;
   private stopping?: Promise<void>;
+  private recovery?: Promise<void>;
   private cacheBytes = 0;
   private releaseOwnership?: () => Promise<void>;
   readonly directory: string;
@@ -202,6 +203,7 @@ export class NativeRecordingRuntime {
     if (this.stopped) throw new Error('Native runtime stopped');
     if (this.active) return;
     await this.reconcileKnownOperations();
+    if (this.stopped || this.active) return;
     this.active = true;
     for (const device of this.devices.values()) {
       const policy = device.recording()?.policy;
@@ -212,7 +214,12 @@ export class NativeRecordingRuntime {
       hsv: [...this.devices.values()].some(device => device.settings.homeKitSecureVideo) });
   }
 
-  private async reconcileKnownOperations(): Promise<void> {
+  private reconcileKnownOperations(): Promise<void> {
+    this.recovery ??= this.performKnownRecovery().finally(() => { this.recovery = undefined; });
+    return this.recovery;
+  }
+
+  private async performKnownRecovery(): Promise<void> {
     // Startup/operator retry may resolve known ownership, but never resends its POST.
     const liveViews = await this.options.client.reconcileKnownLiveViews();
     if (liveViews.some(owner => !owner.confirmed)) this.options.report('live-view-recovery-required');
@@ -236,7 +243,7 @@ export class NativeRecordingRuntime {
   async retryConnection(): Promise<void> {
     if (this.stopped) throw new Error('Native runtime stopped');
     await this.reconcileKnownOperations();
-    if (!this.active || ![...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) return;
+    if (this.stopped || !this.active || ![...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) return;
     await this.source.reconnect();
   }
 
@@ -273,8 +280,11 @@ export class NativeRecordingRuntime {
     if (this.deliveryTimer) globalThis.clearTimeout(this.deliveryTimer);
     this.deliveryTimer = undefined;
     this.stopping = (async () => {
-      const results = await Promise.allSettled([this.source?.stop(), this.core?.stop(),
+      const results = await Promise.allSettled([this.source?.stop(), this.recovery,
         ...[...this.devices.values()].map(device => device.recording()?.invalidateDelivery()), ...this.policyChanges]);
+      // Recovery must settle its terminal coordinator receipt before shutdown
+      // closes the core and hands the shared state writer to a replacement.
+      results.push(...await Promise.allSettled([this.core?.stop()]));
       await this.delivery;
       await this.writes;
       const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');

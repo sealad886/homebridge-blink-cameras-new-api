@@ -316,6 +316,63 @@ describe('native recording runtime composition', () => {
     expect(f.setDemand).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['startup', 'retry'] as const)('drains held %s recovery before real SDK writer handoff without reopening its receiver', async phase => {
+    const seed = await setup({ config: { initialDelaySeconds: 0 } });
+    seed.transport.getJson.mockRejectedValueOnce(new OperationTimeoutError());
+    await seed.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => (await seed.state()).core?.operation?.status === 'unresolved');
+    await seed.runtime.stop();
+    const originalFetch = globalThis.fetch, terminal = deferred<Response>();
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'recovery-writer-handoff', tier: scope.tier });
+    const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;
+    jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...scope, sharedTier: scope.tier });
+    jest.spyOn(internals.auth, 'ensureValidToken').mockResolvedValue(undefined);
+    jest.spyOn(internals.auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer fixture-auth' });
+    const sources: { options: FcmEventSourceOptions; setDemand: jest.Mock; reconnect: jest.Mock; stop: jest.Mock }[] = [];
+    const options: NativeRecordingRuntimeOptions = { client: api, scope, storagePath: root,
+      config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), matchingDevices: [],
+      devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
+        settings: { exposeMotionDetected: true, homeKitSecureVideo: false }, motion: jest.fn(), recording: () => undefined }],
+      eventSourceFactory: input => {
+        const source = { options: input, setDemand: jest.fn().mockResolvedValue(undefined),
+          reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
+        sources.push(source); return source;
+      } };
+    try {
+      globalThis.fetch = jest.fn().mockImplementation(async (url, request) => {
+        expect(url).toBe('https://rest-u000.immedia-semi.com/accounts/10/networks/20/commands/100');
+        expect(request.method).toBe('GET');
+        if (phase === 'retry' && jest.mocked(globalThis.fetch).mock.calls.length === 1) return new Response('{}', { status: 503 });
+        return terminal.promise;
+      });
+      const runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime);
+      if (phase === 'retry') await runtime.start();
+      const recover = () => phase === 'startup' ? runtime.start() : runtime.retryConnection();
+      const first = recover(), second = recover();
+      await until(() => jest.mocked(globalThis.fetch).mock.calls.length === (phase === 'retry' ? 2 : 1));
+      let stopped = false;
+      const stopping = runtime.stop().then(() => { stopped = true; });
+      await until(() => sources[0].stop.mock.calls.length === 1);
+      expect(stopped).toBe(false);
+      terminal.resolve(new Response(JSON.stringify({ complete: true, status: 0 })));
+      await Promise.all([first, second, stopping]);
+      expect(sources[0].reconnect).not.toHaveBeenCalled();
+      expect(sources[0].setDemand).toHaveBeenCalledTimes(phase === 'retry' ? 1 : 0);
+      const statePath = path.join(runtime.directory, 'state.json');
+      const settled = JSON.parse(await fs.readFile(statePath, 'utf8')) as NativeRecordingRuntimeState;
+      expect(settled.nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished', commandId: 100,
+        result: { status: 'failed', reason: 'discarded', remoteStatus: 0 } });
+      expect(settled.core?.operation).toBeUndefined(); expect(settled.core?.queue).toEqual([]);
+      const replacement = await NativeRecordingRuntime.create(options); runtimes.push(replacement); await replacement.start();
+      await sources[1].options.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['replacement-checkpoint'] });
+      const checkpoint = await fs.readFile(statePath);
+      await runtime.stop(); await realImmediate(); await jest.advanceTimersByTimeAsync(0);
+      expect(await fs.readFile(statePath)).toEqual(checkpoint);
+      expect(JSON.parse(checkpoint.toString()).push.persistentIds).toEqual(['replacement-checkpoint']);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(phase === 'retry' ? 2 : 1);
+    } finally { terminal.resolve(new Response(JSON.stringify({ complete: true, status: 0 }))); globalThis.fetch = originalFetch; }
+  });
+
   it.each([
     { accountId: 10, clientId: 11, tier: 'u000' },
     { accountId: 12, clientId: 11, tier: 'u000' },
