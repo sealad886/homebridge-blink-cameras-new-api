@@ -111,8 +111,9 @@ export class NativeRecordingRuntime {
     await this.privateDirectory(this.cacheDirectory);
     try {
       const stat = await fs.lstat(this.statePath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_STATE_BYTES || (stat.mode & 0o777) !== 0o600
-        || (process.getuid && stat.uid !== process.getuid())) throw new Error('Unsafe native recording state');
+      const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_STATE_BYTES
+        || (uid !== undefined && ((stat.mode & 0o777) !== 0o600 || stat.uid !== uid))) throw new Error('Unsafe native recording state');
       this.state = await readOwnerOnlyJsonFile<NativeRecordingRuntimeState>(this.statePath);
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') throw error;
@@ -420,7 +421,8 @@ export class NativeRecordingRuntime {
   private async privateDirectory(directory: string): Promise<void> {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const stat = await fs.lstat(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700 || (process.getuid && stat.uid !== process.getuid())) {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== undefined && ((stat.mode & 0o777) !== 0o700 || stat.uid !== uid))) {
       throw new Error('Native recording directory must be private and owned by this process');
     }
   }

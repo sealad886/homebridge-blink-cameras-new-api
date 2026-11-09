@@ -66,7 +66,11 @@ homebridge-ui/server.js
 homebridge-ui/server.js.map
 
 /scripts/*
+!/scripts/preview-plugin-ui.mjs
 !/scripts/release.mjs
+!/scripts/migrate-secure-media-config.cjs
+!/scripts/check-rtsp-network.cjs
+!/scripts/measure-secure-media.cjs
 !/scripts/preuninstall.js
 !/scripts/migrate-native-recording-config.cjs
 !/scripts/deploy-to-pi.sh
@@ -269,3 +273,8 @@ vite.config.ts.timestamp-*
 
 # Finder metadata in nested directories
 **/.DS_Store
+
+# Generated native package candidates; source inputs stay tracked
+/native/runtime/
+/native/corresponding-source.tar.gz
+/native/NOTICE

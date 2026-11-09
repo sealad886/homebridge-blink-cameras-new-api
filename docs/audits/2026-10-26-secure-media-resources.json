@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "scope": "local synthetic Darwin arm64; five-target CI remains required",
+  "resources": {
+    "checkerSha256": "7641d47da6cc7c427a39ca45c8ad13c38cfb5e32d601932e607c883f37dcf839",
+    "fixtureSha256": "703d82ff64012f7bbadbeaf8f30db9649eb97a0ebebad5edd871af8e27e41b37",
+    "method": "wait4.ru_maxrss",
+    "observations": [
+      {
+        "audioBitrate": 128000,
+        "audioCodec": 1,
+        "audioPacketMs": 10,
+        "audioRate": 24000,
+        "exitCode": 0,
+        "inputHeight": 2048,
+        "inputPixels": 8388608,
+        "inputWidth": 4096,
+        "level": 2,
+        "outputFps": 30,
+        "outputHeight": 1080,
+        "outputWidth": 1920,
+        "peakResidentBytes": 92274688,
+        "preset": 0,
+        "profile": 2,
+        "videoBitrate": 8000000,
+        "videoFramesDecoded": 4
+      },
+      {
+        "audioBitrate": 128000,
+        "audioCodec": 1,
+        "audioPacketMs": 10,
+        "audioRate": 24000,
+        "exitCode": 0,
+        "inputHeight": 1440,
+        "inputPixels": 3686400,
+        "inputWidth": 2560,
+        "level": 2,
+        "outputFps": 30,
+        "outputHeight": 1080,
+        "outputWidth": 1920,
+        "peakResidentBytes": 71598080,
+        "preset": 0,
+        "profile": 2,
+        "videoBitrate": 8000000,
+        "videoFramesDecoded": 4
+      },
+      {
+        "audioBitrate": 128000,
+        "audioCodec": 1,
+        "audioPacketMs": 10,
+        "audioRate": 24000,
+        "exitCode": 0,
+        "inputHeight": 1920,
+        "inputPixels": 3686400,
+        "inputWidth": 1920,
+        "level": 2,
+        "outputFps": 30,
+        "outputHeight": 1080,
+        "outputWidth": 1920,
+        "peakResidentBytes": 71516160,
+        "preset": 0,
+        "profile": 2,
+        "videoBitrate": 8000000,
+        "videoFramesDecoded": 4
+      }
+    ],
+    "observedAt": "2026-10-26T01:11:18.286283+00:00",
+    "pythonVersion": "3.14.9",
+    "rawUnit": "bytes",
+    "schemaVersion": 1,
+    "scope": "Observed per-worker OS resident high-water mark for three four-video-frame flat-color synthetic workloads; independent video pixels/aspect and audible audio decode. Not a hard memory/CPU budget, long-run, concurrency, physical-device or external crash-collector proof.",
+    "startupCrashGuard": "RLIMIT_CORE zero readback passed before STATUS",
+    "target": "darwin-arm64",
+    "workerSha256": "abc33f581f77c2b8b9118744f5d76a7e029cca4d43585be2cc888bec14818a89"
+  },
+  "queueAndRecording": {
+    "schemaVersion": 1,
+    "synthetic": true,
+    "baseRevision": "bb699a57b913cfd77ad27a694208bf481f7864c1",
+    "workingTree": true,
+    "testSha256": "06ea48c7f172e8603f96af914dd6272d8dfdb49d62e5e4770fe4c2945fec54a3",
+    "sourceSha256": {
+      "src/blink-api/immis-proxy.ts": "dce7ec05bc4901141496dc3d4231df7cfddac060fb5b708193c3989287ca0a7e",
+      "src/accessories/media-session.ts": "a90404e81be6f4ade0245b2db9b517735195fc423b2b85fe9941fae1722099b1",
+      "src/accessories/media-worker.ts": "2efd63ae9312ad93be5f4fc3a00762ab9ae03362f2c1520f71968d7d805ecac1"
+    },
+    "platform": "darwin",
+    "arch": "arm64",
+    "recording": [
+      {
+        "scenario": "file-cap",
+        "admittedBytes": 67108864,
+        "offeredBytes": 67108865,
+        "actualFileBytes": 67108864,
+        "consumerBytes": 67108865,
+        "queueHighWaterBytes": 16384,
+        "contentsVerified": true,
+        "closureConfirmed": true
+      },
+      {
+        "scenario": "deadline",
+        "queueHighWaterBytes": 65536,
+        "actualFileBytes": 0,
+        "consumerBytes": 131072
+      },
+      {
+        "scenario": "queue-limit",
+        "queueHighWaterBytes": 262144,
+        "actualFileBytes": 0,
+        "consumerBytes": 393216
+      }
+    ],
+    "native": {
+      "status": "passed",
+      "workerSha256": "abc33f581f77c2b8b9118744f5d76a7e029cca4d43585be2cc888bec14818a89",
+      "admittedBytes": 300612,
+      "consumedBytes": 300612,
+      "frames": 5,
+      "creditMessages": 10,
+      "queueHighWaterBytes": 65536,
+      "outstandingHighWater": 1,
+      "outstandingAtClose": 0,
+      "receiverVerified": true,
+      "outputDatagrams": 183,
+      "outputBytes": 19931
+    },
+    "status": "passed",
+    "nativeRequired": true
+  },
+  "rawSha256": {
+    "resource-receipt.json": "6a4b162c445feee7a09fbb2de4e7157032523371c5c39136b0ed38eee886da5c",
+    "queue-recording-receipt.json": "98a4ba3ff2d4b8107bfb51b399ca3adfb7d525bfcd9defdc1610136e2457e02b"
+  }
+}

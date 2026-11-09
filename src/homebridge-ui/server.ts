@@ -1,10 +1,12 @@
 /* global console, module, process, require */
 
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
+import { promises as fs } from 'node:fs';
 
 import type { BlinkHostedOAuthStart, BlinkLogger } from '../types';
 import { isBlinkHostedOAuthSupportCode } from '../blink-api/auth';
 import { redactDiagnosticText } from '../blink-api/redaction';
+import { PLATFORM_NAME } from '../settings';
 import {
   type AuthStatus,
   type HostedAuthCompleteRequest,
@@ -80,6 +82,8 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
     this.registerRequest('/unlock', this.handleUnlock.bind(this));
     this.registerRequest('/test-connection', this.handleTestConnection.bind(this));
     this.registerRequest('/getNetworks', this.handleGetNetworks.bind(this));
+    this.registerRequest('/settings/inventory', this.handleSettingsInventory.bind(this));
+    this.registerRequest('/settings/validate', this.handleSettingsValidate.bind(this));
     this.ready();
     this.logDebug('Custom UI server ready.');
   }
@@ -140,6 +144,29 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
   async handleGetNetworks(payload: unknown): Promise<Array<{ id: string; name: string }>> {
     this.requireEmptyPayload(payload);
     return this.hostedAuthService.getNetworks();
+  }
+
+  async handleSettingsInventory(payload: unknown) {
+    this.requireEmptyPayload(payload);
+    let config: Record<string, unknown> = {};
+    try {
+      const configPath = this.homebridgeConfigPath;
+      const saved: unknown = configPath ? JSON.parse(await fs.readFile(configPath, 'utf8')) : {};
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        const platforms = (saved as Record<string, unknown>).platforms;
+        if (Array.isArray(platforms)) config = platforms.find((entry: unknown): entry is Record<string, unknown> =>
+          !!entry && typeof entry === 'object' && !Array.isArray(entry) && (entry as Record<string, unknown>).platform === PLATFORM_NAME) ?? {};
+      }
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw new HostedAuthServiceError('Homebridge settings could not be read for camera discovery.', 'storage', 500);
+      }
+    }
+    return this.hostedAuthService.getSettingsInventory(config);
+  }
+
+  async handleSettingsValidate(payload: unknown) {
+    return this.hostedAuthService.validateSettings(payload);
   }
 
   private requireEmptyPayload(payload: unknown): void {

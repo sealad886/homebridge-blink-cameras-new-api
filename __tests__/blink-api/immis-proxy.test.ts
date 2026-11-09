@@ -85,6 +85,10 @@ const consumer = () => new Writable({ write(_chunk, _encoding, callback) { callb
 const latestSocket = (): tls.TLSSocket => (tls.connect as unknown as jest.Mock).mock.results.at(-1)?.value;
 
 describe('ImmisProxyServer private consumer', () => {
+  it('refuses another admitted media protocol before IMMIS authentication or dialing', () => {
+    expect(() => new ImmisProxyServer({ immisUrl: 'rtsps://8.8.8.8:332/session?client_id=1', serial: 'TEST' })).toThrow();
+    expect(tls.connect).not.toHaveBeenCalled();
+  });
   let proxy: ImmisProxyServer;
   beforeEach(() => {
     jest.useFakeTimers();

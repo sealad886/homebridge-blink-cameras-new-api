@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
+import process from 'node:process';
 import { URL } from 'node:url';
 import { BlinkApi, BlinkOperationNotStartedError, type BlinkLiveViewOwnership, type BlinkRemoteOperationOwnership,
   type BlinkStateCommandOwnership } from '../../src/blink-api/client';
@@ -485,5 +486,25 @@ describe('owned native storage SDK', () => {
       .rejects.toThrow('privately owned');
     expect(fetch).not.toHaveBeenCalled();
     expect(await fs.readdir(directory)).toEqual(['unowned-link']);
+  });
+
+  it('downloads a scoped clip when the host cannot represent POSIX ownership and mode bits', async () => {
+    const f = fixture(); const transport = f.api.createNativeStorageTransport({ scope, directory });
+    f.api.setNativeStorageOwner(scope, pending({ operationId: 'clip', kind: 'clip', phase: 'prepared',
+      clip: { manifestId: 303, clip }, commandId: 505 }));
+    const bytes = Buffer.from('synthetic-owned-windows-clip');
+    (fetch as jest.Mock).mockResolvedValue(new Response(bytes));
+    await fs.chmod(directory, 0o777);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'getuid');
+    Object.defineProperty(process, 'getuid', { configurable: true, value: undefined });
+    try {
+      const result = await f.api.withNativeStorageAdmission('clip', () => transport.downloadMedia(mediaUrl, request), {}, scope);
+      expect(await fs.readFile(result.reference)).toEqual(bytes);
+      expect(result).toMatchObject({ bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      if (descriptor) Object.defineProperty(process, 'getuid', descriptor);
+      else Reflect.deleteProperty(process, 'getuid');
+    }
   });
 });

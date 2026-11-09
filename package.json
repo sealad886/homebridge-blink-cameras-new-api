@@ -1,13 +1,13 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "0.10.0",
+    "version": "1.1.0-beta.0",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
         "email": "dev@andrewcox.doctor"
     },
-    "license": "MIT",
+    "license": "(MIT AND GPL-3.0-or-later AND BSD-3-Clause AND ZPL-2.1)",
     "type": "commonjs",
     "homepage": "https://github.com/sealad886/homebridge-blink-cameras-new-api",
     "bugs": {
@@ -40,6 +40,11 @@
         "CHANGELOG.md",
         "config.schema.json",
         "scripts/preuninstall.js",
+        "scripts/migrate-secure-media-config.cjs",
+        "native/runtime",
+        "native/corresponding-source.tar.gz",
+        "native/COPYING",
+        "native/NOTICE",
         "scripts/migrate-native-recording-config.cjs",
         "docs/native-recording-config-migration.md"
     ],
@@ -57,15 +62,18 @@
         "access": "public"
     },
     "engines": {
-        "node": "^20.3.0 || ^22.0.0 || ^24.0.0",
+        "node": "^20.3.0 || ^22.0.0 || ^24.0.0 || ^26.0.0",
         "homebridge": ">=1.11.1"
     },
     "dependencies": {
         "@eneris/push-receiver": "4.4.0",
         "@homebridge/plugin-ui-utils": "^2.1.2",
+        "ajv": "^8.20.0",
         "async-lock": "^1.4.1"
     },
     "devDependencies": {
+        "@commitlint/cli": "20.5.3",
+        "@commitlint/config-conventional": "20.5.3",
         "@faker-js/faker": "^10.2.0",
         "@oznu/homebridge-types": "*",
         "@types/async-lock": "^1.4.2",
@@ -73,17 +81,15 @@
         "@types/node": "^25.0.9",
         "@typescript-eslint/eslint-plugin": "^8.53.1",
         "@typescript-eslint/parser": "^8.53.1",
-        "ajv": "^8.20.0",
         "eslint": "^9.39.2",
-        "ffmpeg-for-homebridge": "2.1.7",
         "homebridge": "^1.11.1",
         "jest": "^30.2.0",
+        "jest-util": "*",
         "nodemon": "^3.1.11",
         "npm-check-updates": "^19.3.1",
         "prettier": "^3.8.0",
         "ts-jest": "^29.4.6",
-        "typescript": "^5.9.3",
-        "jest-util": "*"
+        "typescript": "^5.9.3"
     },
     "scripts": {
         "blink-api:decompile": "node scripts/blink-api-contract/index.cjs decompile --apk-dir logs/blink-apk/59.2-29823413/apks --output-dir logs/blink-apk/59.2-29823413/decompiled",
@@ -91,7 +97,7 @@
         "blink-api:validate": "node scripts/blink-api-contract/index.cjs validate --input docs/api-contract/blink-59.2-29823413.json --schema docs/api-contract/schema.json",
         "preuninstall": "node scripts/preuninstall.js",
         "build": "tsc && npm run copy-ui-assets",
-        "copy-ui-assets": "mkdir -p dist/homebridge-ui/public && cp -r src/homebridge-ui/public/* dist/homebridge-ui/public/",
+        "copy-ui-assets": "node .github/scripts/copy-ui-assets.mjs",
         "watch": "npm run build && nodemon",
         "watch:homebridge": "npm run watch",
         "watch:ts": "tsc --watch",
@@ -102,8 +108,5 @@
         "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
         "update": "ncu -u && npm update && npm install"
-    },
-    "allowScripts": {
-        "ffmpeg-for-homebridge@2.1.7": true
     }
 }

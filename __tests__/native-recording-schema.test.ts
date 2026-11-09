@@ -40,17 +40,3 @@ it.each(Object.entries(NATIVE_RECORDING_CONFIG_FIELDS))('keeps %s defaults and r
     expect(() => resolveNativeRecordingConfig({ [key]: rejected } as never)).toThrow();
   }
 });
-
-it('offers the new controls through the existing schema form without exposing retired motion polling', () => {
-  const keys = new Set<string>();
-  const collect = (node: unknown) => {
-    if (typeof node === 'string') keys.add(node);
-    else if (Array.isArray(node)) node.forEach(collect);
-    else if (node && typeof node === 'object') Object.values(node).forEach(collect);
-  };
-  collect(document.layout);
-  for (const key of ['exposeMotionDetected', 'nativeRecording', 'deviceSettingOverrides[].exposeMotionDetected',
-    'deviceSettingOverrides[].homeKitSecureVideo']) expect(keys.has(key)).toBe(true);
-  expect(document.schema.properties).not.toHaveProperty('enableMotionPolling');
-  expect(keys.has('enableMotionPolling')).toBe(false);
-});

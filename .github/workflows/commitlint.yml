@@ -18,7 +18,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Lint commits
-        uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          configFile: ./commitlint.config.mjs
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install commit validation tools
+        run: npm ci --ignore-scripts
+
+      - name: Lint commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npx --no-install commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose

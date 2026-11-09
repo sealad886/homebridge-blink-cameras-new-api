@@ -10,7 +10,7 @@ const { randomUUID } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 
 const MAX_BYTES = 4 * 1024 * 1024;
-const OBSOLETE_RECORDING_KEYS = ['hksvSource', 'syncModuleRecording', 'syncModuleFeedLimits'];
+const OBSOLETE_RECORDING_KEYS = ['hksvSource', 'syncModuleRecording'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const has = (value, key) => Object.hasOwn(value, key);
 const selector = value => typeof value === 'string' && /\S/.test(value);
@@ -183,7 +183,7 @@ function main(args) {
     process.stdout.write('Usage: node scripts/migrate-native-recording-config.cjs /explicit/config.json [--apply]\n'
       + 'Default: preview only. --apply preserves exact original bytes in a private local backup before atomic replacement.\n'
       + 'Converts enableMotionPolling and verified hksvCameras selectors.\n'
-      + 'Removes obsolete hksvSource, syncModuleRecording, and syncModuleFeedLimits after backup.\n'
+      + 'Removes obsolete hksvSource and syncModuleRecording after backup; preserves live-view feed limits.\n'
       + 'Does not contact Blink or restart Homebridge.\n');
     return 0;
   }

@@ -90,7 +90,8 @@ export interface BlinkTierInfo {
 }
 
 /**
- * Blink network (Sync Module grouping) - represents an armed/disarmed unit
+ * Blink system/network - represents an armed/disarmed unit.
+ * Sync Modules have separate IDs; a network is not itself a module.
  * Source: API Dossier Section 3.7 (Network & Arm/Disarm) / NetworkApi.smali
  */
 export interface BlinkNetwork {

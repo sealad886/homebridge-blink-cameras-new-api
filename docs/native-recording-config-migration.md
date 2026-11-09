@@ -5,10 +5,31 @@ configuration exposes motion sensors globally or per camera and enables HomeKit
 Secure Video separately for each camera. The timing and cache controls are under
 `nativeRecording`.
 
-The existing custom sign-in screen opens Homebridge's schema form. The new
-controls are part of that form; no separate settings editor is required.
+Use the plugin's existing five-section settings editor. Motion exposure belongs
+to the camera settings; HomeKit recording selects the new per-camera policy.
+Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
-Run the one-off local converter from this checkout with Node.js 20 or newer:
+## Upgrade from 0.10.0
+
+First review the [secure media upgrade](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#upgrade-configuration).
+The secure media converter removes retired live-view CLI options and maps the
+retired audio choice. It has no preview flag: when a conversion is needed, this
+command writes an owner-only backup before replacing the explicit file:
+
+```sh
+node scripts/migrate-secure-media-config.cjs /explicit/path/to/config.json
+```
+
+Use the complete Homebridge configuration path, preserve current auth/accessory
+state, and close concurrent settings editors. Then preview the native recording
+converter below against that same path. It preserves other platform and bridge
+blocks and the valid live-view module limits. Neither converter contacts Blink,
+changes an installed package or restarts Homebridge.
+
+## Preview and apply native recording settings
+
+Run the converter from this checkout with a supported Node.js version
+(20.3+, 22, 24 or 26):
 
 ```sh
 node scripts/migrate-native-recording-config.cjs /explicit/path/to/config.json
@@ -57,7 +78,10 @@ settings, credentials, and unknown fields are preserved.
 | Top-level `hksvCameras: string[]` | Merge `homeKitSecureVideo: true` into an exactly matching `deviceSettingOverrides` row, or append a row with that selector; remove `hksvCameras` |
 | `hksvSource` | Remove the obsolete live-feed/saved-clips source selection; the redesign uses completed USB motion clips |
 | `syncModuleRecording` | Remove obsolete module-specific source and recurring clip-polling overrides |
-| `syncModuleFeedLimits` | Remove obsolete concurrent-feed limits |
+
+The valid `syncModuleFeedLimits` setting is preserved. It limits explicit live
+viewing through the existing secure-media admission owner; it does not schedule
+native USB clip acquisition.
 
 Explicit new booleans take precedence, including `homeKitSecureVideo: false`.
 Existing per-device fields are preserved. Qualified selectors such as
@@ -80,7 +104,7 @@ configuration alone. The converter preserves them and does not merge aliases.
 Review row order because the first matching per-device row applies.
 
 The report lists removed setting names under `removedKeys`. Removal is limited
-to the five verified keys in the table above. Their original values remain in
+to the four verified keys in the table above. Their original values remain in
 the private original-byte backup. Other unknown settings are preserved.
 
 Reports contain counts, platform array indexes, and fixed issue codes; they do

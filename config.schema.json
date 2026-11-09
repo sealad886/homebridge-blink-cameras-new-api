@@ -4,28 +4,67 @@
   "singular": true,
   "customUi": true,
   "customUiPath": "./dist/homebridge-ui",
-  "headerDisplay": "Blink cameras integration for HomeKit via Homebridge. Provides SecuritySystem arm/disarm, motion sensors, doorbell notifications, and optional HomeKit Secure Video from saved Blink USB clips.",
+  "headerDisplay": "Choose cameras, motion notifications, live viewing and native Blink clips for HomeKit Secure Video.",
   "footerDisplay": "For help, see the [README](https://github.com/sealad886/homebridge-blink-cameras-new-api#readme).",
   "schema": {
     "type": "object",
     "required": [
       "name"
     ],
+    "not": {
+      "anyOf": [
+        {
+          "required": [
+            "ffmpegPath"
+          ]
+        },
+        {
+          "required": [
+            "ffmpegDebug"
+          ]
+        },
+        {
+          "required": [
+            "rtpSsrcMode"
+          ]
+        },
+        {
+          "required": [
+            "rtspTransport"
+          ]
+        },
+        {
+          "required": [
+            "videoEncoder"
+          ]
+        },
+        {
+          "required": [
+            "twoWayAudio"
+          ]
+        },
+        {
+          "required": [
+            "verifyImmisTls"
+          ]
+        }
+      ]
+    },
     "properties": {
       "name": {
-        "title": "Platform Name",
+        "title": "Homebridge platform name",
         "description": "Name for this Blink platform instance",
         "type": "string",
         "default": "Blink"
       },
       "deviceId": {
-        "title": "Device ID",
+        "title": "Homebridge connection ID",
         "description": "Unique identifier for this Homebridge instance (sent to Blink as hardware_id)",
         "type": "string",
         "default": "homebridge-blink"
       },
       "deviceName": {
-        "title": "Device Name",
+        "title": "Homebridge device name",
         "description": "Friendly name for this device (fallback for Device ID)",
         "type": "string"
       },
@@ -69,12 +108,273 @@
         "maximum": 600
       },
       "motionTimeout": {
-        "title": "Motion Timeout (seconds)",
+        "title": "Keep motion shown in Home for (seconds)",
         "description": "How long motion detected state stays active before resetting",
         "type": "integer",
         "default": 30,
         "minimum": 5,
         "maximum": 300
+      },
+      "snapshotCacheTTL": {
+        "title": "Snapshot Cache Duration (seconds)",
+        "description": "How long to cache camera snapshots before requesting a fresh one from Blink. Set to 0 to always request fresh snapshots (uses more battery). Default: 60 seconds.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 0,
+        "maximum": 300
+      },
+      "exposeTemperature": {
+        "title": "Expose Camera Temperature",
+        "type": "boolean",
+        "default": false,
+        "description": "Expose reported temperature for supported traditional Blink cameras. Adds one metadata request per enabled camera per state poll; does not wake the camera. Restart the child bridge after saving."
+      },
+      "persistSnapshotCache": {
+        "title": "Persist Snapshot Cache Until Manual Refresh",
+        "description": "Keep the last preview until its Refresh Snapshot switch is used in Home. Overrides preview cache duration.",
+        "type": "boolean",
+        "default": false
+      },
+      "enableStreaming": {
+        "title": "Allow live viewing in Home",
+        "description": "Enable HomeKit live video streaming.",
+        "type": "boolean",
+        "default": true
+      },
+      "mediaDebug": {
+        "title": "Media diagnostics",
+        "description": "Enable bounded, redacted streaming diagnostics. Per-packet and NAL traces are omitted.",
+        "type": "boolean",
+        "default": false
+      },
+      "debugStreamPath": {
+        "title": "Save raw diagnostic video locally",
+        "description": "Optional folder on the Homebridge host for raw IMMIS .ts diagnostic video. Uses local disk and can contain private footage. Not an HSV or iCloud destination. Leave blank to disable.",
+        "type": "string",
+        "placeholder": "/tmp/blink-streams"
+      },
+      "maxStreams": {
+        "title": "Simultaneous live viewers per camera",
+        "description": "Maximum number of simultaneous HomeKit streams for each camera.",
+        "type": "integer",
+        "default": 1,
+        "minimum": 1,
+        "maximum": 4
+      },
+      "enableAudio": {
+        "title": "Camera audio in HomeKit",
+        "description": "Allows camera audio in both live viewing and HomeKit recordings. Apple Home recording-audio permission must also allow it. Two-way talkback is unavailable.",
+        "type": "boolean",
+        "default": true
+      },
+      "audioCodec": {
+        "title": "Audio Codec",
+        "description": "Preferred audio codec for HomeKit streaming.",
+        "type": "string",
+        "default": "opus",
+        "oneOf": [
+          {
+            "title": "Opus (recommended)",
+            "enum": [
+              "opus"
+            ]
+          },
+          {
+            "title": "PCMA",
+            "enum": [
+              "pcma"
+            ]
+          },
+          {
+            "title": "PCMU",
+            "enum": [
+              "pcmu"
+            ]
+          }
+        ]
+      },
+      "audioBitrate": {
+        "title": "Audio Bitrate (kbps)",
+        "description": "Target audio bitrate for HomeKit streaming.",
+        "type": "integer",
+        "default": 32,
+        "minimum": 8,
+        "maximum": 128
+      },
+      "outputQuality": {
+        "title": "Live-view picture quality",
+        "type": "string",
+        "default": "auto",
+        "enum": [
+          "auto",
+          "720p15",
+          "360p15",
+          "1080p30"
+        ],
+        "enumNames": [
+          "Current quality (Home chooses)",
+          "1280 \u00d7 720 at 15 fps",
+          "640 \u00d7 360 at 15 fps",
+          "1920 \u00d7 1080 at 30 fps"
+        ],
+        "description": "Picture preset for live viewing only. Apple Home chooses the HomeKit recording format."
+      },
+      "videoBitrate": {
+        "title": "Max Video Bitrate (kbps)",
+        "description": "Cap the video bitrate (leave empty to use HomeKit defaults).",
+        "type": "integer",
+        "minimum": 300,
+        "maximum": 8000
+      },
+      "softwareEncodingPreset": {
+        "title": "Software Stream Encoding",
+        "description": "Low CPU uses faster video encoding and lower Opus encoding complexity. It may reduce video/audio quality at the same bitrate.",
+        "type": "string",
+        "default": "veryfast",
+        "oneOf": [
+          {
+            "title": "Balanced (current default)",
+            "enum": [
+              "veryfast"
+            ]
+          },
+          {
+            "title": "Low CPU",
+            "enum": [
+              "ultrafast"
+            ]
+          }
+        ]
+      },
+      "excludedNetworks": {
+        "title": "Excluded Networks",
+        "description": "Network IDs or exact Blink network names to exclude, including all their cameras. Restart the Blink child bridge after changing this setting.",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "title": "Network ID or Name"
+        }
+      },
+      "excludeDevices": {
+        "title": "Excluded Devices",
+        "description": "List of device serial numbers, IDs, or names to exclude from HomeKit.",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "title": "Device Identifier"
+        }
+      },
+      "deviceNameOverrides": {
+        "title": "Custom Device Names",
+        "description": "Override display names for devices in HomeKit.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "deviceIdentifier",
+            "customName"
+          ],
+          "properties": {
+            "deviceIdentifier": {
+              "title": "Device Serial / ID",
+              "description": "The device serial number or numeric ID to rename",
+              "type": "string"
+            },
+            "customName": {
+              "title": "Custom Name",
+              "description": "The display name to use in HomeKit",
+              "type": "string"
+            }
+          }
+        }
+      },
+      "deviceSettingOverrides": {
+        "title": "Per-Device Settings",
+        "description": "Override settings for specific devices.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "deviceIdentifier"
+          ],
+          "properties": {
+            "deviceIdentifier": {
+              "title": "Camera Name / Serial / ID",
+              "description": "Exact Blink name, serial, numeric ID, or qualified ID such as camera:123, owl:123, or doorbell:123. The first matching row applies.",
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "inputQuality": {
+              "title": "Camera Input Quality",
+              "type": "string",
+              "default": "auto",
+              "enum": [
+                "auto",
+                "saver",
+                "standard",
+                "best"
+              ],
+              "enumNames": [
+                "Automatic (preserve camera setting)",
+                "Saver",
+                "Standard",
+                "Best (including supported 2K)"
+              ],
+              "description": "Per-camera Blink source quality. Automatic preserves existing quality and remembers first observed input. Explicit selection changes Blink camera configuration and recordings too; dimensions depend on camera model and subscription."
+            },
+            "exposeTemperature": {
+              "title": "Expose Temperature",
+              "type": "boolean",
+              "description": "Override the global temperature setting for this camera. Leave unset to inherit."
+            },
+            "motionTimeout": {
+              "title": "Motion Timeout (seconds)",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300,
+              "description": "Motion timeout in seconds for this device"
+            },
+            "exposeMotionDetected": {
+              "title": "Expose Motion Detected Sensor",
+              "description": "Override the global motion sensor choice for this camera. Leave unset to inherit it.",
+              "type": "boolean"
+            },
+            "homeKitSecureVideo": {
+              "title": "Enable HomeKit Secure Video",
+              "description": "Offer saved Blink USB motion clips to HomeKit Secure Video for this camera. Requires native Blink motion recording, one associated Sync Module, USB local storage, and recording permission in Apple Home. Save and restart the Blink child bridge after changing this setting.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      },
+      "syncModuleFeedLimits": {
+        "title": "Sync Module feed limits",
+        "description": "Optional limits for actual discovered Sync Modules. Each defaults to its associated included camera count. Upstream feeds are shared by live viewing and recording.",
+        "type": "array",
+        "default": [],
+        "uniqueItems": true,
+        "items": {
+          "type": "object",
+          "required": [
+            "syncModuleId",
+            "maxFeeds"
+          ],
+          "properties": {
+            "syncModuleId": {
+              "type": "string",
+              "title": "Sync Module ID",
+              "minLength": 1
+            },
+            "maxFeeds": {
+              "type": "integer",
+              "title": "Simultaneous camera feeds",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        }
       },
       "exposeMotionDetected": {
         "title": "Expose Motion Detected Sensors",
@@ -152,354 +452,65 @@
             "maximum": 1073741824
           }
         }
-      },
-      "snapshotCacheTTL": {
-        "title": "Snapshot Cache Duration (seconds)",
-        "description": "How long to cache camera snapshots before requesting a fresh one from Blink. Set to 0 to always request fresh snapshots (uses more battery). Default: 60 seconds.",
-        "type": "integer",
-        "default": 60,
-        "minimum": 0,
-        "maximum": 300
-      },
-      "persistSnapshotCache": {
-        "title": "Persist Snapshot Cache Until Manual Refresh",
-        "description": "Keep the last successful snapshot indefinitely instead of expiring by TTL. When enabled, each camera exposes a 'Refresh Snapshot' switch in Home to fetch a new thumbnail on demand.",
-        "type": "boolean",
-        "default": false
-      },
-      "enableStreaming": {
-        "title": "Enable Live Streaming",
-        "description": "Enable HomeKit live video streaming via FFmpeg.",
-        "type": "boolean",
-        "default": true
-      },
-      "ffmpegPath": {
-        "title": "FFmpeg Path",
-        "description": "Path to the FFmpeg binary. Defaults to ffmpeg in PATH.",
-        "type": "string",
-        "default": "ffmpeg"
-      },
-      "ffmpegDebug": {
-        "title": "FFmpeg Debug Logging",
-        "description": "Enable bounded, redacted streaming diagnostics. Per-packet and NAL traces are omitted.",
-        "type": "boolean",
-        "default": false
-      },
-      "debugStreamPath": {
-        "title": "Debug Stream Recording Path",
-        "description": "Path to save raw MPEG-TS stream recordings for debugging. Leave empty to disable.",
-        "type": "string",
-        "placeholder": "/tmp/blink-streams"
-      },
-      "rtspTransport": {
-        "title": "RTSP Transport",
-        "description": "RTSP transport mode for Blink live view input.",
-        "type": "string",
-        "default": "tcp",
-        "oneOf": [
-          { "title": "TCP (recommended)", "enum": ["tcp"] },
-          { "title": "UDP", "enum": ["udp"] }
-        ]
-      },
-      "maxStreams": {
-        "title": "Max Concurrent Streams per Camera",
-        "description": "Maximum number of simultaneous HomeKit streams for each camera.",
-        "type": "integer",
-        "default": 1,
-        "minimum": 1,
-        "maximum": 4
-      },
-      "enableAudio": {
-        "title": "Enable Audio",
-        "description": "Enable audio streaming from camera to HomeKit. Two-way talkback is currently unavailable.",
-        "type": "boolean",
-        "default": true
-      },
-      "twoWayAudio": {
-        "title": "Enable Two-Way Audio",
-        "description": "Temporarily disabled: talkback UI is hidden until uplink framing is finalized.",
-        "type": "boolean",
-        "default": false
-      },
-      "audioCodec": {
-        "title": "Audio Codec",
-        "description": "Preferred audio codec for HomeKit streaming.",
-        "type": "string",
-        "default": "opus",
-        "oneOf": [
-          { "title": "Opus (recommended)", "enum": ["opus"] },
-          { "title": "AAC-ELD", "enum": ["aac-eld"] },
-          { "title": "PCMA", "enum": ["pcma"] },
-          { "title": "PCMU", "enum": ["pcmu"] }
-        ]
-      },
-      "audioBitrate": {
-        "title": "Audio Bitrate (kbps)",
-        "description": "Target audio bitrate for HomeKit streaming.",
-        "type": "integer",
-        "default": 32,
-        "minimum": 8,
-        "maximum": 128
-      },
-      "outputQuality": {
-        "title": "HomeKit Output Quality",
-        "type": "string",
-        "default": "auto",
-        "enum": [
-          "auto",
-          "720p15",
-          "360p15",
-          "1080p30"
-        ],
-        "enumNames": [
-          "Current quality (Home chooses)",
-          "1280 \u00d7 720 at 15 fps",
-          "640 \u00d7 360 at 15 fps",
-          "1920 \u00d7 1080 at 30 fps"
-        ],
-        "description": "System-wide HomeKit output profile. Low-frame-rate profiles cap encoding at 15 fps even when Home selects 30 fps at the same supported dimensions. Default preserves current behavior. Home may choose the small-resolution fallback. Audio remains negotiated separately."
-      },
-      "videoBitrate": {
-        "title": "Max Video Bitrate (kbps)",
-        "description": "Cap the video bitrate (leave empty to use HomeKit defaults).",
-        "type": "integer",
-        "minimum": 300,
-        "maximum": 8000
-      },
-      "softwareEncodingPreset": {
-        "title": "Software Stream Encoding",
-        "description": "Low CPU uses ultrafast for libx264 (including software fallback) and lower Opus encoding complexity. It may reduce video/audio quality at the same bitrate. Hardware video encoders keep their own settings.",
-        "type": "string",
-        "default": "veryfast",
-        "oneOf": [
-          { "title": "Balanced (current default)", "enum": ["veryfast"] },
-          { "title": "Low CPU", "enum": ["ultrafast"] }
-        ]
-      },
-      "videoEncoder": {
-        "title": "Video Encoder",
-        "description": "Preferred FFmpeg video encoder. Auto probes available hardware encoders at startup (dry-run test) and selects the first working one; falls back to software libx264 if none found.",
-        "type": "string",
-        "default": "auto",
-        "oneOf": [
-          { "title": "Auto (prefer hardware, fallback to software)", "enum": ["auto"] },
-          { "title": "Software (libx264)", "enum": ["libx264"] },
-          { "title": "Raspberry Pi / Linux ARM (h264_v4l2m2m)", "enum": ["h264_v4l2m2m"] },
-          { "title": "macOS VideoToolbox (h264_videotoolbox)", "enum": ["h264_videotoolbox"] },
-          { "title": "Intel Quick Sync (h264_qsv)", "enum": ["h264_qsv"] },
-          { "title": "NVIDIA NVENC (h264_nvenc)", "enum": ["h264_nvenc"] },
-          { "title": "Linux VAAPI (advanced)", "enum": ["h264_vaapi"] }
-        ]
-      },
-      "excludedNetworks": {
-        "title": "Excluded Networks",
-        "description": "Network IDs or exact Blink network names to exclude, including all their cameras. Restart the Blink child bridge after changing this setting.",
-        "type": "array",
-        "items": { "type": "string", "title": "Network ID or Name" }
-      },
-      "excludeDevices": {
-        "title": "Excluded Devices",
-        "description": "List of device serial numbers, IDs, or names to exclude from HomeKit.",
-        "type": "array",
-        "items": {
-          "type": "string",
-          "title": "Device Identifier"
-        }
-      },
-      "deviceNameOverrides": {
-        "title": "Custom Device Names",
-        "description": "Override display names for devices in HomeKit.",
-        "type": "array",
-        "items": {
-          "type": "object",
-          "required": [
-            "deviceIdentifier",
-            "customName"
-          ],
-          "properties": {
-            "deviceIdentifier": {
-              "title": "Device Serial / ID",
-              "description": "The device serial number or numeric ID to rename",
-              "type": "string"
-            },
-            "customName": {
-              "title": "Custom Name",
-              "description": "The display name to use in HomeKit",
-              "type": "string"
-            }
-          }
-        }
-      },
-      "deviceSettingOverrides": {
-        "title": "Per-Device Settings",
-        "description": "Override settings for specific devices.",
-        "type": "array",
-        "items": {
-          "type": "object",
-          "required": [
-            "deviceIdentifier"
-          ],
-          "properties": {
-            "deviceIdentifier": {
-              "title": "Camera Name / Serial / ID",
-              "description": "Exact Blink name, serial, numeric ID, or qualified ID such as camera:123, owl:123, or doorbell:123. The first matching row applies.",
-              "type": "string",
-              "minLength": 1,
-              "pattern": "\\S"
-            },
-            "exposeMotionDetected": {
-              "title": "Expose Motion Detected Sensor",
-              "description": "Override the global motion sensor choice for this camera. Leave unset to inherit it.",
-              "type": "boolean"
-            },
-            "homeKitSecureVideo": {
-              "title": "Enable HomeKit Secure Video",
-              "description": "Offer saved Blink USB motion clips to HomeKit Secure Video for this camera. Requires native Blink motion recording, one associated Sync Module, USB local storage, and recording permission in Apple Home. Save and restart the Blink child bridge after changing this setting.",
-              "type": "boolean",
-              "default": false
-            },
-            "inputQuality": {
-              "title": "Camera Input Quality",
-              "type": "string",
-              "default": "auto",
-              "enum": [
-                "auto",
-                "saver",
-                "standard",
-                "best"
-              ],
-              "enumNames": [
-                "Automatic (preserve camera setting)",
-                "Saver",
-                "Standard",
-                "Best (including supported 2K)"
-              ],
-              "description": "Per-camera Blink source quality. Automatic preserves existing quality and remembers first observed input. Explicit selection changes Blink camera configuration and recordings too; dimensions depend on camera model and subscription."
-            },
-            "motionTimeout": {
-              "title": "Motion Timeout (seconds)",
-              "type": "integer",
-              "minimum": 5,
-              "maximum": 300,
-              "description": "Motion timeout in seconds for this device"
-            }
-          }
-        }
       }
     }
   },
   "layout": [
     {
       "type": "fieldset",
-      "title": "Platform Settings",
+      "title": "Overview & connection",
       "items": [
         "name"
       ]
     },
     {
       "type": "fieldset",
-      "title": "Device Identification",
-      "expandable": true,
-      "expanded": false,
+      "title": "Cameras in Home",
       "items": [
-        "deviceId",
-        "deviceName"
-      ]
-    },
-    {
-      "type": "fieldset",
-      "title": "Motion & Camera Previews",
-      "expandable": true,
-      "expanded": false,
-      "items": [
-        "pollInterval",
-        "motionTimeout",
         "exposeMotionDetected",
-        "snapshotCacheTTL",
-        "persistSnapshotCache"
+        "excludedNetworks",
+        "excludeDevices",
+        "deviceNameOverrides",
+        "deviceSettingOverrides",
+        "syncModuleFeedLimits"
       ]
     },
     {
       "type": "fieldset",
-      "title": "HomeKit Secure Video",
-      "expandable": true,
-      "expanded": false,
+      "title": "HomeKit recording",
       "items": [
         "nativeRecording"
       ]
     },
     {
       "type": "fieldset",
-      "title": "Streaming",
-      "expandable": true,
-      "expanded": false,
+      "title": "Live viewing & sound",
       "items": [
         "enableStreaming",
-        "ffmpegPath",
+        "outputQuality",
+        "enableAudio"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced & troubleshooting",
+      "items": [
         "maxStreams",
-        "enableAudio",
         "audioCodec",
         "audioBitrate",
-        "outputQuality",
         "videoBitrate",
-        "videoEncoder",
         "softwareEncodingPreset",
-        "rtspTransport",
-        "ffmpegDebug",
-        "debugStreamPath"
-      ]
-    },
-    {
-      "type": "fieldset",
-      "title": "Device Customization",
-      "expandable": true,
-      "expanded": false,
-      "items": [
-        {
-          "key": "excludedNetworks",
-          "type": "array",
-          "buttonText": "Exclude Network",
-          "items": ["excludedNetworks[]"]
-        },
-        {
-          "key": "excludeDevices",
-          "type": "array",
-          "buttonText": "Add Device to Exclude",
-          "items": [
-            "excludeDevices[]"
-          ]
-        },
-        {
-          "key": "deviceNameOverrides",
-          "type": "array",
-          "buttonText": "Add Name Override",
-          "items": [
-            "deviceNameOverrides[].deviceIdentifier",
-            "deviceNameOverrides[].customName"
-          ]
-        },
-        {
-          "key": "deviceSettingOverrides",
-          "type": "array",
-          "buttonText": "Add Device Setting",
-          "items": [
-            "deviceSettingOverrides[].deviceIdentifier",
-            "deviceSettingOverrides[].exposeMotionDetected",
-            "deviceSettingOverrides[].homeKitSecureVideo",
-            "deviceSettingOverrides[].motionTimeout",
-            "deviceSettingOverrides[].inputQuality"
-          ]
-        }
-      ]
-    },
-    {
-      "type": "fieldset",
-      "title": "Advanced",
-      "expandable": true,
-      "expanded": false,
-      "items": [
+        "pollInterval",
+        "motionTimeout",
+        "snapshotCacheTTL",
+        "persistSnapshotCache",
+        "exposeTemperature",
+        "deviceId",
+        "deviceName",
         "trustDevice",
-        "debugAuth"
+        "debugAuth",
+        "mediaDebug",
+        "debugStreamPath"
       ]
     }
   ]

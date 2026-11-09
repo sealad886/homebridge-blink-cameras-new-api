@@ -32,10 +32,11 @@ See [Apple's notification instructions](https://support.apple.com/en-ie/105042).
 HomeKit writes and fresh snapshot responses have a 12-second response limit.
 Started Blink commands may finish later; a timeout does not replay a mutation.
 Queued mutations that expire before starting are not sent. Thumbnail captures
-share durable ownership with other mutations and storage work until command
-completion, while reads and image
-downloads remain independent. An HTTP 409 is reconciled against fresh state or
-retried within bounded limits; exhausted conflicts return a HomeKit error.
+share durable ownership with mutations and storage work until command completion,
+while reads and image downloads remain independent. Ordinary controls can
+reconcile an explicit conflict against confirmed state within their bounds.
+Native-storage refusals defer locally; an unknown accepted outcome remains owned
+and does not authorize a replacement preparation.
 
 Persistent snapshots remain manual-refresh images. Their download/cache age and
 last observed successful capture age are separate diagnostics. A busy capture
@@ -54,13 +55,12 @@ alone is not proof of changing video or audible audio. Battery depletion and
 provider outages need separate evidence; a disconnect message alone does not
 identify their cause.
 
-Check the selected executable and negotiated codec in the bounded startup and
-stream receipts. The executable must be runnable by the Homebridge service
-account, not merely your interactive shell. See [FFmpeg requirements](streaming.md#ffmpeg-requirements)
-for codec probing, audio-offer updates and signed/unsigned RTP SSRC handling.
-An unavailable AAC-ELD selection or failed SSRC capability check should be
-investigated against the actual executable; do not reset pairing, replace a
-working binary blindly, or disable certificate verification to bypass it.
+Check the installed package's verified worker and negotiated codec in bounded
+startup receipts. A missing or modified worker needs a verified package reinstall,
+not an executable-path override. See [packaged codec requirements](streaming.md#packaged-codec-requirements)
+and the [upgrade migration](streaming.md#upgrade-configuration). AAC-ELD is no longer
+offered; Home receives the supported codec update through normal HAP metadata.
+Do not reset pairing or disable certificate verification to bypass a refused stream.
 
 For stutter, compare the same camera and scene with the same network conditions.
 The [quality guide](streaming.md#input-and-output-quality) describes lower output
@@ -75,7 +75,7 @@ response or timeout, new stream start, first media and final cleanup. Bounded
 reconnect exhaustion is a failure receipt, not proof of successful recovery.
 HTTP 406 may be transient provider behavior; an eligible command GET has one
 bounded retry, while liveview/completion POSTs are not ambiguously replayed.
-Never include their capability URLs, command identifiers or full FFmpeg argv in
+Never include their capability URLs, command identifiers, process arguments or media in
 an issue. Use the [diagnostic policy](debug_logging_spec.md) and
 [release acceptance guidance](RELEASE.md) to record proof and limitations.
 
@@ -117,13 +117,23 @@ replay an ambiguous POST. If rate limits recur:
 
 ## Node.js Version
 
-The declared Node.js ranges are 20.3+, 22 or 24; see `package.json`. The push
+The declared Node.js ranges are 20.3+, 22, 24 or 26; see `package.json`. The push
 receiver uses `AbortSignal.any`, which is unavailable in Node 20.0–20.2.
 Check your version:
 
 ```bash
 node --version
 ```
+
+## Configuration migration required
+
+An upgrade from 0.10.0 can contain both retired secure-media and old recording
+settings. Follow the [secure media upgrade](streaming.md#upgrade-configuration)
+first, then the [native recording preview and application](native-recording-config-migration.md).
+Use the explicit full Homebridge config path. The first converter applies with a
+private backup; the second defaults to preview and requires `--apply` to replace.
+Both preserve unrelated configuration and make no Blink requests or service
+changes. The current `syncModuleFeedLimits` live-view setting remains valid.
 
 ## Motion Not Detected
 

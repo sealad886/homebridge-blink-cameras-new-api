@@ -1,11 +1,12 @@
 /** Finite local MP4 preparation. This module has no provider or live-view transport. */
 import { Buffer } from 'node:buffer';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 import type { CameraRecordingConfiguration } from 'homebridge';
+import { PrivateMediaWorker, MEDIA_WORKER_LIMITS } from './media-worker';
+import { loadPackagedMediaWorker } from './media-worker-artifact';
 
 export const NATIVE_RECORDING_MEDIA_LIMITS = Object.freeze({
   sourceBytes: 32 * 1024 * 1024,
@@ -52,7 +53,6 @@ export class NativeRecordingMemoryBudget {
 }
 const sharedMemory = new NativeRecordingMemoryBudget();
 export interface NativeRecordingPreparationOptions {
-  ffmpegPath: string;
   /** One shared local conversion admission gate across all cameras. */
   admit<T>(work: () => Promise<T>, signal: globalThis.AbortSignal): Promise<T>;
   memory?: NativeRecordingMemoryBudget;
@@ -72,8 +72,8 @@ export function snapshotNativeRecordingConfiguration(value: CameraRecordingConfi
       width < 16 || width > 1920 || height < 16 || height > 1080 || width % 2 || height % 2 ||
       ![15, 24, 30].includes(fps) || ![0, 1, 2].includes(profile) || !levelBounds ||
       macroblocks > levelBounds[0] || macroblocks * fps > levelBounds[1] ||
-      fragment < 1000 || fragment > 4000 || video.parameters.iFrameInterval < 250 || video.parameters.iFrameInterval > 4000 ||
-      video.parameters.bitRate < 16 || video.parameters.bitRate > 16000 ||
+      fragment < 1000 || fragment > 4000 || video.parameters.iFrameInterval < 1000 || video.parameters.iFrameInterval > 4000 ||
+      video.parameters.bitRate < 16 || video.parameters.bitRate > 8000 ||
       !Array.isArray(copy.eventTriggerTypes) || !copy.eventTriggerTypes.includes(1)) {
     throw new Error('Unsupported native recording configuration');
   }
@@ -112,7 +112,7 @@ function uint(data: Buffer, box: Box, offset: number): number {
 }
 function payloadFlags(data: Buffer, box: Box): number { return uint(data, box, 0) & 0xffffff; }
 
-/** Validate the generated file rather than treating FFmpeg exit status as media validity. */
+/** Validate the generated file independently of successful codec completion. */
 function parsePrepared(data: Buffer, selected: CameraRecordingConfiguration, audioActive: boolean): {
   initialization: Buffer; fragments: NativeRecordingFragment[]; durationMs: number;
 } {
@@ -192,33 +192,16 @@ function parsePrepared(data: Buffer, selected: CameraRecordingConfiguration, aud
   return { initialization: data.subarray(0, moov.end), fragments, durationMs: fragments.at(-1)!.startMs + fragments.at(-1)!.durationMs };
 }
 
-function ffmpegArguments(configuration: CameraRecordingConfiguration, audioActive: boolean): string[] {
-  const [width, height, fps] = configuration.videoCodec.resolution;
-  const video = configuration.videoCodec.parameters;
-  const audio = configuration.audioCodec;
-  const rate = [8000, 16000, 24000, 32000, 44100, 48000][audio.samplerate];
-  if (audioActive && (audio.type !== 0 || !rate || ![1, 2].includes(audio.audioChannels ?? 1) ||
-      !Number.isInteger(audio.bitrate) || audio.bitrate < 8 || audio.bitrate > 320)) throw new Error('Unsupported recording audio');
-  const gop = Math.max(1, Math.floor(fps * Math.min(video.iFrameInterval, configuration.mediaContainerConfiguration.fragmentLength) / 1000));
-  const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-max_alloc', '67108864', '-protocol_whitelist', 'file,pipe',
-    '-max_pixels', '8388608', '-f', 'mov', '-enable_drefs', '0', '-use_absolute_path', '0', '-i', '/dev/fd/3', '-map', '0:v:0', '-map_metadata', '-1', '-map_chapters', '-1',
-    '-filter_threads', '1', '-threads', '1', '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`,
-    '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-profile:v', ['baseline', 'main', 'high'][video.profile],
-    '-level:v', ['3.1', '3.2', '4.0'][video.level], '-b:v', `${video.bitRate}k`, '-maxrate', `${video.bitRate}k`, '-bufsize', `${video.bitRate * 2}k`,
-    '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0', '-bf', '0'];
-  if (audioActive) {
-    args.push('-map', '0:a:0', '-c:a', 'aac', '-profile:a', 'aac_low', '-ar', String(rate), '-ac', String(audio.audioChannels ?? 1), '-b:a', `${audio.bitrate}k`);
-  } else args.push('-an');
-  args.push('-t', '91', '-video_track_timescale', '90000', '-movflags', '+frag_keyframe+empty_moov+delay_moov+default_base_moof+omit_tfhd_offset+skip_trailer', '-f', 'mp4', 'pipe:1');
-  return args;
-}
-
 export async function prepareNativeRecording(source: NativeRecordingSource, configuration: CameraRecordingConfiguration,
   audioActive: boolean, signal: globalThis.AbortSignal, options: NativeRecordingPreparationOptions): Promise<PreparedNativeRecording> {
   signal.throwIfAborted();
   const selected = snapshotNativeRecordingConfiguration(configuration);
-  const args = ffmpegArguments(selected, audioActive);
-  if (!options.ffmpegPath || typeof options.admit !== 'function') throw new Error('Recording preparation admission unavailable');
+  const audio = selected.audioCodec;
+  if (audioActive && (audio.type !== 0 || ![1, 2].includes(audio.samplerate) ||
+      (audio.audioChannels ?? 1) !== 1 || !Number.isInteger(audio.bitrate) || audio.bitrate < 8 || audio.bitrate > 128)) {
+    throw new Error('Unsupported recording audio');
+  }
+  if (typeof options.admit !== 'function') throw new Error('Recording preparation admission unavailable');
   const timeout = options.timeoutMs ?? NATIVE_RECORDING_MEDIA_LIMITS.preparationMs;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 300000) throw new Error('Invalid recording preparation deadline');
   const controller = new globalThis.AbortController();
@@ -237,16 +220,18 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
     if (!source || !path.isAbsolute(source.filePath) || !Number.isSafeInteger(source.expectedBytes) || source.expectedBytes < 1 ||
         source.expectedBytes > NATIVE_RECORDING_MEDIA_LIMITS.sourceBytes || !/^[a-f0-9]{64}$/.test(source.expectedSha256)) throw new Error('Invalid local recording source');
     const parent = await fs.lstat(path.dirname(source.filePath));
-    if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 0o777) !== 0o700 ||
-        (typeof process.getuid === 'function' && parent.uid !== process.getuid())) throw new Error('Recording source directory is not private');
+    if (!parent.isDirectory() || parent.isSymbolicLink() ||
+        (typeof process.getuid === 'function' && ((parent.mode & 0o777) !== 0o700 || parent.uid !== process.getuid()))) throw new Error('Recording source directory is not private');
+    const reference = await fs.lstat(source.filePath);
+    if (!reference.isFile() || reference.isSymbolicLink()) throw new Error('Recording source is not a private regular file');
     const file = await fs.open(source.filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     let output: Buffer | undefined, retained = false;
     const chunks: Buffer[] = [];
     let collected = 0;
     try {
       const before = await file.stat();
-      if (!before.isFile() || before.size !== source.expectedBytes || (before.mode & 0o777) !== 0o600 ||
-          (typeof process.getuid === 'function' && before.uid !== process.getuid())) throw new Error('Recording source is not a private regular file');
+      if (!before.isFile() || before.size !== source.expectedBytes || before.dev !== reference.dev || before.ino !== reference.ino ||
+          (typeof process.getuid === 'function' && ((before.mode & 0o777) !== 0o600 || before.uid !== process.getuid()))) throw new Error('Recording source is not a private regular file');
       const hash = createHash('sha256'), block = Buffer.allocUnsafe(65536);
       try {
         for (let position = 0; position < before.size;) {
@@ -259,40 +244,67 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       const after = await file.stat();
       if (hash.digest('hex') !== source.expectedSha256 || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error('Recording source integrity mismatch');
       owner.throwIfAborted();
-      await new Promise<void>((resolve, reject) => {
-        const process = spawn(options.ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe', file.fd] });
-        let failure: Error | undefined;
-        let killTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-        let stderrBytes = 0;
-        const fail = (error: Error) => {
-          failure ??= error;
-          process.kill('SIGTERM');
-          killTimer ??= globalThis.setTimeout(() => { if (process.exitCode === null) process.kill('SIGKILL'); }, 500);
-        };
-        const abort = () => fail(new Error('Recording conversion cancelled'));
-        owner.addEventListener('abort', abort, { once: true });
-        if (owner.aborted) abort();
-        process.once('error', () => fail(new Error('Recording converter unavailable')));
-        process.stdout!.on('data', (value: Buffer) => {
-          if (failure) return;
-          try {
-            if (collected + value.length > NATIVE_RECORDING_MEDIA_LIMITS.outputBytes) throw new Error('Recording output exhausted');
-            memory.reserve(value.length);
-            let copy: Buffer;
-            try { copy = Buffer.from(value); } catch (error) { memory.release(value.length); throw error; }
-            chunks.push(copy); collected += copy.length;
-          } catch { fail(new Error('Recording output exhausted')); }
-        });
-        process.stderr!.on('data', (value: Buffer) => { stderrBytes += value.length; if (stderrBytes > 65536) fail(new Error('Recording converter diagnostic bound exceeded')); });
-        process.once('close', code => {
-          owner.removeEventListener('abort', abort);
-          if (killTimer) globalThis.clearTimeout(killTimer);
-          if (failure || code !== 0) reject(failure ?? new Error('Recording conversion failed'));
-          else resolve();
-        });
+      // Only the content-verified shipped worker can decode these bytes. It gets
+      // no file paths, provider capabilities, URLs or inherited environment.
+      // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
+      const workerPath = loadPackagedMediaWorker(path.resolve(__dirname, '../..'));
+      let outputFailure: Error | undefined;
+      const collect = async (value: Buffer): Promise<void> => {
+        owner.throwIfAborted();
+        try {
+          if (collected + value.length > NATIVE_RECORDING_MEDIA_LIMITS.outputBytes) throw new Error();
+          memory.reserve(value.length);
+        } catch { outputFailure = new Error('Recording output exhausted'); throw outputFailure; }
+        let copy: Buffer;
+        try { copy = Buffer.from(value); } catch (error) { memory.release(value.length); throw error; }
+        chunks.push(copy); collected += copy.length;
+      };
+      const worker = new PrivateMediaWorker(workerPath, {
+        recordingInit: collect,
+        recordingFragment: fragment => collect(fragment.data),
       });
+      const abort = () => { void worker.stop(); };
+      owner.addEventListener('abort', abort, { once: true });
+      let phase: 'configuration' | 'input' | 'output' | 'closure' = 'configuration';
+      try {
+        owner.throwIfAborted();
+        const video = selected.videoCodec, [width, height, fps] = video.resolution;
+        await worker.configureRecording({ width, height, fps, bitrate: video.parameters.bitRate * 1000,
+          // This is a decoded-source budget, independent of HomeKit output fps.
+          maxFrames: 9000, preset: 0,
+          profile: video.parameters.profile, level: video.parameters.level, inputFormat: 'mp4',
+          audioCodec: audioActive ? 4 : 0, audioRate: audioActive ? audio.samplerate === 1 ? 16000 : 24000 : 0,
+          audioBitrate: audioActive ? audio.bitrate * 1000 : 0,
+          fragmentMs: selected.mediaContainerConfiguration.fragmentLength,
+          iFrameIntervalMs: Math.min(video.parameters.iFrameInterval, selected.mediaContainerConfiguration.fragmentLength) });
+        await worker.whenReady;
+        phase = 'input';
+        const actual = createHash('sha256'), block = Buffer.allocUnsafe(MEDIA_WORKER_LIMITS.inputBytes);
+        try {
+          for (let position = 0; position < before.size;) {
+            owner.throwIfAborted();
+            const { bytesRead } = await file.read(block, 0, Math.min(block.length, before.size - position), position);
+            if (!bytesRead) throw new Error('Recording source changed');
+            const bytes = block.subarray(0, bytesRead); actual.update(bytes);
+            await worker.media(bytes); position += bytesRead;
+          }
+        } finally { block.fill(0); }
+        const consumed = await file.stat();
+        if (actual.digest('hex') !== source.expectedSha256 || before.size !== consumed.size ||
+            before.mtimeMs !== consumed.mtimeMs || before.ctimeMs !== consumed.ctimeMs) throw new Error('Recording source integrity mismatch');
+        owner.throwIfAborted(); phase = 'output'; await worker.endMedia(); await worker.whenMediaDrained;
+        phase = 'closure'; await worker.finishInput();
+        if (worker.failed) throw new Error('Recording conversion failed');
+      } catch (error) {
+        if (owner.aborted) throw new Error('Recording conversion cancelled');
+        if (outputFailure) throw outputFailure;
+        if (error instanceof Error && /Recording (?:output exhausted|source)/.test(error.message)) throw error;
+        throw new Error(`Recording conversion failed during ${phase}`);
+      } finally {
+        owner.removeEventListener('abort', abort); await worker.stop();
+      }
       owner.throwIfAborted();
-      if (!collected) throw new Error('Recording converter produced no media');
+      if (!collected) throw new Error('Recording worker produced no media');
       memory.reserve(collected);
       try { output = Buffer.concat(chunks, collected); } catch (error) { memory.release(collected); throw error; }
       for (const chunk of chunks) chunk.fill(0);

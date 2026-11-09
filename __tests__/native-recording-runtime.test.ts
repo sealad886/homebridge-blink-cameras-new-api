@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import process from 'node:process';
 import { setImmediate as realImmediate } from 'node:timers/promises';
 import type { CameraRecordingConfiguration } from 'homebridge';
 import type { BlinkApi, BlinkRemoteOperationOwnership } from '../src/blink-api/client';
@@ -42,6 +43,7 @@ function prepared(selected: CameraRecordingConfiguration, audioActive: boolean):
 }
 
 describe('native recording runtime composition', () => {
+  const itIfPosix = process.platform === 'win32' || typeof process.getuid !== 'function' ? it.skip : it;
   let root: string;
   let runtimes: NativeRecordingRuntime[];
   beforeEach(async () => {
@@ -66,14 +68,14 @@ describe('native recording runtime composition', () => {
       expect((await fs.readFile(input.filePath)).length).toBe(input.expectedBytes);
       return prepared(selected, audioActive);
     });
-    const delegate = new NativeRecordingDelegate({ preparation: { ffmpegPath: 'never-launch', admit: work => work() },
+    const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() },
       prepare: overrides.prepare ?? prepare, readyMotion,
       policyChanged: policy => runtime?.policyChanged('camera:40', policy),
       deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome) });
     delegate.updateRecordingConfiguration(configuration()); delegate.updateRecordingActive(true);
     const cornerReady = jest.fn();
     const cornerDelegate = overrides.secondCamera ? new NativeRecordingDelegate({
-      preparation: { ffmpegPath: 'never-launch', admit: work => work() }, prepare, readyMotion: cornerReady,
+      preparation: { admit: work => work() }, prepare, readyMotion: cornerReady,
       policyChanged: policy => runtime?.policyChanged('camera:41', policy), deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome),
     }) : undefined;
     cornerDelegate?.updateRecordingConfiguration(configuration()); cornerDelegate?.updateRecordingActive(true);
@@ -361,4 +363,58 @@ describe('native recording runtime composition', () => {
     expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.delegate.policy.allowed).toBe(false);
     expect(f.readyMotion).not.toHaveBeenCalledWith(true);
   });
+
+  it('bootstraps and reloads Windows-shaped modes without POSIX identity or provider requests', async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const uidDescriptor = Object.getOwnPropertyDescriptor(process, 'getuid');
+    const realLstat = fs.lstat.bind(fs), realOpen = fs.open.bind(fs);
+    const windowsMode = <T extends { mode: number; isDirectory(): boolean }>(stat: T): T => {
+      stat.mode = (stat.mode & ~0o777) | (stat.isDirectory() ? 0o777 : 0o666);
+      return stat;
+    };
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+    Object.defineProperty(process, 'getuid', { configurable: true, writable: true, value: undefined });
+    jest.spyOn(fs, 'lstat').mockImplementation(async location => windowsMode(await realLstat(location)));
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args), realStat = handle.stat.bind(handle);
+      jest.spyOn(handle, 'stat').mockImplementation(async () => windowsMode(await realStat()));
+      return handle;
+    });
+    try {
+      const first = await setup({ hsv: false });
+      await first.source.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['owned-checkpoint'] });
+      await first.runtime.stop();
+      const reloaded = await setup({ hsv: false });
+      expect((await reloaded.state()).push?.persistentIds).toEqual(['owned-checkpoint']);
+      expect(reloaded.setDemand).toHaveBeenCalledWith({ motionAccessory: true, hsv: false });
+      for (const value of [first, reloaded]) {
+        expect(value.transport.postEmpty).not.toHaveBeenCalled();
+        expect(value.transport.getJson).not.toHaveBeenCalled();
+        expect(value.transport.downloadMedia).not.toHaveBeenCalled();
+        expect(value.client.registerMotionNotificationKey).not.toHaveBeenCalled();
+      }
+      await reloaded.runtime.stop();
+    } finally {
+      jest.restoreAllMocks();
+      Object.defineProperty(process, 'platform', platformDescriptor);
+      if (uidDescriptor) Object.defineProperty(process, 'getuid', uidDescriptor);
+      else Reflect.deleteProperty(process, 'getuid');
+    }
+  });
+
+  itIfPosix('still refuses non-private native directories on POSIX hosts', async () => {
+    const directory = path.join(root, '.blink-native-recording');
+    await fs.mkdir(directory, { mode: 0o700 });
+    await fs.chmod(directory, 0o755);
+    await expect(setup({ hsv: false })).rejects.toThrow('Native recording directory must be private');
+  });
+
+  itIfPosix('still refuses non-private saved runtime state on POSIX hosts', async () => {
+    const first = await setup({ hsv: false });
+    await first.source.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: [] });
+    await first.runtime.stop();
+    await fs.chmod(path.join(first.runtime.directory, 'state.json'), 0o644);
+    await expect(setup({ hsv: false })).rejects.toThrow('Unsafe native recording state');
+  });
+
 });

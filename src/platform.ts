@@ -33,12 +33,15 @@ import { AuthStateChangedError } from './blink-api/auth-storage';
 import { BlinkRestVerificationRequiredError } from './blink-api/client';
 import {
   BlinkHomescreen,
+  BlinkCameraKind,
 } from './types';
+import { cameraKey, matchesDeviceIdentifier as matchesIdentifier, projectSettingsInventory,
+  validateModuleFeedLimits, type ModuleFeedLimit } from './settings-inventory';
+import { CameraFeedAdmission, type FeedLease } from './accessories/feed-admission';
 import { NetworkAccessory, CameraAccessory, DoorbellAccessory, OwlAccessory } from './accessories';
-import { BlinkCameraStreamingConfig, resolveStreamingConfig, VideoEncoderPreference } from './accessories/camera-source';
+import { AudioCodecPreference, BlinkCameraStreamingConfig, resolveStreamingConfig } from './accessories/camera-source';
 import { OutputQualityProfile } from './accessories/stream-quality';
 import { BlinkInputQuality } from './types';
-import { probeAacEldEncoder, probeRtpSsrcMode, probeVideoEncoder } from './accessories/encoder-probe';
 import { setHapServiceName, toHapName } from './hap-name';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { withResponseBudget } from './operation-budget';
@@ -49,6 +52,7 @@ import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeR
 import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
 import type { NativeRecordingPolicy } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
+import { HomeKitAudit } from './homekit-audit';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -73,6 +77,7 @@ interface DeviceNameOverride {
 
 interface DeviceSettingOverride {
   deviceIdentifier: string;
+  exposeTemperature?: boolean;
   inputQuality?: BlinkInputQuality;
   motionTimeout?: number;
   exposeMotionDetected?: boolean;
@@ -80,6 +85,7 @@ interface DeviceSettingOverride {
 }
 
 interface BlinkPlatformConfig extends PlatformConfig {
+  exposeTemperature?: boolean;
   username?: string;
   password?: string;
   deviceId?: string;
@@ -95,6 +101,7 @@ interface BlinkPlatformConfig extends PlatformConfig {
   motionTimeout?: number;
   nativeRecording?: NativeRecordingConfigInput;
   exposeMotionDetected?: boolean;
+  syncModuleFeedLimits?: ModuleFeedLimit[];
   excludeDevices?: string[];
   excludedNetworks?: string[];
   /** @deprecated Use deviceNameOverrides instead */
@@ -104,19 +111,14 @@ interface BlinkPlatformConfig extends PlatformConfig {
   deviceNameOverrides?: DeviceNameOverride[];
   deviceSettingOverrides?: DeviceSettingOverride[];
   enableStreaming?: boolean;
-  ffmpegPath?: string;
-  ffmpegDebug?: boolean;
-  rtspTransport?: 'tcp' | 'udp';
+  mediaDebug?: boolean;
   maxStreams?: number;
   enableAudio?: boolean;
-  twoWayAudio?: boolean;
-  audioCodec?: 'opus' | 'aac-eld' | 'pcma' | 'pcmu';
+  audioCodec?: AudioCodecPreference;
   audioBitrate?: number;
   videoBitrate?: number;
   outputQuality?: OutputQualityProfile;
-  videoEncoder?: VideoEncoderPreference;
   softwareEncodingPreset?: 'veryfast' | 'ultrafast';
-  verifyImmisTls?: boolean;
   debugAuth?: boolean;
   authLocked?: boolean;
   debugStreamPath?: string;
@@ -130,6 +132,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
   public readonly apiClient: BlinkApi;
   public readonly streamingConfig: BlinkCameraStreamingConfig;
+  private readonly feedAdmission = new CameraFeedAdmission();
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly pollInterval: number;
@@ -153,6 +156,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private lastSuccessfulPoll: number | null = null;
   private outageConfirmedAt: number | null = null;
   private readonly reportedNameAdjustments = new Set<string>();
+  private readonly homeKitAudit: HomeKitAudit;
 
   // Maps for quick accessory lookup by device ID
   private networkAccessories = new Map<number, NetworkAccessory>();
@@ -167,6 +171,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
+    this.homeKitAudit = new HomeKitAudit(this.log);
 
     // Validate configuration
     this.validateConfig();
@@ -180,31 +185,22 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     this.streamingConfig = resolveStreamingConfig({
       enabled: this.config.enableStreaming ?? true,
-      ffmpegPath: this.config.ffmpegPath,
-      ffmpegDebug: this.config.ffmpegDebug,
-      rtspTransport: this.config.rtspTransport,
+      mediaDebug: this.config.mediaDebug,
       maxStreams: this.config.maxStreams,
       debugStreamPath: this.config.debugStreamPath,
-      verifyImmisTls: this.config.verifyImmisTls,
       snapshotCacheTTL: this.config.snapshotCacheTTL,
       persistSnapshotCache: this.config.persistSnapshotCache,
       audio: {
         enabled: this.config.enableAudio,
-        twoWay: this.config.twoWayAudio,
         codec: this.config.audioCodec,
         bitrate: this.config.audioBitrate,
       },
       video: {
         maxBitrate: this.config.videoBitrate,
         outputQuality: this.config.outputQuality,
-        encoder: this.config.videoEncoder,
         softwarePreset: this.config.softwareEncodingPreset,
       },
     });
-
-    if (this.config.twoWayAudio) {
-      this.log.warn('Two-way talk UI is disabled until uplink framing is verified; ignoring twoWayAudio setting.');
-    }
 
     if (this.streamingConfig.persistSnapshotCache) {
       this.log.info(
@@ -255,17 +251,50 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         this.pollTimer = null;
       }
       void this.nativeRuntime?.stop().catch(() => this.log.error('Native recording shutdown could not complete.'));
+      void this.shutdownMotionHandlers([
+        ...this.cameraAccessories.values(),
+        ...this.doorbellAccessories.values(),
+        ...this.owlAccessories.values(),
+      ]);
+      this.homeKitAudit.dispose();
     });
   }
 
   private validateConfig(): void {
     resolveNativeRecordingConfig(this.config.nativeRecording);
-    nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { id: -1 }, this.config.exposeMotionDetected);
+    validateModuleFeedLimits(this.config.syncModuleFeedLimits);
+    const nativeRetired = ['enableMotionPolling', 'hksvCameras', 'hksvSource', 'syncModuleRecording'];
+    if (nativeRetired.some(key => Object.hasOwn(this.config, key))) {
+      throw new Error('Retired motion/recording settings require scripts/migrate-native-recording-config.cjs: preview the explicit config path, then apply with --apply');
+    }
+    const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
+    if (retired.some(key => Object.hasOwn(this.config, key))) {
+      throw new Error('Retired streaming settings require the explicit scripts/migrate-secure-media-config.cjs migration');
+    }
+    for (const key of ['mediaDebug', 'enableAudio', 'enableStreaming', 'persistSnapshotCache']) {
+      if (this.config[key] !== undefined && typeof this.config[key] !== 'boolean') throw new Error('Invalid streaming boolean setting');
+    }
+    if (this.config.softwareEncodingPreset !== undefined && !['ultrafast', 'veryfast'].includes(this.config.softwareEncodingPreset)) {
+      throw new Error('Invalid software encoding preset');
+    }
+    if (this.config.exposeTemperature !== undefined && typeof this.config.exposeTemperature !== 'boolean') {
+      throw new Error('Invalid temperature setting');
+    }
+    if (this.config.deviceSettingOverrides !== undefined && !Array.isArray(this.config.deviceSettingOverrides)) {
+      throw new Error('Invalid per-camera settings list');
+    }
     for (const override of this.config.deviceSettingOverrides ?? []) {
+      if (!override || typeof override.deviceIdentifier !== 'string' || !override.deviceIdentifier.trim()) {
+        throw new Error('Invalid per-camera deviceIdentifier: choose a camera or remove the empty entry');
+      }
+      if (override.exposeTemperature !== undefined && typeof override.exposeTemperature !== 'boolean') {
+        throw new Error('Invalid per-camera temperature setting');
+      }
       if (override.inputQuality !== undefined && !['auto', 'saver', 'standard', 'best'].includes(override.inputQuality)) {
         throw new Error('Invalid per-camera input quality');
       }
     }
+    nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { id: -1 }, this.config.exposeMotionDetected);
     const hasUsername = Boolean(this.config.username?.trim());
     const hasPassword = Boolean(this.config.password?.trim());
 
@@ -304,21 +333,37 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return path.join(storagePath, 'blink-auth', 'auth-state.json');
   }
 
-  private isDeviceExcluded(device: { id: number; name: string; serial?: string }): boolean {
+  private isDeviceExcluded(device: { id: number; name: string; serial?: string }, kind?: BlinkCameraKind): boolean {
     const excludeList = this.config.excludeDevices ?? [];
-    const excluded = excludeList.some(
-      (entry) =>
-        entry === device.name ||
-        entry === `${device.id}` ||
-        (device.serial && entry === device.serial),
-    );
+    const excluded = excludeList.some(entry => this.matchesDeviceIdentifier(device, entry, kind));
     if (excluded) {
       this.log.info(`Excluding device: ${device.name} (matched exclusion list)`);
     }
     return excluded;
   }
 
-  private getDeviceDisplayName(device: { id: number; name: string; serial?: string }): string {
+  private matchesDeviceIdentifier(device: { id: number; name?: string; serial?: string }, identifier: string, kind?: BlinkCameraKind): boolean {
+    return matchesIdentifier(device, identifier, kind);
+  }
+
+  public acquireCameraFeed(kind: BlinkCameraKind, id: number): FeedLease { return this.feedAdmission.acquire(cameraKey(kind, id)); }
+
+  public isNetworkArmed(networkId: number): boolean { return this.networkAccessories.get(networkId)?.isArmed() ?? false; }
+
+  public updateMotionAvailability(): void {
+    for (const handler of [...this.cameraAccessories.values(), ...this.owlAccessories.values(), ...this.doorbellAccessories.values()]) {
+      handler.updateAvailability();
+    }
+  }
+
+  private async shutdownMotionHandlers(handlers: Iterable<{ shutdown(): Promise<void> }>): Promise<void> {
+    await Promise.all(Array.from(handlers, async handler => {
+      try { await handler.shutdown(); }
+      catch { this.log.error('Failed to stop camera media during shutdown'); }
+    }));
+  }
+
+  private getDeviceDisplayName(device: { id: number; name: string; serial?: string }, kind?: BlinkCameraKind): string {
     // New array-based overrides (preferred)
     const overrides = this.config.deviceNameOverrides;
     if (overrides && Array.isArray(overrides)) {
@@ -327,9 +372,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           continue;
         }
         if (
-          override.deviceIdentifier === device.name ||
-          override.deviceIdentifier === `${device.id}` ||
-          (device.serial && override.deviceIdentifier === device.serial)
+          this.matchesDeviceIdentifier(device, override.deviceIdentifier, kind)
         ) {
           return override.customName;
         }
@@ -347,15 +390,20 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return device.name;
   }
 
-  public getDeviceInputQuality(device: { id: number; name?: string; serial?: string }): BlinkInputQuality {
-    const override = this.config.deviceSettingOverrides?.find(entry =>
-      entry.deviceIdentifier === `${device.id}` ||
-      (device.serial !== undefined && entry.deviceIdentifier === device.serial) ||
-      (device.name !== undefined && entry.deviceIdentifier === device.name));
-    return override?.inputQuality ?? 'auto';
+  private getDeviceSettingOverride(device: { id: number; name?: string; serial?: string }, kind?: BlinkCameraKind): DeviceSettingOverride | undefined {
+    return this.config.deviceSettingOverrides?.find(entry =>
+      this.matchesDeviceIdentifier(device, entry.deviceIdentifier, kind));
   }
 
-  public getDeviceMotionTimeout(device: { id: number; name?: string; serial?: string }): number {
+  public getDeviceInputQuality(device: { id: number; name?: string; serial?: string }, kind?: BlinkCameraKind): BlinkInputQuality {
+    return this.getDeviceSettingOverride(device, kind)?.inputQuality ?? 'auto';
+  }
+
+  public isTemperatureEnabled(device: { id: number; name?: string; serial?: string }, kind?: BlinkCameraKind): boolean {
+    return this.getDeviceSettingOverride(device, kind)?.exposeTemperature ?? this.config.exposeTemperature ?? false;
+  }
+
+  public getDeviceMotionTimeout(device: { id: number; name?: string; serial?: string }, kind?: BlinkCameraKind): number {
     // New array-based overrides (preferred)
     const overrides = this.config.deviceSettingOverrides;
     if (overrides && Array.isArray(overrides)) {
@@ -364,9 +412,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           continue;
         }
         if (
-          (device.name && override.deviceIdentifier === device.name) ||
-          override.deviceIdentifier === `${device.id}` ||
-          (device.serial && override.deviceIdentifier === device.serial)
+          this.matchesDeviceIdentifier(device, override.deviceIdentifier, kind)
         ) {
           if (override.motionTimeout !== undefined) {
             return override.motionTimeout * 1000;
@@ -387,7 +433,13 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return this.motionTimeout;
   }
 
+  private cameraKindForAccessory(accessory: PlatformAccessory): BlinkCameraKind | undefined {
+    const id = accessory.context.device?.id;
+    return (['camera', 'owl', 'doorbell'] as const).find(kind => accessory.UUID === this.api.hap.uuid.generate(`blink-${kind}-${id}`));
+  }
+
   configureAccessory(accessory: PlatformAccessory): void {
+    this.homeKitAudit.observe(accessory);
     const cachedDevice = accessory.context.device;
     if (
       cachedDevice &&
@@ -396,13 +448,22 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       typeof cachedDevice.name === 'string'
     ) {
       const displayName = this.hapName(
-        this.getDeviceDisplayName(cachedDevice as { id: number; name: string; serial?: string }),
+        this.getDeviceDisplayName(cachedDevice as { id: number; name: string; serial?: string }, this.cameraKindForAccessory(accessory)),
         'Blink Device',
       );
       accessory.displayName = displayName;
       for (const service of accessory.services) {
         setHapServiceName(service, this.Characteristic.Name, service.displayName, displayName);
       }
+    }
+    // Restored samples are not fresh metadata, including before failed discovery.
+    const temperature = accessory.getServiceById(this.Service.TemperatureSensor, 'temperature');
+    if (temperature) {
+      temperature.getCharacteristic(this.Characteristic.StatusFault).updateValue(1);
+      temperature.getCharacteristic(this.Characteristic.StatusActive).updateValue(false);
+      temperature.getCharacteristic(this.Characteristic.CurrentTemperature).onGet(() => {
+        throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+      });
     }
     this.accessories.push(accessory);
   }
@@ -412,7 +473,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   getNativeRecordingPreparation(): NativeRecordingPreparationOptions {
-    return { ffmpegPath: this.streamingConfig.ffmpegPath, memory: this.recordingMemory,
+    return { memory: this.recordingMemory,
       admit: <T>(work: () => Promise<T>, signal: globalThis.AbortSignal) => this.admitRecordingConversion(work, signal) };
   }
 
@@ -453,7 +514,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const networks = new Set(homescreen.networks.filter(network => !this.isNetworkExcluded(network) && !this.isDeviceExcluded(network)).map(network => network.id));
     const devices: NativeRuntimeDevice[] = [];
     for (const { device, kind, map } of candidates) {
-      if (!networks.has(device.network_id) || this.isDeviceExcluded(device)) continue;
+      if (!networks.has(device.network_id) || this.isDeviceExcluded(device, kind)) continue;
       const modules = (homescreen.sync_modules ?? []).filter(module => module.network_id === device.network_id);
       const settings = nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { ...device, kind }, this.config.exposeMotionDetected);
       devices.push({ binding: { accountId: scope.accountId, networkId: device.network_id, providerId: device.id,
@@ -500,47 +561,21 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
   private async performDiscovery(): Promise<boolean> {
     try {
-      if (this.streamingConfig.enabled) {
-        const mode = await probeRtpSsrcMode(this.streamingConfig.ffmpegPath);
-        if (mode) {
-          this.streamingConfig.rtpSsrcMode = mode;
-          this.log.info(`RTP SSRC option resolved to: ${mode}`);
-        } else {
-          this.streamingConfig.enabled = false;
-          this.log.warn('RTP SSRC capability could not be verified; live streaming disabled for this runtime.');
-        }
-      }
-
-      if (this.streamingConfig.video.encoder === 'auto') {
-        const probe = await probeVideoEncoder(
-          this.streamingConfig.ffmpegPath,
-          (msg) => this.log.info(`[EncoderProbe] ${msg}`),
-        );
-        (this.streamingConfig.video as { encoder: VideoEncoderPreference }).encoder = probe.selected;
-        this.log.info(`Video encoder resolved to: ${probe.selected}`);
-      }
-
-      if (this.streamingConfig.enabled && this.streamingConfig.audio.enabled) {
-        if (await probeAacEldEncoder(this.streamingConfig.ffmpegPath)) {
-          this.streamingConfig.audio.aacEldEncoder = 'libfdk_aac';
-        } else {
-          if (this.streamingConfig.audio.codec === 'aac-eld') {
-            this.streamingConfig.audio.codec = 'opus';
-            this.log.warn('AAC-ELD encoding is unavailable; advertising Opus audio instead.');
-          }
-        }
-      }
-
       await this.apiClient.login(this.config.twoFactorCode);
       const homescreen = await this.apiClient.getHomescreen();
+      if (!this.monitorActive) return false;
       await this.prepareNativeRuntime(homescreen);
-      this.registerDevices(homescreen);
-      await this.nativeRuntime?.start();
+      if (!this.monitorActive) return false;
+      const registration = this.registerDevices(homescreen);
+      if (registration) await registration;
+      if (!this.monitorActive) return false;
       this.inventoryInitialized = true;
       this.startPolling();
       this.setConnectionHealthy();
-      return true;
+      if (this.nativeRuntime) await this.nativeRuntime.start();
+      return this.monitorActive;
     } catch (error) {
+      if (!this.monitorActive) return false;
       this.log.error(
         `Device discovery failed (${this.describeConnectionFailure(error)}). ` +
         'Check the preceding bounded authentication/API diagnostics.',
@@ -635,12 +670,14 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const hapDisplayName = this.hapName(displayName, 'Blink Connection');
     if (!accessory) {
       accessory = new this.api.platformAccessory(hapDisplayName, uuid);
+      this.homeKitAudit.observe(accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
     } else {
       accessory.displayName = hapDisplayName;
     }
     accessory.context[contextKey] = true;
+    this.homeKitAudit.observe(accessory);
     accessory.getService(this.Service.AccessoryInformation)
       ?.setCharacteristic(this.Characteristic.Name, hapDisplayName);
     return accessory;
@@ -809,19 +846,23 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         await this.apiClient.login(this.config.twoFactorCode);
       }
       const homescreen = await this.apiClient.getHomescreen({ deadline: Date.now() + 25000, retryTransient: true });
+      if (!this.monitorActive) return false;
       await this.prepareNativeRuntime(homescreen);
       if (this.inventoryInitialized) {
         this.updateDeviceStates(homescreen);
       } else {
         // A startup failure occurs before handlers exist. Complete initial
         // discovery exactly once; ordinary runtime recovery remains state-only.
-        this.registerDevices(homescreen);
+        const registration = this.registerDevices(homescreen);
+        if (registration) await registration;
+        if (!this.monitorActive) return false;
         this.inventoryInitialized = true;
       }
-      await this.nativeRuntime?.start();
       this.setConnectionHealthy();
-      return true;
+      if (this.nativeRuntime) await this.nativeRuntime.start();
+      return this.monitorActive;
     } catch (error) {
+      if (!this.monitorActive) return false;
       if (startedFaulted || authenticate) {
         this.log.error(`Blink connection recovery failed (${this.describeConnectionFailure(error)}).`);
         this.setConnectionFailure(error);
@@ -838,6 +879,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       this.Service.SecuritySystem,
       this.Service.MotionSensor,
       this.Service.Doorbell,
+      this.Service.TemperatureSensor,
     ];
 
     for (const accessory of this.accessories) {
@@ -865,39 +907,103 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return (this.config.excludedNetworks ?? []).some(entry => entry === String(network.id) || entry === network.name);
   }
 
-  private registerDevices(homescreen: BlinkHomescreen): void {
+  // Normal construction stays synchronous so deferred accessory reads run after
+  // connection health is published. Only retiring excluded media needs a wait.
+  private registerDevices(homescreen: BlinkHomescreen): void | Promise<void> {
     validateHomescreen(homescreen);
     let excludedCount = 0;
-    const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number }>([
+    this.feedAdmission.configure(projectSettingsInventory(homescreen, this.config), this.config);
+    const currentDevices = new Map<string, { id: number; name: string; serial?: string; network_id?: number; kind?: BlinkCameraKind }>([
       ...homescreen.networks.map(device => [this.api.hap.uuid.generate(`blink-network-${device.id}`), device] as const),
-      ...homescreen.cameras.map(device => [this.api.hap.uuid.generate(`blink-camera-${device.id}`), device] as const),
-      ...homescreen.doorbells.map(device => [this.api.hap.uuid.generate(`blink-doorbell-${device.id}`), device] as const),
-      ...homescreen.owls.map(device => [this.api.hap.uuid.generate(`blink-owl-${device.id}`), device] as const),
+      ...homescreen.cameras.map(device => [this.api.hap.uuid.generate(`blink-camera-${device.id}`), { ...device, kind: 'camera' as const }] as const),
+      ...homescreen.doorbells.map(device => [this.api.hap.uuid.generate(`blink-doorbell-${device.id}`), { ...device, kind: 'doorbell' as const }] as const),
+      ...homescreen.owls.map(device => [this.api.hap.uuid.generate(`blink-owl-${device.id}`), { ...device, kind: 'owl' as const }] as const),
     ]);
     const excludedNetworkIds = new Set(homescreen.networks
       .filter(network => this.isNetworkExcluded(network))
       .map(network => network.id));
+    const deviceForAccessory = (accessory: PlatformAccessory) => currentDevices.get(accessory.UUID)
+      ?? (accessory.context.device ? { ...accessory.context.device, kind: this.cameraKindForAccessory(accessory) } : undefined);
     for (const accessory of this.accessories) {
-      const device = currentDevices.get(accessory.UUID) ?? accessory.context.device;
+      const device = deviceForAccessory(accessory);
       if (device && accessory.UUID === this.api.hap.uuid.generate(`blink-network-${device.id}`)
         && this.isNetworkExcluded(device)) excludedNetworkIds.add(device.id);
     }
-    const excluded = (device: { id: number; name: string; serial?: string; network_id?: number }) =>
-      this.isDeviceExcluded(device) || (device.network_id !== undefined && (
+    const excluded = (device: { id: number; name: string; serial?: string; network_id?: number; kind?: BlinkCameraKind }, kind = device.kind) =>
+      this.isDeviceExcluded(device, kind) || (device.network_id !== undefined && (
         excludedNetworkIds.has(device.network_id) || (this.config.excludedNetworks ?? []).includes(String(device.network_id))
       ));
 
     // Only explicit exclusions remove cached accessories. A temporarily absent
     // device must retain its HomeKit identity and automations.
     const removed = this.accessories.filter(accessory => {
-      const device = currentDevices.get(accessory.UUID) ?? accessory.context.device;
+      const device = deviceForAccessory(accessory);
       if (!device) return false;
       return excluded(device) || (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${device.id}`)
         && this.isNetworkExcluded(device));
     });
-    if (removed.length) {
+    const registerCurrentDevices = (): void => {
+      if (!this.monitorActive) return;
+
+      for (const network of homescreen.networks) {
+        if (!this.isDeviceExcluded(network) && !excludedNetworkIds.has(network.id)) {
+          this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      for (const camera of homescreen.cameras) {
+        if (!excluded(camera, 'camera')) {
+          this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      for (const doorbell of homescreen.doorbells) {
+        if (!excluded(doorbell, 'doorbell')) {
+          this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      for (const owl of homescreen.owls) {
+        if (!excluded(owl, 'owl')) {
+          this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
+        } else {
+          excludedCount++;
+        }
+      }
+
+      this.log.info(
+        `Discovered: ${homescreen.networks.length} networks, ` +
+        `${homescreen.cameras.length} cameras, ` +
+        `${homescreen.doorbells.length} doorbells, ` +
+        `${homescreen.owls.length} owls` +
+        (excludedCount > 0 ? ` (${excludedCount} excluded)` : ''),
+      );
+    };
+
+    if (!removed.length) { registerCurrentDevices(); return; }
+    return (async () => {
+      const retiring = removed.flatMap(accessory => {
+        const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
+        const handlers = [
+          ['blink-camera-', this.cameraAccessories],
+          ['blink-doorbell-', this.doorbellAccessories],
+          ['blink-owl-', this.owlAccessories],
+        ] as const;
+        return handlers.flatMap(([prefix, map]) => {
+          const handler = accessory.UUID === this.api.hap.uuid.generate(`${prefix}${id}`) ? map.get(id) : undefined;
+          return handler ? [handler] : [];
+        });
+      });
+      await this.shutdownMotionHandlers(retiring);
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, removed);
       for (const accessory of removed) {
+        this.homeKitAudit.remove(accessory);
         this.accessories.splice(this.accessories.indexOf(accessory), 1);
         const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${id}`)) this.networkAccessories.delete(id);
@@ -906,47 +1012,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-owl-${id}`)) this.owlAccessories.delete(id);
       }
       this.log.info(`Removed ${removed.length} explicitly excluded accessories.`);
-    }
-
-    for (const network of homescreen.networks) {
-      if (!this.isDeviceExcluded(network) && !excludedNetworkIds.has(network.id)) {
-        this.registerDevice(network, 'blink-network-', 'network', this.networkAccessories, NetworkAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    for (const camera of homescreen.cameras) {
-      if (!excluded(camera)) {
-        this.registerDevice(camera, 'blink-camera-', 'camera', this.cameraAccessories, CameraAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    for (const doorbell of homescreen.doorbells) {
-      if (!excluded(doorbell)) {
-        this.registerDevice(doorbell, 'blink-doorbell-', 'doorbell', this.doorbellAccessories, DoorbellAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    for (const owl of homescreen.owls) {
-      if (!excluded(owl)) {
-        this.registerDevice(owl, 'blink-owl-', 'owl', this.owlAccessories, OwlAccessory);
-      } else {
-        excludedCount++;
-      }
-    }
-
-    this.log.info(
-      `Discovered: ${homescreen.networks.length} networks, ` +
-      `${homescreen.cameras.length} cameras, ` +
-      `${homescreen.doorbells.length} doorbells, ` +
-      `${homescreen.owls.length} owls` +
-      (excludedCount > 0 ? ` (${excludedCount} excluded)` : ''),
-    );
+      registerCurrentDevices();
+    })();
   }
 
   private registerDevice<TDevice extends { id: number; name: string; serial?: string }, THandler>(
@@ -958,20 +1025,25 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   ): void {
     const uuid = this.api.hap.uuid.generate(`${uuidPrefix}${device.id}`);
     const existing = this.accessories.find((acc) => acc.UUID === uuid);
-    const displayName = this.hapName(this.getDeviceDisplayName(device), `Blink ${deviceLabel}`);
+    const kind = deviceLabel === 'camera' || deviceLabel === 'owl' || deviceLabel === 'doorbell' ? deviceLabel : undefined;
+    const displayName = this.hapName(this.getDeviceDisplayName(device, kind), `Blink ${deviceLabel}`);
 
     if (existing) {
       existing.displayName = displayName;
       existing.getService(this.Service.AccessoryInformation)
         ?.setCharacteristic(this.Characteristic.Name, displayName);
       existing.context.device = device;
+      this.homeKitAudit.observe(existing);
       const handler = new HandlerClass(this, existing, device);
+      this.homeKitAudit.observe(existing);
       accessoryMap.set(device.id, handler);
       this.log.info(`Restored Blink ${deviceLabel} from cache:`, displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = device;
+      this.homeKitAudit.observe(accessory);
       const handler = new HandlerClass(this, accessory, device);
+      this.homeKitAudit.observe(accessory);
       accessoryMap.set(device.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
@@ -995,14 +1067,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Poll device states from homescreen and check for motion events
+   * Poll device states from homescreen; native motion arrives independently
    */
   private async pollDeviceStates(): Promise<void> {
-    if (this.connectionState === 'authentication-required') {
+    if (!this.monitorActive || this.connectionState === 'authentication-required') {
       return;
     }
     try {
       await this.recoverConnection(!this.inventoryInitialized);
+      if (!this.monitorActive) return;
 
     } catch (error) {
       if (this.firstFailedPoll === null) {
@@ -1024,6 +1097,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Update all device states from homescreen response
    */
   private updateDeviceStates(homescreen: BlinkHomescreen): void {
+    this.feedAdmission.configure(projectSettingsInventory(homescreen, this.config), this.config);
     for (const network of homescreen.networks) {
       const handler = this.networkAccessories.get(network.id);
       if (handler) {

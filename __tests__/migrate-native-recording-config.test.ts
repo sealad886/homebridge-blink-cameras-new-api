@@ -111,9 +111,11 @@ describePosix('explicit native recording configuration migration', () => {
     expect(JSON.parse(result.stdout).issues).toEqual(expect.arrayContaining([
       { platformIndex: 0, code: 'unresolved-camera-aliases', severity: 'warning' },
     ]));
-    expect(JSON.parse(result.stdout).removedKeys).toEqual(expect.arrayContaining(['hksvCameras', 'hksvSource', 'syncModuleRecording', 'syncModuleFeedLimits']));
+    expect(JSON.parse(result.stdout).removedKeys).toEqual(expect.arrayContaining(['hksvCameras', 'hksvSource', 'syncModuleRecording']));
+    expect(JSON.parse(result.stdout).removedKeys).not.toContain('syncModuleFeedLimits');
     expect(result.stdout + result.stderr).not.toContain('private-serial-alias');
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ platforms: [{ platform: 'BlinkCameras', deviceSettingOverrides: [
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ platforms: [{ platform: 'BlinkCameras',
+      syncModuleFeedLimits: source.platforms[0].syncModuleFeedLimits, deviceSettingOverrides: [
       { deviceIdentifier: 'private-serial-alias', motionTimeout: 15 },
       { deviceIdentifier: 'camera:12', homeKitSecureVideo: true },
     ] }] });

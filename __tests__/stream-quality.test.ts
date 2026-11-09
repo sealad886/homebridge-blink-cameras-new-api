@@ -5,7 +5,12 @@ import { decode, decodeWithLists } from 'hap-nodejs/dist/lib/util/tlv';
 import { BlinkApi } from '../src/blink-api';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { effectiveOutputFps, isSupportedOutputVideo, outputResolutions, OutputQualityProfile } from '../src/accessories/stream-quality';
-import { spawnSync } from 'node:child_process';
+jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: () => '/verified/worker' }));
+jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn(async () => {
+  let closed!: () => void;
+  const whenClosed = new Promise<void>(resolve => { closed = resolve; });
+  return { whenClosed, failed: false, write: async () => {}, end: async () => {}, stop: async () => { closed(); } };
+}) }));
 
 const hap = realHap as unknown as HAP;
 const delegate = { prepareStream: jest.fn(), handleStreamRequest: jest.fn(), handleSnapshotRequest: jest.fn() };
@@ -75,43 +80,6 @@ describe('System-wide output quality profiles', () => {
     expect(effectiveOutputFps(profile, 15)).toBe(15);
     expect(effectiveOutputFps(profile, 10)).toBe(10);
     expect(effectiveOutputFps('auto', 30)).toBe(30);
-    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
-      () => undefined, () => true, jest.fn(), { audio: { enabled: false }, video: { outputQuality: profile } });
-    const args = (source as any).buildFfmpegArgs('pipe:0', {
-      video: { width: 320, height: 240, fps: 30, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
-    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
-    expect(args[args.indexOf('-r') + 1]).toBe('15');
-  });
-
-  it.each([
-    ['720p15', 30, 15], ['360p15', 30, 15], ['1080p30', 30, 30], ['auto', 30, 30],
-  ] as const)('reduces %s frames before scaling while preserving output FPS', (profile, requested, effective) => {
-    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
-      () => undefined, () => true, jest.fn(), { audio: { enabled: false }, video: { outputQuality: profile } });
-    const args = (source as any).buildFfmpegArgs('pipe:0', {
-      video: { width: 1280, height: 720, fps: requested, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
-    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
-    const filter = args[args.indexOf('-vf') + 1];
-    // Discard unneeded source frames before the expensive spatial conversion.
-    expect(filter).toContain(`1/${effective}-0.000001`);
-    expect(filter.indexOf('select=')).toBeLessThan(filter.indexOf('scale='));
-    expect(args[args.indexOf('-r') + 1]).toBe(String(effective));
-  });
-
-  it.each([
-    [15, 'auto', 30, 15, ''], [7, '720p15', 30, 7, ''], [30, '720p15', 30, 15, ''],
-    [30, 'auto', 30, 20, "select='not(eq(mod(n,3),1))',"],
-  ] as const)('never creates source frames before scaling %sfps input under %s', (inputFps, profile, requested, expected, variableInput) => {
-    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
-      () => undefined, () => true, jest.fn(), { audio: { enabled: false }, video: { outputQuality: profile } });
-    const args = (source as any).buildFfmpegArgs('pipe:0', {
-      video: { width: 320, height: 240, fps: requested, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
-    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
-    const result = spawnSync(require('ffmpeg-for-homebridge'), ['-hide_banner', '-f', 'lavfi', '-i',
-      `testsrc2=size=64x64:rate=${inputFps}:duration=1`, '-vf', variableInput + args[args.indexOf('-vf') + 1] + ',showinfo',
-      '-vsync', '0', '-f', 'null', '-'], { timeout: 10_000 });
-    expect(result.status).toBe(0);
-    expect((result.stderr.toString().match(/n:\s*\d+ pts:/g) ?? []).length).toBe(expected);
   });
 
   it.each([0, -1, 60, NaN, Infinity, 15.5])('rejects invalid/unadvertised FPS %s', fps => {
@@ -174,43 +142,6 @@ describe('System-wide output quality profiles', () => {
     const first = outputResolutions('720p15');
     first[0][0] = 1;
     expect(outputResolutions('720p15')[0]).toEqual([1280, 720, 15]);
-  });
-
-  it.each(['libx264', 'h264_vaapi', 'h264_videotoolbox', 'h264_v4l2m2m', 'h264_qsv', 'h264_nvenc'])(
-    'uses one aspect-preserving negotiated-frame filter for %s', (encoder) => {
-      const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
-        () => undefined, () => true, jest.fn(), { audio: { enabled: false } });
-      const args = (source as any).buildFfmpegArgs('pipe:0', {
-        video: { width: 1280, height: 720, fps: 15, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
-      }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, encoder);
-      expect(args.filter((arg: string) => arg === '-vf')).toHaveLength(1);
-      expect(args).not.toContain('-s');
-      const filter = args[args.indexOf('-vf') + 1];
-      expect(filter).toBe("select='isnan(prev_selected_t)+gte(t-prev_selected_t,1/15-0.000001)'," + 'scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
-        'pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' +
-        (encoder === 'h264_vaapi' ? ',format=nv12,hwupload' : ''));
-    });
-
-  it('packs square input into a 16:9 frame without stretching its content', () => {
-    const source = new BlinkCameraSource({} as BlinkApi, hap, 1, 2, 'camera', 'test-serial',
-      () => undefined, () => true, jest.fn(), { audio: { enabled: false } });
-    const args = (source as any).buildFfmpegArgs('pipe:0', {
-      video: { width: 1280, height: 720, fps: 15, max_bit_rate: 300, pt: 99, mtu: 1378, profile: 0, level: 0 },
-    }, { videoCryptoSuite: 0, videoSRTP: Buffer.alloc(30), videoSSRC: 1, address: '127.0.0.1', videoPort: 5000 }, 'libx264');
-    const filter = args[args.indexOf('-vf') + 1];
-    // Synthetic media only. A square white source must retain square content
-    // with centered black sidebars in the negotiated 1280x720 output frame.
-    const result = spawnSync(require('ffmpeg-for-homebridge'), ['-hide_banner', '-loglevel', 'error',
-      '-f', 'lavfi', '-i', 'color=white:size=64x64:rate=1', '-vf', filter,
-      '-frames:v', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'],
-    { maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toHaveLength(1280 * 720);
-    const row = result.stdout.subarray(360 * 1280, 361 * 1280);
-    expect(row[279]).toBeLessThan(20);
-    expect(row[280]).toBeGreaterThan(220);
-    expect(row[999]).toBeGreaterThan(220);
-    expect(row[1000]).toBeLessThan(20);
   });
 
   it('rejects stale START quality before requesting vendor media and releases preparation', async () => {

@@ -31,7 +31,7 @@ describe('finite native recording delegate', () => {
       const value = bundle(selected, audio); prepared.push(value); return value;
     });
     const readyMotion = jest.fn(), deliveryOutcome = jest.fn(), policyChanged = jest.fn();
-    const delegate = new NativeRecordingDelegate({ preparation: { ffmpegPath: 'unused', admit: work => work() },
+    const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() },
       prepare, readyMotion, deliveryOutcome, policyChanged, offerTimeoutMs: 1000, acknowledgementTimeoutMs: 1000, ...overrides });
     delegates.push(delegate);
     const enable = () => { delegate.updateRecordingConfiguration(configuration()); delegate.updateRecordingActive(true); };

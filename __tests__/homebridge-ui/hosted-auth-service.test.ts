@@ -660,6 +660,28 @@ describe('HostedAuthService', () => {
     expect(entries.join(' ')).not.toContain('secret-provider-detail');
   });
 
+  it('discovers a safe camera inventory and validates drafts without provider requests or writes', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const api = createApiDouble();
+    api.getHomescreen.mockResolvedValue({ account: { account_id: 123 },
+      networks: [{ id: 1, name: 'System', armed: true, token: 'provider-secret' }],
+      sync_modules: [{ id: 2, network_id: 1, status: 'online' }],
+      cameras: [{ id: 3, network_id: 1, name: 'Camera', enabled: true, token: 'provider-secret' }], owls: [], doorbells: [],
+    });
+    const { logger } = createLogger();
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+    const inventory = await service.getSettingsInventory();
+    expect(inventory.cameras[0].key).toBe('camera:3');
+    expect(JSON.stringify(inventory)).not.toContain('provider-secret');
+    const before = await fs.readFile(authStoragePath, 'utf8');
+    expect(service.validateSettings({ revision: 1, config: { name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'camera:3', homeKitSecureVideo: true }] } }).valid).toBe(true);
+    expect(service.validateSettings({ revision: 2, config: { name: 'Blink', pollInterval: 1 } }).valid).toBe(false);
+    expect(api.getHomescreen).toHaveBeenCalledTimes(1); expect(api.login).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(authStoragePath, 'utf8')).toBe(before);
+    await service.clear();
+    expect(service.validateSettings({ revision: 3, config: { name: 'Blink', syncModuleFeedLimits: [{ syncModuleId: '2', maxFeeds: 1 }] } }).valid).toBe(false);
+  });
+
   it('reconstructs from replacement durable state before testing the connection', async () => {
     const stateA = persistedState({
       accessToken: 'connectionAccessA_9Ry3',
@@ -1577,8 +1599,27 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/unlock',
       '/test-connection',
       '/getNetworks',
+      '/settings/inventory',
+      '/settings/validate',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
+  });
+
+  it('supplies saved exclusions to read-only inventory and delegates validation without saving', async () => {
+    const saved = { platforms: [{ platform: 'Other', private: true }, { platform: 'BlinkCameras', excludeDevices: ['camera:3'] }] };
+    const text = JSON.stringify(saved);
+    await fs.writeFile(path.join(serverStorageRoot, 'config.json'), text);
+    const inventory = jest.spyOn(HostedAuthService.prototype, 'getSettingsInventory').mockResolvedValue({
+      revision: 'test', fetchedAt: new Date().toISOString(), cameras: [], networks: [], syncModules: [], globalFeedCapacity: 0,
+    });
+    const validate = jest.spyOn(HostedAuthService.prototype, 'validateSettings').mockReturnValue({ revision: 1, valid: true, errors: [], warnings: [] });
+    new BlinkUiServer();
+    await mockUiHandlers.get('/settings/inventory')!({});
+    expect(inventory).toHaveBeenCalledWith(saved.platforms[1]);
+    const draft = { revision: 1, config: { name: 'Blink' } };
+    await expect(mockUiHandlers.get('/settings/validate')!(draft)).resolves.toMatchObject({ revision: 1, valid: true });
+    expect(validate).toHaveBeenCalledWith(draft);
+    expect(await fs.readFile(path.join(serverStorageRoot, 'config.json'), 'utf8')).toBe(text);
   });
 
   it('delegates hosted start, complete, status, verify, and token-only connection requests', async () => {

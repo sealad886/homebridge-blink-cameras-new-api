@@ -4,8 +4,10 @@ Date: 9 November 2026
 
 This is the verification ledger for [ADR-007](../adr/007-event-driven-native-recording.md).
 The authorized worktree is `.worktrees/hsv-redesign`, branch
-`codex/hsv-event-driven-redesign`, based on stable 0.10.0 at
-`fb42ef207077b06565cd024a6db86143d640a276`. Source development, provider evidence,
+`codex/hsv-event-driven-redesign`. The initial implementation used stable 0.10.0
+at `fb42ef207077b06565cd024a6db86143d640a276`; the release integrates main
+`0ef68d13d525fbc959a15ac0ff18d14f3595bd6d` to retain secure media, current settings,
+temperature and release functionality. Source development, provider evidence,
 installation and physical acceptance are distinct outcomes.
 
 ## Ordered checklist
@@ -29,6 +31,9 @@ Pi installation. No publication, release or physical acceptance is implied.
 
 ## Sources and consolidation decisions
 
+The initial consolidation below records the stable-based implementation
+checkpoint. The beta integration section records the later release reconciliation.
+
 This scoped Repository Consolidation and Simplify Code pass reconciles the changed
 feature in its authorized worktree. It does not merge onto the default branch or
 retire unrelated branches/worktrees.
@@ -44,10 +49,11 @@ retire unrelated branches/worktrees.
 
 Private preservation, branch-retirement, replay and operational receipts are in
 `logs/hsv-redesign-20261109/` of the primary checkout. They are not distributed
-source. The clean foundation and preserved reference have different HAP dependency
-contracts; the replacement follows its selected HAP 0.14.0 contract. Local finite
-media uses operator-managed FFmpeg through an inherited descriptor. No reference
-native worker/binary or incomplete artifact protocol is imported.
+source. The initial clean foundation and preserved reference have different HAP
+dependency contracts. The beta retains main's current secure live-view architecture
+and extends its canonical packaged worker for finite MP4 preparation. Earlier
+private FFmpeg/descriptor component tests are historical evidence, not the final
+release's cross-platform media qualification.
 
 The source-to-outcome pass retains meaningful boundaries for scheduling, remote
 operation lifetime, Google process isolation and local Home delivery. All share
@@ -140,7 +146,7 @@ all in-scope corrections settle.
 | Migrate configuration once with backup | Preview/no-op/conflict/preservation/backup/replacement tests with network disabled; obsolete verified keys removed | Explicit application to a reviewed operator config |
 | Describe outcomes honestly | Local transition reports distinguish event, acquisition, offer, close/ACK and uncertainty | Retained/playable Home recording must be inspected separately |
 
-Final host verification:
+Historical stable-foundation host verification:
 
 - The corrected source passed **58 Jest suites: 1,378 tests passed, one skipped**.
   The skipped test requires an externally qualified native worker artifact; it is
@@ -190,7 +196,7 @@ These overlapping runs must not be added into a unique-test total. The separate
 live receiver evidence proves a native-motion delivery path. It does not prove a
 saved USB video, the original physical outage's cause or iCloud retention.
 
-## Final consolidation and release boundary
+## Initial consolidation and release boundary
 
 The pre-review pass mapped every selected source to the surviving owners above
 and accounted for omitted reference/diagnostic paths. The final net-change pass
@@ -232,3 +238,33 @@ Preserve current rotated credentials rather than restoring a stale token cache.
 Report each camera separately. Keep installation/readback, runtime evidence and
 human playback acceptance separate from host tests. The working Pi remains on
 0.10.0 until a candidate trial is actually carried out and read back.
+
+## Beta release integration
+
+The maintainer selected **1.1.0-beta.0** and authorized normal GitHub Actions/npm
+publication; Pi installation remains operator-owned. Integration takes current
+main's secure media transports, native/source packaging, licensing, settings
+editor, temperature support, account validation and release gates. The obsolete
+continuous recording acquisition and cloud-motion polling paths are replaced by
+the owned receiver and completed-clip pipeline.
+
+Explicit live viewing still uses the current shared-feed admission owner and
+`syncModuleFeedLimits`. The native configuration converter preserves those valid
+limits. The new finite MP4 mode belongs to the canonical native worker, with a
+new protocol identity. Old worker artifacts and previous private package receipts
+cannot qualify this changed source or its publication bytes.
+
+Release checklist:
+
+- [ ] Finish main reconciliation and targeted regression checks.
+- [ ] Run combined local checks and current-head independent review.
+- [ ] Merge the reviewed source and pass the normal exact-source release gates.
+- [ ] Verify npm integrity/source identity, beta tag, unchanged stable tag and
+  GitHub release receipt through consumer readback.
+- [ ] Separately record the operator's installed Pi/runtime and physical Home
+  recording acceptance.
+
+Only main reconciliation is active at this preparation checkpoint. The earlier
+1,378-test component total and live receiver receipts retain their exact source
+scope; they do not describe the final integrated release. Publication results,
+source SHA and new gate receipts must be added after those actions complete.

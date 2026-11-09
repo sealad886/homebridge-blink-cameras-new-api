@@ -56,6 +56,9 @@ Use a minor bump for new compatible capabilities, a patch for compatible fixes.
 The supported progression is `X.Y.Z-alpha.0`, `X.Y.Z-beta.0`, `X.Y.Z-rc.0`, then
 `X.Y.Z`. Increment the prerelease number after changes within a stage. Freeze the
 version target before alpha. Never reuse a published version for different code.
+Numeric prereleases may also use a compact identifier, such as `1.0.0-beta1`;
+the `alpha`, `beta` or `rc` channel still determines the npm dist-tag. The first
+HSV beta uses `1.0.0-beta1` at the maintainer's explicit request.
 
 Update `CHANGELOG.md` with a `## [VERSION] - YYYY-MM-DD` section describing user
 behavior, security fixes, upgrade notes, and known limitations. Keep package.json
@@ -67,16 +70,22 @@ Use `npm version VERSION --no-git-tag-version`, inspect and commit the changes,
 then merge the reviewed PR to main. Resolve current-head reviews and CI before
 merging. Do not include unrelated editor files, credentials, or build artifacts.
 
+Validate the proposed squash commit title and body with `npx --no-install commitlint`
+before merging. PR checks validate the source commits; the push check validates
+the resulting squash commit. Wrap body prose to 100 characters or fewer.
+
 ## Gates and publication
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
-build, and package contents. Use a dedicated clean clone when the working checkout
+build, and package contents. Full native package verification requires all five
+verified workers and corresponding sources staged by the canonical package job;
+an ordinary source checkout cannot substitute JavaScript-only smoke for it. Use a dedicated clean clone when the working checkout
 contains unrelated user files; never stash or delete those files to satisfy it.
 
 Publication requires an explicit dispatch on main with the exact version input.
 An ordinary source push does not publish. The workflow validates the requested
 version against the manifest and runs clean-install, lint, tests, build, and
-package loadability checks on Node.js 20, 22, and 24 before publication.
+package loadability checks on Node.js 20, 22, 24, and 26 before publication.
 
 ```sh
 gh workflow run publish.yml --ref main -f version=VERSION
@@ -106,6 +115,101 @@ Prereleases use `alpha`, `beta`, or `rc`; stable uses `latest`. Verify exact reg
 version, integrity, source identity, GitHub release, and dist-tags before installing.
 A prerelease must leave the previous stable `latest` unchanged. Stable publication
 must not move `latest` backwards.
+
+## Native artifact preparation and qualification
+
+The secure media release pipeline is `gates → package → qualify (five targets) → publish`.
+The version remains blocked until the matching reviewed source and all required
+automated, security, performance and operator gates have supporting evidence.
+Adding these jobs does not supply a pass or authorize workflow dispatch.
+
+The reusable source gates build Linux x64/arm64, macOS arm64/x64 and Windows x64
+candidates. Each `native-candidate-TARGET-SHA` artifact contains one worker and its
+receipt. A separate `native-validation-TARGET-SHA` artifact contains the synthetic
+fixture generator, independent SRTP receiver and a receipt binding their hashes
+to the same source SHA and worker hash. The helper binaries are validation tools;
+they are excluded from the product tarball. Their dependency audit must pass before
+the source job uploads them.
+
+The read-only package job downloads all five candidates from the same workflow
+run. `native/dependencies/package.py` rejects incomplete or mismatched inputs and
+uses the exact committed native source, build scripts, tests, full license notices
+and four authenticated pinned dependency archives. It stages
+`native/runtime/TARGET/worker[.exe]`, the closed five-target manifest and distribution
+receipt, `native/corresponding-source.tar.gz`, `native/COPYING` and `native/NOTICE`
+before npm packing. Existing output roots are refused. Source download verification
+includes the pinned FFmpeg GPG fingerprint; a URL-only source offer is insufficient.
+
+`.github/scripts/verify-package.mjs` checks the final package's complete native
+inventory, every worker hash, manifest and distribution hashes, recipe/pinned-input
+identity, corresponding-source member inventory and content hashes against the
+exact Git commit. It verifies the bundled archives and licenses, stamps `gitHead`
+and records the final immutable npm integrity. Ordinary JavaScript matrix smoke
+may explicitly set `VERIFY_PACKAGE_JAVASCRIPT_ONLY=1` before native artifacts exist;
+this mode refuses release output and supplies no native acceptance evidence.
+
+Native candidate jobs also retain separate worker-hash-bound resource receipts:
+per-worker OS memory observations, native consumption high water, and actual
+recorder byte/queue bounds. Missing observations fail their job. These receipts
+are evidence for bounded synthetic workloads, not universal memory budgets.
+
+Five separate clean-host jobs download that same npm tarball and their matching
+validation artifact. They install the exact tarball into a fresh temporary npm
+prefix with lifecycle scripts disabled, without a source dependency installation,
+native build, compiler setup, MSYS2 setup or private dependency prefix. They verify
+the installed native inventory and resolve the installed worker using the shipped
+resolver. The installed media-session implementation launches that worker and
+exercises Opus at 16/24 kHz, PCMA and PCMU against both short and bundled LATM
+fixtures. The independent receiver must authenticate/decrypt SRTP/SRTCP, decode
+video pixels and nonzero audio energy, verify shared timing/counters and refuse forged
+SRTP. Protected output is captured through an isolated owned output; this proof
+does not substitute for the separate actual UDP, performance, security or physical
+camera/HomeKit gates.
+
+Qualification runner baselines are Ubuntu 22.04 (x64/arm64), macOS 15 (arm64/x64)
+and Windows Server 2022 (x64). A pass establishes only its observed runner/runtime
+baseline. A macOS deployment target of 13 does not prove macOS 13 acceptance;
+Windows Server 2022 does not establish Windows 10 acceptance. Every release needs
+a successful run for its exact final source and npm integrity. The
+[26 October beta checkpoint](plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
+records the observed five-host qualification for `0.11.0-beta.0`.
+
+The privileged main-only OIDC job requires all five jobs and independently checks
+their receipts against the exact publication tarball, source SHA, source-bundle
+hash and target worker hashes before publishing. It neither rebuilds nor repacks
+the qualified tarball. Candidate/distribution build receipts retain
+`distribution_ready: false`; separate qualification receipts record the observed
+target results without changing the immutable product bytes. Qualification alone
+does not close findings or record physical acceptance; the hardening ledger owns
+the combined F05/F06 remediation evidence and disposition. Preserve any release
+hold until its remaining gates are verified. Registry publication and subsequent
+authorized Homebridge installation/physical acceptance remain distinct stages.
+
+## 1.1.0-beta.0 event-driven recording checkpoint
+
+This release keeps the `beta` npm channel separate from stable `latest`. The
+maintainer requested registry publication and will update the Pi manually.
+The source integrates the current secure-media packaging and release gates;
+it does not publish the earlier stable-based private tarball.
+Public Firebase app/project parameters are application identifiers recovered from
+the official APK, not sender or administrative credentials. Generated receiver
+keys, account tokens, raw motion payloads and private diagnostic evidence remain
+outside the source and npm artifact. The package gate requires the isolated FCM
+worker and both migration tools and rejects private/runtime-state files.
+
+Protocol 4 adds finite MP4 preparation to the canonical private worker. Its
+bounded parent-supplied input has no provider URL or network transport. The exact
+release requires new workers, source hashes, package integrity and all five
+installed-target qualifications. Previous protocol artifacts cannot be reused.
+
+The owned receiver has received real native-motion messages, including a fresh
+production-worker observation, using an existing Blink session. This qualifies
+that component only. The completed beta still needs installation/readback,
+continued native USB recording, actual new clip bytes, finite Home requests,
+retained/playable recordings and privacy/recovery observations. Record these
+separately under the stage-specific acceptance rules below. Notification arrival
+or a transport ACK must not be substituted for clip or iCloud retention evidence.
+The original persistent USB recording lock's cause remains unproven.
 
 ## Homebridge upgrade and acceptance
 
@@ -169,11 +273,13 @@ gh workflow run npm-prerelease-cleanup.yml --ref main \
 
 The [18 October stable-release disposition](plans/security-hardening.md#18-october-2026-delegated-stable-release-residual-risk-disposition)
 accepts F05/F06 as disclosed residual risks specifically for stable 0.10.0.
-Both findings remain open. Their closure and native-worker acceptance criteria
-are unchanged; the retained runtime guards are mandatory. Do not request the
-same risk decision again unless the exposure or release scope changes.
+That historical acceptance does not repair the older stable artifact or waive
+the new runtime's acceptance criteria. The
+[26 October checkpoint](plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
+owns current finding status; retained runtime guards remain mandatory. Do not
+request the same stable-release risk decision again unless its exposure or scope changes.
 
-Current functional acceptance is recorded in the
+Functional acceptance for stable 0.10.0 is recorded in the
 [hardening ledger](plans/security-hardening.md#23-october-2026-rc19-acceptance-and-stable-readiness).
 Release acceptance follows the evidence requirements above; a new RC number,
 label or documentation change does not create a waiting period. Hardware failures

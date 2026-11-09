@@ -1,8 +1,37 @@
 import { describeMediaDestination, isPublicMediaAddress, resolveMediaDestination } from '../../src/blink-api/media-destination';
 import { checkServerIdentity, type PeerCertificate } from 'node:tls';
+import { test } from '@jest/globals';
 
 // Synthetic adversarial cases test policy; they do not establish provider host contracts.
 describe('IMMIS destination admission', () => {
+  test('admits the source-backed RTSPS port with shared verified TLS identity', async () => {
+    const destination = describeMediaDestination('rtsps://8.8.8.8/private?blinkRTSP=1&token=dummy-private');
+    expect(destination).toEqual({ scheme: 'rtsps:', hostname: '8.8.8.8', servername: '*.immedia-semi.com', port: 332 });
+    const lookup = jest.fn();
+    const admitted = await resolveMediaDestination(destination, new globalThis.AbortController().signal, lookup);
+    expect(admitted.address).toBe('8.8.8.8'); expect(lookup).not.toHaveBeenCalled();
+    expect(JSON.stringify(admitted)).not.toContain('dummy-private');
+    expect(describeMediaDestination('rtsps://media.immedia-semi.com:332/private')).toEqual({
+      scheme: 'rtsps:', hostname: 'media.immedia-semi.com', servername: 'media.immedia-semi.com', port: 332 });
+  });
+  test.each(['rtsp://media.immedia-semi.com:332', 'rtsps://media.immedia-semi.com:443',
+    'rtsps://media.immedia-semi.com:554', 'rtsps://127.0.0.1:332', 'rtsps://8.008.8.8:332',
+    'rtsps://immedia-semi.com.evil.invalid:332', 'rtsps://user:private@8.8.8.8:332',
+    'rtsps://[2606:4700:4700::1111]:332', 'rtsps://media.immedia-semi.com:332/#private'])(
+    'refuses unsupported RTSPS authority %s', raw => {
+    expect(() => describeMediaDestination(raw)).toThrow('Unsupported media destination');
+  });
+  test('RTSPS reconnect repeats whole-answer admission and preserves DNS TLS identity', async () => {
+    const destination = describeMediaDestination('rtsps://media.immedia-semi.com:332/session');
+    const lookup = jest.fn().mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }])
+      .mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }, { address: '::1', family: 6 }]);
+    const signal = new globalThis.AbortController().signal;
+    await expect(resolveMediaDestination(destination, signal, lookup)).resolves.toMatchObject({
+      scheme: 'rtsps:', port: 332, servername: 'media.immedia-semi.com', address: '8.8.8.8' });
+    await expect(resolveMediaDestination(destination, signal, lookup)).rejects.toThrow('refused');
+    await expect(resolveMediaDestination({ ...destination, port: 443 }, signal, lookup)).rejects.toThrow();
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
   test('connects directly to admitted IPv4 with official vendor TLS identity and no DNS', async () => {
     const lookup = jest.fn();
     const destination = describeMediaDestination('immis://8.8.8.8:443/session?client_id=1&token=secret');

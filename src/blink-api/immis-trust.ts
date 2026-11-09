@@ -1,8 +1,10 @@
-/** Public Blink IMMIS trust anchors from the official Android 59.2 libwalnut.
+/** Public Blink media trust anchors from the official Android 59.2 libwalnut.
  * Source SHA256: 820c92207abcf68b2e9acf53c5c903b388b34fc4c5e5aa0bcd036d96694ebd3f.
  * TLSCertificates.cc installs these ten self-signed vendor CAs, valid 2016–2039.
  * See docs/audits/2026-10-11-immis-tls-trust.md for offsets and fingerprints.
- * These are public certificates, never private keys. Use only for IMMIS sockets.
+ * These are public certificates, never private keys. Use only for admitted vendor
+ * media sockets: IMMIS and RTSPS reach the same checked mbedTLSSocket wrapper.
+ * See native/RTSP-ALTERNATIVES.md for the shared RTSPS connection trace.
  */
 export const IMMIS_VENDOR_CA: readonly string[] = Object.freeze([
   `-----BEGIN CERTIFICATE-----

@@ -40,6 +40,34 @@ export interface MediaPacketProtector {
 
 export const MEDIA_OUTPUT_LIMITS = Object.freeze({ accessUnitBytes: 2 * 1024 * 1024, accessUnitPackets: 2048,
   queuedPackets: 2048, queuedBytes: 3 * 1024 * 1024, sendTimeoutMs: 1000 });
+/** Each stream uses the same source origin; Opus RTP always uses 48 kHz (RFC7587). */
+export class RtpClock {
+  constructor(private readonly rate: 8000 | 48000 | 90000, private readonly origin: bigint, private readonly offset: number) {
+    if (![8000, 48000, 90000].includes(rate)) { throw new Error('Invalid RTP clock'); }
+    integer(offset, 0, 0xffffffff);
+  }
+  timestamp(ptsMicroseconds: bigint): number {
+    const scaled = (ptsMicroseconds - this.origin) * BigInt(this.rate);
+    // Floor consistently on either side of the shared origin, without Number precision loss.
+    const ticks = scaled >= 0n ? scaled / 1000000n : (scaled - 999999n) / 1000000n;
+    return Number(BigInt.asUintN(32, BigInt(this.offset) + ticks));
+  }
+}
+/** RFC7587/RFC3551: one encoded audio packet per RTP packet, without fragmentation. */
+export class AudioPacketizer {
+  #sequence: number;
+  constructor(private readonly ssrc: number, private readonly pt: number, private readonly mtu: number, sequence: number) {
+    integer(ssrc, 1, 0xffffffff); integer(pt, 0, 127); integer(mtu, 64, 1500); integer(sequence, 0, 65535); this.#sequence = sequence;
+  }
+  packetize(payload: Buffer, timestamp: number, marker = false): Buffer {
+    integer(timestamp, 0, 0xffffffff);
+    if (payload.length === 0 || payload.length + 22 > this.mtu) { throw new Error('Invalid audio packet'); }
+    const packet = Buffer.alloc(12 + payload.length); packet[0] = 0x80; packet[1] = this.pt | (marker ? 0x80 : 0);
+    packet.writeUInt16BE(this.#sequence, 2); this.#sequence = (this.#sequence + 1) & 0xffff;
+    packet.writeUInt32BE(timestamp, 4); packet.writeUInt32BE(this.ssrc, 8); payload.copy(packet, 12);
+    return packet;
+  }
+}
 export class H264Packetizer {
   #sequence: number;
   constructor(private readonly ssrc: number, private readonly pt: number, private readonly mtu: number, sequence: number) {
@@ -134,5 +162,56 @@ export class BoundedMediaSender {
   close(): void {
     this.#closed = true; this.#active?.abort();
     for (const entry of this.#queue.splice(0)) { this.#bytes -= entry.packet.length; this.#packets--; entry.packet.fill(0); entry.reject(new Error('Media sender closed')); }
+  }
+}
+
+/** One generation-owned RTP stream. Callers pace access units on the shared source timeline. */
+export class ProtectedRtpStream {
+  #clock: RtpClock; #audio: AudioPacketizer; #video: H264Packetizer; #sender: BoundedMediaSender;
+  #closed = false; #busy = false; #packets = 0; #octets = 0; #ssrc: number;
+  constructor(options: MediaOutputOptions, private readonly codec: 'h264' | 'opus' | 'pcma' | 'pcmu',
+    origin: bigint, offset: number, sequence: number, private readonly cname: string,
+    private readonly protector: MediaPacketProtector, sink: MediaDatagramSink) {
+    validateMediaOutput(options);
+    if (!['h264', 'opus', 'pcma', 'pcmu'].includes(codec)
+        || senderReport(options.ssrc, 0, 0, 0, 0, cname).length + 14 > options.mtu) { throw new Error('Invalid RTP stream'); }
+    this.#clock = new RtpClock(codec === 'h264' ? 90000 : codec === 'opus' ? 48000 : 8000, origin, offset);
+    this.#ssrc = options.ssrc;
+    this.#audio = new AudioPacketizer(options.ssrc, options.payloadType, options.mtu, sequence);
+    this.#video = new H264Packetizer(options.ssrc, options.payloadType, options.mtu, sequence);
+    this.#sender = new BoundedMediaSender(options, sink);
+  }
+  async #run(operation: () => Promise<void>): Promise<void> {
+    if (this.#closed || this.#busy) { throw new Error('RTP stream admission rejected'); }
+    this.#busy = true;
+    try { await operation(); }
+    catch { this.close(); throw new Error('RTP stream failed'); }
+    finally { this.#busy = false; }
+  }
+  async #send(packet: Buffer): Promise<void> {
+    await this.#sender.send(await this.protector.protectRtp(packet));
+    this.#packets = (this.#packets + 1) >>> 0; this.#octets = (this.#octets + packet.length - 12) >>> 0;
+  }
+  sendAudio(payload: Buffer, pts: bigint, marker = false): Promise<void> {
+    return this.#run(async () => {
+      if (this.codec === 'h264') { throw new Error('Invalid stream payload'); }
+      await this.#send(this.#audio.packetize(payload, this.#clock.timestamp(pts), marker));
+    });
+  }
+  sendVideo(nals: readonly Buffer[], pts: bigint): Promise<void> {
+    return this.#run(async () => {
+      if (this.codec !== 'h264') { throw new Error('Invalid stream payload'); }
+      for (const packet of this.#video.packetize(nals, this.#clock.timestamp(pts))) { await this.#send(packet); }
+    });
+  }
+  report(unixMs: number, pts: bigint): Promise<void> {
+    return this.#run(async () => {
+      const report = senderReport(this.#ssrc, unixMs, this.#clock.timestamp(pts), this.#packets, this.#octets, this.cname);
+      await this.#sender.send(await this.protector.protectRtcp(report));
+    });
+  }
+  close(): void {
+    if (this.#closed) { return; }
+    this.#closed = true; this.#sender.close(); this.protector.close();
   }
 }

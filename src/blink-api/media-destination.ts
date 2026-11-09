@@ -3,10 +3,10 @@ import { BlockList, isIP } from 'node:net';
 import { lookupAddresses, type AddressLookup } from './bounded-dns';
 
 export interface MediaDestination {
-  readonly scheme: 'immis:';
+  readonly scheme: 'immis:' | 'rtsps:';
   readonly hostname: string;
   readonly servername: string;
-  readonly port: 443;
+  readonly port: 443 | 332;
 }
 
 export interface MediaAddress {
@@ -25,9 +25,10 @@ export type MediaAddressLookup = AddressLookup;
 // Android libwalnut uses this certificate identity for IPv4-literal IMMIS servers.
 export const IMMIS_IPV4_TLS_IDENTITY = '*.immedia-semi.com';
 
-/** APK 59.2 Blink-domain constant; libwalnut IMMISDefaultPort = uint16 443.
+/** APK 59.2 Blink-domain constant; libwalnut defaults IMMIS 443 / RTSPS 332.
  * Public IPv4 literals use libwalnut's explicit vendor TLS identity; DNS uses original hostname.
- * This is a restricted IMMIS policy, not evidence of all provider media hosts.
+ * Both sources reach the same verified TLS wrapper; see RTSP-ALTERNATIVES.md.
+ * This is conservative vendor DNS policy, not exhaustive provider host evidence.
  * URL paths/query are session credentials and are never retained in this descriptor.
  */
 export function describeMediaDestination(raw: string): MediaDestination {
@@ -37,14 +38,15 @@ export function describeMediaDestination(raw: string): MediaDestination {
   let url: URL;
   try { url = new URL(raw); } catch { throw new Error('Unsupported media destination'); }
   const hostname = url.hostname;
-  if (url.protocol !== 'immis:' || url.username || url.password || url.hash ||
-      (url.port && url.port !== '443') || hostname.length > 253 ||
+  const port = url.protocol === 'immis:' ? 443 : 332;
+  if (!['immis:', 'rtsps:'].includes(url.protocol) || url.username || url.password || url.hash ||
+      (url.port && url.port !== String(port)) || hostname.length > 253 ||
       (!(isIP(hostname) === 4 && isPublicMediaAddress(hostname)) &&
       !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*immedia-semi\.com$/.test(hostname))) {
     throw new Error('Unsupported media destination');
   }
-  return Object.freeze({ scheme: 'immis:', hostname,
-    servername: isIP(hostname) === 4 ? IMMIS_IPV4_TLS_IDENTITY : hostname, port: 443 });
+  return Object.freeze({ scheme: url.protocol as MediaDestination['scheme'], hostname,
+    servername: isIP(hostname) === 4 ? IMMIS_IPV4_TLS_IDENTITY : hostname, port });
 }
 
 const forbiddenV4 = new BlockList();

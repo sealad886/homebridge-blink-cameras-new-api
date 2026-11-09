@@ -8,8 +8,8 @@ static AVAudioFifo *audio_fifo;
 static AVFrame *audio_decoded;
 static int audio_stream=-1, source_rate, source_format, source_channels;
 static AVRational audio_time_base;
-static int64_t audio_next_pts, expected_source_us=AV_NOPTS_VALUE;
-static uint64_t audio_samples;
+static int64_t audio_next_pts, source_origin_us=AV_NOPTS_VALUE;
+static uint64_t audio_samples, source_samples;
 static void audio_emit(uint64_t *bytes) {
     AVPacket *p=av_packet_alloc(); if(!p)fatal("MEMORY");
     packets(audio_encoder,p,bytes,4); av_packet_free(&p);
@@ -49,45 +49,66 @@ static void audio_convert(AVFrame *f,int flush,uint64_t *bytes) {
     av_freep(&samples[0]);av_freep(&samples);
     audio_encode_fifo(flush,bytes);
 }
+static void audio_open_encoder(void) {
+    if(audio_encoder)return;
+    const char *name=config[6]==1?"libopus":config[6]==2?"pcm_alaw":config[6]==3?"pcm_mulaw":"aac";
+    const AVCodec *codec=avcodec_find_encoder_by_name(name);audio_encoder=avcodec_alloc_context3(codec);if(!audio_encoder)fatal("AUDIO_ENCODER");
+    audio_encoder->sample_fmt=config[6]==4?AV_SAMPLE_FMT_FLTP:AV_SAMPLE_FMT_S16;audio_encoder->sample_rate=(int)config[7];audio_encoder->bit_rate=config[9];audio_encoder->thread_count=1;
+    if(config[6]==4) { audio_encoder->profile=AV_PROFILE_AAC_LOW;audio_encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER; }
+    if(config[6]==1 && config[5])audio_encoder->compression_level=3;
+    av_channel_layout_default(&audio_encoder->ch_layout,1);audio_encoder->time_base=(AVRational){1,(int)config[7]};
+    AVDictionary *options=NULL;
+    if(config[6]==1 && av_dict_set_int(&options,"frame_duration",config[12],0)<0)fatal("MEMORY");
+    if(avcodec_open2(audio_encoder,codec,&options)<0)fatal("AUDIO_ENCODER");
+    av_dict_free(&options);
+    if(audio_encoder->extradata_size<0 || audio_encoder->extradata_size>4096)fatal("AUDIO_LIMIT");
+    uint8_t info[4116];put32(info,config[6]);put32(info+4,config[7]);put32(info+8,1);put32(info+12,(uint32_t)audio_encoder->initial_padding);put32(info+16,(uint32_t)audio_encoder->extradata_size);
+    if(audio_encoder->extradata_size) {
+        memcpy(info+20,audio_encoder->extradata,(size_t)audio_encoder->extradata_size);
+    }
+    if(!config[13])output(5,info,20+(uint32_t)audio_encoder->extradata_size);
+}
 static void audio_open(AVCodecParameters *params,AVRational time_base) {
     if(params->codec_id!=AV_CODEC_ID_AAC && params->codec_id!=AV_CODEC_ID_AAC_LATM)fatal("AUDIO_CODEC");
     const AVCodec *codec=avcodec_find_decoder(params->codec_id); audio_decoder=avcodec_alloc_context3(codec);if(!audio_decoder)fatal("MEMORY");
     if(avcodec_parameters_to_context(audio_decoder,params)<0)fatal("AUDIO_DECODE");
     audio_decoder->thread_count=1;audio_decoder->pkt_timebase=time_base;audio_time_base=time_base;
     if(avcodec_open2(audio_decoder,codec,NULL)<0)fatal("AUDIO_DECODE");
-    const char *name=config[6]==1?"libopus":config[6]==2?"pcm_alaw":"pcm_mulaw";
-    codec=avcodec_find_encoder_by_name(name);audio_encoder=avcodec_alloc_context3(codec);if(!audio_encoder)fatal("AUDIO_ENCODER");
-    audio_encoder->sample_fmt=AV_SAMPLE_FMT_S16;audio_encoder->sample_rate=(int)config[7];audio_encoder->bit_rate=config[9];audio_encoder->thread_count=1;
-    av_channel_layout_default(&audio_encoder->ch_layout,1);audio_encoder->time_base=(AVRational){1,(int)config[7]};
-    if(avcodec_open2(audio_encoder,codec,NULL)<0)fatal("AUDIO_ENCODER");
-    if(audio_encoder->extradata_size<0 || audio_encoder->extradata_size>4096)fatal("AUDIO_LIMIT");
-    uint8_t info[4116];put32(info,config[6]);put32(info+4,config[7]);put32(info+8,1);put32(info+12,(uint32_t)audio_encoder->initial_padding);put32(info+16,(uint32_t)audio_encoder->extradata_size);
-    if(audio_encoder->extradata_size) {
-        memcpy(info+20,audio_encoder->extradata,(size_t)audio_encoder->extradata_size);
-    }
-    output(5,info,20+(uint32_t)audio_encoder->extradata_size);
+    audio_open_encoder();
     audio_decoded=av_frame_alloc();if(!audio_decoded)fatal("MEMORY");
 }
 static void audio_decode(AVPacket *p,uint64_t *bytes) {
     if(avcodec_send_packet(audio_decoder,p)<0)fatal("AUDIO_DECODE");
     int result;
     while((result=avcodec_receive_frame(audio_decoder,audio_decoded))>=0) {
+        int rate=audio_decoded->sample_rate, count=audio_decoded->nb_samples;
+        if(rate<8000 || rate>48000 || count<=0 || count>8192 || (resampler && rate!=source_rate))fatal("AUDIO_INPUT");
+        if(source_samples+(uint64_t)count>300u*(uint32_t)rate)fatal("AUDIO_LIMIT");
         int64_t timestamp=audio_decoded->best_effort_timestamp;
-        if(timestamp==AV_NOPTS_VALUE)fatal("AUDIO_TIMESTAMP");
-        int64_t us=av_rescale_q(timestamp,audio_time_base,AV_TIME_BASE_Q);
-        if(expected_source_us==AV_NOPTS_VALUE)audio_next_pts=av_rescale_q(timestamp,audio_time_base,audio_encoder->time_base);
-        else if(llabs(us-expected_source_us)>2000)fatal("AUDIO_DISCONTINUITY");
-        if(audio_decoded->sample_rate<=0)fatal("AUDIO_INPUT");
-        expected_source_us=us+av_rescale_q(audio_decoded->nb_samples,(AVRational){1,audio_decoded->sample_rate},AV_TIME_BASE_Q);
+        if(source_origin_us==AV_NOPTS_VALUE) {
+            if(timestamp==AV_NOPTS_VALUE)fatal("AUDIO_TIMESTAMP");
+            source_origin_us=av_rescale_q(timestamp,audio_time_base,AV_TIME_BASE_Q);
+            if(source_origin_us==AV_NOPTS_VALUE || source_origin_us>INT64_MAX-300000000)fatal("AUDIO_TIMESTAMP");
+            audio_next_pts=av_rescale_q(timestamp,audio_time_base,audio_encoder->time_base);
+        } else if(timestamp!=AV_NOPTS_VALUE) {
+            int64_t us=av_rescale_q(timestamp,audio_time_base,AV_TIME_BASE_Q);
+            int64_t expected=source_origin_us+av_rescale_q((int64_t)source_samples,(AVRational){1,rate},AV_TIME_BASE_Q);
+            uint64_t distance=us>=expected?(uint64_t)us-(uint64_t)expected:(uint64_t)expected-(uint64_t)us;
+            if(distance>2000)fatal("AUDIO_DISCONTINUITY");
+        }
+        // A bundled AAC PES timestamps only its first decoded access unit.
+        // Keep the first source origin; cumulative samples clock later units.
+        source_samples+=(uint64_t)count;
         audio_convert(audio_decoded,0,bytes);av_frame_unref(audio_decoded);
     }
     if(result!=AVERROR(EAGAIN) && result!=AVERROR_EOF)fatal("AUDIO_DECODE");
 }
 static void audio_finish(uint64_t *bytes) {
-    if(!audio_decoder)return;
-    audio_decode(NULL,bytes);audio_convert(NULL,1,bytes);
-    if(avcodec_send_frame(audio_encoder,NULL)<0) { fatal("AUDIO_ENCODE"); }
-    audio_emit(bytes);
+    if(audio_decoder) {
+        audio_decode(NULL,bytes);audio_convert(NULL,1,bytes);
+        if(avcodec_send_frame(audio_encoder,NULL)<0) { fatal("AUDIO_ENCODE"); }
+        audio_emit(bytes);
+    } else if(config[6] && config[13])fatal("AUDIO_MISSING");
     av_frame_free(&audio_decoded);av_audio_fifo_free(audio_fifo);swr_free(&resampler);
     avcodec_free_context(&audio_decoder);avcodec_free_context(&audio_encoder);
 }

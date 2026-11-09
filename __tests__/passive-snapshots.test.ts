@@ -68,4 +68,20 @@ describe('native recording snapshot policy', () => {
     expect(capture).toHaveBeenCalledTimes(1);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('revokes a manual refresh queued behind an automatic read when camera privacy changes', async () => {
+    let finishRead!: (response: Response) => void;
+    globalThis.fetch = jest.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finishRead = resolve; }));
+    const { source, capture } = fixture();
+    const callback = jest.fn();
+    const passive = source.handleSnapshotRequest(request, callback);
+    const manual = expect(source.refreshSnapshotCache()).rejects.toThrow('Camera is unavailable/offline');
+    source.setCameraActive(false);
+    source.setCameraActive(true);
+    finishRead(new globalThis.Response(Buffer.from([7])));
+    await Promise.all([passive, manual]);
+    expect(callback).toHaveBeenCalledWith(expect.any(Error));
+    expect(capture).not.toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
 });

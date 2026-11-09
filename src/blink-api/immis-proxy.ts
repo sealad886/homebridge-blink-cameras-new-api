@@ -218,6 +218,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     super();
 
     this.destination = describeMediaDestination(config.immisUrl);
+    if (this.destination.scheme !== 'immis:') throw new Error('Unsupported IMMIS destination');
     this.parsedUrl = new URL(config.immisUrl);
     const clientId = this.parsedUrl.searchParams.get('client_id');
     if (clientId === null || !/^(0|[1-9][0-9]*)$/.test(clientId) || Number(clientId) > 0xffffffff) {

@@ -7,6 +7,172 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.0] - 2026-11-09
+
+### Changed
+- Replace continuous HomeKit recording capture and cloud-media motion polling
+  with a plugin-owned push receiver and delayed retrieval of completed native
+  Blink USB motion clips. Motion exposure and per-camera HomeKit recording each
+  activate the shared subscription; idle recording prepares no USB catalogs.
+- Name public motion sensors `<camera name> Motion Detected` while preserving
+  their HomeKit service identity. Public motion reports independently from the
+  internal recording trigger, which is raised after finite local media is ready.
+- Schedule independent ready FIFO jobs with configurable delay, missing-clip
+  retries, catalog cooldown and bounded local resources. Match canonical camera
+  identities and offset-bearing capture timestamps rather than guessing URL
+  filenames. Preserve unresolved remote ownership through timeout and restart.
+- Prepare completed private MP4 files with the packaged codec worker and offer
+  finite fMP4 recordings under Home camera/recording/audio permissions. Explicit
+  live viewing retains the existing secure transport and capacity controls.
+- Automatic snapshots for recording cameras read existing thumbnails; explicit
+  manual refresh can request a capture. No video, image or other data file is
+  uploaded to Blink. Normal control and workflow metadata POSTs remain supported.
+
+### Upgrade
+- Use global/per-camera `exposeMotionDetected`, per-camera `homeKitSecureVideo`
+  and `nativeRecording` timing/resource settings. Preview the explicit one-off
+  native-recording configuration migration; application preserves exact original
+  bytes in a private backup. The live-view `syncModuleFeedLimits` setting remains
+  valid and is preserved.
+- Retain the current settings editor, temperature sensors, arm/disarm intent
+  handling, verified native packaging, destination checks and hosted sign-in.
+  A valid existing Blink session can register the new receiver without signing
+  in again. Firebase administration and copied phone/tablet tokens are not needed.
+- Require Node.js 20.3+ in the 20.x line; support 22, 24 and 26. Native protocol 4
+  packages require newly built, hash-bound workers and corresponding source for
+  every supported target; previous native artifacts are refused.
+
+### Beta evidence and limits
+- Publish this prerelease on the `beta` channel, preserving stable `latest`.
+  Registry publication does not install it on Homebridge; installation remains
+  operator-owned.
+- An owned receiver received authenticated real native motion events using one
+  Blink registration POST and no camera/Sync Module commands. Source tests and
+  component delivery do not establish a saved native USB clip or Home retention.
+- Full installed Pi operation, continued native recording, Home-hub requests,
+  retained playback and policy/recovery acceptance remain unverified. This beta
+  uses a delayed offer; it does not claim pre-event capture or arbitrary historic
+  insertion into Home's recording timeline. The original persistent USB recording
+  lock's cause remains unproven.
+
+## [1.0.0-beta3] - 2026-11-02
+
+### Fixed
+- Ignore missing, nonstring or blank camera identifiers when resolving camera
+  selections and settings overrides. An orphaned settings row can no longer
+  override inherited settings for a camera without a serial number.
+- Preserve existing saved rows and valid camera identifiers. Invalid rows still
+  need to be removed or completed before Homebridge can save the configuration;
+  they do not define plugin or Sync Module defaults.
+
+## [1.0.0-beta2] - 2026-11-02
+
+### Changed
+- Replace the stacked account and settings forms with five task sections:
+  Overview & connection, Cameras in Home, HomeKit recording, Live viewing &
+  sound, and Advanced & troubleshooting.
+- Choose discovered cameras and Blink systems, edit per-camera names and
+  inherited settings, and retain selections and incomplete edits across
+  navigation or discovery failures. Keep one validated draft until Homebridge
+  Save; precise numeric settings use exact inputs.
+- Remove the four-camera HomeKit recording selection limit. Derive global
+  upstream feed capacity from the known, included camera count, and expose
+  independent feed limits for actual Sync Modules under Cameras in Home.
+  Live viewing and recording share one upstream feed per camera; pending and
+  retiring feeds retain their capacity until owned cleanup completes.
+
+### Fixed
+- Reserve a captured configuration throughout immediate account actions so
+  asynchronous sign-in, lock or unlock operations cannot save unrelated edits.
+- Match qualified camera identities exclusively across recording, exclusions
+  and overrides, including devices or systems whose names resemble another
+  camera's identifier. Preserve and expose unavailable saved system exclusions.
+- Separate initialization, connection and discovery failures, preserve saved
+  choices on discovery failure, and explain which controls govern Blink clip
+  polling, live viewing, background buffering, audio and Home recording.
+
+### Upgrade and beta acceptance
+- Install the exact registry beta through Homebridge package management. Keep
+  HomeKit pairing and accessory persistence. Existing settings remain available;
+  Save and restart the Blink child bridge to apply changes.
+- A Sync Module limit uses its discovered Blink-system association, not proof
+  of a physical video path. Ambiguous associations require resolution before an
+  explicit limit can be saved. Blink can impose lower limits than local capacity.
+  The separate per-camera HomeKit viewer limit and fixed recording-memory and
+  worker-resource bounds remain in place.
+- Recording stays opt-in. Continuous capture increases battery and network use;
+  provider interruptions can leave gaps. Synthetic and local browser checks do
+  not establish physical all-camera concurrency or saved iCloud clips. Apple
+  Home recording permission, motion-to-recording and playback remain operator
+  acceptance steps after installation; publication does not install on the Pi.
+
+## [1.0.0-beta1] - 2026-11-01
+
+### Added
+- Opt-in HomeKit Secure Video recording with a four-second, memory-only prebuffer,
+  H.264 video and optional AAC-LC audio. Select cameras with `hksvCameras`, then
+  enable recording in Apple Home after installation.
+- Share one Blink feed per camera between HomeKit live viewers and recording.
+  Retain complete recording fragments with explicit per-camera and shared memory
+  limits; report discontinuities and overflow instead of silently losing footage.
+- Detect motion from the recording worker's decoded video while its prebuffer is
+  ready. Respect confirmed Blink arming and camera motion settings, with bounded
+  scene analysis that rejects uniform exposure changes and isolated noise.
+  HSV motion does not require delayed Blink cloud-clip polling.
+- Respect HomeKit camera, recording and audio permissions. Revocation, camera
+  unavailability and shutdown stop capture and erase retained recording buffers.
+- Add privacy-preserving HomeKit request and state audit logging, including
+  motion, doorbell, snapshot and streaming outcomes without media capabilities,
+  pairing identifiers or footage in logs.
+
+### Native media and release
+- Add private worker protocol 3 for complete fragmented MP4 initialization and
+  media segments. Reject incompatible worker manifests before launch and require
+  newly built, hash-bound native artifacts for every supported target.
+- Validate recording timestamp continuity, keyframe boundaries and audio
+  coverage. Withhold incomplete fragments and fail explicitly on source resets,
+  missing audio, stalled consumers or resource exhaustion.
+- Publish the exact `1.0.0-beta1` version on the `beta` dist-tag. The stable
+  `latest` channel remains unchanged.
+
+### Beta acceptance and installation
+- Recording remains off by default. Continuous Blink capture increases battery,
+  network and encoding load, and provider session endings can leave gaps while
+  the buffer warms again. Buffering cannot restore media never sent by Blink.
+- Local native decoding, HAP negotiation, permission, buffering and ownership
+  tests provide development evidence. Physical motion-to-Home-hub-to-iCloud
+  recording and playback remain operator acceptance steps after installation.
+- Install the exact registry beta through Homebridge package management. Existing
+  HomeKit pairing and accessory persistence must be retained. Follow
+  `docs/RELEASE.md` and the HomeKit Secure Video section of the README; no Pi
+  installation or configuration change is included in publication.
+
+## [0.11.0-beta.0] - 2026-10-25
+
+### Added
+- Expose optional HomeKit temperature sensors for traditional Blink cameras that report temperature. The global `exposeTemperature` setting defaults to false; existing per-device overrides can enable or disable it for individual cameras.
+- Read the camera's cached configuration temperature in Fahrenheit and convert it to Celsius for HomeKit. Enabled cameras add at most one bounded metadata read per normal state poll; HomeKit reads do not contact Blink or wake/calibrate the camera.
+- Keep temperature faults local, wait for valid metadata before adding a sensor, reuse restored sensors, and report missing, invalid or offline readings as unavailable rather than inventing a value. Owl/Mini and doorbell temperature are not supported.
+
+### Fixed
+- Preserve the latest unresolved network arm/disarm target on HomeKit reads through older command completion and queue expiration. Current security state and motion reads still report confirmed device state; reconciliation or an explicit already-confirmed replacement resolves the intent without replaying a command. This prepares the source correction for issue #48; immutable registry delivery remains pending.
+
+### Secure media implementation
+- Replace the media CLI with a pinned private-pipe codec worker, parent-owned TLS and separate generation-owned SRTP sockets. Bound codec input/output, preserve shared A/V timing, and retain reservations until actual closure.
+- Admit only verified IMMIS and the source-backed RTSPS TCP-interleaved subset; reject redirects, secondary authorities and UDP transport.
+- Supply an explicit configuration migrator that backs up locally before removing retired CLI controls and mapping AAC-ELD to Opus.
+
+### Development tooling
+- Validate complete pull-request and push commit ranges with pinned commitlint 20.5.3. Generated dependency-update messages with long URLs now pass the upstream URL exception; malformed subjects and oversized non-URL prose remain rejected.
+- Update the pinned Python setup action to 7.1.0 for native prototype validation.
+- Update the development-only URI parser to fast-uri 3.1.9, addressing its URI parsing and normalization advisories.
+
+### Beta scope and acceptance
+- Publication is blocked by the maintainer's 25 October decision until F05 and F06 are both fixed and their closure criteria verified. The prepared version and passing source tests do not authorize publication while this hold remains active.
+- This minor beta includes the reviewed runtime changes in PR #86 and supersedes the unpublished 0.10.1-beta.0 preparation. Temperature sensing is opt-in. Secure media replaces the external FFmpeg executable and requires explicit migration of retired settings; see the [upgrade guide](docs/streaming.md#upgrade-configuration).
+- F05/F06 closure remains gated on the final native distribution, integrated secret/connection checks and independent review. The private worker removes media CLI arguments, and the parent enforces the admitted RTSPS subset without a fallback. Opus, PCMA and PCMU replace the former AAC-ELD offer; hardware encoder selection is removed. Talkback remains disabled. The 0.10.0 stable-specific risk disposition does not apply to this beta.
+- Follow the [release guide](docs/RELEASE.md) for exact-registry installation and beta acceptance. Local and hosted tests cover target-state regressions, metadata conversion, sensor lifecycle and fault isolation; they do not establish physical temperature accuracy, Home display, hosted sign-in, offline/recovery behavior or natural token-refresh acceptance for this beta. No Homebridge installation, restart or pairing is included in publication.
+
 ## [0.10.0] - 2026-10-23
 
 ### Added

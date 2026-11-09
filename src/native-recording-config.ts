@@ -1,3 +1,5 @@
+import { matchesDeviceIdentifier } from './settings-inventory';
+
 export interface NativeRecordingConfigInput {
   initialDelaySeconds?: number;
   retryIntervalSeconds?: number;
@@ -66,14 +68,13 @@ export function resolveNativeRecordingConfig(input: NativeRecordingConfigInput |
 export function nativeRecordingDevicePolicy(overrides: readonly NativeRecordingDeviceOverride[] | undefined,
   device: { id: number; name?: string; serial?: string; kind?: 'camera' | 'owl' | 'doorbell' }, exposeMotionDetected = true): NativeRecordingDevicePolicy {
   if (typeof exposeMotionDetected !== 'boolean') throw new Error('Invalid exposeMotionDetected');
+  if (overrides !== undefined && !Array.isArray(overrides)) throw new Error('Invalid per-camera settings list');
   for (const row of overrides ?? []) {
+    if (!row || typeof row.deviceIdentifier !== 'string' || !row.deviceIdentifier.trim()) throw new Error('Invalid per-camera deviceIdentifier');
     for (const key of ['exposeMotionDetected', 'homeKitSecureVideo'] as const) {
       if (row[key] !== undefined && typeof row[key] !== 'boolean') throw new Error(`Invalid per-camera ${key}`);
     }
   }
-  const row = overrides?.find(entry => entry.deviceIdentifier === String(device.id)
-    || (device.kind !== undefined && entry.deviceIdentifier === `${device.kind}:${device.id}`)
-    || (device.serial !== undefined && entry.deviceIdentifier === device.serial)
-    || (device.name !== undefined && entry.deviceIdentifier === device.name));
+  const row = overrides?.find(entry => matchesDeviceIdentifier(device, entry.deviceIdentifier, device.kind));
   return { exposeMotionDetected: row?.exposeMotionDetected ?? exposeMotionDetected, homeKitSecureVideo: row?.homeKitSecureVideo ?? false };
 }

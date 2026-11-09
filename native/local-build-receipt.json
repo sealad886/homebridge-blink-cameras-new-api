@@ -1,15 +1,32 @@
 {
+  "bundled_latm_primary_source_sha256": {
+    "fftools/ffmpeg_opt.c": "9b452dd88d471954e745fa9b74e4d501ae7438e4dde0228b0031bd9e4b08940b",
+    "libavcodec/decode.c": "ccbb7d4597ff8429e50c34ddf81c969010090b85ea0cb29c3ec26f4217dfaaa6",
+    "libavformat/mpegtsenc.c": "5a214e9da8f2b30f66ef5ede3f220a56e26539008d21579d1c1f020f95a4f4a8"
+  },
   "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
   "dependency_receipt": {
     "relative_label": "build/deps/local-eor2xuvi/build-receipt.json",
     "sha256": "f6f1d306dcfdaa5521d6cdc15ad80544e3e8deef02d4467aa4095cd6e0b55eba"
   },
   "distribution_ready": false,
+  "exact_profile_primary_source_sha256": {
+    "ffmpeg-9.0.2/libavcodec/libx264.c": "d118d19748c33cd616d39375021c6dfd32a9ab2baa47827cbc0b976c7679bff3",
+    "x264-0480cb05/common/base.c": "b5c9cc2a672c1103ff50f37e0e5482904dd230a431b47806c10cd4ac0510cc4f",
+    "x264-0480cb05/common/tables.c": "385124cc6b74fc4bcf603e253e437b3d6a43514a128f612f6b26d180e320a726",
+    "x264-0480cb05/encoder/set.c": "09a03e4996e23aba0b02cba244497d91a80d3836bcfd7a6e0956f216088caf40"
+  },
   "ffmpeg_version": "9.0.2",
   "historical_receipts": [
     "receipts/video-only-local-build.json",
     "receipts/audio-srtp-homebrew-local-build.json",
-    "receipts/pre-pr50-gcc-format-local-build.json"
+    "receipts/pre-pr50-gcc-format-local-build.json",
+    "receipts/pre-protocol2-local-build.json",
+    "receipts/pre-session-local-build.json",
+    "receipts/pre-exact-profile-local-build.json",
+    "receipts/pre-eight-megabit-local-build.json",
+    "receipts/pre-bundled-latm-local-build.json",
+    "receipts/pre-resource-local-build.json"
   ],
   "installed_header_sha256": {
     "libavcodec/avcodec.h": "324452903f0d3b4bb4078652ca32c9ca29d7b3db5e005e1af04487409bd3090d",
@@ -33,44 +50,66 @@
   "installed_prefix_label": "build/deps/local-eor2xuvi/prefix",
   "output_sha256": {
     "audio-capabilities": "0339571d98f14bb87f74993937a74e7f18884cc40a58e98ff8e129a95ff5802f",
-    "blink-codec-worker": "66eff29dbad2bf4d41551f532420021814ad93d8ec2ad4c6fad1ed7229388f8b",
-    "check-output": "a7981fc91708da811c53338c053f9ce174a0f1a8945808c2a0dc7a8a009f3a68",
-    "fixture": "dd52d95ea178e47e23d71c085fb98b1caef9475eb7e37e523a0c27121c5322d9"
+    "blink-codec-worker": "abc33f581f77c2b8b9118744f5d76a7e029cca4d43585be2cc888bec14818a89",
+    "check-output": "7641d47da6cc7c427a39ca45c8ad13c38cfb5e32d601932e607c883f37dcf839",
+    "check-rtp": "a0ee74256f360f7796909e8ba71262ad77ac2ee6b1764edf4b2bbc6ef561006c",
+    "fixture": "703d82ff64012f7bbadbeaf8f30db9649eb97a0ebebad5edd871af8e27e41b37"
   },
+  "parent_source_sha256": {
+    "__tests__/media-session.test.ts": "17e9b6b175589d2ff4ad0e9871b14767af93456a391252b5b8b66f003a9d987f",
+    "__tests__/media-worker.test.ts": "527ff1ba0d1a7da4748978bac1b9718e8224f5c9b90fe8ac47624125a2938455",
+    "docs/audits/private-media-worker-client-prototype.md": "32f088b75bd542d0e64a26123d66472a5b5012c2c4e798d9d0ad42dd405cc9a5",
+    "src/accessories/media-session.ts": "a90404e81be6f4ade0245b2db9b517735195fc423b2b85fe9941fae1722099b1",
+    "src/accessories/media-worker.ts": "2efd63ae9312ad93be5f4fc3a00762ab9ae03362f2c1520f71968d7d805ecac1"
+  },
+  "protocol_version": 2,
   "prototype_source_sha256": {
-    "AUDIO-OUTPUT-GATES.md": "a82602969bf0f8caeed2fdcbf37f71b70cdbc238bcc5d5b5ed5400534bbc8f93",
+    "AUDIO-OUTPUT-GATES.md": "3b289e640a941bd3cca371f81622a62d52478c8a42ee12d2da85ddd9f62f2e3b",
     "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-    "Makefile": "94cc9c9183aa36cbfe7870d595694e0a5796e4c93d19bf4c1670e5e677fedc61",
-    "README.md": "6d9330a44582ffbfa2b23ab8245cac3c5e1a082beee236690eea9bd053c63f90",
-    "RTSP-ALTERNATIVES.md": "3b85475293c9e3b4fb541fb7bcdafa1e984c4eb4ee38e9558a9e742b909f1df9",
-    "audio.inc": "73c0639264d9e3acdfb25a57593069ffc8c1a112ea41fe8aa744a1f48b9d6660",
+    "Makefile": "19d1fa498edabe109d387075375371260d39aeb0a1b958d4c97a65752f6e1c22",
+    "README.md": "8b7f1004f583f1ba5e5b0f581dba1e03d0ee8de7e3f9e3e9ce3d4977216bd39a",
+    "RTSP-ALTERNATIVES.md": "5422068eb8545682f362634981fec1cc1be2a0d9fdf93165dd2e6b3988b34d77",
+    "audio.inc": "61cbd69abf91b511f27c7dc85c5422f63f6d1ee7dbdc53825948b1d41be1bfe1",
     "dependencies/licenses/libsrtp-LICENSE": "6254b8adcb68109dc150f3b7243c771478360cd64f22860e715e7265b7b3bb78",
     "output.inc": "bd62b142324b9730af57e9ae12ee15276be42ce71b0956fc72a21511f28e893b",
     "protection.inc": "79afb10696448af99fe6cf44fda83cd76cfc5bda4daac90be55b116b34bd03d1",
-    "protocol.h": "e5a0bc85fe2c34c4e6ab3c5466d6fb1e03312180b53fb34e1310fa48a5da1380",
+    "protocol.h": "6f521c08f9cbfaae6766b30aef9b19191dc802daeb10cdee28746be2285257e1",
+    "receipts/bundled-latm-timestamp-review.md": "95bf2784c277952dcf61178c30a5e6fedfa88b351f9a6d5a4aa087518a630060",
     "receipts/pr50-gcc-indentation-review.md": "969cef9c914cd5681f7b349ba2f979cb4657c7b621cb14913e8d2574e4c44bc8",
     "tests/audio-capabilities.c": "2eaa868a8b6f0f268402eb88c3fab2ad289033a0d6edda13f685898a96ce3d29",
-    "tests/check-output.c": "d6987e0e62b79ea66ac2bf7e8492867ca2beda0162d6ec7af17e0e7be79105d4",
-    "tests/fixture.c": "2675e620e55bb0ab1e7b84a68ca6826280ece63ce9ab077cc2e2940261a5deeb",
-    "tests/test_worker.py": "8d66725d699a47e9882321923ac5859add5c90780c215e8d3f9d464746517974",
-    "worker.c": "02db1d217bf5ee4130fda999791d84e684e810d2eeb934a608fed5cefd85ce67"
+    "tests/check-output.c": "3ca650439a2da5f088224508ceaec7b1f37d144334bb67aa677b1edc329e1ef7",
+    "tests/check-rtp.c": "0a45bd4bbd6e619260f428fb1d2348ce6a07a41ca08adc3f6b63a7b33f6b84ac",
+    "tests/fixture.c": "9d0d74266559c2e571ba56047432a46d12b22ad4ee3c7d788f2b24c6eaa36f40",
+    "tests/test_resources.py": "cf10a02ef5805aa62e6296cbf1204a35d917a0ffabe0bf703df112ba8a0ac80b",
+    "tests/test_worker.py": "20f52e6ecc06f96673093a1e20bdd47e03282a8cbcba238e98654bce495c714e",
+    "worker.c": "07085bf6030ae303678b75571fff9bd4ece8d427f407733a3b678b0e6b1ef680"
   },
+  "recorded_at": "2026-10-26T01:15:28.577250+00:00",
   "scope": "local macOS arm64 static worker development build; not a distribution receipt",
   "upstream_source_commit": "FFmpeg commit unverified; verified release archive identity recorded below",
   "validation": {
     "audio_capability_probe": "Opus/PCMA/PCMU opened; AAC-ELD rejected with -22",
+    "bundled_latm_timestamp": "RED oldworker failed AUDIO_TIMESTAMP on retained benchmark SHA532d2fc79a248b1943bb55decb7a58b95ac3e3a4a726a50b1374cb8d8b1faf17 and generated bundled-PES all4codecs; GREEN first-source anchor plus cumulative validated samples derives missing laterPTS, knownPTS tolerance2ms no reanchor. Initialmissingreject; exact2msaccept;\u00b12.011msreject; independent decode/20msPTS/64msAVoffset; retained exactbenchmark exit0 empty stderr. See receipts/bundled-latm-timestamp-review.md; no resource acceptance claim",
     "checker": "same verified static prefix as worker, fixture and capability probe",
+    "checks": "Full native suite 33/33; real private-session/receiver and queue/recording checks; full repository TypeScript/lint and workflow syntax. Windows execution remains pending hosted CI.",
     "command": "make -B -C native FFMPEG_PREFIX=<verified static prefix> SRTP_PREFIX=<verified static prefix> test",
-    "crash_limit": "POSIX worker runtime sets/verifies own RLIMIT_CORE soft/hard=0; no secret-bearing crash triggered; Windows error-mode source-only",
+    "crash_limit": "POSIX own RLIMIT_CORE zero readback passed. Windows required SetErrorMode/GetErrorMode mask readback implemented before STATUS, pending actual Windows execution; external/administrative memory collectors excluded.",
+    "dependency_recipe_scope": "Retained verified local-eor2xuvi prefix from earlier source build; newly extended cross-target dependency recipe and Windows target are not proved by this local receipt",
+    "eight_megabit_boundary": "RED old4Mbps ceiling refused8M; GREEN nativebothpresets:8M accepted, exactHigh/SPS100 level31, independent4framepixeldecode, effective bitstream SEI bitrate/vbv_maxrate/vbv_bufsize=8000;8000001 refused; sessionpreflight8M accepted/>8Mnoeffects. Packet/queue/lifetimecaps unchanged; no stress/performance claim",
+    "exact_h264_profile": "RED ultrafast Main/High emitted SPS66; GREEN all6 veryfast/ultrafast xBaseline/Main/High SPS66/77/100 and selected levels31/32/40, each independently decoded4frames/pixels; public coder/8x8dct options restore required tools; Pi CPU/resource gate remains open",
     "gcc_syntax_checks": [
       "GCC14.4.0 strict syntax-only all owned native translation units/includes/C helpers",
       "GCC16.2.0 strict syntax-only all owned native translation units/includes/C helpers"
     ],
+    "parent_client": "107 worker/session/output/socket tests passed:42 worker,19 session,32 output,14 socket; includes actual worker and independent SRTP receiver on small and bundled AAC-LATM fixtures",
     "pattern_gate": "eight CI diagnostic sites corrected; local/regional/native-wide direct fallback; relevant Codanna included helper symbols not indexed",
     "process_surface_check": "owned synthetic child ps argv/environment, INIT reply, fixed malformed-frame diagnostics; tests run outside sandbox because sandbox blocks ps",
+    "protocol_2": "13u32/52B CONFIG with preset0veryfast/1ultrafast in field5; source info output7 width,height,fps numerator/denominator; original geometry/FPS/profile/Opus/cumulative-credit proof retained",
+    "resource_observations": "Three decoded maximum-geometry/2K/square synthetic workloads; per-worker OS resident high-water marks in build/resource-receipt.json. Short-workload observations only; no hard global memory budget or physical acceptance.",
     "scope": "macOS arm64 only; no physical runtime/distribution proof",
+    "session_receiver": "Eight real LATM->worker->paced RTP/SRTCP->libsrtp unprotect/libavcodec decode cases: small and bundled30-video-frame fixtures, Opus16/24kHz and PCMA/PCMU8kHz, FU-A at128-byte videoMTU, stream identity/20ms audio clocks/final SR counters/64ms audible offset, forged authentication-tag rejection; injected datagram sink, not actual UDP",
     "srtp": "published RTP/SRTCP vectors through IPC, post-codec-END protection, stdout deadline and independent STOP",
-    "tests_passed": 19
+    "tests_passed": 33
   },
   "verified_source_inputs": {
     "ffmpeg_signature": {

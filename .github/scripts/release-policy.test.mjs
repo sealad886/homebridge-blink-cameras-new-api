@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { releaseTag, releaseNotes, registryMetadata, verifyPublished, waitForPublished, waitForTagRemoval, compareStableVersions, assertTrustedPublishing } from './release-policy.mjs';
 
-for (const [version, tag] of [['0.10.0-alpha.0', 'alpha'], ['0.10.0-beta.2', 'beta'], ['0.10.0-rc.0', 'rc'], ['0.10.0', 'latest']]) {
+for (const [version, tag] of [['0.10.0-alpha.0', 'alpha'], ['0.10.0-beta.2', 'beta'], ['1.0.0-beta1', 'beta'], ['0.10.0-rc.0', 'rc'], ['0.10.0', 'latest']]) {
   test(`routes ${version} to ${tag}`, () => assert.equal(releaseTag(version), tag));
 }
-for (const version of ['01.2.3', '1.2', '1.2.3-dev.0', '1.2.3-alpha', '1.2.3-rc.01', '1.2.3+build', '1.2.3\n', undefined]) {
+for (const version of ['01.2.3', '1.2', '1.2.3-dev.0', '1.2.3-alpha', '1.2.3-beta01', '1.2.3-rc.01', '1.2.3+build', '1.2.3\n', undefined]) {
   test(`rejects unsupported version ${version}`, () => assert.throws(() => releaseTag(version)));
 }
 test('extracts only exact version curated notes', () => {

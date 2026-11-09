@@ -31,6 +31,11 @@ records the actual JADX/DEX evidence and limitations. REA's Android operation wa
 unavailable because the caller-supplied JADX MCP JAR was not configured; no
 successful REA Android Evidence IDs are claimed.
 
+The beta integrates current main's secure live-view runtime, settings and verified
+native packaging before publication. Finite downloaded MP4 input is a closed mode
+of the same private codec worker; previous worker artifacts are rejected. The
+original stable-based component test results remain separately identified.
+
 The working Pi remains on 0.10.0. Source development and these documents do not
 install a candidate, restart Homebridge or authorize speculative camera/storage
 recovery commands. Operational tests need their own recorded scope and evidence.
@@ -49,7 +54,7 @@ flowchart LR
   Q --> C[Shared account command admission]
   C --> B[Official native-storage workflow]
   B --> F[Private completed video]
-  F --> W[Finite local FFmpeg preparation]
+  F --> W[Finite private-worker preparation]
   W --> R[Internal recording trigger]
   W --> H[Camera recording delegate]
   R --> K[Home hub]
@@ -67,7 +72,7 @@ local conversion callback into provider acquisition.
 | Exact preparation/status/result protocol and durable operation receipt | `NativeStorageOwner` |
 | Account-wide admission for storage, controls and manual Live View | Existing `BlinkApi` command queue and combined remote-operation ownership |
 | Scoped persistence and composition with discovered devices | `NativeRecordingRuntime`, using the existing owner-only JSON writer |
-| Finite local conversion and Home transport lifecycle | `native-recording-preparation.ts`, `NativeRecordingDelegate` |
+| Finite local conversion and Home transport lifecycle | `native-recording-preparation.ts`, canonical private codec worker, `NativeRecordingDelegate` |
 | Configured policy and HomeKit service assembly | `native-recording-config.ts`, platform and existing `MotionBase` |
 
 These boundaries retain different necessary lifetimes: Google transport,
@@ -195,7 +200,7 @@ race requeues within the existing retry/age bound; strict no-send proof restores
 the prior catalog cooldown, while a sent/refused POST retains its cooldown.
 One shared conversion admission and an explicit retained-media budget prevent
 unbounded concurrent local preparation. Bounds on owned buffers are not a claim
-about total Homebridge or FFmpeg RSS.
+about total Homebridge or native-worker RSS.
 
 ## Preserve provider ownership and minimize requests
 
@@ -238,12 +243,14 @@ supported.
 
 ## Finite local media and Home privacy
 
-Prepare the completed private file through the operator-managed FFmpeg executable,
-using an inherited seekable local descriptor, bounded output/deadlines and local
-file/pipe protocols. H.264/AAC-LC output is validated as finite fMP4 with contiguous
-keyframe fragments. No reference native binary or worker artifact is imported.
-The stable lock selects Homebridge 1.11.1 / HAP 0.14.0; the running Pi's newer
-Homebridge/Node environment is a separate runtime qualification.
+Validate and read the completed private file through its owned descriptor, then
+feed bounded MP4 bytes to the canonical packaged codec worker. Its finite mode
+uses a closed seekable memory input after END; it accepts no filename, provider
+URL or protocol-opening capability. H.264/AAC-LC output is validated as finite
+fMP4 with contiguous keyframe fragments and bounded output/deadlines. Protocol 4
+requires newly built, source-bound workers rather than previous artifacts.
+The development lock selects Homebridge 1.11.1 / HAP 0.14.0; the running Pi's
+newer Homebridge/Node environment is a separate runtime qualification.
 
 HAP's [0.14.0 recording delegate](https://github.com/homebridge/HAP-NodeJS/blob/v0.14.0/src/lib/controller/CameraController.ts#L200-L307)
 accepts initialization and media packets, not a URL/file-import command. Announce

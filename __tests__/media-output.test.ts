@@ -1,12 +1,102 @@
 import { test } from '@jest/globals';
 import { Buffer } from 'node:buffer';
-import { BoundedMediaSender, H264Packetizer, MEDIA_OUTPUT_LIMITS, MediaOutputOptions, senderReport, validateMediaOutput } from '../src/accessories/media-output';
+import { AudioPacketizer, BoundedMediaSender, H264Packetizer, MEDIA_OUTPUT_LIMITS, MediaOutputOptions, ProtectedRtpStream, RtpClock, senderReport, validateMediaOutput } from '../src/accessories/media-output';
 
 const options = (): MediaOutputOptions => ({ address: '192.168.1.5', addressVersion: 'ipv4', port: 5000,
   suite: 'AES_CM_128_HMAC_SHA1_80', key: Buffer.alloc(16), salt: Buffer.alloc(14), ssrc: 0xcafebabe,
   payloadType: 99, mtu: 128, fps: 30, rtcpInterval: 0.5 });
 
 describe('isolated media output boundary', () => {
+  test('audio RTP preserves one encoded packet, negotiated identity and sequence wrap', () => {
+    const packetizer = new AudioPacketizer(3, 110, 128, 65535);
+    const payload = Buffer.from([0x78, 1, 2]);
+    const first = packetizer.packetize(payload, 48000, true);
+    expect(first[0]).toBe(0x80); expect(first[1]).toBe(238);
+    expect(first.readUInt16BE(2)).toBe(65535); expect(first.readUInt32BE(4)).toBe(48000);
+    expect(first.readUInt32BE(8)).toBe(3); expect(first.subarray(12)).toEqual(payload);
+    payload.fill(0); expect(first.subarray(12)).toEqual(Buffer.from([0x78, 1, 2]));
+    const next = packetizer.packetize(Buffer.from([0x78, 3]), 48960);
+    expect(next.readUInt16BE(2)).toBe(0); expect(next[1]).toBe(110);
+  });
+  test('audio rejects oversized and empty packets without consuming sequence', () => {
+    const packetizer = new AudioPacketizer(3, 110, 128, 7);
+    expect(() => packetizer.packetize(Buffer.alloc(107), 0)).toThrow();
+    expect(() => packetizer.packetize(Buffer.alloc(0), 0)).toThrow();
+    expect(() => packetizer.packetize(Buffer.alloc(1), -1)).toThrow();
+    expect(packetizer.packetize(Buffer.alloc(106), 0).length + 10).toBe(128);
+    expect(packetizer.packetize(Buffer.alloc(1), 0).readUInt16BE(2)).toBe(8);
+  });
+  test('RTP clocks preserve a common signed microsecond timeline and wrap', () => {
+    const origin = 10000000000000000n;
+    const video = new RtpClock(90000, origin, 0xfffffff0);
+    const opus = new RtpClock(48000, origin, 50);
+    const pcm = new RtpClock(8000, origin, 100);
+    expect(video.timestamp(origin)).toBe(0xfffffff0);
+    expect(video.timestamp(origin + 1000000n)).toBe(89984);
+    expect(opus.timestamp(origin + 20000n)).toBe(1010);
+    expect(pcm.timestamp(origin + 20000n)).toBe(260);
+    expect(opus.timestamp(origin - 20000n)).toBe(4294966386);
+    expect(video.timestamp(origin + 1000000n)).toBe(89984);
+  });
+  test('owned RTP output protects audio and reports only transmitted payload counters', async () => {
+    const sent: Buffer[] = [];
+    const protector = { protectRtp: jest.fn(async (p: Buffer) => Buffer.concat([p, Buffer.alloc(10)])),
+      protectRtcp: jest.fn(async (p: Buffer) => Buffer.concat([p, Buffer.alloc(14)])), close: jest.fn() };
+    const sink = { send: jest.fn(async (p: Buffer) => { sent.push(Buffer.from(p)); }) };
+    const stream = new ProtectedRtpStream(options(), 'opus', 0n, 50, 65535, 'session-123', protector, sink);
+    await stream.sendAudio(Buffer.from([0x78, 1]), 20000n, true);
+    await stream.report(1000500, 20000n);
+    expect(sent[0].readUInt32BE(4)).toBe(1010);
+    expect(sent[0].readUInt16BE(2)).toBe(65535);
+    expect(protector.protectRtcp.mock.calls[0][0].readUInt32BE(20)).toBe(1);
+    expect(protector.protectRtcp.mock.calls[0][0].readUInt32BE(24)).toBe(2);
+    stream.close(); expect(protector.close).toHaveBeenCalledTimes(1);
+    await expect(stream.sendAudio(Buffer.from([0x78]), 40000n)).rejects.toThrow();
+  });
+  test('RTP reports retain admitted identity if the caller mutates negotiation', async () => {
+    const negotiation = options(); const reports: Buffer[] = [];
+    const protector = { protectRtp: async (p: Buffer) => Buffer.concat([p, Buffer.alloc(10)]),
+      protectRtcp: async (p: Buffer) => { reports.push(Buffer.from(p)); return Buffer.concat([p, Buffer.alloc(14)]); }, close: jest.fn() };
+    const stream = new ProtectedRtpStream(negotiation, 'pcma', 0n, 0, 0, 'session-123', protector, { send: async () => {} });
+    negotiation.ssrc = 42;
+    await stream.report(1000, 0n);
+    expect(reports[0].readUInt32BE(4)).toBe(0xcafebabe); stream.close();
+  });
+  test('protected H264 fragments fit MTU and sender reports count RTP payload octets', async () => {
+    const rtp: Buffer[] = []; const reports: Buffer[] = [];
+    const protector = { protectRtp: async (p: Buffer) => { rtp.push(Buffer.from(p)); return Buffer.concat([p, Buffer.alloc(10)]); },
+      protectRtcp: async (p: Buffer) => { reports.push(Buffer.from(p)); return Buffer.concat([p, Buffer.alloc(14)]); }, close: jest.fn() };
+    const sent: Buffer[] = [];
+    const stream = new ProtectedRtpStream(options(), 'h264', 1000n, 10, 0, 'session-123', protector,
+      { send: async (p: Buffer) => { sent.push(Buffer.from(p)); } });
+    await stream.sendVideo([Buffer.concat([Buffer.from([0x65]), Buffer.alloc(350)])], 1001000n);
+    await stream.report(1000, 1001000n);
+    expect(rtp.length).toBeGreaterThan(1); expect(rtp[0].readUInt32BE(4)).toBe(90010);
+    expect(reports[0].readUInt32BE(20)).toBe(rtp.length);
+    expect(reports[0].readUInt32BE(24)).toBe(rtp.reduce((sum, p) => sum + p.length - 12, 0));
+    expect(sent.every(p => p.length <= 128)).toBe(true); stream.close();
+  });
+  test('protection failure closes admission before any datagram can escape', async () => {
+    const sink = { send: jest.fn(async () => {}) };
+    const protector = { protectRtp: jest.fn(async (): Promise<Buffer> => { throw new Error('dummy-private-input'); }),
+      protectRtcp: jest.fn(async (p: Buffer) => p), close: jest.fn() };
+    const stream = new ProtectedRtpStream(options(), 'opus', 0n, 0, 0, 'session-123', protector, sink);
+    await expect(stream.sendAudio(Buffer.from([0x78]), 0n)).rejects.toThrow('RTP stream failed');
+    expect(sink.send).not.toHaveBeenCalled(); expect(protector.close).toHaveBeenCalledTimes(1);
+    await expect(stream.report(1000, 0n)).rejects.toThrow('admission'); stream.close();
+    expect(protector.close).toHaveBeenCalledTimes(1);
+  });
+  test('STOP fences an in-flight protection result and concurrent admission', async () => {
+    let finish!: (packet: Buffer) => void;
+    const sink = { send: jest.fn(async () => {}) };
+    const protector = { protectRtp: () => new Promise<Buffer>(resolve => { finish = resolve; }),
+      protectRtcp: async (p: Buffer) => p, close: jest.fn() };
+    const stream = new ProtectedRtpStream(options(), 'pcmu', 0n, 0, 0, 'session-123', protector, sink);
+    const pending = stream.sendAudio(Buffer.alloc(10), 0n);
+    await expect(stream.report(1000, 0n)).rejects.toThrow('admission');
+    stream.close(); finish(Buffer.alloc(32));
+    await expect(pending).rejects.toThrow(); expect(sink.send).not.toHaveBeenCalled();
+  });
   test.each([{ address: 'example.com' }, { address: '::1' }, { address: 'fe80::1%en0', addressVersion: 'ipv6' },
     { address: '0.0.0.0' }, { address: '127.0.0.1' }, { address: '224.0.0.1' }, { port: 0 }, { port: 65536 }, { payloadType: 128 }, { fps: 0 }, { mtu: 63 }, { ssrc: 0 },
     { rtcpInterval: NaN }, { suite: 'NONE' }, { key: Buffer.alloc(15) }, { salt: Buffer.alloc(16) }])('rejects invalid negotiation %p', change => {

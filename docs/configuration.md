@@ -17,6 +17,48 @@ child-bridge restart workflow.
 
 For sign-in and token-storage behavior, see [authentication](authentication.md).
 
+The editor separates five tasks:
+
+| Section | Use it for |
+| --- | --- |
+| Overview & connection | Sign in, inspect stored-session facts and test the Blink connection. |
+| Cameras in Home | Choose systems/cameras, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional live-view feed limits. Excluded cameras remain visible here so you can include them again. |
+| HomeKit recording | Choose discovered cameras and review recording, motion and privacy prerequisites. |
+| Live viewing & sound | Allow live viewing, choose a picture preset and allow shared HomeKit audio. |
+| Advanced & troubleshooting | Polling, previews, exact tuning values, diagnostics and immediate account maintenance. |
+
+Navigation retains incomplete edits. Invalid values or an unavailable validation
+service keep Save disabled with a retryable explanation. Camera discovery failure
+preserves existing selections and marks the last list stale; it does not turn
+missing cameras into an empty successful result. Unresolved saved identifiers
+remain visible until you explicitly remove them. New selections use qualified
+identities such as `camera:123`, `owl:123` or `doorbell:123` so equal numeric IDs
+across device types stay distinct.
+
+Account actions are immediate and separate from settings Save. Save or discard
+unsaved settings before changing the account, so an account action cannot save
+unrelated edits. Settings stay unavailable throughout the account request and
+its configuration save. Per-camera temperature offers **Use platform setting**, **Show**
+and **Hide**. Blank per-camera motion duration inherits the platform duration.
+
+## Live-view feed limits
+
+HomeKit recording uses completed native clips as described
+[below](#motion-and-homekit-recording). Explicit live viewing retains independent
+upstream capacity limits. These limits do not schedule USB clip acquisition.
+
+The global live-view upstream feed capacity is the known, included camera count;
+an offline camera remains known. Each actual Sync Module defaults to the included camera count associated with its Blink
+system. Set an optional positive whole-number limit in the module details;
+**Use discovered default** removes that override. Blink may impose additional
+limits regardless of local capacity.
+
+A Blink system is not a Sync Module ID. The available inventory associates a
+camera with a real module only when exactly one module belongs to its system;
+this is not proof of the physical video path. Ambiguous associations and stale
+explicit module limits receive validation errors. Remove an override or resolve
+the inventory before saving; the editor never silently ignores it.
+
 ## Manual Configuration
 
 Add a platform entry to your Homebridge `config.json`:
@@ -34,8 +76,6 @@ Add a platform entry to your Homebridge `config.json`:
       "motionTimeout": 30,
       "exposeMotionDetected": true,
       "enableStreaming": true,
-      "ffmpegPath": "ffmpeg",
-      "videoEncoder": "auto",
       "enableAudio": true
     }
   ]
@@ -59,31 +99,38 @@ Add a platform entry to your Homebridge `config.json`:
 | `debugAuth` | No | `false` | Enable verbose authentication logging |
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
-| `exposeMotionDetected` | No | `true` | Publish a motion sensor per camera and subscribe to Blink push notifications; per-camera overrides apply |
+| `exposeMotionDetected` | No | `true` | Publish motion sensors from Blink push events; per-camera overrides apply |
 | `nativeRecording` | No | See below | Bounded timing, matching and local storage policy for optional HomeKit recording |
-| `enableStreaming` | No | `true` | Enable HomeKit live streaming; FFmpeg is also needed for optional HomeKit recording |
-| `ffmpegPath` | No | `ffmpeg` | Operator-managed executable path; required capabilities are described in [streaming requirements](streaming.md#ffmpeg-requirements) |
-| `ffmpegDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
-| `rtspTransport` | No | `tcp` | RTSP transport for Blink live view |
+| `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
+| `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
+| `syncModuleFeedLimits` | No | `[]` | Optional live-view `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. These do not govern native clip acquisition. |
+| `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
-| `enableAudio` | No | `true` | Enable audio streaming from camera |
-| `twoWayAudio` | No | `false` (forced off) | Talkback is currently disabled; HomeKit microphone UI is hidden until IMMIS uplink is validated |
-| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `aac-eld`, `pcma`, `pcmu`) |
+| `enableAudio` | No | `true` | Allow camera audio for live viewing and HSV; Home recording-audio permission must also allow it |
+| `audioCodec` | No | `opus` | Preferred audio codec (`opus`, `pcma`, `pcmu`) |
 | `audioBitrate` | No | `32` | Audio bitrate (kbps) |
 | `outputQuality` | No | `auto` | System-wide output profile; see [quality profiles](streaming.md#input-and-output-quality) |
 | `softwareEncodingPreset` | No | `veryfast` | Balanced or optional `ultrafast` software encoding |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
-| `videoEncoder` | No | `auto` | Preferred FFmpeg video encoder; `auto` prefers platform hardware encoding and falls back to `libx264` |
-| `debugStreamPath` | No | - | Save raw MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging |
-| `snapshotCacheTTL` | No | `60` | Snapshot cache duration in seconds; native-recording cameras only download an existing thumbnail on automatic cache misses |
+| `debugStreamPath` | No | - | Save raw IMMIS MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging; RTSPS recording is not implemented |
+| `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` requests fresh snapshots, subject to capture coalescing, failure backoff and provider busy fallback |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
-| `excludeDevices` | No | - | List of device IDs/serials/names to exclude |
+| `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
-| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeMotionDetected` and `homeKitSecureVideo`; see below and [input quality](streaming.md#input-and-output-quality) |
+| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected` and `homeKitSecureVideo`; see below and [input quality](streaming.md#input-and-output-quality) |
 
-Use **Excluded Networks** in the plugin settings to select systems this instance
-should not expose. Save and restart the Blink child bridge. Clearing a selection
-restores that network on discovery. Missing/offline devices are not removed merely
+For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration)
+before restarting; retired CLI and AAC-ELD settings are rejected. Upgrading from
+0.10.0 also requires reviewing the
+[native recording migration](native-recording-config-migration.md). Run the secure
+media converter first against the explicit complete Homebridge config path; it
+creates a private backup before replacement. Then preview the native recording
+converter, review its report and apply it only when ready. Neither tool contacts
+Blink or restarts Homebridge.
+
+Use **Cameras in Home** to select systems this instance should expose. Save and
+restart the Blink child bridge. Including a system restores it on discovery.
+Missing/offline devices are not removed merely
 because they are absent from one response. Network names are exact matches; IDs
 remain stable if a network is renamed.
 
@@ -177,7 +224,44 @@ For earlier configuration, use the
 [one-off configuration migration](native-recording-config-migration.md). Review its dry run and
 backup before applying it; it is never run automatically on the Pi.
 
-## Snapshot behavior
+## Camera temperature
+
+Set `exposeTemperature` to `true` to expose Blink's reported temperature for
+traditional cameras that supply it. It is disabled by default. An optional
+`exposeTemperature` boolean in `deviceSettingOverrides` overrides the global
+setting for a matching camera serial, numeric ID or exact Blink name. Omit the
+per-device field to inherit; explicit `false` disables it even when globally on.
+
+```json
+{
+  "exposeTemperature": false,
+  "deviceSettingOverrides": [
+    { "deviceIdentifier": "CAMERA-SERIAL", "exposeTemperature": true }
+  ]
+}
+```
+
+Save and apply through the normal child-bridge restart workflow. Each enabled
+traditional camera adds at most one bounded config metadata GET at discovery and
+each normal state poll, with overlapping reads coalesced. HomeKit reads make no
+cloud requests. This reads the camera's last reported measurement; it does not
+wake the camera, force a new measurement or change its calibration. Frequent
+state polling also increases these optional metadata requests.
+
+Blink's camera config `signals.temp` is Fahrenheit; the plugin converts to
+Celsius for HomeKit, which uses the Home app's preferred display units. A sensor
+appears after the first valid sample. Missing/invalid data, a failed metadata
+read or an offline camera/bridge makes an existing sensor unavailable with a
+fault instead of reporting zero. A later valid sample restores it. Restored
+sensors wait for fresh metadata; disabling the option removes them when the
+camera is restored during discovery.
+
+Owl/Mini and doorbell inventory are excluded from this implementation. It does
+not assume that an unverified homescreen temperature field supplies a reading.
+Real camera measurement accuracy and Home display require physical acceptance;
+automated contract and lifecycle tests alone do not establish those outcomes.
+
+## Snapshot cache
 
 When `persistSnapshotCache` is enabled, `snapshotCacheTTL` is ignored after the first successful
 snapshot fetch. Use the `Refresh Snapshot` switch in Home to request a fresh thumbnail capture.
