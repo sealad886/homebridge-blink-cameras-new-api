@@ -178,7 +178,8 @@ export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
       createNativeStorageTransport: () => ({ postEmpty: denied, getJson: denied, validateMediaUrl: denied, downloadMedia: denied }),
       withNativeStorageAdmission: denied, setNativeStorageOwner() {},
       configureRemoteOperationOwnership: options => { saveRemote = options.saveState; return async () => {}; },
-      reconcileKnownStateCommand: async () => ({ confirmed: true }), getRemoteOperationState: () => ({ storage: [], persistenceFailed: false }) };
+      reconcileKnownStateCommand: async () => ({ confirmed: true }), reconcileKnownLiveViews: async () => [],
+      getRemoteOperationState: () => ({ storage: [], persistenceFailed: false }) };
     const options = { client, scope, storagePath: scratch, config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT,
       appVersion: '61.0', report: event => assert(!event.includes('faulted'), 'Offline runtime must not fault'),
       matchingDevices: [{ accountId: 10, networkId: 20, syncModuleId: 30, moduleId: '20:30', providerId: 40,

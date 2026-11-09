@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -12,7 +12,7 @@ import { BLINK_FIREBASE_CLIENT } from '../src/blink-api/fcm-config';
 import { BlinkHttpError } from '../src/blink-api/http';
 import type { FcmEventSourceOptions } from '../src/blink-api/fcm/source';
 import type { FcmNotification, FcmReceiverState } from '../src/blink-api/fcm/types';
-import type { NativeStorageTransport } from '../src/blink-api/native-storage';
+import type { NativeStorageTransport, NativeStoredMedia } from '../src/blink-api/native-storage';
 import type { NativeMotionDevice } from '../src/blink-api/motion-events';
 import { writeOwnerOnlyJsonFile } from '../src/blink-api/secure-json-file';
 import { NativeRecordingDelegate } from '../src/accessories/native-recording-delegate';
@@ -116,6 +116,7 @@ describe('native recording runtime composition', () => {
         remoteSave = options.saveState; return releaseOwnership;
       }),
       reconcileKnownStateCommand: jest.fn().mockResolvedValue({ confirmed: true }),
+      reconcileKnownLiveViews: jest.fn().mockResolvedValue([]),
     };
     const devices: NativeRecordingRuntimeOptions['devices'] = [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
         ...(overrides.nativeStorage === false ? {} : { nativeStorage: { moduleId: '20:30', syncModuleId: 30 } }),
@@ -164,6 +165,58 @@ describe('native recording runtime composition', () => {
     expect(demand).toHaveBeenNthCalledWith(1, { motionAccessory: false, hsv: false });
     expect(demand).toHaveBeenNthCalledWith(2, { motionAccessory: false, hsv: false });
     expect(api.getRemoteOperationState()).toMatchObject({ storage: [], persistenceFailed: false });
+  });
+
+  it.each([
+    { acknowledged: true, commandId: 707, completeAtStartup: true },
+    { acknowledged: true, commandId: 707, completeAtStartup: false },
+    { acknowledged: false, commandId: 707, completeAtStartup: false },
+    { acknowledged: false, commandId: undefined, completeAtStartup: false },
+  ])('recovers only known acknowledged retirements on startup/retry ($acknowledged/$commandId/$completeAtStartup)', async scenario => {
+    const originalFetch = globalThis.fetch;
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'retirement-recovery', tier: scope.tier });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...scope, sharedTier: scope.tier });
+    jest.spyOn(auth, 'ensureValidToken').mockResolvedValue(undefined);
+    jest.spyOn(auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer fixture-auth' });
+    const directory = path.join(root, '.blink-native-recording', '10-11-u000');
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const saved: NativeRecordingRuntimeState = { version: 1, scope, nativeByModule: {}, consumed: [], catalogStartedAt: {}, refusedUntil: {}, downloads: [],
+      remoteOperations: { liveView: { reservationId: 'retiring-view', accountId: 10, networkId: 20, deviceId: 40,
+        kind: 'camera', phase: 'unresolved', commandId: scenario.commandId, retirementAcknowledged: scenario.acknowledged } } };
+    await writeOwnerOnlyJsonFile(path.join(directory, 'state.json'), saved);
+    const demand = jest.fn().mockResolvedValue(undefined), report = jest.fn();
+    try {
+      globalThis.fetch = jest.fn().mockImplementation(async () => {
+        const complete = scenario.completeAtStartup || (globalThis.fetch as jest.Mock).mock.calls.length > 1;
+        return new Response(JSON.stringify({ complete, status: 0 }), { headers: { 'content-type': 'application/json' } });
+      });
+      const runtime = await NativeRecordingRuntime.create({ client: api, scope, devices: [], matchingDevices: [], storagePath: root,
+        config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report,
+        eventSourceFactory: () => ({ setDemand: demand, stop: jest.fn().mockResolvedValue(undefined) }) });
+      runtimes.push(runtime); await runtime.start();
+      if (scenario.acknowledged) {
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        if (!scenario.completeAtStartup) {
+          expect(api.getRemoteOperationState().liveView).toMatchObject({ commandId: 707, phase: 'unresolved', retirementAcknowledged: true });
+          const retry = runtime.start(); await jest.advanceTimersByTimeAsync(300); await retry;
+        }
+        expect(api.getRemoteOperationState().liveView).toBeUndefined();
+        const admission = api.withNativeStorageAdmission('recovered-admission', async () => 'allowed', {}, { accountId: 10, networkId: 20, syncModuleId: 30 });
+        await jest.advanceTimersByTimeAsync(300); await expect(admission).resolves.toBe('allowed');
+        for (const [url, request] of (globalThis.fetch as jest.Mock).mock.calls) {
+          expect(url).toBe('https://rest-u000.immedia-semi.com/accounts/10/networks/20/commands/707'); expect(request.method).toBe('GET');
+        }
+        expect(globalThis.fetch).toHaveBeenCalledTimes(scenario.completeAtStartup ? 1 : 2);
+      } else {
+        await runtime.start();
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(api.getRemoteOperationState().liveView).toEqual(saved.remoteOperations!.liveView);
+        await expect(api.withNativeStorageAdmission('blocked-admission', async () => 'must-not-run', {},
+          { accountId: 10, networkId: 20, syncModuleId: 30 })).rejects.toMatchObject({ dispatched: false });
+      }
+      expect(demand).toHaveBeenCalledTimes(1);
+    } finally { globalThis.fetch = originalFetch; }
   });
 
   it('persists late live-view cleanup through the replacement runtime without erasing its newer push checkpoint', async () => {
@@ -498,6 +551,58 @@ describe('native recording runtime composition', () => {
     await expect(fs.stat(reference)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await fs.readFile(path.join(restored.runtime.cacheDirectory, 'unknown.mp4'), 'utf8')).toBe('preserve');
     expect(await fs.readFile(path.join(restored.runtime.cacheDirectory, '.DS_Store'), 'utf8')).toBe('preserve');
+  });
+
+  it.each(['before-result', 'before-download-index'] as const)('reclaims the %s crash window and resumes recording at the minimum cache capacity', async crashWindow => {
+    const config = { maxCachedBytes: 32 * 1024 * 1024 }, f = await setup({ config }), pending = deferred<NativeStoredMedia>();
+    let promoted: NativeStoredMedia | undefined, partial = '';
+    f.transport.downloadMedia.mockImplementationOnce(async () => {
+      const id = randomUUID(), reference = path.join(f.runtime.cacheDirectory, `native-${id}.mp4`), bytes = Buffer.from('promoted before process exit');
+      await fs.writeFile(reference, bytes, { mode: 0o600 });
+      partial = path.join(f.runtime.cacheDirectory, `.native-${id}.partial`); await fs.link(reference, partial);
+      promoted = { reference, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+      return pending.promise;
+    });
+    await f.push(); await jest.advanceTimersByTimeAsync(60_000); await until(() => !!promoted);
+    const checkpoint = await f.state(), operation = checkpoint.nativeByModule['20:30'].state.operation!;
+    expect(operation.phase).toBe('prepared'); expect(checkpoint.downloads).toEqual([]);
+    await f.runtime.stop(); pending.resolve(promoted!);
+    if (crashWindow === 'before-download-index') { operation.phase = 'finished'; operation.result = { status: 'ready', value: promoted! }; }
+    await writeOwnerOnlyJsonFile(path.join(f.runtime.directory, 'state.json'), checkpoint);
+    await fs.writeFile(path.join(f.runtime.cacheDirectory, '.DS_Store'), 'preserve');
+    const recovered = await setup({ config });
+    await expect(fs.stat(promoted!.reference)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(partial)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(recovered.runtime.cacheDirectory, '.DS_Store'), 'utf8')).toBe('preserve');
+    expect(recovered.transport.postEmpty).not.toHaveBeenCalled(); expect(recovered.transport.getJson).not.toHaveBeenCalled();
+    expect(recovered.prepare).not.toHaveBeenCalled();
+    const retained = (await recovered.state()).nativeByModule['20:30'].state.operation!;
+    expect(retained.commandId).toBe(operation.commandId); expect(retained.phase).toBe('finished');
+    if (crashWindow === 'before-download-index') expect(retained.result).toEqual(operation.result);
+    else expect(retained.result).toMatchObject({ status: 'failed', reason: 'discarded' });
+    await recovered.push(recovered.notification('fresh-after-crash')); await jest.advanceTimersByTimeAsync(60_000);
+    await until(() => recovered.events.includes('offered'));
+    expect(recovered.transport.downloadMedia).toHaveBeenCalledTimes(1); expect(recovered.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it('reclaims generated cache remnants while preserving an unknown remote obligation', async () => {
+    const f = await setup(); f.transport.postEmpty.mockRejectedValueOnce(new Error('lost acknowledgement'));
+    await f.push(); await jest.advanceTimersByTimeAsync(60_000); await until(async () => (await f.state()).core?.operation?.status === 'unresolved');
+    await f.runtime.stop(); const before = (await f.state()).nativeByModule['20:30'];
+    const reference = path.join(f.runtime.cacheDirectory, `native-${randomUUID()}.mp4`);
+    await fs.writeFile(reference, 'orphan from an earlier local permission period', { mode: 0o600 });
+    const recovered = await setup();
+    await expect(fs.stat(reference)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await recovered.state()).nativeByModule['20:30']).toEqual(before);
+    expect(recovered.transport.postEmpty).not.toHaveBeenCalled(); expect(recovered.transport.getJson).not.toHaveBeenCalled();
+  });
+
+  itIfPosix('refuses generated-looking symlinks instead of deleting their target or treating them as an owned orphan', async () => {
+    const f = await setup(); await f.runtime.stop();
+    const outside = path.join(root, 'preserved.mp4'), reference = path.join(f.runtime.cacheDirectory, `native-${randomUUID()}.mp4`);
+    await fs.writeFile(outside, 'preserve', { mode: 0o600 }); await fs.symlink(outside, reference);
+    await expect(setup()).rejects.toThrow('Recording cache identity changed');
+    expect(await fs.readFile(outside, 'utf8')).toBe('preserve'); expect((await fs.lstat(reference)).isSymbolicLink()).toBe(true);
   });
 
   it('preserves concurrent push, core, module, and ordinary ownership saves in one account state', async () => {

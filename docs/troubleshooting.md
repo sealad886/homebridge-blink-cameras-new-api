@@ -38,6 +38,16 @@ reconcile an explicit conflict against confirmed state within their bounds.
 Native-storage refusals defer locally; an unknown accepted outcome remains owned
 and does not authorize a replacement preparation.
 
+If Blink acknowledged closing an owned Live View but its status check was
+interrupted, startup or an explicit connection retry checks that known command's
+status within the existing bound. Recovery does not resend the close request.
+Unknown command IDs and unacknowledged closes retain their ownership fences.
+
+Startup also retires verified downloaded clips and private generated media
+remnants left by interrupted downloads before accounting for cache capacity.
+It preserves remote operation receipts, unexpected files and `.DS_Store`.
+Do not clear the private state directory to recover from a pending operation.
+
 Persistent snapshots remain manual-refresh images. Their download/cache age and
 last observed successful capture age are separate diagnostics. A busy capture
 may return an existing thumbnail and is explicitly labelled as a fallback.

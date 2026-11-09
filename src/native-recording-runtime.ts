@@ -8,7 +8,7 @@ import { FcmEventSource, type FcmEventSourceOptions } from './blink-api/fcm/sour
 import type { FcmNotification, FcmReceiverState, FcmScope, FirebaseConfig } from './blink-api/fcm/types';
 import { decodeBlinkMotionMessage, isBlinkMotionDevice, isNativeMotionDevice, type BlinkMotionDevice, type NativeMotionDevice } from './blink-api/motion-events';
 import { matchNativeClip } from './blink-api/native-clip-matcher';
-import { NativeStorageOwner, type NativeStorageCatalog, type NativeStorageScope, type NativeStorageState } from './blink-api/native-storage';
+import { NativeStorageOwner, type NativeStorageCatalog, type NativeStorageScope, type NativeStorageState, type NativeStoredMedia } from './blink-api/native-storage';
 import { readOwnerOnlyJsonFile, writeOwnerOnlyJsonFile } from './blink-api/secure-json-file';
 import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type NativeRecordingAcquisitionResult,
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
@@ -24,7 +24,7 @@ export interface NativeRuntimeDevice {
 }
 type RuntimeClient = Pick<BlinkApi, 'getCachedIdentity' | 'registerMotionNotificationKey' | 'createNativeStorageTransport'
   | 'withNativeStorageAdmission' | 'setNativeStorageOwner' | 'configureRemoteOperationOwnership' | 'reconcileKnownStateCommand'
-  | 'getRemoteOperationState'>;
+  | 'reconcileKnownLiveViews' | 'getRemoteOperationState'>;
 interface DownloadedAsset {
   reference: string; bytes: number; sha256: string; identity: string; capturedAt: string;
   moduleId: string; cameraId: string; jobId: string; policyEpoch: number; cameraGeneration: number;
@@ -58,6 +58,9 @@ export interface NativeRecordingRuntimeOptions {
 }
 
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
+// Exact names promoted/temporarily written by BlinkApi.downloadNativeMedia().
+const CACHE_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const CACHE_ARTIFACT = new RegExp(`^(?:native-${CACHE_UUID}\\.mp4|\\.native-${CACHE_UUID}\\.partial)$`);
 const clone = <T>(value: T): T => globalThis.structuredClone(value);
 const bindingKey = (binding: BlinkMotionDevice): string => JSON.stringify([binding.providerId, binding.target, binding.networkId]);
 const observationKey = (event: NativeRecordingObservation): string => JSON.stringify([event.moduleId, event.cameraId, event.eventId]);
@@ -178,6 +181,7 @@ export class NativeRecordingRuntime {
     // ownership stays represented by a cancelled head until terminal proof.
     for (const job of this.core.snapshot().queue) await this.core.cancelCamera(job.observation.moduleId, job.observation.cameraId);
     for (const asset of [...this.state.downloads]) await this.removeOwnedAsset(asset);
+    await this.reconcileCache();
     await this.countCache();
     this.source = (this.options.eventSourceFactory ?? (config => new FcmEventSource(config)))({
       scope: this.options.scope, firebase: this.options.firebase, restoredState: this.state.push,
@@ -196,6 +200,9 @@ export class NativeRecordingRuntime {
 
   async start(): Promise<void> {
     if (this.stopped) throw new Error('Native runtime stopped');
+    // Explicit startup/retry may resolve an acknowledged retirement, but never sends /done again.
+    const liveViews = await this.options.client.reconcileKnownLiveViews();
+    if (liveViews.some(owner => !owner.confirmed)) this.options.report('live-view-recovery-required');
     if (this.active) return;
     const ordinary = await this.options.client.reconcileKnownStateCommand();
     if (ordinary.commandId !== undefined && !ordinary.confirmed) this.options.report('ordinary-recovery-required');
@@ -401,33 +408,62 @@ export class NativeRecordingRuntime {
   }
 
   private async removeOwnedAsset(asset: DownloadedAsset): Promise<void> {
-    if (typeof asset.reference !== 'string' || path.dirname(asset.reference) !== this.cacheDirectory || !Number.isSafeInteger(asset.bytes)
-      || path.basename(asset.reference) === '.DS_Store' || asset.bytes < 1 || asset.bytes > 32 * 1024 * 1024
-      || !/^[a-f0-9]{64}$/.test(asset.sha256)) throw new Error('Invalid owned recording cache entry');
-    try {
-      const stat = await fs.lstat(asset.reference);
-      if (!stat.isFile() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid()) || stat.size !== asset.bytes) throw new Error('Recording cache identity changed');
-      const handle = await fs.open(asset.reference, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      try {
-        const opened = await handle.stat(), hash = createHash('sha256'), block = Buffer.alloc(64 * 1024);
-        if (opened.ino !== stat.ino || opened.dev !== stat.dev) throw new Error('Recording cache identity changed');
-        for (let offset = 0; offset < asset.bytes;) {
-          const { bytesRead } = await handle.read(block, 0, Math.min(block.length, asset.bytes - offset), offset);
-          if (!bytesRead) throw new Error('Recording cache file changed');
-          hash.update(block.subarray(0, bytesRead)); offset += bytesRead;
-        }
-        if (hash.digest('hex') !== asset.sha256) throw new Error('Recording cache content changed');
-        const current = await fs.lstat(asset.reference);
-        if (current.ino !== stat.ino || current.dev !== stat.dev || current.isSymbolicLink()) throw new Error('Recording cache identity changed');
-      } finally { await handle.close(); }
-      await fs.unlink(asset.reference);
-    } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
+    await this.removeCacheFile(asset);
     let removed = false;
     await this.commit(next => {
       removed = next.downloads.some(entry => entry.reference === asset.reference);
       next.downloads = next.downloads.filter(entry => entry.reference !== asset.reference);
     });
     if (removed) this.cacheBytes = Math.max(0, this.cacheBytes - asset.bytes);
+  }
+
+  private async removeCacheFile(file: { reference: string; bytes: number; sha256?: string }): Promise<void> {
+    const orphan = file.sha256 === undefined;
+    if (typeof file.reference !== 'string' || path.dirname(file.reference) !== this.cacheDirectory || !Number.isSafeInteger(file.bytes)
+      || path.basename(file.reference) === '.DS_Store' || file.bytes < (orphan ? 0 : 1) || file.bytes > 32 * 1024 * 1024
+      || (orphan ? !CACHE_ARTIFACT.test(path.basename(file.reference)) : !/^[a-f0-9]{64}$/.test(file.sha256!))) {
+      throw new Error('Invalid owned recording cache entry');
+    }
+    try {
+      const stat = await fs.lstat(file.reference);
+      if (!stat.isFile() || stat.isSymbolicLink() || (process.getuid && (stat.uid !== process.getuid() || (orphan && (stat.mode & 0o077) !== 0)))
+        || stat.size !== file.bytes) throw new Error('Recording cache identity changed');
+      const handle = await fs.open(file.reference, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      try {
+        const opened = await handle.stat();
+        if (opened.ino !== stat.ino || opened.dev !== stat.dev || opened.size !== stat.size) throw new Error('Recording cache identity changed');
+        if (!orphan) {
+          const hash = createHash('sha256'), block = Buffer.alloc(64 * 1024);
+          for (let offset = 0; offset < file.bytes;) {
+            const { bytesRead } = await handle.read(block, 0, Math.min(block.length, file.bytes - offset), offset);
+            if (!bytesRead) throw new Error('Recording cache file changed');
+            hash.update(block.subarray(0, bytesRead)); offset += bytesRead;
+          }
+          if (hash.digest('hex') !== file.sha256) throw new Error('Recording cache content changed');
+        }
+        const current = await fs.lstat(file.reference);
+        if (current.ino !== stat.ino || current.dev !== stat.dev || current.size !== stat.size || current.isSymbolicLink()) throw new Error('Recording cache identity changed');
+      } finally { await handle.close(); }
+      await fs.unlink(file.reference);
+    } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
+  }
+
+  private async reconcileCache(): Promise<void> {
+    // The native owner's durable result can precede the runtime's downloads index.
+    for (const { state } of Object.values(this.state.nativeByModule)) {
+      const operation = state.operation;
+      if (operation?.kind === 'clip' && operation.phase === 'finished' && operation.result?.status === 'ready') {
+        await this.removeCacheFile(operation.result.value as NativeStoredMedia);
+      }
+    }
+    // A crash can also precede that result receipt, including atomic-link promotion.
+    // Retire only generated regular/private artifacts; leave unexpected names and all remote receipts intact.
+    for (const name of await fs.readdir(this.cacheDirectory)) {
+      if (!CACHE_ARTIFACT.test(name)) continue;
+      const reference = path.join(this.cacheDirectory, name), stat = await fs.lstat(reference);
+      await this.removeCacheFile({ reference, bytes: stat.size });
+      this.options.report('orphan-cache-retired');
+    }
   }
 
   private async countCache(): Promise<void> {
