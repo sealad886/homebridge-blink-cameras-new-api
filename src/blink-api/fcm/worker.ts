@@ -1,6 +1,7 @@
 /* global require, module */
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
+import { setDefaultResultOrder } from 'node:dns';
 import { FCM_LIMITS, boundedJson, validCredentials, validFirebase, validPersistentId,
   type FcmFailure, type WorkerCommand, type WorkerEvent } from './types';
 import { McsConnection } from './wire';
@@ -8,6 +9,8 @@ import { registerGoogleIdentity } from './registration';
 
 /** The worker has no Blink credential, URL or SDK dependency. */
 export function runFcmWorker(): void {
+  // This child owns Google networking; prefer reachable IPv4 without excluding IPv6 or changing Homebridge DNS.
+  setDefaultResultOrder('ipv4first');
   let started = false, finished = false;
   let transport: McsConnection | undefined;
   let credentialsTimer: ReturnType<typeof globalThis.setTimeout> | undefined;

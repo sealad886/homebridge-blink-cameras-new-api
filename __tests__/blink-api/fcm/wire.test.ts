@@ -14,6 +14,22 @@ const credentials: Credentials = {
   keys: { privateKey: 'fixture', publicKey: 'fixture', authSecret: 'fixture' },
   config: { projectId: 'test-project', vapidKey: '', bundleId: FCM_BUNDLE_ID },
 };
+const motion = { category: 'motion', event_type: 'cam2sm_motion', created_at: '2026-11-09T10:00:00Z' };
+
+function encryptedMessage(payload: unknown = { from: '123', data: motion }, outerSender = 'web-push-transport') {
+  const receiver = createECDH('prime256v1'); receiver.setPrivateKey(Buffer.alloc(32, 1));
+  const sender = createECDH('prime256v1'); sender.setPrivateKey(Buffer.alloc(32, 2));
+  const keys = { privateKey: receiver.getPrivateKey('base64'), publicKey: receiver.getPublicKey('base64'), authSecret: Buffer.alloc(16, 3).toString('base64') };
+  const salt = Buffer.alloc(16, 4).toString('base64');
+  const ciphertext = encrypt(Buffer.from(JSON.stringify(payload)), {
+    version: 'aesgcm', privateKey: sender, dh: keys.publicKey, authSecret: keys.authSecret, salt,
+  });
+  const envelope: mcs_proto.IDataMessageStanza = { from: outerSender, category: 'org.chromium.linux',
+    persistentId: 'encrypted-1', rawData: ciphertext,
+    appData: [{ key: 'crypto-key', value: `dh=${sender.getPublicKey('base64')}; p256ecdsa=unused-parameter` },
+      { key: 'encryption', value: `salt=${salt}` }] };
+  return { credentials: { ...credentials, keys }, envelope };
+}
 class Socket extends EventEmitter {
   authorized = true;
   readonly write = jest.fn<boolean, [Buffer]>().mockReturnValue(true);
@@ -33,11 +49,11 @@ function data(id = 'event-1', sender = '123', extras: Partial<mcs_proto.IDataMes
       { key: 'created_at', value: '2026-11-09T10:00:00Z' }], ...extras,
   }).finish());
 }
-function fixture(persistentIds: string[] = []) {
+function fixture(persistentIds: string[] = [], ownedCredentials = credentials) {
   const socket = new Socket();
   const connect = jest.fn<TLSSocket, [ConnectionOptions]>().mockReturnValue(socket as unknown as TLSSocket);
   const ready = jest.fn(), notification = jest.fn(), failure = jest.fn();
-  const connection = new McsConnection({ credentials, senderId: '123', persistentIds,
+  const connection = new McsConnection({ credentials: ownedCredentials, senderId: '123', persistentIds,
     connect, onReady: ready, onNotification: notification, onFailure: failure });
   connection.start();
   return { socket, connect, ready, notification, failure, connection };
@@ -137,27 +153,59 @@ it('closes an idle initialization or missing heartbeat response with no reconnec
 });
 
 it('rejects malformed/unsupported payloads without passing unbounded or untrusted JSON to the parent', () => {
-  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: 'x', value: 'a' }, { key: 'x', value: 'b' }] }, credentials)).toBeNull();
-  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: '__proto__', value: 'b' }] }, credentials)).toBeNull();
-  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: 'x', value: 'a'.repeat(4097) }] }, credentials)).toBeNull();
-  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: 'crypto-key', value: 'invalid' }], rawData: Buffer.from('invalid') }, credentials)).toBeNull();
+  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: 'x', value: 'a' }, { key: 'x', value: 'b' }] }, credentials, '123')).toBeNull();
+  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: '__proto__', value: 'b' }] }, credentials, '123')).toBeNull();
+  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: 'x', value: 'a'.repeat(4097) }] }, credentials, '123')).toBeNull();
+  expect(decodeMcsData({ from: '123', category: 'fixture', appData: [{ key: 'crypto-key', value: 'invalid' }], rawData: Buffer.from('invalid') }, credentials, '123')).toBeNull();
 });
 
-it('uses the vetted ECE codec for authenticated encrypted Web Push and rejects tampering', () => {
-  const receiver = createECDH('prime256v1'); receiver.setPrivateKey(Buffer.alloc(32, 1));
-  const sender = createECDH('prime256v1'); sender.setPrivateKey(Buffer.alloc(32, 2));
-  const keys = { privateKey: receiver.getPrivateKey('base64'), publicKey: receiver.getPublicKey('base64'), authSecret: Buffer.alloc(16, 3).toString('base64') };
-  const salt = Buffer.alloc(16, 4).toString('base64');
-  const data = { category: 'motion', event_type: 'cam2sm_motion', created_at: '2026-11-09T10:00:00Z' };
-  const ciphertext = encrypt(Buffer.from(JSON.stringify({ data })), {
-    version: 'aesgcm', privateKey: sender, dh: keys.publicKey, authSecret: keys.authSecret, salt,
-  });
-  const envelope: mcs_proto.IDataMessageStanza = { from: '123', category: 'fixture', rawData: ciphertext,
-    appData: [{ key: 'crypto-key', value: `dh=${sender.getPublicKey('base64')}; p256ecdsa=unused-parameter` },
-      { key: 'encryption', value: `salt=${salt}` }] };
-  expect(decodeMcsData(envelope, { ...credentials, keys })).toEqual(data);
-  const changed = Buffer.from(ciphertext); changed[0] ^= 1;
-  expect(decodeMcsData({ ...envelope, rawData: changed }, { ...credentials, keys })).toBeNull();
+it('accepts an owned-key Web Push envelope with the configured inner project and a different outer transport sender', () => {
+  const encrypted = encryptedMessage(); const f = fixture([], encrypted.credentials);
+  f.socket.emit('secureConnect'); f.socket.emit('data', login());
+  f.socket.emit('data', packet(MCSProtoTag.kDataMessageStanzaTag, mcs_proto.DataMessageStanza.encodeDelimited(encrypted.envelope).finish()));
+  expect(f.notification).toHaveBeenCalledTimes(1);
+  expect(f.notification).toHaveBeenCalledWith(expect.objectContaining({ persistentId: 'encrypted-1', data: motion }));
+  f.socket.emit('data', packet(MCSProtoTag.kHeartbeatPingTag, mcs_proto.HeartbeatPing.encodeDelimited({}).finish()));
+  expect(mcs_proto.HeartbeatAck.decodeDelimited(f.socket.write.mock.calls.at(-1)![0].subarray(1)).lastStreamIdReceived).toBe(1);
+  f.connection.acknowledge('encrypted-1');
+  expect(mcs_proto.HeartbeatPing.decodeDelimited(f.socket.write.mock.calls.at(-1)![0].subarray(1)).lastStreamIdReceived).toBe(3);
+  expect(f.failure).not.toHaveBeenCalled(); f.connection.stop();
+});
+
+it.each([
+  { from: '999', data: motion }, { data: motion }, { from: 123, data: motion },
+  { from: null, data: motion }, { from: '123' }, { from: '123', data: [] }, null, [],
+])('rejects a wrong, missing or malformed inner project/payload even when the outer sender matches: %j', payload => {
+  const encrypted = encryptedMessage(payload, '123'); const f = fixture([], encrypted.credentials);
+  f.socket.emit('secureConnect'); f.socket.emit('data', login());
+  f.socket.emit('data', packet(MCSProtoTag.kDataMessageStanzaTag, mcs_proto.DataMessageStanza.encodeDelimited(encrypted.envelope).finish()));
+  expect(f.notification).toHaveBeenCalledWith(expect.objectContaining({ persistentId: 'encrypted-1', data: null }));
+  expect(f.failure).not.toHaveBeenCalled(); f.connection.stop();
+});
+
+it('keeps plaintext project validation inside the decoder as well as the connection boundary', () => {
+  const value = { from: '999', category: 'fixture', appData: Object.entries(motion).map(([key, value]) => ({ key, value })) };
+  expect(decodeMcsData(value, credentials, '123')).toBeNull();
+  expect(decodeMcsData({ ...value, from: '123' }, credentials, '123')).toEqual(motion);
+  expect(decodeMcsData({ ...value, from: '123' }, credentials, '')).toBeNull();
+});
+
+it.each(['ciphertext', 'auth-secret', 'receiver-key'])('rejects Web Push encrypted data with an owned-key AEAD mismatch: %s', mismatch => {
+  const encrypted = encryptedMessage();
+  const keys = { ...encrypted.credentials.keys };
+  const envelope = { ...encrypted.envelope };
+  if (mismatch === 'ciphertext') {
+    const changed = Buffer.from(envelope.rawData!); changed[0] ^= 1; envelope.rawData = changed;
+  } else if (mismatch === 'auth-secret') keys.authSecret = Buffer.alloc(16, 5).toString('base64');
+  else {
+    const other = createECDH('prime256v1'); other.setPrivateKey(Buffer.alloc(32, 6));
+    keys.privateKey = other.getPrivateKey('base64'); keys.publicKey = other.getPublicKey('base64');
+  }
+  const f = fixture([], { ...encrypted.credentials, keys });
+  f.socket.emit('secureConnect'); f.socket.emit('data', login());
+  f.socket.emit('data', packet(MCSProtoTag.kDataMessageStanzaTag, mcs_proto.DataMessageStanza.encodeDelimited(envelope).finish()));
+  expect(f.notification).toHaveBeenCalledWith(expect.objectContaining({ persistentId: 'encrypted-1', data: null }));
+  expect(f.failure).not.toHaveBeenCalled(); f.connection.stop();
 });
 
 it('removes timers/listeners on stop and does not accept later socket events', async () => {

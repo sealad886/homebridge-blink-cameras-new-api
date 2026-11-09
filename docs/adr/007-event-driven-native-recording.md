@@ -3,8 +3,9 @@
 Date: 9 November 2026
 
 Status: implemented locally; host verification and independent review passed.
-Provider motion delivery and physical HomeKit acceptance remain
-separate gates in the [evidence ledger](../plans/event-driven-hsv-redesign.md).
+An owned receiver has received a fresh native motion event. Full installed-plugin
+and physical HomeKit acceptance remain separate gates in the
+[evidence ledger](../plans/event-driven-hsv-redesign.md).
 This supersedes the motion polling decision in [ADR-002](002-motion-detection.md).
 
 ## Problem and evidence
@@ -102,11 +103,31 @@ messages, protocol frames and pending notifications are bounded. Source stop,
 disable, epoch changes and reconnect fence late callbacks and disabled-period
 backlog. Google ACK follows durable downstream handoff and message-ID storage.
 
-The exact receiver component has registered and connected; Blink acknowledged
-its own-client binding with HTTP 200. Real Blink motion receipt and reconnect
-acceptance remain distinct evidence gates. A TLS connection or registration ACK
-is not event-delivery proof. The [ledger](../plans/event-driven-hsv-redesign.md#provider-evidence)
-records the current results.
+Web Push transport identity and Firebase project identity are separate. Decrypt
+an encrypted message with the owned receiver keys, then require its inner FCM
+envelope's `from` to match the configured Blink sender before extracting data.
+Do not reject it because the outer MCS sender is a Web Push/VAPID transport
+identity. Plaintext native data still requires an exact outer project sender.
+Wrong or missing inner senders, invalid payloads and ciphertext/key mismatches
+expose no application data. The scoped primary-source trace is recorded in the
+[protocol audit](../audits/2026-11-09-blink61-recording-protocol.md#web-push-transport-and-project-identity).
+
+The isolated worker sets IPv4-first DNS ordering before registration/connection,
+retaining IPv6 and automatic family selection. Importing the worker does not
+change the Homebridge process's DNS settings. This responds to observed
+automatic-family timeouts where verified IPv4 connects succeeded; it introduces
+no hardcoded address, certificate bypass, extra account request or UI flag.
+
+The receiver component registered and connected; Blink acknowledged its own-client
+binding with HTTP 200. The corrected decoder subsequently authenticated fourteen
+real native-motion messages, including a fresh event durably accepted after its
+activation boundary. The first qualification used an explicit IPv4 diagnostic
+connection after automatic-family transport timeouts. The final production
+worker then reconnected and durably accepted another fresh native motion event
+with its isolated DNS policy and no socket/frame override. An installed full Pi
+runtime remains a separate gate.
+The [ledger](../plans/event-driven-hsv-redesign.md#provider-evidence) records the
+exact scope and remaining physical gates.
 
 An owned Android notification-listener relay remains a fallback design if direct
 consumer delivery cannot be qualified. It would require explicit device access,

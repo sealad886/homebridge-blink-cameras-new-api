@@ -212,3 +212,52 @@ Exact anchors, support outputs and hashes are retained privately as
 `notification-prerequisite-trace/receipt.json` in the acquisition evidence. The
 owned JADX session closed normally. This follow-up does not expand the generated
 59.2 full API catalog or claim an APK runtime packet capture.
+
+## Web Push transport and project identity
+
+The Node receiver's pinned registration uses a Chromium Web Push endpoint and
+associates it with the Firebase project. That differs from assuming every outer
+MCS `DataMessageStanza.from` is a Firebase project number. Chromium maps that
+outer value to transport `sender_id` / `authorized_entity` for decryption-key
+lookup; Web Push registration derives its sender information from the normalized
+application-server/VAPID key. Firebase's messaging SDK reads the project-level
+`from` from the decrypted PushEvent JSON and exposes that inner field.
+
+Primary code: [Chromium incoming mapping](https://raw.githubusercontent.com/chromium/chromium/main/components/gcm_driver/gcm_client_impl.cc),
+[encryption-key lookup](https://raw.githubusercontent.com/chromium/chromium/main/components/gcm_driver/crypto/gcm_encryption_provider.cc),
+[Web Push registration](https://raw.githubusercontent.com/chromium/chromium/main/chrome/browser/push_messaging/push_messaging_service_impl.cc),
+[Firebase push handling](https://raw.githubusercontent.com/firebase/firebase-js-sdk/main/packages/messaging/src/listeners/sw-listeners.ts),
+and [Firebase payload mapping](https://raw.githubusercontent.com/firebase/firebase-js-sdk/main/packages/messaging/src/helpers/externalizePayload.ts).
+Pinned Eneris 4.4.0 `gcm.js`, `fcm.js` and `client.js` corroborate endpoint
+registration followed by decryption, without an outer-project filter.
+
+The first receiver revision conflated these identities. The correction decrypts
+with the owned ECE keys, requires the exact configured project in the inner
+envelope, and then validates/extracts bounded data. Plaintext retains its outer
+project check. Real-encryption positive/negative tests and independent review
+passed. Static evidence alone did not establish the account's actual outer value.
+
+The subsequent Google-only observation captured fourteen real encrypted
+`cam2sm_motion` messages. Every outer sender differed from the project sender;
+every decrypted inner sender matched it. Offline replay of those exact encrypted
+captures through the old and corrected source delivered zero and fourteen
+messages respectively. This proves the old filter rejects the observed messages;
+it does not reconstruct exactly when the earlier connection received them.
+
+Thirteen older messages were intentionally fenced by the new activation boundary.
+A fresh native event created at 08:28:02 UTC arrived at 08:28:03.080 and completed
+the receiver's durable acceptance. That interval is notification time to receipt,
+not measured physical PIR latency. The callback's provider/account/device fields
+also passed the canonical motion decoder using retained local camera identity.
+These are motion observations, not saved-video or Home retention evidence.
+
+Automatic-family connections had timed out before frames; an independent IPv4
+verified TLS probe succeeded while IPv6 returned `EHOSTUNREACH`. The successful
+observer explicitly selected IPv4 through an identified diagnostic hook while
+retaining TLS, owned-key decryption and project validation. The isolated production
+worker was then updated to prefer IPv4 DNS results while retaining IPv6 and
+automatic family selection. Its unmodified connection path reconnected and
+durably accepted a fresh 08:51:21 UTC native event at 08:51:22.153, without any
+socket/frame hook. Pi full-plugin qualification remains open. The follow-up made no Blink requests;
+the only Blink request was the earlier client registration. Private raw frames,
+receiver state, hook/source hashes and replay receipts preserve the evidence.

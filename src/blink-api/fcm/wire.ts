@@ -137,7 +137,7 @@ export class McsConnection {
     } else if (!this.ready) { this.fail('protocol-error'); return; }
     else if (frame.tag === MCSProtoTag.kDataMessageStanzaTag) {
       const value = mcs_proto.DataMessageStanza.decode(frame.payload);
-      if (value.from !== this.options.senderId) {
+      if (!hasEncryptedPayload(value) && value.from !== this.options.senderId) {
         this.complete(sequence); this.scheduleHeartbeat(); return;
       }
       if (!validPersistentId(value.persistentId)) { this.fail('protocol-error'); return; }
@@ -154,7 +154,7 @@ export class McsConnection {
       this.pending.set(value.persistentId, { sequences: [sequence], timer });
       if (this.pending.size === FCM_LIMITS.pendingMessages) this.socket?.pause();
       this.options.onNotification({ persistentId: value.persistentId,
-        data: decodeMcsData(value, this.options.credentials), receivedAt: (this.options.now ?? Date.now)() });
+        data: decodeMcsData(value, this.options.credentials, this.options.senderId), receivedAt: (this.options.now ?? Date.now)() });
       this.scheduleHeartbeat();
       return;
     } else if (frame.tag === MCSProtoTag.kHeartbeatPingTag) {
@@ -196,21 +196,28 @@ export class McsConnection {
   }
 }
 
-/** Decrypt Web Push with the dependency's vetted ECE implementation; native data stays inside verified TLS. */
-export function decodeMcsData(value: mcs_proto.IDataMessageStanza, credentials: Credentials): Record<string, string> | null {
+function hasEncryptedPayload(value: mcs_proto.IDataMessageStanza): boolean {
+  return Boolean(value.rawData?.length || value.appData?.some(item =>
+    item.key === 'crypto-key' || item.key === 'encryption' || item.key === 'content-encoding'));
+}
+
+/** Web Push binds the project inside its owned-key AEAD envelope; plaintext binds its outer TLS sender. */
+export function decodeMcsData(value: mcs_proto.IDataMessageStanza, credentials: Credentials,
+  senderId: string): Record<string, string> | null {
   try {
+    if (typeof senderId !== 'string' || !senderId) return null;
     if (!Array.isArray(value.appData) || value.appData.length > 64) return null;
     const pairs = value.appData.map(item => [item.key, item.value]);
     if (pairs.some(([key, item]) => typeof key !== 'string' || typeof item !== 'string')
       || new Set(pairs.map(([key]) => key)).size !== pairs.length) return null;
     const headers = Object.fromEntries(pairs);
-    if (headers['crypto-key'] || headers.encryption) {
+    if (hasEncryptedPayload(value)) {
       if (!value.rawData || value.rawData.length > FCM_LIMITS.notificationBytes) return null;
       const decoded = decrypt<unknown>(value as unknown as Parameters<typeof decrypt>[0], credentials.keys);
       if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return null;
-      const data = (decoded as { data?: unknown }).data;
-      return validData(data) ? data : null;
+      const envelope = decoded as { from?: unknown; data?: unknown };
+      return envelope.from === senderId && validData(envelope.data) ? envelope.data : null;
     }
-    return validData(headers) ? headers : null;
+    return value.from === senderId && validData(headers) ? headers : null;
   } catch { return null; }
 }

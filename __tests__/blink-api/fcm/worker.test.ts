@@ -1,9 +1,13 @@
 import { Buffer } from 'node:buffer';
-import { installGoogleRequestBudget } from '../../../src/blink-api/fcm/worker';
+import { getDefaultResultOrder, setDefaultResultOrder } from 'node:dns';
+import { getDefaultAutoSelectFamily } from 'node:net';
+import process from 'node:process';
+import { installGoogleRequestBudget, runFcmWorker } from '../../../src/blink-api/fcm/worker';
 import { FCM_LIMITS } from '../../../src/blink-api/fcm/types';
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; jest.restoreAllMocks(); });
+const originalDnsOrder = getDefaultResultOrder();
+afterEach(() => { globalThis.fetch = originalFetch; setDefaultResultOrder(originalDnsOrder); jest.restoreAllMocks(); });
 function fixture(response = new globalThis.Response('ok')) {
   const fetch = jest.fn(async () => response.clone());
   globalThis.fetch = fetch;
@@ -13,6 +17,28 @@ function fixture(response = new globalThis.Response('ok')) {
   return { fetch, failure, controller };
 }
 const post = { method: 'POST', body: 'bounded-client-metadata' };
+
+it('does not change parent DNS or install request interception when the worker module is imported', () => {
+  setDefaultResultOrder('verbatim');
+  jest.isolateModules(() => { jest.requireActual('../../../src/blink-api/fcm/worker'); });
+  expect(getDefaultResultOrder()).toBe('verbatim');
+  expect(globalThis.fetch).toBe(originalFetch);
+});
+
+it('sets IPv4-first only when its isolated worker starts, before any registration or connect can be admitted', () => {
+  setDefaultResultOrder('verbatim');
+  const autoSelectFamily = getDefaultAutoSelectFamily();
+  const on = jest.spyOn(process, 'on').mockImplementation(() => {
+    expect(getDefaultResultOrder()).toBe('ipv4first');
+    return process;
+  });
+  const fetch = jest.fn(); globalThis.fetch = fetch;
+  runFcmWorker();
+  expect(on).toHaveBeenCalledWith('message', expect.any(Function));
+  expect(getDefaultResultOrder()).toBe('ipv4first');
+  expect(getDefaultAutoSelectFamily()).toBe(autoSelectFamily);
+  expect(globalThis.fetch).toBe(fetch); expect(fetch).not.toHaveBeenCalled();
+});
 
 it('allows bounded Google registration metadata with redirects and deadline enforcement', async () => {
   const f = fixture();

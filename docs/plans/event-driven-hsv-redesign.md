@@ -17,13 +17,14 @@ installation and physical acceptance are distinct outcomes.
 - [x] Finish combined verification and independent corrections; reconcile
   source/configuration/documentation. Candidate identity is recorded in the
   private final receipt.
-- [ ] **Active:** complete the bounded exact-component push qualification;
-  registration, verified connection and own-client binding passed, actual motion
-  payload receipt is pending.
+- [x] Complete the bounded receiver qualification: fourteen real native messages
+  authenticated; thirteen older messages fenced, one fresh event durably accepted.
+  The diagnostic IPv4 route and later production-worker fresh event are identified
+  separately from installed-plugin acceptance.
 - [ ] Qualify an exact installed full candidate and separately verify continued
   native recording, finite Home delivery and retained playback.
 
-Only one checklist phase is active. The candidate has not replaced the working
+At most one checklist phase is active. The candidate has not replaced the working
 Pi installation. No publication, release or physical acceptance is implied.
 
 ## Sources and consolidation decisions
@@ -68,6 +69,7 @@ with exact-byte private backup before replacement.
 | New ownership originally missed timed-out ordinary commands | Independent SDK reproduction, correction and final review | Durable ordinary ownership joins native/Live View fences; combined host tests pass |
 | Initial strict FIFO held ready cameras behind missing clips | Independent source review and two-camera regression | Ready FIFO now requeues terminal missing jobs; unresolved provider ownership still blocks all bypass |
 | Explicit refused POSTs could create permanent ID-less owners | Actual SDK/protocol source with mocked fetch returning HTTP409 | Corrected with shared POST-only refusal classification; GET errors and ambiguous requests remain fenced |
+| The first receiver conflated outer transport and inner project identity | Primary Chromium/Firebase source, pinned registration code and real ECE fixtures | Corrected to validate encrypted FCM inner `from`; the empty watch does not establish actual dropped messages |
 | Persistent recording outage root cause | Not proven | Workload/ownership defects and rollback correlation do not establish the physical cause |
 
 Reference replay artifacts are `reference-replay/reference-recorder.test.ts` and
@@ -91,7 +93,10 @@ was unavailable; successful REA Android Evidence IDs are not claimed.
 | Bind receiver to the plugin's own Blink client | One regional `/clients/{currentClient}/update` metadata POST returned HTTP200; receiver emitted `client-bound` and `ready` at approximately 07:04 UTC | Binding ACK and connection proved; actual motion payload still pending |
 | Preserve current Pi operation | 07:09 UTC package/config/process/invocation comparison unchanged, diagnostic units still absent | No candidate deployment or Homebridge restart |
 | Compare tablet notification time | Tablet detached at later inventory | No contemporaneous notification evidence obtained |
-| Receive real `cam2sm_motion` / `cloud_motion` | Bounded listener is observing during implementation | No real event recorded at this ledger revision; do not claim USB-only delivery acceptance |
+| Receive real `cam2sm_motion` / `cloud_motion` | First component window ended 07:04–08:04 UTC with zero accepted payloads; its raw sender rejections were not captured | No delivery acceptance; that revision contained the project-filter defect and does not prove no motion occurred |
+| Qualify the corrected identity boundary | 65 FCM tests and independent real-encryption review passed; actual captured-message replay delivered old 0 / corrected 14, all inner senders matched | Actual outer transport sender differed from project for every captured message |
+| Initial corrected capture | IPv4 diagnostic hook captured fourteen authenticated `cam2sm_motion` messages; fresh 08:28:02 UTC event arrived 08:28:03.080 and passed durable acceptance | Thirteen pre-activation messages suppressed; captured-message replay old 0 / corrected 14; full Pi runtime unqualified |
+| Production worker connection policy | Exact final worker with isolated IPv4-first DNS reconnected; fresh 08:51:21 UTC event arrived 08:51:22.153 and was durably accepted, with no socket/frame hook | IPv6 retained; zero added Blink requests; no Homebridge-global DNS change; full Pi runtime remains unqualified |
 
 The private `receiver-proof/` directory contains acquisition, registration,
 connection, exact-source and bounded Blink-binding receipts. Credentials and raw
@@ -137,7 +142,7 @@ all in-scope corrections settle.
 
 Final host verification:
 
-- The final source passed **58 Jest suites: 1,364 tests passed, one skipped**.
+- The corrected source passed **58 Jest suites: 1,378 tests passed, one skipped**.
   The skipped test requires an externally qualified native worker artifact; it is
   separate from this redesign's direct FFmpeg recording path. The real local
   finite-media conversion/decode tests ran successfully.
@@ -167,6 +172,10 @@ Independent component evidence:
 - Independent ready-FIFO/assembly/runtime run: **56 tests across three suites
   passed**, including cached-admission deferral, strict no-send retry and
   per-module cooldown for both catalog and clip POST refusals.
+- Corrected project authentication and isolated DNS policy: **67 FCM tests across four suites passed**;
+  independent real-encryption/actual-source checks rejected wrong or missing
+  inner projects, malformed data and key/ciphertext mismatches, and retained
+  plaintext sender and durable-ACK behavior.
 - Other component owners report focused passing checks. The private validation
   directory retains aggregate Jest JSON/logs, dependency setup and package
   receipts. Final source/build/package identities are recorded after the local
@@ -177,8 +186,9 @@ only fixed audit enums and a bounded retry delay, never raw payloads, credential
 or provider URLs, and adds no provider probe. Post-change focused checks remain
 part of root's final receipt.
 
-These overlapping runs must not be added into a unique-test total. No local test
-proves the original physical outage, actual USB-only delivery or iCloud retention.
+These overlapping runs must not be added into a unique-test total. The separate
+live receiver evidence proves a native-motion delivery path. It does not prove a
+saved USB video, the original physical outage's cause or iCloud retention.
 
 ## Final consolidation and release boundary
 
@@ -202,9 +212,10 @@ Before an authorized operational trial, freeze source/build/package identity,
 retain private configuration/auth/accessory state and define exact rollback.
 Preserve current rotated credentials rather than restoring a stale token cache.
 
-1. **Motion only:** receive a real, account/camera-matched push; compare provider,
-   receipt and notification time without a USB query. Verify duplicate handling
-   and reconnect delivery. No hidden cloud-media polling fallback is permitted.
+1. **Motion only:** repeat the demonstrated real, account/camera-matched push on
+   the exact installed candidate, including default-network reconnect. Compare
+   notification and receipt times without a USB query. No hidden cloud-media
+   polling fallback is permitted.
 2. **One native recording:** after natural motion and the configured delay,
    retrieve through the official bounded workflow; verify actual new video bytes,
    camera, capture time and content. Catalog totals or alerts alone do not pass.
