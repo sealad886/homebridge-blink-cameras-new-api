@@ -161,7 +161,7 @@ Before reading private configuration, POSIX builds set and verify the worker's o
 
 ## Parent readiness and drain
 
-`PrivateMediaWorker.whenReady` resolves only after a unique protocol-4 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a two-second deadline from accepted input END. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
+`PrivateMediaWorker.whenReady` resolves only after a unique protocol-4 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a deadline from accepted input END of 120 seconds for completed MP4 input and two seconds for other input. Other preparation limits can expire earlier. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
 
 ## Owned session and independent synthetic receiver
 

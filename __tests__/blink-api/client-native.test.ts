@@ -329,6 +329,26 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().storage).toEqual([]);
   });
 
+  it('releases a terminal native preparation after media GET failure so ordinary controls work without restart', async () => {
+    const f = fixture(), saved: NativeStorageState[] = [];
+    const owner = new NativeStorageOwner({ transport: f.api.createNativeStorageTransport({ scope, directory }),
+      admit: (work, options, id, binding) => f.api.withNativeStorageAdmission(id, work, options, binding),
+      saveState: async state => { saved.push(copy(state)); f.api.setNativeStorageOwner(scope, state); } });
+    (fetch as jest.Mock).mockImplementation(async (url: string, options: RequestInit) => {
+      if (url === mediaUrl) return json({ error: 'media unavailable' }, 503);
+      if (options.method === 'POST') return json({ id: url.endsWith('/state/arm') ? 606 : 505 });
+      return json({ complete: true, status: 0 });
+    });
+    await expect(owner.downloadClip({ ...scope, operationId: 'failed-clip' }, { manifestId: 303, clip }))
+      .resolves.toEqual({ status: 'failed', reason: 'invalid-media' });
+    expect(saved.at(-1)?.operation).toMatchObject({ phase: 'finished', commandId: 505, statusReads: 1 });
+    expect(f.api.getRemoteOperationState().storage).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    await expect(f.api.armNetwork(20)).resolves.toEqual({ id: 606 });
+    expect(fetch).toHaveBeenCalledTimes(5);
+    expect((fetch as jest.Mock).mock.calls.filter(([url]) => url === mediaUrl)).toHaveLength(1);
+  });
+
   it.each([
     'https://evil.example/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/303/clip/request/404/',
     mediaUrl.replace('/accounts/10/', '/accounts/11/'),

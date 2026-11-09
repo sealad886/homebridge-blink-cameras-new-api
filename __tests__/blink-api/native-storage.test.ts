@@ -1,7 +1,7 @@
 import { NativeStorageOwner, type NativeStorageCatalog, type NativeStorageClipRequest,
   type NativeStorageContext, type NativeStorageOwnerOptions, type NativeStorageState,
   type NativeStorageTransport, type NativeStorageRoute, type NativeStorageRequestOptions } from '../../src/blink-api/native-storage';
-import type { RequestOptions } from '../../src/operation-budget';
+import { OperationTimeoutError, type RequestOptions } from '../../src/operation-budget';
 import { URL } from 'node:url';
 import { BlinkHttpError } from '../../src/blink-api/http';
 
@@ -301,6 +301,22 @@ it('prepares a selected clip once, then downloads its validated original media l
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
   expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
 });
+
+it.each([new Error('Media GET failed'), new OperationTimeoutError()])(
+  'settles a failed prepared clip transfer locally without replaying or retaining its command: %s', async error => {
+    const f = fixture(), clipContext = { ...context, operationId: 'event-1:clip' };
+    f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0 });
+    f.transport.downloadMedia.mockRejectedValueOnce(error);
+    const result = await f.owner.downloadClip(clipContext, clipRequest());
+    expect(result).toEqual({ status: 'failed', reason: 'invalid-media' });
+    expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', commandId: 101, statusReads: 1, result });
+    expect(await f.restart().downloadClip(clipContext, clipRequest())).toEqual(result);
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+    expect(f.transport.getJson).toHaveBeenCalledTimes(1);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect(await f.owner.readCatalog({ ...context, operationId: 'next-event:catalog' })).toMatchObject({ status: 'ready' });
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  });
 
 it('validates media destinations before preparation and rejects invalid local download receipts', async () => {
   const untrusted = fixture(); const request = clipRequest(); request.clip.mediaUrl = 'https://attacker.invalid/video';

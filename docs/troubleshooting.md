@@ -37,6 +37,8 @@ while reads and image downloads remain independent. Ordinary controls can
 reconcile an explicit conflict against confirmed state within their bounds.
 Native-storage refusals defer locally; an unknown accepted outcome remains owned
 and does not authorize a replacement preparation.
+When Blink has already confirmed command completion, a failed media transfer is
+settled locally so later controls and recording jobs can proceed.
 
 If Blink acknowledged closing an owned Live View but its status check was
 interrupted, startup or an explicit connection retry checks that known command's

@@ -57,7 +57,10 @@ describe('platform native recording and ordinary command ownership', () => {
   afterEach(async () => {
     api.emit('shutdown');
     for (const result of createRuntime.mock.results) {
-      if (result.type === 'return') await (await result.value as NativeRecordingRuntime).stop();
+      if (result.type === 'return') {
+        const runtime = await (result.value as Promise<NativeRecordingRuntime>).catch(() => undefined);
+        await runtime?.stop();
+      }
     }
     jest.restoreAllMocks();
     await fs.rm(directory, { recursive: true, force: true });
@@ -142,6 +145,23 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(retry.value).toBe(false);
     expect(source.reconnect).not.toHaveBeenCalled();
     expect(source.setDemand).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('recreates the runtime after a failed replacement instead of reusing its stopped predecessor', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen);
+    const original = await createRuntime.mock.results[0].value as NativeRecordingRuntime;
+    const stop = jest.spyOn(original, 'stop');
+    const renamed = globalThis.structuredClone(homescreen); renamed.cameras[0].name = 'Entry renamed';
+    jest.mocked(client.getHomescreen).mockResolvedValue(renamed);
+    createRuntime.mockRejectedValueOnce(new Error('Replacement initialization failed'));
+    await expect(retryControl(platform).onSetHandler!(true)).rejects.toMatchObject({ hapStatus: -70402 });
+    expect(stop).toHaveBeenCalledTimes(1);
+    await refresh(platform, homescreen);
+    expect(createRuntime).toHaveBeenCalledTimes(3);
+    expect(source.setDemand).toHaveBeenCalledTimes(2);
     expect(fetch).not.toHaveBeenCalled();
   });
 

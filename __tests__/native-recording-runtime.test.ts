@@ -19,6 +19,7 @@ import { NativeRecordingDelegate } from '../src/accessories/native-recording-del
 import type { PreparedNativeRecording, prepareNativeRecording } from '../src/accessories/native-recording-preparation';
 import { resolveNativeRecordingConfig, type NativeRecordingConfigInput } from '../src/native-recording-config';
 import { NativeRecordingRuntime, type NativeRecordingRuntimeOptions, type NativeRecordingRuntimeState } from '../src/native-recording-runtime';
+import { OperationTimeoutError } from '../src/operation-budget';
 
 const scope = { accountId: 10, clientId: 11, tier: 'u000' };
 const configuration = (): CameraRecordingConfiguration => ({
@@ -448,6 +449,23 @@ describe('native recording runtime composition', () => {
     expect((await fs.stat(f.runtime.directory)).mode & 0o777).toBe(0o700);
     expect((await fs.stat(path.join(f.runtime.directory, 'state.json'))).mode & 0o777).toBe(0o600);
     expect((await f.state()).consumed).toHaveLength(1);
+  });
+
+  it('finishes a timed-out prepared download and records the next motion without restarting the runtime', async () => {
+    const f = await setup({ config: { initialDelaySeconds: 0 } });
+    f.transport.downloadMedia.mockRejectedValueOnce(new OperationTimeoutError());
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => f.events.includes('download-invalid-media') && !(await f.state()).core?.operation);
+    const failed = await f.state();
+    expect(failed.nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished', result: { status: 'failed', reason: 'invalid-media' } });
+    expect(failed.core?.queue).toEqual([]);
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2); expect(f.transport.getJson).toHaveBeenCalledTimes(3);
+    expect(f.prepare).not.toHaveBeenCalled(); expect(f.readyMotion).not.toHaveBeenCalled();
+    await f.push(f.notification('next-motion')); await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(3); expect(f.transport.getJson).toHaveBeenCalledTimes(4);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(2); expect(f.prepare).toHaveBeenCalledTimes(1);
+    expect(f.readyMotion).toHaveBeenLastCalledWith(true);
   });
 
   it('reuses the real configured delegate after client handoff, discards old media, and offers only fresh motion', async () => {

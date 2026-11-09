@@ -537,6 +537,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     ])).sort()]);
     if (this.nativeRuntimeKey === key) return;
     if (this.nativeRuntime) await this.nativeRuntime.stop();
+    this.nativeRuntime = undefined;
+    this.nativeRuntimeKey = undefined;
     const storagePath = this.api.user.storagePath();
     this.nativeRuntime = await NativeRecordingRuntime.create({ client: this.apiClient, scope, devices, matchingDevices, storagePath,
       config: resolveNativeRecordingConfig(this.config.nativeRecording), firebase: BLINK_FIREBASE_CLIENT, appVersion: BLINK_NOTIFICATION_APP_VERSION,
