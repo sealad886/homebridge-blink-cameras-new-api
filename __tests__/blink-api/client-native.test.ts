@@ -329,24 +329,26 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().storage).toEqual([]);
   });
 
-  it('releases a terminal native preparation after media GET failure so ordinary controls work without restart', async () => {
+  it.each(['catalog', 'clip'] as const)('releases a terminal native %s preparation after result GET failure so ordinary controls work without restart', async kind => {
     const f = fixture(), saved: NativeStorageState[] = [];
     const owner = new NativeStorageOwner({ transport: f.api.createNativeStorageTransport({ scope, directory }),
       admit: (work, options, id, binding) => f.api.withNativeStorageAdmission(id, work, options, binding),
       saveState: async state => { saved.push(copy(state)); f.api.setNativeStorageOwner(scope, state); } });
+    const resultUrl = kind === 'clip' ? mediaUrl : `${sharedRoot}api/${modulePath}/media/202`;
     (fetch as jest.Mock).mockImplementation(async (url: string, options: RequestInit) => {
-      if (url === mediaUrl) return json({ error: 'media unavailable' }, 503);
+      if (url === resultUrl) return json({ error: 'result unavailable' }, 503);
       if (options.method === 'POST') return json({ id: url.endsWith('/state/arm') ? 606 : 505 });
-      return json({ complete: true, status: 0 });
+      return json({ complete: true, status: 0, commands: [{ id: 202 }] });
     });
-    await expect(owner.downloadClip({ ...scope, operationId: 'failed-clip' }, { manifestId: 303, clip }))
-      .resolves.toEqual({ status: 'failed', reason: 'invalid-media' });
+    const context = { ...scope, operationId: `failed-${kind}` };
+    await expect(kind === 'clip' ? owner.downloadClip(context, { manifestId: 303, clip }) : owner.readCatalog(context))
+      .resolves.toEqual({ status: 'failed', reason: kind === 'clip' ? 'invalid-media' : 'invalid-result' });
     expect(saved.at(-1)?.operation).toMatchObject({ phase: 'finished', commandId: 505, statusReads: 1 });
     expect(f.api.getRemoteOperationState().storage).toEqual([]);
     expect(fetch).toHaveBeenCalledTimes(3);
     await expect(f.api.armNetwork(20)).resolves.toEqual({ id: 606 });
     expect(fetch).toHaveBeenCalledTimes(5);
-    expect((fetch as jest.Mock).mock.calls.filter(([url]) => url === mediaUrl)).toHaveLength(1);
+    expect((fetch as jest.Mock).mock.calls.filter(([url]) => url === resultUrl)).toHaveLength(1);
   });
 
   it.each([

@@ -196,10 +196,10 @@ export class NativeStorageOwner {
       }, request, context.operationId, context), request);
     } catch (error) {
       if (entered && !this.persistenceFailed && this.state.operation?.operationId === context.operationId
-        && this.state.operation.kind === 'clip' && this.state.operation.phase === 'prepared') {
-        // Preparation already has durable terminal proof. A failed media GET
+        && this.state.operation.phase === 'prepared') {
+        // Preparation already has durable terminal proof. A failed result GET
         // is a local acquisition failure, not an unknown Sync Module command.
-        try { return await this.finish({ status: 'failed', reason: 'invalid-media' }); }
+        try { return await this.finish({ status: 'failed', reason: kind === 'clip' ? 'invalid-media' : 'invalid-result' }); }
         catch { return this.unresolved('persistence-failed'); }
       }
       const noSend = error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false;

@@ -616,6 +616,24 @@ describe('native recording runtime composition', () => {
     expect(f.readyMotion).toHaveBeenLastCalledWith(true);
   });
 
+  it('finishes a timed-out prepared catalog and records the next motion without operator recovery', async () => {
+    const f = await setup({ config: { initialDelaySeconds: 0 } });
+    f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0, commands: [{ id: 200 }] }).mockRejectedValueOnce(new OperationTimeoutError());
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => f.events.includes('catalog-invalid-result') && !(await f.state()).core?.operation);
+    const failed = await f.state();
+    expect(failed.nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished', result: { status: 'failed', reason: 'invalid-result' } });
+    expect(failed.core?.queue).toEqual([]);
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(1); expect(f.transport.getJson).toHaveBeenCalledTimes(2);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled(); expect(f.readyMotion).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(60_000); f.media[0].created_at = new Date(Date.now()).toISOString();
+    await f.push(f.notification('next-motion')); await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(3); expect(f.transport.getJson).toHaveBeenCalledTimes(5);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1); expect(f.prepare).toHaveBeenCalledTimes(1);
+    expect(f.setDemand).toHaveBeenCalledTimes(1); expect(f.reconnectSource).not.toHaveBeenCalled();
+  });
+
   it('reuses the real configured delegate after client handoff, discards old media, and offers only fresh motion', async () => {
     const f = await setup(); f.delegate.updateRecordingAudioActive(true);
     await f.push(); await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));

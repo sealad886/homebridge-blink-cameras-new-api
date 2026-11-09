@@ -229,18 +229,18 @@ it('rejects nonofficial acknowledgement aliases rather than creating another com
   expect(f.transport.getJson).not.toHaveBeenCalled();
 });
 
-it('resumes a prepared result GET after transport failure without another POST or status poll', async () => {
+it.each([new Error('Catalog GET failed'), new OperationTimeoutError()])('finishes a failed prepared catalog without replay and accepts the next event: %s', async error => {
   const f = fixture();
-  f.transport.getJson.mockImplementation(async route => {
-    if (route.base === 'root') return { complete: true, status: 0, commands: [{ id: 202 }] };
-    throw new Error('Result response unavailable');
-  });
-  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved' });
-  f.transport.getJson.mockClear().mockResolvedValue(wireCatalog());
-  expect(await f.restart().readCatalog(context)).toMatchObject({ status: 'ready' });
+  f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0, commands: [{ id: 202 }] }).mockRejectedValueOnce(error);
+  const result = await f.owner.readCatalog(context);
+  expect(result).toEqual({ status: 'failed', reason: 'invalid-result' });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', commandId: 101, resultCommandId: 202, statusReads: 1, result });
+  expect(await f.restart().readCatalog(context)).toEqual(result);
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
-  expect(f.transport.getJson.mock.calls.map(([route]) => route.path))
-    .toEqual(['v1/accounts/1/networks/2/sync_modules/3/local_storage/media/202']);
+  expect(f.transport.getJson).toHaveBeenCalledTimes(2);
+  expect(await f.owner.readCatalog({ ...context, operationId: 'next-event:catalog' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  expect(f.transport.getJson).toHaveBeenCalledTimes(4);
 });
 
 it('preserves accepted ownership on cancellation and resumes the same known command', async () => {
@@ -280,7 +280,7 @@ it('enforces decoded JSON bounds and requests transport-enforced bounded bodies 
   const f = fixture({ maxJsonBytes: 256 });
   f.transport.getJson.mockImplementation(async route => route.base === 'root' ?
     { complete: true, status: 0, commands: [{ id: 202 }] } : { padding: 'x'.repeat(300) });
-  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved' });
+  expect(await f.owner.readCatalog(context)).toEqual({ status: 'failed', reason: 'invalid-result' });
   for (const [, options] of [...f.transport.postEmpty.mock.calls, ...f.transport.getJson.mock.calls]) {
     expect(options).toMatchObject({ maxBytes: 256, retry: false });
   }
