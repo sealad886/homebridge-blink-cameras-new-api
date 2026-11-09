@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext, Script } from 'node:vm';
 import { execFileSync } from 'node:child_process';
+import { SettingsValidator } from '../../src/homebridge-ui/settings-validation';
 
 class Element {
   children: Element[] = [];
@@ -26,7 +27,7 @@ const source = (name: string) => readFileSync(join(__dirname, '../../src/homebri
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const cameras = [{ key: 'camera:1', kind: 'camera', id: '1', name: 'Same', networkId: '10', status: 'online', enabled: true, moduleAssociation: { state: 'unique', source: 'network_id', candidateIds: ['100'] } },
   { key: 'owl:1', kind: 'owl', id: '1', name: 'Same', networkId: '10', status: 'offline', enabled: true, moduleAssociation: { state: 'noneReported', source: 'network_id', candidateIds: [] } }];
-function mount(config: Record<string, unknown>) {
+function mount(config: Record<string, unknown>, validate?: (payload: unknown) => unknown) {
   const elements = new Map(['settingsNavigation', 'sectionFields', 'connectionFlow', 'accountMaintenance', 'sectionTitle', 'draftStatus', 'settingsErrors', 'inventoryStatus', 'retrySettings', 'accountDraftWarning', 'settingsWarnings'].map(id => [id, new Element()]));
   const document = { createElement: (tag: string) => new Element(tag), getElementById: (id: string) => elements.get(id) };
   const context: any = { window: {}, document, structuredClone, setTimeout, clearTimeout };
@@ -35,13 +36,38 @@ function mount(config: Record<string, unknown>) {
   const homebridge = {
     request: jest.fn(async (path: string, payload?: any) => path === '/settings/inventory'
       ? { revision: '1', fetchedAt: '2026-11-02T00:00:00Z', networks: [{ id: '10', name: 'Home', armed: true }], syncModules: [{ id: '100', networkId: '10', status: 'online' }], cameras }
-      : { revision: payload.revision, valid: true, errors: [], warnings: [] }),
+      : validate ? validate(JSON.parse(JSON.stringify(payload))) : { revision: payload.revision, valid: true, errors: [], warnings: [] }),
     updatePluginConfig: jest.fn().mockResolvedValue(undefined), enableSaveButton: jest.fn(), disableSaveButton: jest.fn(),
   };
   const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8'));
   const editor = context.window.BlinkSettingsUI.mount(homebridge, schema, [{ platform: 'BlinkCameras', name: 'Blink', ...config }]);
   return { editor, homebridge, elements };
 }
+
+it('identifies every blocking field and stages only after canonical validation succeeds', async () => {
+  const validator = new SettingsValidator(() => undefined);
+  const { editor, homebridge, elements } = mount({ enableMotionPolling: false, hksvCameras: ['camera:1'],
+    deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: 'yes' }] }, payload => validator.validate(payload));
+  editor.draft.set('name', 'Updated Blink'); await editor.draft.flush();
+  const paths = editor.draft.state.errors.map((error: { path: string }) => error.path);
+  expect(paths).toEqual(expect.arrayContaining(['/enableMotionPolling', '/hksvCameras', '/deviceSettingOverrides/0/homeKitSecureVideo']));
+  const messages = elements.get('settingsErrors')!.querySelectorAll('p').map(item => item.textContent);
+  for (const path of paths) expect(messages.some(message => message.includes(path))).toBe(true);
+  expect(elements.get('draftStatus')!.textContent).toContain(String(paths.length));
+  expect(elements.get('draftStatus')!.textContent).not.toMatch(/Unsaved changes/);
+  expect(homebridge.updatePluginConfig).not.toHaveBeenCalled();
+  expect(homebridge.enableSaveButton).not.toHaveBeenCalled();
+  expect(homebridge.disableSaveButton).toHaveBeenCalled();
+
+  editor.draft.set('enableMotionPolling', undefined);
+  editor.draft.set('hksvCameras', undefined);
+  editor.draft.set('deviceSettingOverrides', [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true }]);
+  await editor.draft.flush();
+  expect(editor.draft.state.errors).toEqual([]);
+  expect(elements.get('settingsErrors')!.hidden).toBe(true);
+  expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(1);
+  expect(homebridge.enableSaveButton).toHaveBeenCalledTimes(1);
+});
 
 it('renders a valid zero-selection recording picker without adding a blank selector', async () => {
   const { editor, homebridge, elements } = mount({ unrelated: 'kept' });
