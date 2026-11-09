@@ -196,7 +196,7 @@ describe('native recording runtime composition', () => {
       expect(workers).toHaveLength(2); expect(receiver.getStatus().faulted).toBe(true);
       expect(f.events).toContain('push-faulted:transport-error');
 
-      await f.runtime.reconnectEvents(); expect(workers).toHaveLength(3);
+      await f.runtime.retryConnection(); expect(workers).toHaveLength(3);
       expect(workers[2].send).toHaveBeenCalledWith({ type: 'start', firebase: BLINK_FIREBASE_CLIENT, credentials, persistentIds: ['before-outage'] });
       await activate(workers[2]);
       notify(workers[2], 'before-outage'); notify(workers[2], 'during-outage', enabledAt + 1);
@@ -208,7 +208,7 @@ describe('native recording runtime composition', () => {
       expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.transport.getJson).not.toHaveBeenCalled();
       expect(f.transport.downloadMedia).not.toHaveBeenCalled(); expect(globalThis.fetch).not.toHaveBeenCalled();
       // A deliberate retry of a healthy connection also retains this enabled period.
-      await f.runtime.reconnectEvents(); expect(workers).toHaveLength(4);
+      await f.runtime.retryConnection(); expect(workers).toHaveLength(4);
       expect(workers[2].stop).toHaveBeenCalledTimes(1);
       expect(workers[3].send).toHaveBeenCalledWith(expect.objectContaining({ type: 'start', credentials,
         persistentIds: ['before-outage', 'during-outage'] }));
@@ -217,12 +217,103 @@ describe('native recording runtime composition', () => {
 
   it('keeps no-demand recovery quiet and rejects reconnect after permanent shutdown', async () => {
     const f = await setup({ exposure: false, hsv: false });
-    await f.runtime.start(); await f.runtime.reconnectEvents();
+    await f.runtime.start(); await f.runtime.retryConnection();
     expect(f.setDemand).toHaveBeenCalledTimes(1); expect(f.reconnectSource).not.toHaveBeenCalled();
     expect(f.transport.postEmpty).not.toHaveBeenCalled();
     await f.runtime.stop();
-    await expect(f.runtime.reconnectEvents()).rejects.toThrow('Native runtime stopped');
+    await expect(f.runtime.retryConnection()).rejects.toThrow('Native runtime stopped');
     expect(f.reconnectSource).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('recovers an active ordinary command only on explicit retry with a known ID (%s)', async acknowledged => {
+    const originalFetch = globalThis.fetch;
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'active-ordinary-recovery', tier: scope.tier });
+    const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;
+    jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...scope, sharedTier: scope.tier });
+    jest.spyOn(internals.auth, 'ensureValidToken').mockResolvedValue(undefined);
+    jest.spyOn(internals.auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer fixture-auth' });
+    const demand = jest.fn().mockResolvedValue(undefined), reconnect = jest.fn().mockResolvedValue(undefined);
+    try {
+      globalThis.fetch = jest.fn().mockImplementation(async (_url, request) => {
+        if (request.method === 'POST' && acknowledged) return new Response(JSON.stringify({ id: 707 }));
+        throw new OperationTimeoutError();
+      });
+      const runtime = await NativeRecordingRuntime.create({ client: api, scope, devices: [], matchingDevices: [], storagePath: root,
+        config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(),
+        eventSourceFactory: () => ({ setDemand: demand, reconnect, stop: jest.fn().mockResolvedValue(undefined) }) });
+      runtimes.push(runtime); await runtime.start(); await runtime.start();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      await expect(api.armNetwork(20)).rejects.toBeDefined();
+      const owner = api.getRemoteOperationState().stateCommand!;
+      expect(owner).toMatchObject({ kind: 'arm', phase: 'unresolved', statusReads: acknowledged ? 1 : 0 });
+      expect(owner.commandId).toBe(acknowledged ? 707 : undefined);
+      jest.mocked(globalThis.fetch).mockClear().mockResolvedValue(new Response(JSON.stringify({ complete: true, status: 0 })));
+      await runtime.start(); expect(globalThis.fetch).not.toHaveBeenCalled();
+      await runtime.retryConnection();
+      if (acknowledged) {
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        expect(globalThis.fetch).toHaveBeenCalledWith('https://rest-u000.immedia-semi.com/accounts/10/networks/20/commands/707',
+          expect.objectContaining({ method: 'GET' }));
+        expect(api.getRemoteOperationState().stateCommand).toBeUndefined();
+      } else {
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(api.getRemoteOperationState().stateCommand).toEqual(owner);
+      }
+      jest.mocked(globalThis.fetch).mockClear();
+      await runtime.start(); await runtime.retryConnection();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(demand).toHaveBeenCalledTimes(1); expect(reconnect).not.toHaveBeenCalled();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  it.each([true, false])('recovers an unresolved native acquisition only with acknowledged terminal proof (%s)', async acknowledged => {
+    const f = await setup({ config: { initialDelaySeconds: 0 } });
+    if (acknowledged) f.transport.getJson.mockRejectedValueOnce(new OperationTimeoutError());
+    else f.transport.postEmpty.mockRejectedValueOnce(new OperationTimeoutError());
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => (await f.state()).core?.operation?.status === 'unresolved');
+    const before = (await f.state()).nativeByModule['20:30'].state;
+    expect(before.operation?.phase).toBe(acknowledged ? 'accepted' : 'intent');
+    await f.runtime.start();
+    expect(f.transport.getJson).toHaveBeenCalledTimes(acknowledged ? 1 : 0);
+    await f.runtime.retryConnection();
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    if (!acknowledged) {
+      expect((await f.state()).nativeByModule['20:30'].state).toEqual(before);
+      expect((await f.state()).core?.operation?.status).toBe('unresolved');
+      expect(f.transport.getJson).not.toHaveBeenCalled();
+      return;
+    }
+    expect(f.transport.getJson).toHaveBeenCalledTimes(2);
+    expect(f.transport.getJson).toHaveBeenLastCalledWith({ base: 'root', path: 'accounts/10/networks/20/commands/100' },
+      expect.objectContaining({ retry: false }));
+    const recovered = await f.state();
+    expect(recovered.nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished', commandId: 100,
+      result: { status: 'failed', reason: 'discarded', remoteStatus: 0 } });
+    expect(recovered.core?.operation).toBeUndefined(); expect(recovered.core?.queue).toEqual([]);
+    await jest.advanceTimersByTimeAsync(60_000); f.media[0].created_at = new Date(Date.now()).toISOString();
+    await f.push(f.notification('next-motion')); await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(3); expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect(f.setDemand).toHaveBeenCalledTimes(1); expect(f.reconnectSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an in-flight native acquisition unchanged during explicit connection retry', async () => {
+    const f = await setup({ config: { initialDelaySeconds: 0 } }), response = deferred<unknown>();
+    f.transport.getJson.mockImplementationOnce(() => response.promise);
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.transport.getJson.mock.calls.length === 1);
+    const before = (await f.state()).core?.operation;
+    expect(before?.status).toBe('active');
+    await f.runtime.retryConnection();
+    expect((await f.state()).core?.operation).toEqual(before);
+    expect(f.transport.getJson).toHaveBeenCalledTimes(1); expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    response.resolve({ complete: true, status: 0, commands: [{ id: 200 }] });
+    await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2); expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect(f.setDemand).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -279,7 +370,7 @@ describe('native recording runtime composition', () => {
         expect(globalThis.fetch).toHaveBeenCalledTimes(1);
         if (!scenario.completeAtStartup) {
           expect(api.getRemoteOperationState().liveView).toMatchObject({ commandId: 707, phase: 'unresolved', retirementAcknowledged: true });
-          const retry = runtime.start(); await jest.advanceTimersByTimeAsync(300); await retry;
+          const retry = runtime.retryConnection(); await jest.advanceTimersByTimeAsync(300); await retry;
         }
         expect(api.getRemoteOperationState().liveView).toBeUndefined();
         const admission = api.withNativeStorageAdmission('recovered-admission', async () => 'allowed', {}, { accountId: 10, networkId: 20, syncModuleId: 30 });
@@ -289,7 +380,7 @@ describe('native recording runtime composition', () => {
         }
         expect(globalThis.fetch).toHaveBeenCalledTimes(scenario.completeAtStartup ? 1 : 2);
       } else {
-        await runtime.start();
+        await runtime.retryConnection();
         expect(globalThis.fetch).not.toHaveBeenCalled();
         expect(api.getRemoteOperationState().liveView).toEqual(saved.remoteOperations!.liveView);
         await expect(api.withNativeStorageAdmission('blocked-admission', async () => 'must-not-run', {},

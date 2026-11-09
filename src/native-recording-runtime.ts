@@ -200,23 +200,8 @@ export class NativeRecordingRuntime {
 
   async start(): Promise<void> {
     if (this.stopped) throw new Error('Native runtime stopped');
-    // Explicit startup/retry may resolve an acknowledged retirement, but never sends /done again.
-    const liveViews = await this.options.client.reconcileKnownLiveViews();
-    if (liveViews.some(owner => !owner.confirmed)) this.options.report('live-view-recovery-required');
     if (this.active) return;
-    const ordinary = await this.options.client.reconcileKnownStateCommand();
-    if (ordinary.commandId !== undefined && !ordinary.confirmed) this.options.report('ordinary-recovery-required');
-    // Only existing command IDs may be examined during recovery; no new prepare.
-    for (const owner of this.owners.values()) await owner.reconcilePending();
-    const operation = this.core.snapshot().operation;
-    if (operation) {
-      const job = this.core.snapshot().queue[0];
-      const state = this.owners.get(job.observation.moduleId)?.snapshot().operation;
-      if (!state || state.phase === 'finished') {
-        await this.core.resolveOperation({ moduleId: job.observation.moduleId, operationId: operation.operationId,
-          status: 'verified-terminal', result: { status: 'skipped' } });
-      } else this.options.report('recovery-required');
-    }
+    await this.reconcileKnownOperations();
     this.active = true;
     for (const device of this.devices.values()) {
       const policy = device.recording()?.policy;
@@ -227,9 +212,30 @@ export class NativeRecordingRuntime {
       hsv: [...this.devices.values()].some(device => device.settings.homeKitSecureVideo) });
   }
 
+  private async reconcileKnownOperations(): Promise<void> {
+    // Startup/operator retry may resolve known ownership, but never resends its POST.
+    const liveViews = await this.options.client.reconcileKnownLiveViews();
+    if (liveViews.some(owner => !owner.confirmed)) this.options.report('live-view-recovery-required');
+    const ordinary = await this.options.client.reconcileKnownStateCommand();
+    if (ordinary.commandId !== undefined && !ordinary.confirmed) this.options.report('ordinary-recovery-required');
+    const operation = this.core.snapshot().operation;
+    if (operation?.status === 'active') return;
+    // Only existing command IDs may be examined during recovery; no new prepare.
+    for (const owner of this.owners.values()) await owner.reconcilePending();
+    if (operation?.status === 'unresolved') {
+      const job = this.core.snapshot().queue[0];
+      const state = this.owners.get(job.observation.moduleId)?.snapshot().operation;
+      if (!state || state.phase === 'finished') {
+        await this.core.resolveOperation({ moduleId: job.observation.moduleId, operationId: operation.operationId,
+          status: 'verified-terminal', result: { status: 'skipped' } });
+      } else this.options.report('recovery-required');
+    }
+  }
+
   /** Explicit operator retry; ordinary status recovery keeps its current subscription. */
-  async reconnectEvents(): Promise<void> {
+  async retryConnection(): Promise<void> {
     if (this.stopped) throw new Error('Native runtime stopped');
+    await this.reconcileKnownOperations();
     if (!this.active || ![...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) return;
     await this.source.reconnect();
   }

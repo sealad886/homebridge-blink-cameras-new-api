@@ -39,6 +39,9 @@ Native-storage refusals defer locally; an unknown accepted outcome remains owned
 and does not authorize a replacement preparation.
 When Blink has already confirmed command completion, a failed media transfer is
 settled locally so later controls and recording jobs can proceed.
+Startup and explicit connection retry reconcile known ordinary and native
+command IDs within their existing bounds. Ordinary polling adds no ownership
+probes, and unknown IDs remain fenced.
 
 If Blink acknowledged closing an owned Live View but its status check was
 interrupted, startup or an explicit connection retry checks that known command's

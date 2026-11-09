@@ -670,7 +670,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           ).then(async recovered => {
             // This continuation retains operator intent even when recovery joins
             // a status poll or discovery. A replacement already starts fresh.
-            if (recovered && this.monitorActive && this.nativeRuntime === previousRuntime) await this.nativeRuntime?.reconnectEvents();
+            if (recovered && this.monitorActive && this.nativeRuntime === previousRuntime) await this.nativeRuntime?.retryConnection();
           }));
         } catch (error) {
           throw toHapError(this.api.hap, error);
