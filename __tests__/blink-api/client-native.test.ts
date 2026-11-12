@@ -277,6 +277,163 @@ describe('owned native storage SDK', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects a stale arm conflict reconciliation after writer replacement without retrying its refused POST', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    let releaseRead!: (response: Response) => void;
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 409))
+      .mockImplementationOnce(async () => new Promise<Response>(resolve => { releaseRead = resolve; }));
+    const old = f.api.armNetwork(20).catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(releaseRead).toBeDefined();
+    const releasing = f.release({ deadline: Date.now() + 1 });
+    await jest.advanceTimersByTimeAsync(2); await releasing;
+    f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
+    releaseRead(json({ account: { account_id: 10 }, networks: [{ id: 20, name: 'Home', armed: true }],
+      cameras: [], owls: [], doorbells: [] }));
+    await expect(old).resolves.toMatchObject({ reason: 'ownership-unavailable', dispatched: false });
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST', 'GET']);
+  });
+
+  it('rejects a Live View success when its accepted-owner save spans writer replacement', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    let releaseSave!: () => void;
+    f.saveLive.mockImplementation(async state => {
+      if (state.liveView?.phase === 'active') await new Promise<void>(resolve => { releaseSave = resolve; });
+    });
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ command_id: 707, server: 'immis://fixture.invalid' }));
+    const old = f.api.startCameraLiveview(20, 40).catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(releaseSave).toBeDefined();
+    const releasing = f.release({ deadline: Date.now() + 1 });
+    await jest.advanceTimersByTimeAsync(2); await releasing;
+    f.api.configureRemoteOperationOwnership({ restoredState: { liveView: f.api.getRemoteOperationState().liveView },
+      saveState: jest.fn().mockResolvedValue(undefined) });
+    releaseSave();
+    await expect(old).resolves.toMatchObject({ dispatched: true, cause: { reason: 'ownership-unavailable' } });
+    expect(f.api.getRemoteOperationState().liveView).toMatchObject({ phase: 'active', commandId: 707 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a late arm success after a successor reconciles and confirms disarm', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    let releaseOld!: (response: Response) => void;
+    let firstStatus = true;
+    (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
+      if (request.method === 'POST') return json({ id: url.endsWith('/arm') ? 101 : 102 });
+      if (url.endsWith('/commands/101') && firstStatus) {
+        firstStatus = false;
+        return new Promise<Response>(resolve => { releaseOld = resolve; });
+      }
+      return json({ complete: true, status: 0 });
+    });
+    let confirmed = 'unknown';
+    const oldArm = f.api.armNetwork(20).then(() => { confirmed = 'armed'; return undefined; }, error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(releaseOld).toBeDefined();
+    const releasing = f.release({ deadline: Date.now() + 1 });
+    await jest.advanceTimersByTimeAsync(2); await releasing;
+    f.api.configureRemoteOperationOwnership({ restoredState: { stateCommand: f.api.getRemoteOperationState().stateCommand },
+      saveState: jest.fn().mockResolvedValue(undefined) });
+    await expect(f.api.reconcileKnownStateCommand()).resolves.toMatchObject({ confirmed: true, remoteStatus: 0 });
+    const disarm = f.api.disarmNetwork(20);
+    await jest.advanceTimersByTimeAsync(301); await disarm; confirmed = 'disarmed';
+    releaseOld(json({ complete: true, status: 0 }));
+    await expect(oldArm).resolves.toMatchObject({ dispatched: true });
+    expect(confirmed).toBe('disarmed');
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    expect((fetch as jest.Mock).mock.calls.filter(([, request]) => request.method === 'POST')).toHaveLength(2);
+  });
+
+  it('does not confirm an old live-view retirement after a successor completes disarm', async () => {
+    jest.useFakeTimers();
+    const f = fixture(live({ retirementAcknowledged: true }));
+    let releaseOld!: (response: Response) => void;
+    let firstStatus = true;
+    (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
+      if (request.method === 'POST') return json({ id: 102 });
+      if (url.endsWith('/commands/707') && firstStatus) {
+        firstStatus = false;
+        return new Promise<Response>(resolve => { releaseOld = resolve; });
+      }
+      return json({ complete: true, status: 0 });
+    });
+    const oldRetirement = f.api.reconcileKnownLiveViews();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(releaseOld).toBeDefined();
+    const releasing = f.release({ deadline: Date.now() + 1 });
+    await jest.advanceTimersByTimeAsync(2); await releasing;
+    f.api.configureRemoteOperationOwnership({ restoredState: { liveView: f.api.getRemoteOperationState().liveView },
+      saveState: jest.fn().mockResolvedValue(undefined) });
+    const reconcile = f.api.reconcileKnownLiveViews();
+    await jest.advanceTimersByTimeAsync(301);
+    await expect(reconcile).resolves.toEqual([{ commandId: 707, confirmed: true }]);
+    const disarm = f.api.disarmNetwork(20);
+    await jest.advanceTimersByTimeAsync(301); await disarm;
+    releaseOld(json({ complete: true, status: 0 }));
+    await expect(oldRetirement).rejects.toMatchObject({ reason: 'ownership-unavailable' });
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+    expect((fetch as jest.Mock).mock.calls.filter(([, request]) => request.method === 'POST')).toHaveLength(1);
+  });
+
+  it.each(['arm', 'retirement'] as const)('rejects superseded %s terminal proof while its owner-clear save is pending', async kind => {
+    jest.useFakeTimers();
+    const f = fixture(kind === 'retirement' ? live({ retirementAcknowledged: true }) : undefined);
+    let releaseSave!: () => void;
+    f.saveLive.mockImplementationOnce(async state => {
+      if (kind === 'retirement') await new Promise<void>(resolve => { releaseSave = resolve; });
+      else f.savedRemote.push(copy(state));
+    }).mockImplementation(async state => {
+      if (!state.liveView && !state.stateCommand) await new Promise<void>(resolve => { releaseSave = resolve; });
+    });
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
+      ? json({ id: 101 }) : json({ complete: true, status: 0 }));
+    const old = (kind === 'arm' ? f.api.armNetwork(20) : f.api.reconcileKnownLiveViews()).catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(releaseSave).toBeDefined();
+    const releasing = f.release({ deadline: Date.now() + 1 });
+    await jest.advanceTimersByTimeAsync(2); await releasing;
+    f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
+    releaseSave();
+    if (kind === 'arm') await expect(old).resolves.toMatchObject({ dispatched: true });
+    else await expect(old).resolves.toMatchObject({ reason: 'ownership-unavailable' });
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+  });
+
+  it.each(['lost', 'known'] as const)('flushes the newest %s acknowledgment receipt when journal persistence recovers', async acknowledgment => {
+    const f = fixture();
+    f.saveLive.mockRejectedValue(new Error('fixture disk unavailable'));
+    const lost = new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } });
+    if (acknowledgment === 'known') (fetch as jest.Mock).mockResolvedValueOnce(json({ id: 101 })).mockRejectedValueOnce(lost);
+    else (fetch as jest.Mock).mockRejectedValueOnce(lost);
+    await expect(f.api.armNetwork(20)).rejects.toThrow();
+    const current = f.api.getRemoteOperationState().stateCommand;
+    expect(current).toMatchObject({ phase: 'unresolved', ...(acknowledgment === 'known' ? { commandId: 101 } : {}) });
+    expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+    f.saveLive.mockImplementation(async state => { f.savedRemote.push(copy(state)); });
+    await expect(f.api.retryRemoteOperationPersistence()).resolves.toBeUndefined();
+    expect(f.savedRemote.at(-1)).toEqual({ stateCommand: current });
+    expect(f.api.getRemoteOperationState().persistenceFailed).toBe(false);
+    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ reason: 'ownership-unavailable' });
+    expect(fetch).toHaveBeenCalledTimes(acknowledgment === 'known' ? 2 : 1);
+  });
+
+  it('reports a failed explicit ownership flush without clearing the journal fault', async () => {
+    const f = fixture();
+    f.saveLive.mockRejectedValue(new Error('fixture disk unavailable'));
+    await expect(f.api.retryRemoteOperationPersistence()).rejects.toThrow(/journal unavailable/);
+    expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+    f.saveLive.mockResolvedValue(undefined);
+    await expect(f.api.retryRemoteOperationPersistence()).resolves.toBeUndefined();
+    expect(f.api.getRemoteOperationState().persistenceFailed).toBe(false);
+    await expect(f.api.withNativeStorageAdmission('event', async () => 'admitted', {}, scope)).resolves.toBe('admitted');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('lets a fresh arm and writer handoff pass a hung old journal write, then flushes only the latest state', async () => {
     jest.useFakeTimers();
     const f = fixture();
@@ -501,6 +658,71 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
     await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each((['early-notification', 'quality', 'thumbnail'] as const).flatMap(kind =>
+    (['authentication', 'connection'] as const).map(failure => [kind, failure] as const)))
+  ('does not report an accepted %s as unsent when its final read fails during %s', async (kind, failure) => {
+    const f = fixture();
+    const authenticationFailure = Object.assign(new Error('fixture readback authentication unavailable'), { dispatched: false });
+    let completed = false;
+    (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
+      if (request.method === 'POST') return json({ id: 101 });
+      if (url.endsWith('/commands/101')) {
+        completed = true;
+        if (failure === 'authentication') (f.auth.ensureValidToken as jest.Mock).mockRejectedValueOnce(authenticationFailure);
+        return json({ complete: true, status: 0 });
+      }
+      if (completed) throw new TypeError('fetch failed', { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+      return json({ camera: [{ early_notification: true, early_notification_compatible: true,
+        video_quality: 'standard', video_quality_support: ['standard', 'best'] }] });
+    });
+    const command = kind === 'early-notification'
+      ? f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false)
+      : kind === 'quality' ? f.api.setDeviceVideoQuality('camera', 20, 40, 'best')
+        : f.api.requestCameraThumbnail(20, 40);
+    await expect(command).rejects.toMatchObject({ dispatched: true, cause: failure === 'authentication'
+      ? authenticationFailure : { failure: 'network', dispatched: false } });
+    expect(completed).toBe(true);
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    const calls = (fetch as jest.Mock).mock.calls as [string, RequestInit][];
+    expect(calls.filter(([, request]) => request.method === 'POST')).toHaveLength(1);
+    expect(calls.filter(([url]) => url.endsWith('/commands/101'))).toHaveLength(1);
+    expect(calls.at(-1)?.[0]).toContain(failure === 'authentication' ? '/commands/101'
+      : kind === 'thumbnail' ? '/homescreen' : '/config');
+  });
+
+  it.each(['early-notification', 'quality', 'thumbnail'] as const)
+  ('keeps no-send proof when %s authentication fails before its mutation', async kind => {
+    const f = fixture();
+    (f.auth.ensureValidToken as jest.Mock).mockRejectedValueOnce(new Error('fixture authentication unavailable'));
+    const command = kind === 'early-notification'
+      ? f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false)
+      : kind === 'quality' ? f.api.setDeviceVideoQuality('camera', 20, 40, 'best')
+        : f.api.requestCameraThumbnail(20, 40);
+    await expect(command).rejects.toMatchObject({ dispatched: false });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+  });
+
+  it('does not turn an accepted capture status refusal into a busy thumbnail fallback', async () => {
+    const f = fixture();
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ id: 101 })).mockResolvedValueOnce(json({}, 409))
+      .mockResolvedValueOnce(json({ account: { account_id: 10 }, networks: [],
+        cameras: [{ id: 40, network_id: 20, name: 'Camera', thumbnail: '/current.jpg' }], doorbells: [], owls: [] }));
+    await expect(f.api.requestCameraThumbnail(20, 40)).rejects.toMatchObject({ status: 409, method: 'GET' });
+    expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps no-send proof for a thumbnail read after the capture POST was definitively refused', async () => {
+    const f = fixture();
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 409)).mockRejectedValueOnce(new TypeError('fetch failed', {
+      cause: { code: 'UND_ERR_CONNECT_TIMEOUT' },
+    }));
+    await expect(f.api.requestCameraThumbnail(20, 40)).rejects.toMatchObject({ failure: 'network', dispatched: false });
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST', 'GET']);
   });
 
   it('preserves timeout classification without false no-send proof after an accepted arm', async () => {

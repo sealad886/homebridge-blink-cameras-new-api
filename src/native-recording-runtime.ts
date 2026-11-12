@@ -29,7 +29,7 @@ export interface NativeRuntimeDevice {
 }
 type RuntimeClient = Pick<BlinkApi, 'getCachedIdentity' | 'registerMotionNotificationKey' | 'createNativeStorageTransport'
   | 'withNativeStorageAdmission' | 'setNativeStorageOwner' | 'configureRemoteOperationOwnership' | 'reconcileKnownStateCommand'
-  | 'reconcileKnownLiveViews' | 'getRemoteOperationState' | 'setDeviceEarlyNotification'>;
+  | 'reconcileKnownLiveViews' | 'getRemoteOperationState' | 'setDeviceEarlyNotification' | 'retryRemoteOperationPersistence'>;
 interface EarlyNotificationOriginal {
   kind: BlinkCameraKind;
   networkId: number;
@@ -110,6 +110,7 @@ export class NativeRecordingRuntime {
   private delivery?: Promise<void>;
   private stopping?: Promise<void>;
   private recovery?: Promise<void>;
+  private persistenceRecovery?: Promise<void>;
   private preferences?: Promise<void>;
   private cacheBytes = 0;
   private releaseOwnership?: (options?: RequestOptions) => Promise<void>;
@@ -368,6 +369,19 @@ export class NativeRecordingRuntime {
     if (this.stopped) throw new Error('Native runtime stopped');
     await withinRequestBudget(Promise.allSettled([...this.policyChanges]), { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });
     if (this.failed) {
+      this.persistenceRecovery ??= this.recoverPersistence().finally(() => { this.persistenceRecovery = undefined; });
+      await this.persistenceRecovery;
+    }
+    await this.reconcileKnownOperations();
+    if (this.stopped) return;
+    if (this.active && [...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) {
+      await this.source.reconnect();
+    }
+    this.startPreferenceReconciliation();
+  }
+
+  private async recoverPersistence(): Promise<void> {
+    try {
       await this.writes;
       const next = clone(this.state);
       next.core = this.core.snapshot();
@@ -376,18 +390,13 @@ export class NativeRecordingRuntime {
       }
       await withinRequestBudget(this.writeStateFile(next), { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });
       this.state = next;
-      this.failed = false;
+      await this.options.client.retryRemoteOperationPersistence();
       for (const owner of this.owners.values()) await owner.retryPersistence();
       await this.core.retryPersistence();
+      this.failed = false;
       this.options.report('persistence-recovered');
       this.pumpDelivery();
-    }
-    await this.reconcileKnownOperations();
-    if (this.stopped) return;
-    if (this.active && [...this.devices.values()].some(device => device.settings.exposeMotionDetected || device.settings.homeKitSecureVideo)) {
-      await this.source.reconnect();
-    }
-    this.startPreferenceReconciliation();
+    } catch (error) { this.failed = true; throw error; }
   }
 
   policyChanged(cameraId: string, policy: NativeRecordingPolicy): Promise<void> {
@@ -429,7 +438,7 @@ export class NativeRecordingRuntime {
       const deadline = Date.now() + REMOTE_OPERATION_LEASE_MS;
       try {
         await withinRequestBudget((async () => {
-          const results = await Promise.allSettled([this.source?.stop(), this.recovery, this.preferences,
+          const results = await Promise.allSettled([this.source?.stop(), this.recovery, this.persistenceRecovery, this.preferences,
             ...[...this.devices.values()].map(device => device.recording()?.invalidateDelivery()), ...this.policyChanges]);
           results.push(...await Promise.allSettled([this.core?.stop()]));
           await this.delivery;
@@ -740,7 +749,7 @@ export class NativeRecordingRuntime {
 
   private commit(update: (state: NativeRecordingRuntimeState) => void): Promise<void> {
     const write = this.writes.then(async () => {
-      if (this.failed || this.writerReleased) throw new Error('Native recording persistence unavailable');
+      if ((this.failed && !this.persistenceRecovery) || this.writerReleased) throw new Error('Native recording persistence unavailable');
       const next = clone(this.state); update(next);
       if (Buffer.byteLength(JSON.stringify(next)) > MAX_STATE_BYTES) throw new Error('Native recording state budget exceeded');
       await withinRequestBudget(this.writeStateFile(next), { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });

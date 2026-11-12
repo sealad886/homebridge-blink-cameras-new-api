@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createECDH, createHash, randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import process from 'node:process';
@@ -123,6 +123,7 @@ describe('native recording runtime composition', () => {
       configureRemoteOperationOwnership: jest.fn((options: { saveState: (state: BlinkRemoteOperationOwnership) => Promise<void> }) => {
         remoteSave = options.saveState; return releaseOwnership;
       }),
+      retryRemoteOperationPersistence: jest.fn().mockResolvedValue(undefined),
       reconcileKnownStateCommand: jest.fn().mockResolvedValue({ confirmed: true }),
       reconcileKnownLiveViews: jest.fn().mockResolvedValue([]),
       setDeviceEarlyNotification: jest.fn<ReturnType<BlinkApi['setDeviceEarlyNotification']>, Parameters<BlinkApi['setDeviceEarlyNotification']>>()
@@ -1338,6 +1339,67 @@ describe('native recording runtime composition', () => {
     await f.push(f.notification('fresh-after-disk-recovery'));
     await jest.advanceTimersByTimeAsync(60000); await until(() => f.events.includes('offered'));
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('flushes latest real SDK ownership before recovering its journal (acknowledged: %s)', async acknowledged => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'runtime-journal-recovery', tier: scope.tier });
+    const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;
+    jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...scope, sharedTier: scope.tier });
+    jest.spyOn(internals.auth, 'ensureValidToken').mockResolvedValue(undefined);
+    jest.spyOn(internals.auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer fixture-auth' });
+    const originalFetch = globalThis.fetch, write = secureJson.writeOwnerOnlyJsonFile;
+    const events: string[] = [], recovered: NativeRecordingRuntimeState[] = [], motion = jest.fn();
+    let source!: FcmEventSourceOptions, runtime!: NativeRecordingRuntime, failAll = false, failLatest = false;
+    let filename = path.join(root, '.blink-native-recording', '10-11-u000', 'state.json');
+    const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (location, state) => {
+      if (location === filename && (failAll || (failLatest && (state as NativeRecordingRuntimeState).remoteOperations?.stateCommand))) {
+        throw new Error('Remote ownership journal failure');
+      }
+      return write(location, state);
+    });
+    try {
+      globalThis.fetch = jest.fn().mockImplementation(async (_url, request) => {
+        if (request.method === 'POST' && acknowledged) return new Response(JSON.stringify({ id: 707 }));
+        throw new OperationTimeoutError();
+      });
+      runtime = await NativeRecordingRuntime.create({ client: api, scope, storagePath: root,
+        config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', matchingDevices: [],
+        report: event => {
+          events.push(event);
+          if (event === 'persistence-recovered') recovered.push(JSON.parse(readFileSync(filename, 'utf8')));
+        }, devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry' },
+          settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false }, motion, recording: () => undefined }],
+        eventSourceFactory: input => { source = input; return { setDemand: jest.fn().mockResolvedValue(undefined),
+          reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }; } });
+      filename = path.join(runtime.directory, 'state.json');
+      runtimes.push(runtime); await runtime.start();
+      await source.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['before-journal-fault'] });
+      failAll = true;
+      await expect(api.armNetwork(20)).rejects.toBeDefined();
+      const owner = api.getRemoteOperationState().stateCommand!;
+      expect(owner).toMatchObject({ kind: 'arm', phase: 'unresolved', ...(acknowledged ? { commandId: 707 } : {}) });
+      expect(api.getRemoteOperationState().persistenceFailed).toBe(true);
+      const notify = () => source.onNotification({ persistentMessageId: randomUUID(), scope, receivedAt: Date.now(), activatedAt: Date.now(),
+        data: { category: 'motion', event_type: 'cam2sm_motion', camera: '40', target: 'camera', network: '20',
+          created_at: new Date(Date.now()).toISOString() } }, new globalThis.AbortController().signal);
+      failAll = false; failLatest = true;
+      await expect(runtime.retryConnection()).rejects.toBeDefined();
+      expect(events).not.toContain('persistence-recovered');
+      expect(api.getRemoteOperationState().persistenceFailed).toBe(true);
+      await notify(); expect(motion).not.toHaveBeenCalled();
+      failLatest = false;
+      jest.mocked(globalThis.fetch).mockResolvedValue(new Response(JSON.stringify({ complete: false, status: 0 })));
+      await Promise.all([runtime.retryConnection(), runtime.retryConnection()]);
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0].remoteOperations?.stateCommand).toEqual(owner);
+      expect(api.getRemoteOperationState().persistenceFailed).toBe(false);
+      expect(JSON.parse(await fs.readFile(filename, 'utf8')).remoteOperations.stateCommand).toEqual(api.getRemoteOperationState().stateCommand);
+      expect(api.getRemoteOperationState().stateCommand?.expiresAt).toBe(owner.expiresAt);
+      await expect(api.withNativeStorageAdmission('still-excluded', async () => 'unsafe', {},
+        { accountId: 10, networkId: 20, syncModuleId: 30 })).rejects.toMatchObject({ dispatched: false });
+      await notify(); expect(motion).toHaveBeenCalledTimes(1);
+      expect(jest.mocked(globalThis.fetch).mock.calls.filter(([, request]) => request?.method === 'POST')).toHaveLength(1);
+    } finally { failAll = false; failLatest = false; saving.mockRestore(); globalThis.fetch = originalFetch; }
   });
 
   it('drains a late preference journal before a replacement loads its preserved original', async () => {

@@ -101,6 +101,7 @@ export class NativeStorageOwner {
   private running = false;
   private persistenceFailed = false;
   private generation = 0;
+  private abandonment?: Promise<boolean>;
   private readonly maxStatusReads: number;
   private readonly maxJsonBytes: number;
   private readonly maxMediaBytes: number;
@@ -121,6 +122,7 @@ export class NativeStorageOwner {
 
   /** Retain uncertain evidence, but stop its local veto without another provider request. */
   async abandonExpired(): Promise<boolean> {
+    if (this.abandonment) return this.abandonment;
     const operation = this.state.operation;
     if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned'
       || isRemoteOperationLeaseActive(operation.expiresAt)) return false;
@@ -132,12 +134,15 @@ export class NativeStorageOwner {
         ...(operation.commandId !== undefined ? { commandId: operation.commandId } : {}),
         ...(operation.resultCommandId !== undefined ? { resultCommandId: operation.resultCommandId } : {}),
         ...(operation.expiresAt !== undefined ? { expiresAt: operation.expiresAt } : {}), abandonedAt: Date.now() }].slice(-32);
-    await this.persist({ ...operation, phase: 'abandoned', abandonedAt: Date.now(), result: undefined });
-    return true;
+    const abandonment = this.persist({ ...operation, phase: 'abandoned', abandonedAt: Date.now(), result: undefined }).then(() => true);
+    this.abandonment = abandonment;
+    try { return await abandonment; }
+    finally { if (this.abandonment === abandonment) this.abandonment = undefined; }
   }
 
   /** Explicit retry rechecks durable storage; it does not replay an uncertain preparation. */
   async retryPersistence(): Promise<void> {
+    await this.abandonment?.catch(() => undefined);
     await this.options.saveState(this.snapshot());
     this.persistenceFailed = false;
     await this.abandonExpired();

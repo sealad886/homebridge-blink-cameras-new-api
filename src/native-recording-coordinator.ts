@@ -292,7 +292,8 @@ export class NativeRecordingCoordinator {
       this.operationDispatched = false;
       const [job] = this.queue.splice(0, 1);
       try {
-        await this.options.onOperationAbandoned?.();
+        try { await this.options.onOperationAbandoned?.(); }
+        catch (error) { this.options.onError(asError(error)); }
         await this.persist();
         if (!job.cancelled) this.options.onJobFinished({ observation: cloneObservation(job.observation), attempts: job.attempts, outcome: 'abandoned' });
         this.options.onError(new Error(`Native recording operation ${abandoned.operationId} was locally abandoned after its availability lease.`));

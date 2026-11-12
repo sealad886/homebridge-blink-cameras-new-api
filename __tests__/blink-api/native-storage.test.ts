@@ -57,6 +57,47 @@ it('abandons a legacy unknown command locally without probing or replaying it, t
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
+it('shares an abandonment save between concurrent callers before permitting fresh work', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } },
+    saveState: async () => pending });
+  const first = f.owner.abandonExpired(), second = f.owner.abandonExpired();
+  const settled = Promise.allSettled([first, second]);
+  release();
+  expect(await settled).toEqual([{ status: 'fulfilled', value: true }, { status: 'fulfilled', value: true }]);
+  expect(f.saveState).toHaveBeenCalledTimes(1);
+  expect(f.owner.snapshot().abandoned).toHaveLength(1);
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(await f.owner.readCatalog({ ...context, operationId: 'fresh-after-abandonment' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('allows explicit retry after a failed abandonment save without renewing the lease', async () => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  f.saveState.mockRejectedValueOnce(new Error('temporary disk failure'));
+  await expect(f.owner.abandonExpired()).rejects.toThrow('Native storage persistence failed');
+  await f.owner.retryPersistence();
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned' });
+  expect(f.owner.snapshot().operation?.expiresAt).toBeUndefined();
+  expect(f.owner.snapshot().abandoned).toHaveLength(1);
+  expect(await f.owner.abandonExpired()).toBe(false);
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+});
+
+it('waits for pending abandonment before retrying its persisted snapshot', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } },
+    saveState: async () => pending });
+  const abandoning = f.owner.abandonExpired(), retrying = f.owner.retryPersistence();
+  release();
+  await Promise.all([abandoning, retrying]);
+  expect(f.saved.at(-1)?.operation?.phase).toBe('abandoned');
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+});
+
 it.each(['catalog', 'clip'] as const)('reports rejected %s admission after abandonment as not started', async kind => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
   await f.owner.reconcilePending();

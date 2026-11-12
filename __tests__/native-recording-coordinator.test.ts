@@ -277,6 +277,40 @@ describe('native recording FIFO', () => {
     expect(await coordinator.observe(event('uncertain'))).toBe('duplicate');
   });
 
+  it('persists and reports abandonment despite cleanup failure, then restores without replaying the old event', async () => {
+    const cleanupFailure = new Error('local cleanup failed');
+    const f = setup({ acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }),
+      onOperationAbandoned: jest.fn().mockRejectedValue(cleanupFailure) });
+    const old = event('uncertain-before-cleanup-failure');
+    await f.coordinator.observe(old);
+    await jest.advanceTimersByTimeAsync(180000);
+    const saved = f.saveState.mock.calls.at(-1)![0];
+    expect(saved.operation).toBeUndefined();
+    expect(saved.queue).toEqual([]);
+    expect(f.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ observation: old, outcome: 'abandoned' }));
+    expect(f.onError).toHaveBeenCalledWith(cleanupFailure);
+    await f.coordinator.stop();
+
+    const restored = setup({ restoredState: saved });
+    expect(await restored.coordinator.observe(old)).toBe('duplicate');
+    await restored.coordinator.observe(event('fresh-other-module', { moduleId: 'module-2' }));
+    await jest.advanceTimersByTimeAsync(60000);
+    expect(restored.acquire.mock.calls.map(([request]) => request.observation.eventId)).toEqual(['fresh-other-module']);
+  });
+
+  it('does not report persisted abandonment when the receipt write fails after cleanup fails', async () => {
+    const cleanupFailure = new Error('local cleanup failed'), writeFailure = new Error('abandonment write failed');
+    const saveState = jest.fn<Promise<void>, [NativeRecordingState]>().mockResolvedValue(undefined);
+    const f = setup({ acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }), saveState,
+      onOperationAbandoned: jest.fn().mockRejectedValue(cleanupFailure) });
+    await f.coordinator.observe(event('uncertain-write-failure'));
+    await jest.advanceTimersByTimeAsync(60000);
+    saveState.mockRejectedValueOnce(writeFailure);
+    await jest.advanceTimersByTimeAsync(120000);
+    expect(f.onError).toHaveBeenCalledWith(writeFailure);
+    expect(f.onJobFinished).not.toHaveBeenCalled();
+  });
+
   it('does not let a missing camera cooldown delay another ready camera', async () => {
     let cornerEligibleAt = Date.now();
     const acquire = jest.fn<Promise<NativeRecordingAcquisitionResult>, [NativeRecordingAcquisition, AbortSignal]>().mockImplementation(async request => {

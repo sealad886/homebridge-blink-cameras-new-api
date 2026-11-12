@@ -91,7 +91,7 @@ export class BlinkOperationNotStartedError extends Error {
   }
 }
 
-/** A later unsent status read cannot establish that its preceding mutation was unsent. */
+/** An unsent follow-up read cannot establish that its preceding mutation was unsent. */
 function afterDispatchFailure(error: unknown): unknown {
   if (!(error instanceof Error) || (error as Error & { dispatched?: boolean }).dispatched !== false) return error;
   const timeout = error instanceof OperationTimeoutError;
@@ -162,6 +162,7 @@ interface CommandAdmission {
 }
 interface CommandRequestOptions extends RequestOptions {
   generation: number;
+  mutationAcknowledged: boolean;
   beforeDispatch(): void;
 }
 
@@ -181,6 +182,8 @@ export class BlinkApi {
   private activeNativeAdmission?: { operationId: string; scope: NativeStorageScope; canPost: boolean; expiresAt: number };
   private liveViewOwner?: BlinkLiveViewOwnership;
   private stateCommandOwner?: BlinkStateCommandOwnership;
+  private liveViewRevision = 0;
+  private stateCommandRevision = 0;
   private saveRemoteOperationState?: (state: BlinkRemoteOperationOwnership) => Promise<void>;
   private remoteOperationWriter?: RemoteOperationWriter;
   private queuedStateCommands = 0;
@@ -243,7 +246,7 @@ export class BlinkApi {
       started = true;
       if (queueTimer) globalThis.clearTimeout(queueTimer);
       this.hasSentStateCommand = true;
-      const execution: CommandRequestOptions = { ...options, generation, deadline: Math.min(options.deadline ?? Infinity,
+      const execution: CommandRequestOptions = { ...options, generation, mutationAcknowledged: false, deadline: Math.min(options.deadline ?? Infinity,
         ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
       beforeDispatch: () => {
         checkRequestBudget(execution);
@@ -255,14 +258,21 @@ export class BlinkApi {
         try {
           const sent = send(execution);
           const native = this.activeNativeAdmission;
-          try { return await withinRequestBudget(sent, execution); }
+          try {
+            const result = await withinRequestBudget(sent, execution);
+            execution.beforeDispatch();
+            return result;
+          }
           finally {
             if (native && this.activeNativeAdmission === native) this.activeNativeAdmission = undefined;
             this.expireOperationOwners();
           }
         } catch (error) {
+          // Preserve mutation dispatch proof through status and public readback failures.
+          if (execution.mutationAcknowledged) throw afterDispatchFailure(error);
           if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
           const reconciled = await conflictResolution?.(execution);
+          execution.beforeDispatch();
           if (reconciled?.resolved) {
             this.log.info(`[${label}] Requested state verified after conflict (attempt ${attempt + 1}).`);
             return reconciled.value as T;
@@ -510,6 +520,33 @@ export class BlinkApi {
     catch { degraded(generation); }
   }
 
+  /** Explicit recovery saves current memory through the same bounded, serialized journal writer. */
+  async retryRemoteOperationPersistence(options: RequestOptions = {}): Promise<void> {
+    const generation = this.writerGeneration, writer = this.remoteOperationWriter;
+    const current = () => {
+      checkRequestBudget(options);
+      const identity = this.getCachedIdentity(), scope = writer?.scope;
+      if (!writer || writer !== this.remoteOperationWriter || generation !== this.writerGeneration
+        || (scope && (scope.accountId !== identity.accountId || scope.clientId !== identity.clientId || scope.tier !== identity.tier))) {
+        throw new BlinkOperationNotStartedError('ownership-unavailable');
+      }
+    };
+    current();
+    this.expireOperationOwners();
+    await withinRequestBudget(this.writeRemoteOperationState(this.remoteOperationSnapshot()), options);
+    current();
+    if (this.ownershipPersistenceFailed) throw new Error('Blink ownership journal unavailable.');
+  }
+
+  private assertOperationAuthority(kind: 'liveView' | 'stateCommand', reservationId: string, generation: number,
+    accountId: number, cleared = false): void {
+    const owner = kind === 'liveView' ? this.liveViewOwner : this.stateCommandOwner;
+    if (generation !== this.writerGeneration || this.getCachedIdentity().accountId !== accountId
+      || (cleared ? owner !== undefined : owner?.reservationId !== reservationId)) {
+      throw new BlinkOperationNotStartedError('ownership-unavailable');
+    }
+  }
+
   private validateLiveViewOwner(owner: BlinkLiveViewOwnership): void {
     if (!owner || typeof owner !== 'object' || typeof owner.reservationId !== 'string' || !owner.reservationId ||
       !['camera', 'owl', 'doorbell'].includes(owner.kind) || !['starting', 'active', 'retiring', 'unresolved'].includes(owner.phase) ||
@@ -520,11 +557,13 @@ export class BlinkApi {
   }
 
   private async persistLiveViewOwner(owner: BlinkLiveViewOwnership | undefined, expected?: string,
-    generation = this.writerGeneration): Promise<void> {
-    if (generation !== this.writerGeneration || (expected !== undefined && this.liveViewOwner?.reservationId !== expected)) return;
+    generation = this.writerGeneration): Promise<boolean> {
+    if (generation !== this.writerGeneration || (expected !== undefined && this.liveViewOwner?.reservationId !== expected)) return false;
     if (owner) this.validateLiveViewOwner(owner);
     this.liveViewOwner = owner ? { ...owner } : undefined;
+    const revision = ++this.liveViewRevision;
     await this.writeRemoteOperationState(this.remoteOperationSnapshot());
+    return generation === this.writerGeneration && revision === this.liveViewRevision;
   }
 
   private validateStateCommandOwner(owner: BlinkStateCommandOwnership): void {
@@ -543,11 +582,13 @@ export class BlinkApi {
   }
 
   private async persistStateCommandOwner(owner: BlinkStateCommandOwnership | undefined, expected?: string,
-    generation = this.writerGeneration): Promise<void> {
-    if (generation !== this.writerGeneration || (expected !== undefined && this.stateCommandOwner?.reservationId !== expected)) return;
+    generation = this.writerGeneration): Promise<boolean> {
+    if (generation !== this.writerGeneration || (expected !== undefined && this.stateCommandOwner?.reservationId !== expected)) return false;
     if (owner) this.validateStateCommandOwner(owner);
     this.stateCommandOwner = owner ? { ...owner } : undefined;
+    const revision = ++this.stateCommandRevision;
     await this.writeRemoteOperationState(this.remoteOperationSnapshot());
+    return generation === this.writerGeneration && revision === this.stateCommandRevision;
   }
 
   private async ownedStateCommand(kind: BlinkStateCommandOwnership['kind'], accountId: number, networkId: number,
@@ -571,7 +612,7 @@ export class BlinkApi {
       current();
       dispatched = true;
       const response = await send(current);
-      acknowledged = true;
+      acknowledged = options.mutationAcknowledged = true;
       commandId = requireRemoteId(response?.id ?? response?.command_id);
       current();
       await this.persistStateCommandOwner({ ...intent, phase: 'accepted', commandId }, intent.reservationId, generation);
@@ -592,7 +633,7 @@ export class BlinkApi {
         else await this.persistStateCommandOwner({ ...this.stateCommandOwner, phase: 'unresolved',
           ...(commandId ? { commandId } : {}) }, intent.reservationId, generation);
       }
-      throw acknowledged ? afterDispatchFailure(error) : error;
+      throw error;
     } finally { if (this.stateCommandRunning === intent.reservationId) this.stateCommandRunning = undefined; }
   }
 
@@ -607,16 +648,18 @@ export class BlinkApi {
     checkRequestBudget(options);
     const status = await withinRequestBudget(this.sharedRootHttp.get<{ complete?: unknown; status?: unknown }>(
       `accounts/${owner.accountId}/networks/${owner.networkId}/commands/${owner.commandId}`,
-      { ...options, retry: false, responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: () => {
-        if (generation !== this.writerGeneration || this.stateCommandOwner?.reservationId !== owner.reservationId) {
-          throw new BlinkOperationNotStartedError('ownership-unavailable');
-        }
-      } }), options);
+      { ...options, retry: false, responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: () =>
+        this.assertOperationAuthority('stateCommand', owner.reservationId, generation, owner.accountId) }), options);
+    this.assertOperationAuthority('stateCommand', owner.reservationId, generation, owner.accountId);
     if (typeof status?.complete !== 'boolean' || typeof status.status !== 'number' || !Number.isSafeInteger(status.status)) {
       throw new Error('Blink command returned invalid terminal evidence.');
     }
     if (!status.complete) return undefined;
-    await this.persistStateCommandOwner(undefined, owner.reservationId, generation);
+    if (!await this.persistStateCommandOwner(undefined, owner.reservationId, generation)) {
+      throw new BlinkOperationNotStartedError('ownership-unavailable');
+    }
+    checkRequestBudget(options);
+    this.assertOperationAuthority('stateCommand', owner.reservationId, generation, owner.accountId, true);
     return status.status;
   }
 
@@ -1571,7 +1614,7 @@ export class BlinkApi {
           `${prefix}accounts/${accountId}/networks/${networkId}/${kind}/${deviceId}/thumbnail`,
           undefined, [409], { ...execution, retry: false, beforeDispatch }), execution);
       } catch (error) {
-        if (!(error instanceof BlinkHttpError) || error.failure !== 'http' || error.status !== 409) throw error;
+        if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
         captureOutcome = 'existing-thumbnail';
       }
       const homescreen = await this.getHomescreen(execution);
@@ -1683,7 +1726,7 @@ export class BlinkApi {
         const response = await this.sharedHttp.post<BlinkLiveVideoResponse>(
           `${version}/accounts/${accountId}/networks/${networkId}/${segment}/${deviceId}/liveview`,
           { intent, motion_event_start_time: motionEventStartTime ?? null }, [], { ...execution, retry: false, beforeDispatch: current });
-        acknowledged = true;
+        acknowledged = execution.mutationAcknowledged = true;
         commandId = requireRemoteId(response.command_id ?? response.id);
         current();
         await this.persistLiveViewOwner({ ...owner, phase: 'active', commandId }, owner.reservationId, generation);
@@ -1694,7 +1737,7 @@ export class BlinkApi {
           await this.persistLiveViewOwner(undefined, owner.reservationId, generation);
         } else await this.persistLiveViewOwner({ ...owner, phase: 'unresolved', ...(commandId ? { commandId } : {}) },
           owner.reservationId, generation);
-        throw acknowledged ? afterDispatchFailure(error) : error;
+        throw error;
       }
     }, [], undefined, options, { kind: 'liveview' });
   }
@@ -1798,7 +1841,7 @@ export class BlinkApi {
       try {
         await this.sharedRootHttp.post<void>(`accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
           undefined, [404], { ...execution, responseType: 'void', retry: false, beforeDispatch: current });
-        acknowledged = true;
+        acknowledged = execution.mutationAcknowledged = true;
         if (owned) {
           const receipt = { ...owned, phase: 'retiring' as const, retirementAcknowledged: true };
           current();
@@ -1811,7 +1854,7 @@ export class BlinkApi {
         if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'unresolved',
           retirementAcknowledged: acknowledged || owned.retirementAcknowledged }, owned.reservationId, generation);
         if (!acknowledged && error instanceof BlinkHttpError && error.status === 404) return null;
-        throw acknowledged ? afterDispatchFailure(error) : error;
+        throw error;
       }
     }, [], undefined, options, { kind: 'retire', networkId, commandId });
   }
@@ -1827,13 +1870,13 @@ export class BlinkApi {
       const response = await this.sharedRootHttp.get<{ complete?: unknown; status?: unknown }>(
         `accounts/${owner.accountId}/networks/${owner.networkId}/commands/${owner.commandId}`,
         { ...options, deadline: Math.min(options.deadline ?? Infinity, Date.now() + 10_000), retry: false,
-          responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: () => {
-            if (generation !== this.writerGeneration || this.liveViewOwner?.reservationId !== owner.reservationId) {
-              throw new BlinkOperationNotStartedError('ownership-unavailable');
-            }
-          } });
+          responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: () =>
+            this.assertOperationAuthority('liveView', owner.reservationId, generation, owner.accountId) });
+      this.assertOperationAuthority('liveView', owner.reservationId, generation, owner.accountId);
       if (response.complete === true && response.status === 0) {
-        await this.persistLiveViewOwner(undefined, owner.reservationId, generation);
+        if (!await this.persistLiveViewOwner(undefined, owner.reservationId, generation)) return false;
+        options.beforeDispatch();
+        this.assertOperationAuthority('liveView', owner.reservationId, generation, owner.accountId, true);
         return true;
       }
     } catch {
