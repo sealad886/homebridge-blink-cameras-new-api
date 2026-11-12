@@ -95,6 +95,44 @@ describe('native recording FIFO', () => {
     expect(f.acquire).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])('retries a proven undispatched intent without spending its attempt after retry-save failure=%s', async failRetry => {
+    const f = setup({ maxRetries: 0 });
+    await f.coordinator.observe(event('intent-not-dispatched'));
+    f.saveState.mockRejectedValueOnce(new Error('intent write failed'));
+    await jest.advanceTimersByTimeAsync(60000);
+    expect(f.acquire).not.toHaveBeenCalled();
+    expect(f.coordinator.snapshot().operation?.status).toBe('unresolved');
+    if (failRetry) {
+      const failure = new Error('retry write failed');
+      f.saveState.mockRejectedValueOnce(failure);
+      await expect(f.coordinator.retryPersistence()).rejects.toBe(failure);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(f.acquire).not.toHaveBeenCalled();
+      expect(f.onJobFinished).not.toHaveBeenCalled();
+    }
+    await f.coordinator.retryPersistence();
+    expect(f.coordinator.snapshot().operation).toBeUndefined();
+    expect(f.coordinator.snapshot().queue[0].attempts).toBe(0);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(f.acquire).toHaveBeenCalledTimes(1);
+    expect(f.acquire.mock.calls[0][0].attempt).toBe(1);
+    expect(f.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ attempts: 1, outcome: 'retrieved' }));
+  });
+
+  it('does not refund or replay a restored unknown intent on persistence retry', async () => {
+    const first = setup({ acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }), maxRetries: 0 });
+    await first.coordinator.observe(event('restored-unknown'));
+    await jest.advanceTimersByTimeAsync(60000);
+    const saved = first.coordinator.snapshot(); await first.coordinator.stop();
+    const restored = setup({ restoredState: saved, maxRetries: 0 });
+    await restored.coordinator.retryPersistence();
+    expect(restored.coordinator.snapshot().operation?.operationId).toBe(saved.operation?.operationId);
+    expect(restored.coordinator.snapshot().queue[0].attempts).toBe(1);
+    await jest.advanceTimersByTimeAsync(120000);
+    expect(restored.acquire).not.toHaveBeenCalled();
+    expect(restored.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'abandoned' }));
+  });
+
   it('makes a motion job eligible sixty seconds after motion by default', async () => {
     const { coordinator, acquire } = setup();
     await coordinator.observe(event('entry-motion'));

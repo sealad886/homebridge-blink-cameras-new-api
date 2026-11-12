@@ -8,6 +8,7 @@ import { URL } from 'node:url';
 import { BlinkApi, BlinkOperationNotStartedError, type BlinkLiveViewOwnership, type BlinkRemoteOperationOwnership,
   type BlinkStateCommandOwnership } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
+import { BlinkHttp } from '../../src/blink-api/http';
 import { NativeStorageOwner, type NativeStorageScope, type NativeStorageState,
   type NativeStorageOperation, type NativeStorageRequestOptions } from '../../src/blink-api/native-storage';
 import { OperationTimeoutError, withinRequestBudget } from '../../src/operation-budget';
@@ -277,6 +278,35 @@ describe('owned native storage SDK', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['update-post', 'native-work', 'read-only-native-work'] as const)
+  ('does not claim %s was never sent after its callback completes under a replacement writer', async kind => {
+    jest.useFakeTimers();
+    const f = fixture();
+    let releaseWork!: () => void;
+    const gate = new Promise<void>(resolve => { releaseWork = resolve; });
+    const entered = jest.fn();
+    (fetch as jest.Mock).mockImplementation(async () => { entered(); await gate; return json({ complete: true, status: 0 }); });
+    const operation = (kind === 'update-post' ? f.api.updateCommand(20, 707)
+      : f.api.withNativeStorageAdmission('event', async () => {
+        entered();
+        if (kind === 'native-work') await fetch('https://fixture.invalid/native-command', { method: 'POST' });
+        else await gate;
+        return 'result';
+      }, {}, scope)).catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(entered).toHaveBeenCalled();
+    const releasing = f.release({ deadline: Date.now() + 1 });
+    await jest.advanceTimersByTimeAsync(2); await releasing;
+    f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
+    releaseWork();
+    const failure = await operation;
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(BlinkOperationNotStartedError);
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+    expect(fetch).toHaveBeenCalledTimes(kind === 'read-only-native-work' ? 0 : 1);
+  });
+
   it('rejects a stale arm conflict reconciliation after writer replacement without retrying its refused POST', async () => {
     jest.useFakeTimers();
     const f = fixture();
@@ -291,7 +321,9 @@ describe('owned native storage SDK', () => {
     f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
     releaseRead(json({ account: { account_id: 10 }, networks: [{ id: 20, name: 'Home', armed: true }],
       cameras: [], owls: [], doorbells: [] }));
-    await expect(old).resolves.toMatchObject({ reason: 'ownership-unavailable', dispatched: false });
+    const failure = await old;
+    expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
     expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
     expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST', 'GET']);
   });
@@ -374,7 +406,7 @@ describe('owned native storage SDK', () => {
     const disarm = f.api.disarmNetwork(20);
     await jest.advanceTimersByTimeAsync(301); await disarm;
     releaseOld(json({ complete: true, status: 0 }));
-    await expect(oldRetirement).rejects.toMatchObject({ reason: 'ownership-unavailable' });
+    await expect(oldRetirement).rejects.toMatchObject({ cause: { reason: 'ownership-unavailable' } });
     expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
     expect((fetch as jest.Mock).mock.calls.filter(([, request]) => request.method === 'POST')).toHaveLength(1);
   });
@@ -399,7 +431,7 @@ describe('owned native storage SDK', () => {
     f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
     releaseSave();
     if (kind === 'arm') await expect(old).resolves.toMatchObject({ dispatched: true });
-    else await expect(old).resolves.toMatchObject({ reason: 'ownership-unavailable' });
+    else await expect(old).resolves.toMatchObject({ cause: { reason: 'ownership-unavailable' } });
     expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
     expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
   });
@@ -637,6 +669,30 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101, statusReads: 1 });
     await expect(f.api.withNativeStorageAdmission('event', async () => undefined, {}, scope)).rejects.toMatchObject({ dispatched: false });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['shared-unsent-read', 'inherited-no-send', 'caller-connect-code'] as const)
+  ('retains a dispatched arm uncertainty after abort with %s', async kind => {
+    const f = fixture(), controller = new AbortController();
+    const reason = Object.assign(new Error('operator cancelled'), kind === 'inherited-no-send' ? { dispatched: false }
+      : kind === 'caller-connect-code' ? { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } } : {});
+    let sent!: () => void;
+    const dispatched = new Promise<void>(resolve => { sent = resolve; });
+    (fetch as jest.Mock).mockImplementationOnce(() => { sent(); return new Promise(() => undefined); });
+    const arm = f.api.armNetwork(20, { signal: controller.signal }).catch(error => error);
+    await dispatched;
+    controller.abort(reason);
+    if (kind === 'shared-unsent-read') {
+      const http = new BlinkHttp(f.auth, { email: '', password: '', hardwareId: 'fixture', tier: 'u001' });
+      await expect(http.get('accounts/10/homescreen', { signal: controller.signal })).rejects.toMatchObject({ dispatched: false });
+    }
+    const failure = await arm;
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error & { dispatched?: boolean }).dispatched).not.toBe(false);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ kind: 'arm', phase: 'unresolved', statusReads: 0 });
+    expect(Object.hasOwn(reason, 'dispatched')).toBe(kind === 'inherited-no-send');
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('retains an accepted command when status authentication proves only that its GET was not sent', async () => {
@@ -1033,7 +1089,8 @@ describe('owned native storage SDK', () => {
   it('clears a live view reservation when authentication proves its resource request was never sent', async () => {
     const f = fixture(); const failure = new Error('fixture auth unavailable');
     (f.auth.ensureValidToken as jest.Mock).mockRejectedValue(failure);
-    await expect(f.api.startCameraLiveview(20, 40)).rejects.toBe(failure);
+    await expect(f.api.startCameraLiveview(20, 40)).rejects.toMatchObject({ cause: failure, dispatched: false });
+    expect(Object.hasOwn(failure, 'dispatched')).toBe(false);
     expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
   });

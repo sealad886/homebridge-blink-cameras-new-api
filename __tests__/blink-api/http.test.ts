@@ -180,7 +180,65 @@ describe('BlinkHttp', () => {
     await expect(http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false }))
       .rejects.toMatchObject({ dispatched: false });
     expect(fetch).not.toHaveBeenCalled();
-    await expect(http.get('accounts/1/homescreen')).rejects.toBe(failure);
+    const local = await http.get('accounts/1/homescreen').catch(error => error);
+    expect(local).toBeInstanceOf(BlinkHostedReauthenticationRequiredError);
+    expect(local).not.toBe(failure);
+    expect(local).toMatchObject({ dispatched: false, cause: failure });
+    expect(Object.hasOwn(failure, 'dispatched')).toBe(false);
+  });
+
+  it.each(['error', 'frozen-error', 'dom-exception', 'operation-timeout'] as const)
+  ('keeps shared %s abort metadata local to the unsent request', async kind => {
+    const auth = mockAuth(), http = new BlinkHttp(auth, mockConfig), controller = new AbortController();
+    const reason = kind === 'dom-exception' ? new DOMException('operator cancelled', 'AbortError')
+      : kind === 'operation-timeout' ? new OperationTimeoutError() : kind === 'frozen-error' ? Object.freeze(new Error('operator cancelled')) : new Error('operator cancelled');
+    let sent!: () => void;
+    const dispatched = new Promise<void>(resolve => { sent = resolve; });
+    (fetch as jest.Mock).mockImplementationOnce(() => { sent(); return new Promise(() => undefined); });
+    const post = http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false, signal: controller.signal }).catch(error => error);
+    await dispatched;
+    controller.abort(reason);
+    const unsent = await http.get('accounts/1/homescreen', { signal: controller.signal }).catch(error => error);
+    expect(unsent).not.toBe(reason);
+    expect(unsent).toBeInstanceOf(kind === 'dom-exception' ? DOMException
+      : kind === 'operation-timeout' ? OperationTimeoutError : Error);
+    expect(unsent).toMatchObject({ dispatched: false, cause: reason });
+    expect(Object.hasOwn(reason, 'dispatched')).toBe(false);
+    const posted = await post;
+    expect(posted).toBeInstanceOf(kind === 'dom-exception' ? DOMException : Error);
+    expect((posted as Error & { dispatched?: boolean }).dispatched).not.toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['inherited-no-send', 'direct-connect-code', 'caused-connect-code'] as const)
+  ('does not trust %s on an already dispatched request abort reason', async kind => {
+    const auth = mockAuth(), http = new BlinkHttp(auth, mockConfig), controller = new AbortController();
+    const reason = Object.assign(new Error('operator cancelled'), kind === 'inherited-no-send' ? { dispatched: false }
+      : kind === 'direct-connect-code' ? { code: 'UND_ERR_CONNECT_TIMEOUT' }
+        : { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+    let sent!: () => void;
+    const dispatched = new Promise<void>(resolve => { sent = resolve; });
+    (fetch as jest.Mock).mockImplementationOnce(() => { sent(); return new Promise(() => undefined); });
+    const post = http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false, signal: controller.signal }).catch(error => error);
+    await dispatched;
+    controller.abort(reason);
+    const error = await post;
+    expect((error as Error & { dispatched?: boolean }).dispatched).not.toBe(false);
+    expect(Object.hasOwn(reason, 'dispatched')).toBe(kind === 'inherited-no-send');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each((['authentication', 'before-dispatch'] as const).flatMap(phase => [401, 409].map(status => [phase, status] as const)))
+  ('does not mistake a %s error from a prior POST%s for this request refusal', async (phase, status) => {
+    const auth = mockAuth(), http = new BlinkHttp(auth, mockConfig);
+    const prior = new BlinkHttpError('prior request refused', status, '', 'https://example.invalid/prior', 'POST');
+    if (phase === 'authentication') (auth.ensureValidToken as jest.Mock).mockRejectedValueOnce(prior);
+    const error = await http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false,
+      ...(phase === 'before-dispatch' ? { beforeDispatch: () => { throw prior; } } : {}) }).catch(error => error);
+    expect(error).toMatchObject({ dispatched: false, cause: prior });
+    expect(isBlinkPostRefusal(error)).toBe(false);
+    expect(Object.hasOwn(prior, 'dispatched')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each(['direct', 'fetch-cause'])('marks a %s connection timeout as not dispatched without replay', async shape => {

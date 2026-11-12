@@ -136,8 +136,24 @@ export class BlinkHttpError extends Error {
 
 /** A typed refusal of a new POST is different from an accepted command's failed GET. */
 export function isBlinkPostRefusal(error: unknown): error is BlinkHttpError {
-  return error instanceof BlinkHttpError && error.failure === 'http' && error.method === 'POST'
+  return error instanceof BlinkHttpError && (error as BlinkHttpError & { dispatched?: boolean }).dispatched !== false
+    && error.failure === 'http' && error.method === 'POST'
     && error.status >= 400 && error.status < 500 && error.status !== 408;
+}
+
+/** Dispatch evidence belongs to this request, never to a shared auth failure or AbortSignal reason. */
+function requestLocalError(error: Error, dispatched?: boolean): Error {
+  const local = error instanceof globalThis.DOMException ? new globalThis.DOMException(error.message, error.name) : new Error(error.message);
+  Object.setPrototypeOf(local, Object.getPrototypeOf(error));
+  const properties: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(error);
+  delete properties.cause;
+  delete properties.dispatched;
+  Object.defineProperties(local, properties);
+  Object.defineProperties(local, {
+    cause: { value: error, configurable: true },
+    dispatched: { value: dispatched, configurable: true },
+  });
+  return local;
 }
 
 export class BlinkHttp {
@@ -261,8 +277,8 @@ export class BlinkHttp {
         // Only the explicit connection-establishment error proves no accepted operation.
         // Diagnostic traversal also finds nested/aggregate codes, which are not such proof.
         const transport = cause as { code?: unknown; cause?: { code?: unknown } } | null;
-        if (transport?.code === 'UND_ERR_CONNECT_TIMEOUT'
-          || (transport?.code === undefined && transport?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+        if (!signal.aborted && (transport?.code === 'UND_ERR_CONNECT_TIMEOUT'
+          || (transport?.code === undefined && transport?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT'))) {
           mayHaveDispatched = false;
         }
         checkRequestBudget(options);
@@ -353,10 +369,11 @@ export class BlinkHttp {
 
       return responseData;
     } catch (error) {
-      // Preserve the original error while letting owned callers release an unstarted intent.
       // A retry cannot establish that an earlier wire attempt was never accepted.
-      if (!mayHaveDispatched && attempt === 0 && error instanceof Error && Object.isExtensible(error)) {
-        Object.defineProperty(error, 'dispatched', { value: false, configurable: true });
+      if (error instanceof Error || error instanceof globalThis.DOMException) {
+        if (!mayHaveDispatched && attempt === 0) throw requestLocalError(error, false);
+        // A caller's/shared error cannot establish no-send proof for this dispatched request.
+        if ((error as Error & { dispatched?: boolean }).dispatched === false) throw requestLocalError(error);
       }
       throw error;
     }

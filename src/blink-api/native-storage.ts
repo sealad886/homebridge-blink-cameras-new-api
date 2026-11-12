@@ -123,18 +123,22 @@ export class NativeStorageOwner {
   /** Retain uncertain evidence, but stop its local veto without another provider request. */
   async abandonExpired(): Promise<boolean> {
     if (this.abandonment) return this.abandonment;
+    if (this.persistenceFailed) return false;
     const operation = this.state.operation;
     if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned'
       || isRemoteOperationLeaseActive(operation.expiresAt)) return false;
     this.generation++;
     this.running = false;
-    this.state.abandoned = [...(this.state.abandoned ?? []).filter(item => item.operationId !== operation.operationId),
+    const abandonedAt = Date.now();
+    const abandonedOperation: NativeStorageOperation = { ...operation, phase: 'abandoned', abandonedAt, result: undefined };
+    this.state = { ...this.state, operation: abandonedOperation,
+      abandoned: [...(this.state.abandoned ?? []).filter(item => item.operationId !== operation.operationId),
       { operationId: operation.operationId, accountId: operation.accountId, networkId: operation.networkId,
         syncModuleId: operation.syncModuleId, kind: operation.kind, statusReads: operation.statusReads,
         ...(operation.commandId !== undefined ? { commandId: operation.commandId } : {}),
         ...(operation.resultCommandId !== undefined ? { resultCommandId: operation.resultCommandId } : {}),
-        ...(operation.expiresAt !== undefined ? { expiresAt: operation.expiresAt } : {}), abandonedAt: Date.now() }].slice(-32);
-    const abandonment = this.persist({ ...operation, phase: 'abandoned', abandonedAt: Date.now(), result: undefined }).then(() => true);
+        ...(operation.expiresAt !== undefined ? { expiresAt: operation.expiresAt } : {}), abandonedAt }].slice(-32) };
+    const abandonment = this.persist(abandonedOperation).then(() => true, () => false);
     this.abandonment = abandonment;
     try { return await abandonment; }
     finally { if (this.abandonment === abandonment) this.abandonment = undefined; }
@@ -142,7 +146,7 @@ export class NativeStorageOwner {
 
   /** Explicit retry rechecks durable storage; it does not replay an uncertain preparation. */
   async retryPersistence(): Promise<void> {
-    await this.abandonment?.catch(() => undefined);
+    await this.abandonment;
     await this.options.saveState(this.snapshot());
     this.persistenceFailed = false;
     await this.abandonExpired();
@@ -150,10 +154,12 @@ export class NativeStorageOwner {
 
   /** Cancel a prior permission period using only existing terminal proof or one bounded known-command read. */
   async reconcilePending(options: RequestOptions = {}): Promise<'terminal' | 'unresolved' | 'none' | 'abandoned'> {
-    if (await this.abandonExpired()) return 'abandoned';
+    const abandoned = await this.abandonExpired();
+    if (this.persistenceFailed) return 'unresolved';
+    if (abandoned) return 'abandoned';
     const operation = this.state.operation;
     if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned') return 'none';
-    if (this.running || this.persistenceFailed || operation.phase === 'intent') return 'unresolved';
+    if (this.running || operation.phase === 'intent') return 'unresolved';
     this.running = true;
     const generation = this.generation;
     try {
@@ -196,6 +202,7 @@ export class NativeStorageOwner {
     this.validateContext(context);
     if (this.persistenceFailed) return this.unresolved('persistence-failed');
     await this.abandonExpired();
+    if (this.persistenceFailed) return this.unresolved('persistence-failed');
     if (this.state.abandoned?.some(item => item.operationId === context.operationId)) return { status: 'abandoned' };
     if (this.running) return this.unresolved('caller-in-progress');
     const previous = this.state.operation;

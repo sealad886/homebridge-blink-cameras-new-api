@@ -91,14 +91,16 @@ export class BlinkOperationNotStartedError extends Error {
   }
 }
 
-/** An unsent follow-up read cannot establish that its preceding mutation was unsent. */
-function afterDispatchFailure(error: unknown): unknown {
+/** Checks after work cannot prove that callback work was unsent; acknowledged mutations keep their dispatch proof. */
+function afterWorkFailure(error: unknown, mutationAcknowledged: boolean): unknown {
   if (!(error instanceof Error) || (error as Error & { dispatched?: boolean }).dispatched !== false) return error;
   const timeout = error instanceof OperationTimeoutError;
   const failure = timeout ? new OperationTimeoutError()
-    : new Error('Blink operation was dispatched; its outcome could not be confirmed.', { cause: error });
+    : new Error(mutationAcknowledged ? 'Blink operation was dispatched; its outcome could not be confirmed.'
+      : 'Blink operation result could not be confirmed.', { cause: error });
   if (!timeout) failure.name = 'BlinkOperationOutcomeUnknownError';
-  Object.defineProperty(failure, 'dispatched', { value: true, configurable: true });
+  if (timeout) Object.defineProperty(failure, 'cause', { value: error, configurable: true });
+  if (mutationAcknowledged) Object.defineProperty(failure, 'dispatched', { value: true, configurable: true });
   return failure;
 }
 export interface BlinkMotionClientMetadata { appVersion: string; osVersion: string; clientName: string; }
@@ -252,6 +254,10 @@ export class BlinkApi {
         checkRequestBudget(execution);
         if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
       } };
+      const checkCompletion = () => {
+        try { execution.beforeDispatch(); }
+        catch (error) { throw afterWorkFailure(error, execution.mutationAcknowledged); }
+      };
       for (let attempt = 0; ; attempt++) {
         execution.beforeDispatch();
         this.assertCommandAdmission(admission);
@@ -260,7 +266,7 @@ export class BlinkApi {
           const native = this.activeNativeAdmission;
           try {
             const result = await withinRequestBudget(sent, execution);
-            execution.beforeDispatch();
+            checkCompletion();
             return result;
           }
           finally {
@@ -269,10 +275,10 @@ export class BlinkApi {
           }
         } catch (error) {
           // Preserve mutation dispatch proof through status and public readback failures.
-          if (execution.mutationAcknowledged) throw afterDispatchFailure(error);
+          if (execution.mutationAcknowledged) throw afterWorkFailure(error, true);
           if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
           const reconciled = await conflictResolution?.(execution);
-          execution.beforeDispatch();
+          checkCompletion();
           if (reconciled?.resolved) {
             this.log.info(`[${label}] Requested state verified after conflict (attempt ${attempt + 1}).`);
             return reconciled.value as T;

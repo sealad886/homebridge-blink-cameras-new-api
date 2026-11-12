@@ -240,6 +240,10 @@ export class NativeRecordingCoordinator {
   }
 
   async retryPersistence(): Promise<void> {
+    if (this.operation && !this.operationDispatched) {
+      this.operation = undefined;
+      this.queue[0].attempts--;
+    }
     await this.options.saveState(this.snapshot());
     this.storageError = undefined;
     this.schedule();

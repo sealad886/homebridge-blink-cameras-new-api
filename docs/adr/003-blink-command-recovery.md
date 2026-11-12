@@ -43,8 +43,9 @@ not establish that a dispatched mutation ended. The shared private account state
 retains ordinary-command, Live View and per-module storage evidence. Local
 exclusion lasts at most 120 seconds, or the earlier action/job deadline. The
 deadline is fixed at allocation and is never renewed by polling, retry, restart
-or client rotation. At expiry, the old work is abandoned locally with its
-outcome still unknown; fresh distinct actions may proceed. Blink may reject
+or client rotation. Healthy Live View sessions also retain that original cap;
+successful keepalives do not renew it. At expiry, the old work is abandoned
+locally with its outcome still unknown; fresh distinct actions may proceed. Blink may reject
 those actions with a bounded conflict response. Expiry never declares remote
 success, sends a guessed cleanup command, or automatically replays the old POST.
 Ordinary commands have a persisted total 60-read observation budget; startup reconciliation

@@ -76,13 +76,47 @@ it('shares an abandonment save between concurrent callers before permitting fres
 it('allows explicit retry after a failed abandonment save without renewing the lease', async () => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
   f.saveState.mockRejectedValueOnce(new Error('temporary disk failure'));
-  await expect(f.owner.abandonExpired()).rejects.toThrow('Native storage persistence failed');
+  expect(await Promise.all([f.owner.abandonExpired(), f.owner.abandonExpired()])).toEqual([false, false]);
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
   await f.owner.retryPersistence();
   expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned' });
   expect(f.owner.snapshot().operation?.expiresAt).toBeUndefined();
   expect(f.owner.snapshot().abandoned).toHaveLength(1);
   expect(await f.owner.abandonExpired()).toBe(false);
   expect(f.transport.postEmpty).not.toHaveBeenCalled();
+});
+
+it.each(['catalog', 'clip', 'reconcile'] as const)('reports persistence failure when %s cannot save expired ownership', async kind => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  f.saveState.mockRejectedValueOnce(new Error('abandonment write failed'));
+  const fresh = { ...context, operationId: 'fresh-after-failed-expiry' };
+  const result = kind === 'reconcile' ? await f.owner.reconcilePending()
+    : kind === 'catalog' ? await f.owner.readCatalog(fresh) : await f.owner.downloadClip(fresh, clipRequest());
+  expect(result).toEqual(kind === 'reconcile' ? 'unresolved' : expect.objectContaining({ status: 'unresolved', reason: 'persistence-failed' }));
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(f.owner.snapshot().abandoned).toHaveLength(1);
+  expect(f.saved).toEqual([]);
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  await f.owner.retryPersistence();
+  expect(await f.owner.readCatalog(fresh)).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('returns persistence failure when saving abandonment after an ambiguous expired POST fails', async () => {
+  jest.useFakeTimers();
+  let failed = false;
+  const f = fixture({ saveState: async state => {
+    if (!failed && state.operation?.phase === 'abandoned') { failed = true; throw new Error('abandonment write failed'); }
+  } });
+  f.transport.postEmpty.mockImplementationOnce(async (_route, request) => {
+    await Promise.resolve(); jest.setSystemTime(request.deadline!); throw new OperationTimeoutError();
+  });
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(f.saved.at(-1)?.operation?.phase).toBe('intent');
+  await f.owner.retryPersistence();
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
 it('waits for pending abandonment before retrying its persisted snapshot', async () => {
@@ -494,6 +528,32 @@ it('does not confuse a cancelled queue wait with a dispatched remote command', a
   expect(await f.owner.readCatalog(context, { signal: controller.signal })).toEqual({ status: 'failed', reason: 'not-started' });
   expect(f.transport.postEmpty).not.toHaveBeenCalled();
   expect(f.saveState).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['catalog', 'no-send'], ['clip', 'no-send'], ['catalog', 'refused'], ['clip', 'refused'],
+] as const)('does not reuse caller %s abort %s proof after preparation was invoked', async (kind, proof) => {
+  const f = fixture(), controller = new AbortController();
+  const unrelatedProof = proof === 'no-send'
+    ? Object.assign(new Error('another request was not sent'), { dispatched: false })
+    : new BlinkHttpError('another request was refused', 409, '', location, 'POST');
+  let acknowledge!: (value: unknown) => void;
+  f.transport.postEmpty.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+  const request = kind === 'catalog' ? f.owner.readCatalog(context, { signal: controller.signal })
+    : f.owner.downloadClip(context, clipRequest(), { signal: controller.signal });
+  for (let i = 0; i < 20 && !acknowledge; i++) await Promise.resolve();
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  controller.abort(unrelatedProof);
+
+  expect(await request).toMatchObject({ status: 'unresolved', reason: 'request-outcome-unknown' });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'intent', statusReads: 0 });
+  if (proof === 'no-send') expect(Reflect.get(unrelatedProof, 'dispatched')).toBe(false);
+  const restarted = f.restart();
+  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest())))
+    .toMatchObject({ status: 'unresolved', reason: 'acknowledgement-unknown' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+  acknowledge({ id: 101 });
 });
 
 it('does not dispatch when cancellation arrives while the intent is being saved', async () => {
