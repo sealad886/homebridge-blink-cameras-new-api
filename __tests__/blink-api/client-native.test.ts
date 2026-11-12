@@ -233,6 +233,37 @@ describe('owned native storage SDK', () => {
     }
   });
 
+  it.each(['retire', 'update'] as const)('allows explicit unowned %s after the old live-view lease has already expired', async action => {
+    jest.useFakeTimers();
+    const f = fixture(live({ expiresAt: Date.now() + 1000 }));
+    await jest.advanceTimersByTimeAsync(1001);
+    (fetch as jest.Mock).mockResolvedValueOnce(action === 'retire'
+      ? new Response(null, { status: 204 }) : json({ complete: true, status: 0 }));
+    await expect(action === 'retire' ? f.api.completeCommand(20, 707) : f.api.updateCommand(20, 707)).resolves.not.toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((fetch as jest.Mock).mock.calls[0][0]).toBe(`${sharedRoot}accounts/10/networks/20/commands/707/${action === 'retire' ? 'done' : 'update'}`);
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+    expect(f.api.getRemoteOperationState().abandoned).toEqual([expect.objectContaining({ kind: 'liveview', commandId: 707 })]);
+  });
+
+  it.each(['arm', 'liveview', 'retire'] as const)('does not claim an accepted %s was unstarted when the account changes after its POST', async action => {
+    const f = fixture(action === 'retire' ? live() : undefined);
+    (fetch as jest.Mock).mockImplementationOnce(async () => {
+      (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+      return action === 'retire' ? new Response(null, { status: 204 })
+        : json(action === 'liveview' ? { command_id: 707, server: 'immis://fixture.invalid' } : { id: 101 });
+    });
+    const operation = action === 'arm' ? f.api.armNetwork(20)
+      : action === 'liveview' ? f.api.startCameraLiveview(20, 40) : f.api.completeCommand(20, 707);
+    const failure = await operation.catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBe(true);
+    const state = f.api.getRemoteOperationState();
+    if (action === 'arm') expect(state.stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
+    else expect(state.liveView).toMatchObject({ phase: 'unresolved', commandId: 707, retirementAcknowledged: action === 'retire' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it.each([undefined, -1, 240_000])('abandons an inactive restored ordinary owner without inventing terminal proof (%s)', async offset => {
     const f = fixture(undefined, { reservationId: 'old-known-arm', accountId: 10, networkId: 20, kind: 'arm',
       phase: 'unresolved', commandId: 711, statusReads: 60, ...(offset === undefined ? {} : { expiresAt: Date.now() + offset }) });
@@ -250,7 +281,12 @@ describe('owned native storage SDK', () => {
     jest.useFakeTimers();
     const f = fixture();
     let releaseWrite!: () => void, releaseStatus!: (response: Response) => void;
-    f.saveLive.mockImplementationOnce(() => new Promise<void>(resolve => { releaseWrite = resolve; }));
+    let physicalWrites = 0, maxPhysicalWrites = 0;
+    f.saveLive.mockImplementationOnce(async () => {
+      physicalWrites++; maxPhysicalWrites = Math.max(maxPhysicalWrites, physicalWrites);
+      await new Promise<void>(resolve => { releaseWrite = resolve; });
+      physicalWrites--;
+    });
     const old = f.api.startCameraLiveview(20, 40, 'liveview', undefined, { deadline: Date.now() + 100 });
     const expired = expect(old).rejects.toBeInstanceOf(OperationTimeoutError);
     await jest.advanceTimersByTimeAsync(101); await expired;
@@ -264,13 +300,18 @@ describe('owned native storage SDK', () => {
     releaseStatus(json({ complete: true, status: 0 })); await jest.advanceTimersByTimeAsync(1001); await arm;
     const releasing = f.release({ deadline: Date.now() + 100 });
     await jest.advanceTimersByTimeAsync(101); await releasing;
-    const next = jest.fn().mockResolvedValue(undefined);
+    const next = jest.fn(async () => {
+      physicalWrites++; maxPhysicalWrites = Math.max(maxPhysicalWrites, physicalWrites);
+      await Promise.resolve(); physicalWrites--;
+    });
     f.api.configureRemoteOperationOwnership({ saveState: next });
+    expect(next).not.toHaveBeenCalled();
     releaseWrite(); await jest.advanceTimersByTimeAsync(1);
     expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
     expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
     expect(next).toHaveBeenLastCalledWith(expect.objectContaining({ abandoned: [expect.objectContaining({ kind: 'liveview' })] }));
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(maxPhysicalWrites).toBe(1);
   });
 
   it('hands an idle writer to a replacement after shutdown and persists subsequent controls only through the replacement', async () => {
@@ -443,9 +484,10 @@ describe('owned native storage SDK', () => {
 
   it('retains an accepted command when status authentication proves only that its GET was not sent', async () => {
     const f = fixture();
-    (f.auth.ensureValidToken as jest.Mock).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('fixture auth unavailable'));
+    const authenticationFailure = new Error('fixture auth unavailable');
+    (f.auth.ensureValidToken as jest.Mock).mockResolvedValueOnce(undefined).mockRejectedValueOnce(authenticationFailure);
     (fetch as jest.Mock).mockResolvedValueOnce(json({ id: 101 }));
-    await expect(f.api.armNetwork(20)).rejects.toThrow('fixture auth unavailable');
+    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: true, cause: authenticationFailure });
     expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -455,10 +497,21 @@ describe('owned native storage SDK', () => {
     (fetch as jest.Mock).mockResolvedValueOnce(json({ id: 101 })).mockRejectedValueOnce(new TypeError('fetch failed', {
       cause: { code: 'UND_ERR_CONNECT_TIMEOUT' },
     }));
-    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ failure: 'network', dispatched: false });
+    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: true, cause: { failure: 'network', dispatched: false } });
     expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
     await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves timeout classification without false no-send proof after an accepted arm', async () => {
+    const f = fixture();
+    (f.auth.ensureValidToken as jest.Mock).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new OperationTimeoutError());
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ id: 101 }));
+    const failure = await f.api.armNetwork(20).catch(error => error);
+    expect(failure).toBeInstanceOf(OperationTimeoutError);
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBe(true);
+    expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('keeps ordinary controls available with bounded memory ownership when the journal is missing', async () => {

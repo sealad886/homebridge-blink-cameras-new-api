@@ -166,6 +166,49 @@ it('records a definite SDK no-send refusal as not-started so it can be retried a
   expect(f.transport.getJson).toHaveBeenCalledTimes(2);
 });
 
+it.each([
+  ['catalog', 'no-send'], ['clip', 'no-send'], ['catalog', 'refused'], ['clip', 'refused'],
+] as const)('preserves %s %s proof returned at the request deadline', async (kind, failure) => {
+  jest.useFakeTimers();
+  const f = fixture();
+  f.transport.postEmpty.mockImplementationOnce(async (_route, request) => {
+    await Promise.resolve();
+    jest.setSystemTime(request.deadline!);
+    throw failure === 'no-send' ? Object.assign(new OperationTimeoutError(), { dispatched: false })
+      : new BlinkHttpError('Busy', 409, '', location, 'POST');
+  });
+  const result = kind === 'catalog' ? await f.owner.readCatalog(context) : await f.owner.downloadClip(context, clipRequest());
+  expect(result).toEqual(failure === 'no-send' ? { status: 'failed', reason: 'not-started' }
+    : { status: 'failed', reason: 'refused', httpStatus: 409 });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', statusReads: 0, result });
+  expect(f.owner.snapshot().abandoned).toBeUndefined();
+  const restarted = f.restart();
+  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest()))).toEqual(result);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+});
+
+it.each(['catalog', 'clip'] as const)('settles prepared %s retrieval failure at the deadline without abandonment', async kind => {
+  jest.useFakeTimers();
+  const f = fixture();
+  const expiredResult = async (_route: unknown, request: RequestOptions) => {
+    await Promise.resolve();
+    jest.setSystemTime(request.deadline!);
+    throw new OperationTimeoutError();
+  };
+  if (kind === 'catalog') f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0, commands: [{ id: 202 }] })
+    .mockImplementationOnce(expiredResult);
+  else {
+    f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0 });
+    f.transport.downloadMedia.mockImplementationOnce(expiredResult);
+  }
+  const result = kind === 'catalog' ? await f.owner.readCatalog(context) : await f.owner.downloadClip(context, clipRequest());
+  expect(result).toEqual({ status: 'failed', reason: kind === 'catalog' ? 'invalid-result' : 'invalid-media' });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', commandId: 101, result });
+  expect(f.owner.snapshot().abandoned).toBeUndefined();
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it.each(['catalog', 'clip'] as const)('records an explicit refused %s POST without owning a nonexistent command', async kind => {
   const f = fixture();
   f.transport.postEmpty.mockRejectedValue(new BlinkHttpError('Busy', 409, '', location, 'POST'));

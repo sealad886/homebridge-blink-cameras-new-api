@@ -244,7 +244,6 @@ export class NativeStorageOwner {
       }, request, context.operationId, context), request);
     } catch (error) {
       if (generation !== this.generation) return { status: 'abandoned' };
-      if (!this.persistenceFailed && await this.abandonExpired()) return { status: 'abandoned' };
       if (entered && !this.persistenceFailed && this.state.operation?.operationId === context.operationId
         && this.state.operation.phase === 'prepared') {
         // Preparation already has durable terminal proof. A failed result GET
@@ -262,6 +261,7 @@ export class NativeStorageOwner {
           : { status: 'failed', reason: 'not-started' }, generation); }
         catch { return this.unresolved('persistence-failed'); }
       }
+      if (!this.persistenceFailed && await this.abandonExpired()) return { status: 'abandoned' };
       if (!entered && (!previous || previous.phase === 'finished' || previous.phase === 'abandoned')) return { status: 'failed', reason: 'not-started' };
       return this.unresolved(this.persistenceFailed ? 'persistence-failed' : 'request-outcome-unknown');
     } finally { if (generation === this.generation) this.running = false; }

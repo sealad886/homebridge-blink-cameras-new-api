@@ -90,6 +90,17 @@ export class BlinkOperationNotStartedError extends Error {
     this.name = 'BlinkOperationNotStartedError';
   }
 }
+
+/** A later unsent status read cannot establish that its preceding mutation was unsent. */
+function afterDispatchFailure(error: unknown): unknown {
+  if (!(error instanceof Error) || (error as Error & { dispatched?: boolean }).dispatched !== false) return error;
+  const timeout = error instanceof OperationTimeoutError;
+  const failure = timeout ? new OperationTimeoutError()
+    : new Error('Blink operation was dispatched; its outcome could not be confirmed.', { cause: error });
+  if (!timeout) failure.name = 'BlinkOperationOutcomeUnknownError';
+  Object.defineProperty(failure, 'dispatched', { value: true, configurable: true });
+  return failure;
+}
 export interface BlinkMotionClientMetadata { appVersion: string; osVersion: string; clientName: string; }
 export interface BlinkLiveViewOwnership {
   reservationId: string;
@@ -208,11 +219,11 @@ export class BlinkApi {
     options: RequestOptions = {},
     admission: CommandAdmission = { kind: 'state' },
   ): Promise<T> {
+    this.expireOperationOwners();
     const live = this.liveViewOwner;
     const ownerExpiresAt = (admission.kind === 'retire' || admission.kind === 'update') && live
       && live.networkId === admission.networkId && live.commandId === admission.commandId
       ? live.expiresAt ?? Date.now() : undefined;
-    this.expireOperationOwners();
     const generation = this.writerGeneration;
     this.queuedStateCommands++;
     let started = false;
@@ -488,6 +499,7 @@ export class BlinkApi {
           this.queuedOwnershipWrite = undefined;
           if (next.generation !== this.writerGeneration) continue;
           try {
+            // A caller timeout cannot cancel a file replacement; overlapping a newer save could let this stale write win later.
             await next.save(next.state);
             if (next.generation === this.writerGeneration) this.ownershipPersistenceFailed = false;
           } catch { degraded(next.generation); }
@@ -553,14 +565,15 @@ export class BlinkApi {
     this.stateCommandRunning = intent.reservationId;
     let dispatched = false;
     let acknowledged = false;
+    let commandId: number | undefined;
     try {
       await this.persistStateCommandOwner(intent, undefined, generation);
       current();
       dispatched = true;
       const response = await send(current);
       acknowledged = true;
+      commandId = requireRemoteId(response?.id ?? response?.command_id);
       current();
-      const commandId = requireRemoteId(response?.id ?? response?.command_id);
       await this.persistStateCommandOwner({ ...intent, phase: 'accepted', commandId }, intent.reservationId, generation);
       while (this.stateCommandOwner?.reservationId === intent.reservationId && this.stateCommandOwner.statusReads < 60) {
         current();
@@ -576,9 +589,10 @@ export class BlinkApi {
       const noSend = error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false;
       if (generation === this.writerGeneration && this.stateCommandOwner?.reservationId === intent.reservationId) {
         if (!dispatched || (!acknowledged && (noSend || isBlinkPostRefusal(error)))) await this.persistStateCommandOwner(undefined, intent.reservationId, generation);
-        else await this.persistStateCommandOwner({ ...this.stateCommandOwner, phase: 'unresolved' }, intent.reservationId, generation);
+        else await this.persistStateCommandOwner({ ...this.stateCommandOwner, phase: 'unresolved',
+          ...(commandId ? { commandId } : {}) }, intent.reservationId, generation);
       }
-      throw error;
+      throw acknowledged ? afterDispatchFailure(error) : error;
     } finally { if (this.stateCommandRunning === intent.reservationId) this.stateCommandRunning = undefined; }
   }
 
@@ -1659,6 +1673,7 @@ export class BlinkApi {
       };
       await this.persistLiveViewOwner(owner, undefined, generation);
       let dispatched = false;
+      let acknowledged = false;
       let commandId: number | undefined;
       try {
         current();
@@ -1668,17 +1683,18 @@ export class BlinkApi {
         const response = await this.sharedHttp.post<BlinkLiveVideoResponse>(
           `${version}/accounts/${accountId}/networks/${networkId}/${segment}/${deviceId}/liveview`,
           { intent, motion_event_start_time: motionEventStartTime ?? null }, [], { ...execution, retry: false, beforeDispatch: current });
-        current();
+        acknowledged = true;
         commandId = requireRemoteId(response.command_id ?? response.id);
+        current();
         await this.persistLiveViewOwner({ ...owner, phase: 'active', commandId }, owner.reservationId, generation);
         return response;
       } catch (error) {
         const noSend = error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false;
-        if (!dispatched || (!commandId && (noSend || isBlinkPostRefusal(error)))) {
+        if (!dispatched || (!acknowledged && (noSend || isBlinkPostRefusal(error)))) {
           await this.persistLiveViewOwner(undefined, owner.reservationId, generation);
         } else await this.persistLiveViewOwner({ ...owner, phase: 'unresolved', ...(commandId ? { commandId } : {}) },
           owner.reservationId, generation);
-        throw error;
+        throw acknowledged ? afterDispatchFailure(error) : error;
       }
     }, [], undefined, options, { kind: 'liveview' });
   }
@@ -1778,21 +1794,24 @@ export class BlinkApi {
       };
       if (owned && owned.accountId !== accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
       if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'retiring' }, owned.reservationId, generation);
+      let acknowledged = false;
       try {
         await this.sharedRootHttp.post<void>(`accounts/${accountId}/networks/${networkId}/commands/${commandId}/done`,
           undefined, [404], { ...execution, responseType: 'void', retry: false, beforeDispatch: current });
-      } catch (error) {
-        if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'unresolved' }, owned.reservationId, generation);
-        if (error instanceof BlinkHttpError && error.status === 404) return null;
-        throw error;
-      }
-      if (owned) {
-        const acknowledged = { ...owned, phase: 'retiring' as const, retirementAcknowledged: true };
-        current();
-        await this.persistLiveViewOwner(acknowledged, owned.reservationId, generation);
-        if (!await this.confirmLiveViewRetirement(acknowledged, execution)) {
-          throw new Error('Blink live view retirement remains unconfirmed.');
+        acknowledged = true;
+        if (owned) {
+          const receipt = { ...owned, phase: 'retiring' as const, retirementAcknowledged: true };
+          current();
+          await this.persistLiveViewOwner(receipt, owned.reservationId, generation);
+          if (!await this.confirmLiveViewRetirement(receipt, execution)) {
+            throw new Error('Blink live view retirement remains unconfirmed.');
+          }
         }
+      } catch (error) {
+        if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'unresolved',
+          retirementAcknowledged: acknowledged || owned.retirementAcknowledged }, owned.reservationId, generation);
+        if (!acknowledged && error instanceof BlinkHttpError && error.status === 404) return null;
+        throw acknowledged ? afterDispatchFailure(error) : error;
       }
     }, [], undefined, options, { kind: 'retire', networkId, commandId });
   }
