@@ -80,7 +80,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     private readonly cameraSourceType: DeviceType,
   ) {
     const cameraName = this.accessory.displayName || device.name;
-    const nativePolicy = nativeRecordingDevicePolicy(this.platform.config?.deviceSettingOverrides, { ...device, kind: cameraSourceType }, this.platform.config?.exposeMotionDetected);
+    const nativePolicy = nativeRecordingDevicePolicy(this.platform.config, { ...device, kind: cameraSourceType });
     const motionControlName = deviceServiceName(cameraName, 'Motion Detection');
     const motionSensorName = deviceServiceName(cameraName, 'Motion Detected');
     const refreshName = deviceServiceName(cameraName, 'Refresh Snapshot');

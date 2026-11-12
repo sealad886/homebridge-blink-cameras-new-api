@@ -1,7 +1,7 @@
 import Ajv, { type ErrorObject } from 'ajv';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { resolveNativeRecordingConfig } from '../native-recording-config';
+import { resolveNativeRecordingConfig, validateSyncModuleSettingOverrides } from '../native-recording-config';
 import { deriveFeedCapacity, matchesCameraIdentifier, SettingsConstraintError,
   validateModuleFeedLimits, type FeedCapacity, type SettingsInventory } from '../settings-inventory';
 
@@ -73,6 +73,20 @@ export class SettingsValidator {
     } catch (error) {
       result.errors.push({ path: error instanceof SettingsConstraintError ? error.path : '/syncModuleFeedLimits',
         code: 'feed_limit', message: error instanceof SettingsConstraintError ? error.message : 'Invalid camera feed limits.' });
+    }
+    if (!result.errors.some(error => error.path.startsWith('/syncModuleSettingOverrides'))) {
+      try {
+        validateSyncModuleSettingOverrides(config.syncModuleSettingOverrides).forEach((row, index) => {
+          if (!inventory?.syncModules.some(module => module.id === row.syncModuleId)) {
+            result.warnings.push({ path: `/syncModuleSettingOverrides/${index}/syncModuleId`, code: 'unresolved_selector',
+              message: !inventory ? 'Discovery is unavailable; this saved Sync Module setting is preserved.'
+                : 'This saved Sync Module setting is not in current discovery and is preserved.' });
+          }
+        });
+      } catch (error) {
+        result.errors.push({ path: error instanceof SettingsConstraintError ? error.path : '/syncModuleSettingOverrides',
+          code: 'sync_module_setting', message: error instanceof SettingsConstraintError ? error.message : 'Invalid Sync Module settings.' });
+      }
     }
     for (const key of ['excludeDevices'] as const) {
       const entries = config[key];

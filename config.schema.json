@@ -340,11 +340,40 @@
               "description": "Override the global motion sensor choice for this camera. Leave unset to inherit it.",
               "type": "boolean"
             },
+            "disableEarlyNotification": {
+              "title": "Disable Early Notification",
+              "description": "Override the Sync Module or plugin choice for this camera. On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
+              "type": "boolean"
+            },
             "homeKitSecureVideo": {
               "title": "Enable HomeKit Secure Video",
               "description": "Offer saved Blink USB motion clips to HomeKit Secure Video for this camera. Requires native Blink motion recording, one associated Sync Module, USB local storage, and recording permission in Apple Home. Save and restart the Blink child bridge after changing this setting.",
               "type": "boolean",
               "default": false
+            }
+          }
+        }
+      },
+      "syncModuleSettingOverrides": {
+        "title": "Sync Module Settings",
+        "description": "Override plugin settings for cameras uniquely associated with a discovered Sync Module. Camera settings take precedence.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "syncModuleId"
+          ],
+          "properties": {
+            "syncModuleId": {
+              "title": "Sync Module ID",
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "disableEarlyNotification": {
+              "title": "Disable Early Notification",
+              "description": "Override the plugin choice for this Sync Module's cameras. On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
+              "type": "boolean"
             }
           }
         }
@@ -381,6 +410,11 @@
         "description": "Expose each camera's Blink motion notifications as a HomeKit Motion Detected sensor. Per-device settings can override this choice. Cameras selected for HomeKit Secure Video still receive motion notifications when their sensor is hidden.",
         "type": "boolean",
         "default": true
+      },
+      "disableEarlyNotification": {
+        "title": "Disable Early Notification",
+        "description": "On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off or unset uses the normal delay. Sync Module and camera settings can override this choice. Sync Module cooldown and FIFO order still apply.",
+        "type": "boolean"
       },
       "nativeRecording": {
         "title": "Saved USB Clip Recording",
@@ -472,6 +506,7 @@
         "excludeDevices",
         "deviceNameOverrides",
         "deviceSettingOverrides",
+        "syncModuleSettingOverrides",
         "syncModuleFeedLimits"
       ]
     },
@@ -479,6 +514,7 @@
       "type": "fieldset",
       "title": "HomeKit recording",
       "items": [
+        "disableEarlyNotification",
         "nativeRecording"
       ]
     },

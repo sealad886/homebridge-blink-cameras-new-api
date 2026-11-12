@@ -48,7 +48,8 @@ import { withResponseBudget } from './operation-budget';
 import { toHapError } from './hap-errors';
 import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
 import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recording-runtime';
-import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput } from './native-recording-config';
+import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput,
+  type NativeRecordingDeviceOverride, type NativeRecordingPolicyConfig } from './native-recording-config';
 import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
 import type { NativeRecordingPolicy } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
@@ -76,16 +77,13 @@ interface DeviceNameOverride {
   customName: string;
 }
 
-interface DeviceSettingOverride {
-  deviceIdentifier: string;
+interface DeviceSettingOverride extends NativeRecordingDeviceOverride {
   exposeTemperature?: boolean;
   inputQuality?: BlinkInputQuality;
   motionTimeout?: number;
-  exposeMotionDetected?: boolean;
-  homeKitSecureVideo?: boolean;
 }
 
-interface BlinkPlatformConfig extends PlatformConfig {
+interface BlinkPlatformConfig extends PlatformConfig, NativeRecordingPolicyConfig {
   exposeTemperature?: boolean;
   username?: string;
   password?: string;
@@ -101,7 +99,6 @@ interface BlinkPlatformConfig extends PlatformConfig {
   pollInterval?: number;
   motionTimeout?: number;
   nativeRecording?: NativeRecordingConfigInput;
-  exposeMotionDetected?: boolean;
   syncModuleFeedLimits?: ModuleFeedLimit[];
   excludeDevices?: string[];
   excludedNetworks?: string[];
@@ -295,7 +292,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         throw new Error('Invalid per-camera input quality');
       }
     }
-    nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { id: -1 }, this.config.exposeMotionDetected);
+    nativeRecordingDevicePolicy(this.config, { id: -1 });
     const hasUsername = Boolean(this.config.username?.trim());
     const hasPassword = Boolean(this.config.password?.trim());
 
@@ -502,16 +499,18 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   nativeRecordingDeliveryOutcome(outcome: string): void { this.nativeRuntime?.deliveryOutcome(outcome); }
 
   private async prepareNativeRuntime(homescreen: BlinkHomescreen): Promise<void> {
-    const candidates = [...homescreen.cameras.map(device => ({ kind: device.type === 'owl' ? 'owl' as const : 'camera' as const, map: this.cameraAccessories, device })),
-      ...homescreen.doorbells.map(device => ({ kind: 'doorbell' as const, map: this.doorbellAccessories, device })),
-      ...homescreen.owls.map(device => ({ kind: 'owl' as const, map: this.owlAccessories, device }))];
+    const candidates = [...homescreen.cameras.map(device => ({ kind: device.type === 'owl' ? 'owl' as const : 'camera' as const,
+      inventoryKind: 'camera' as const, map: this.cameraAccessories, device })),
+      ...homescreen.doorbells.map(device => ({ kind: 'doorbell' as const, inventoryKind: 'doorbell' as const, map: this.doorbellAccessories, device })),
+      ...homescreen.owls.map(device => ({ kind: 'owl' as const, inventoryKind: 'owl' as const, map: this.owlAccessories, device }))];
     const identity = this.apiClient.getCachedIdentity();
     if (!identity?.accountId || !identity.clientId) { this.log.warn('Push motion waits for a cached authenticated account and client.'); return; }
     const scope = { accountId: identity.accountId, clientId: identity.clientId, tier: identity.tier };
     const networks = new Set(homescreen.networks.filter(network => !this.isNetworkExcluded(network) && !this.isDeviceExcluded(network)).map(network => network.id));
     const devices: NativeRuntimeDevice[] = [];
     const matchingDevices: NativeMotionDevice[] = [];
-    for (const { device, kind, map } of candidates) {
+    const associations = new Map(projectSettingsInventory(homescreen).cameras.map(device => [device.key, device.moduleAssociation]));
+    for (const { device, kind, inventoryKind, map } of candidates) {
       const modules = (homescreen.sync_modules ?? []).filter(module => module.network_id === device.network_id);
       const binding = { accountId: scope.accountId, networkId: device.network_id, providerId: device.id,
         // APK61 DeviceTarget wire values exactly match these canonical kinds.
@@ -521,8 +520,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       // Exclusions limit consumers, never the identities that can make a clip ambiguous.
       if (nativeStorage) matchingDevices.push({ ...binding, ...nativeStorage });
       if (!networks.has(device.network_id) || this.isDeviceExcluded(device, kind)) continue;
-      const settings = nativeRecordingDevicePolicy(this.config.deviceSettingOverrides, { ...device, kind }, this.config.exposeMotionDetected);
-      devices.push({ binding, settings, ...(nativeStorage ? { nativeStorage } : {}),
+      const settings = nativeRecordingDevicePolicy(this.config, { ...device, kind,
+        moduleAssociation: associations.get(cameraKey(inventoryKind, device.id)) });
+      devices.push({ binding, rawType: 'type' in device && typeof device.type === 'string' ? device.type : undefined,
+        settings, ...(nativeStorage ? { nativeStorage } : {}),
       motion: () => map.get(device.id)?.triggerMotion(), recording: () => map.get(device.id)?.getNativeRecordingDelegate() });
       if (settings.homeKitSecureVideo && modules.length !== 1) this.log.warn(`[${device.name}] Automatic native recording requires one unambiguous Sync Module.`);
     }
@@ -532,8 +533,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // identity changes; ordering and volatile status do not replace the runtime.
     const key = JSON.stringify([scope, matchingDevices.map(device => JSON.stringify([
       device.cameraId, device.nativeName, device.networkId, device.syncModuleId,
-    ])).sort(), devices.map(({ binding, settings }) => JSON.stringify([
-      binding.cameraId, binding.nativeName, binding.networkId, settings.exposeMotionDetected, settings.homeKitSecureVideo,
+    ])).sort(), devices.map(({ binding, rawType, settings }) => JSON.stringify([
+      binding.cameraId, binding.nativeName, binding.networkId, rawType, settings.exposeMotionDetected, settings.homeKitSecureVideo, settings.disableEarlyNotification,
     ])).sort()]);
     if (this.nativeRuntimeKey === key) return;
     if (this.nativeRuntime) await this.nativeRuntime.stop();
