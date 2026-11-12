@@ -183,6 +183,64 @@ describe('BlinkHttp', () => {
     await expect(http.get('accounts/1/homescreen')).rejects.toBe(failure);
   });
 
+  it.each(['direct', 'fetch-cause'])('marks a %s connection timeout as not dispatched without replay', async shape => {
+    const connectionError = Object.assign(new Error('fixture connection timeout'), { code: 'UND_ERR_CONNECT_TIMEOUT' });
+    const failure = shape === 'direct' ? connectionError : new TypeError('fetch failed', { cause: connectionError });
+    (fetch as jest.Mock).mockRejectedValueOnce(failure);
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.post('accounts/1/networks/2/state/arm', undefined, [], { retry: false }))
+      .rejects.toMatchObject({ name: 'BlinkHttpError', failure: 'network', dispatched: false,
+        networkDiagnostic: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } }),
+    new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }),
+    new TypeError('fetch failed', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } }),
+    new TypeError('fetch failed', { cause: { code: 'ETIMEDOUT' } }),
+    new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET', cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } } }),
+    new TypeError('fetch failed', { cause: new AggregateError([
+      Object.assign(new Error('connect failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' }),
+      Object.assign(new Error('socket lost'), { code: 'UND_ERR_SOCKET' }),
+    ]) }),
+  ])('does not infer no-send proof from an ambiguous transport error %#', async failure => {
+    (fetch as jest.Mock).mockRejectedValueOnce(failure);
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    const error = await http.post('accounts/1/networks/2/state/arm', undefined, [], { retry: false }).catch(caught => caught);
+    expect(error).toBeInstanceOf(BlinkHttpError);
+    expect((error as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks an operation that expires after successful authentication as never dispatched', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+    (auth.ensureValidToken as jest.Mock).mockImplementation(async () => {
+      await Promise.resolve();
+      now.mockReturnValue(2_000);
+    });
+    await expect(http.post('accounts/1/networks/2/state/arm', undefined, [], { deadline: 2_000, retry: false }))
+      .rejects.toMatchObject({ name: 'OperationTimeoutError', dispatched: false });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not infer an unstarted POST when a retry fails to connect after a server error', async () => {
+    jest.useFakeTimers();
+    try {
+      (fetch as jest.Mock).mockResolvedValueOnce(response(500)).mockRejectedValueOnce(new TypeError('fetch failed', {
+        cause: { code: 'UND_ERR_CONNECT_TIMEOUT' },
+      }));
+      const http = new BlinkHttp(mockAuth(), mockConfig);
+      const pending = http.post('accounts/1/networks/2/state/arm').catch(error => error);
+      await jest.advanceTimersByTimeAsync(500);
+      const error = await pending;
+      expect(error).toBeInstanceOf(BlinkHttpError);
+      expect((error as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
   it('bounds binary GETs and does not include the downloaded bytes in diagnostic logs', async () => {
     const messages: unknown[][] = []; const log = (...args: unknown[]) => { messages.push(args); };
     const http = new BlinkHttp(mockAuth(), { ...mockConfig, debugAuth: true,

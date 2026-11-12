@@ -168,8 +168,9 @@ to camera identities, native names, networks or Sync Module associations replace
 the runtime after its pending local work drains. The handoff discards old media
 and preserves the accessory's HomeKit configuration and privacy choices.
 Ordering and ordinary status changes reuse the runtime. Unresolved remote
-obligations remain fenced across handoff and restart; neither declares an
-operation complete. New HomeKit accessories still follow the platform's existing
+obligations retain their original finite local lease across handoff and restart.
+Expiry records local abandonment, preserves uncertainty, and permits later
+distinct work without declaring remote completion. New HomeKit accessories still follow the platform's existing
 registration lifecycle and may require a child-bridge restart.
 
 ## Delayed jobs, fairness and bounded reuse
@@ -213,8 +214,13 @@ Storage, explicit settings/capture commands and manual Live View use the
 canonical account admission. Persist intent before a new operation POST and
 persist the accepted command identity before status reads. A local deadline,
 cancellation, network error, malformed acknowledgement, restart, exhausted status
-budget or failed GET cannot free an uncertain operation or authorize a new POST.
-Per-module receipts survive every shared account-state write.
+budget or failed GET cannot establish remote completion. Local exclusion is
+bounded to 120 seconds or the earlier action/job deadline and is never renewed
+by retries or restart. At expiry the uncertain job is abandoned, not retried;
+new distinct work may proceed through normal provider conflict handling.
+Per-module receipts survive shared account-state writes. Legacy receipts without
+a lease are advisory rather than a permanent veto. Late results cannot revive
+abandoned work or replace a newer owner.
 
 A typed HTTP refusal of a new POST is different: a 4xx response other than 408,
 before an accepted identity exists, does not create a new command owner. Retain
@@ -228,7 +234,7 @@ A refused status GET is never proof that the preceding POST was refused.
 | New/rotated owned push token | One current-client metadata POST; none for unchanged tokens |
 | Catalog preparation | One empty POST, at most 30 total known-parent status GETs at two-second spacing, then one first-child catalog GET on success |
 | Selected clip | One empty POST, at most 30 total known-command status GETs, then one validated provider-returned file GET on success |
-| Ordinary accepted command | Its existing workflow, with a durable total status-read ceiling of 60; deadline expiry retains ownership |
+| Ordinary accepted command | Its existing workflow, with a durable total status-read ceiling of 60; deadline expiry retains uncertainty without an indefinite local veto |
 | Startup recovery | At most one remaining-budget GET per known pending command; no replacement POST, catalog/file retrieval or guessed `/done` |
 | Local conversion, HAP callbacks and cache expiry | No new acquisition requests |
 

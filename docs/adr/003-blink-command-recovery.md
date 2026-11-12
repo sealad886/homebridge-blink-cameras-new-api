@@ -14,9 +14,9 @@ failed polls and recovery attempts; historical network root cause is unknown.
 ## Decision
 
 Extend the existing account-wide coordinator to network, motion, quality,
-thumbnail, Live View and native-storage operations. Persist an intent before
-dispatch and the accepted command identity before observing completion. Hold
-ownership through strict terminal proof. Status reads and
+thumbnail, Live View and native-storage operations. Normally persist an intent
+before dispatch and the accepted command identity before observing completion. Bound
+local exclusion while retaining uncertain outcomes as recovery evidence. Status reads and
 JPEG downloads remain outside it. Retain 300 ms spacing and bounded conflict
 retries. Reconcile motion conflicts against matching fresh device/network/type
 and requested enabled state. An explicit resolved/value result supports void
@@ -29,14 +29,39 @@ replay follows ambiguous transport failure. Safe homescreen polling gets one
 transient transport retry within 25 seconds. Existing HTTP response retry policy
 remains in force for eligible reads; owned mutation POSTs use one HTTP attempt.
 
+Failures before HTTP dispatch release their reservation. This includes local
+request preparation and the exact Undici `UND_ERR_CONNECT_TIMEOUT` error on the
+fetch error or its immediate cause: connection establishment failed, leaving no
+potentially accepted mutation on that attempt. This does not automatically replay the
+POST. Other transport failures, including socket resets and response timeouts,
+remain ambiguous and retain recovery evidence. The distinction follows the
+[Undici connection-timeout contract](https://github.com/nodejs/undici/blob/v8.12.2/docs/docs/api/Errors.md#timeout-related-errors),
+verified against the affected Pi's bundled Undici 8.12.2.
+
 Local timeout, abort, restart, a refused status GET or malformed completion does
 not establish that a dispatched mutation ended. The shared private account state
-retains ordinary-command, Live View and per-module storage ownership. An
-unresolved owner blocks a replacement mutation or storage preparation. Ordinary
-commands have a persisted total 60-read observation budget; startup reconciliation
+retains ordinary-command, Live View and per-module storage evidence. Local
+exclusion lasts at most 120 seconds, or the earlier action/job deadline. The
+deadline is fixed at allocation and is never renewed by polling, retry, restart
+or client rotation. At expiry, the old work is abandoned locally with its
+outcome still unknown; fresh distinct actions may proceed. Blink may reject
+those actions with a bounded conflict response. Expiry never declares remote
+success, sends a guessed cleanup command, or automatically replays the old POST.
+Ordinary commands have a persisted total 60-read observation budget; startup reconciliation
 can make one remaining-budget GET for an existing command ID and never resends
 the POST. Native-storage's separate 30-read budget and official parent/child
 workflow are specified in [ADR-007](007-event-driven-native-recording.md).
+
+Legacy owners without an expiry are immediately advisory on load; repeatedly
+restarting cannot grant them a fresh exclusion period. Migration preserves their
+uncertain identity and does not claim provider completion. In-process queue
+slots and writer handoff also have finite budgets. Late responses remain bound
+to their original reservation and cannot replace a newer owner or deliver stale
+media. A failed recording journal degrades recording rather than permanently
+vetoing account controls. Controls then use warned in-memory ownership; a process
+loss during that fault may lose the unpersisted command history. Successful
+persistence resumes the canonical journal. Arm/disarm failure logs include the safe local reason
+without printing provider error messages.
 
 The existing stable contact sensor and Retry switch own connection presentation.
 The contact monitor stays active during a cloud outage, but reports disconnected

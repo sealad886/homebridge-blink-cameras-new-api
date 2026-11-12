@@ -56,6 +56,29 @@ describe('native recording FIFO', () => {
     expect(saveState).not.toHaveBeenCalled();
   });
 
+  it('does not let a restored future timestamp renew an ownership lease', async () => {
+    const first = setup({ acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }) });
+    await first.coordinator.observe(event('old'));
+    await jest.advanceTimersByTimeAsync(60000);
+    const saved = first.coordinator.snapshot(); await first.coordinator.stop();
+    saved.operation!.startedAt = Date.now() + 24 * 60 * 60 * 1000;
+    const restored = setup({ restoredState: saved });
+    await jest.advanceTimersByTimeAsync(1);
+    expect(restored.coordinator.snapshot().operation).toBeUndefined();
+    expect(restored.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'abandoned' }));
+    expect(restored.acquire).not.toHaveBeenCalled();
+  });
+
+  it('recovers scheduling after an explicit successful persistence retry', async () => {
+    const saveState = jest.fn().mockRejectedValueOnce(new Error('temporary disk failure')).mockResolvedValue(undefined);
+    const f = setup({ saveState });
+    await expect(f.coordinator.observe(event('not-dispatched'))).rejects.toThrow('temporary disk failure');
+    await jest.advanceTimersByTimeAsync(60000); expect(f.acquire).not.toHaveBeenCalled();
+    await f.coordinator.retryPersistence();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(f.acquire).toHaveBeenCalledTimes(1);
+  });
+
   it('makes a motion job eligible sixty seconds after motion by default', async () => {
     const { coordinator, acquire } = setup();
     await coordinator.observe(event('entry-motion'));
@@ -171,17 +194,20 @@ describe('native recording FIFO', () => {
     }
   });
 
-  it('holds the whole FIFO when the remote outcome is unresolved, regardless of elapsed time', async () => {
-    const acquire = jest.fn().mockResolvedValue({ status: 'unresolved' });
-    const { coordinator } = setup({ acquire });
+  it('abandons an unresolved head after its lease and runs another module without retrying the old event', async () => {
+    const acquire = jest.fn().mockResolvedValueOnce({ status: 'unresolved' }).mockResolvedValue({ status: 'retrieved' });
+    const { coordinator, onJobFinished } = setup({ acquire });
     await coordinator.observe(event('uncertain'));
     await jest.advanceTimersByTimeAsync(60_000);
     await coordinator.observe(event('later', { moduleId: 'module-2' }));
-    await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1_000);
-
+    await jest.advanceTimersByTimeAsync(119_999);
     expect(acquire).toHaveBeenCalledTimes(1);
     expect(coordinator.snapshot().operation?.status).toBe('unresolved');
-    expect(coordinator.snapshot().queue.map(job => job.observation.eventId)).toEqual(['uncertain', 'later']);
+    await jest.advanceTimersByTimeAsync(2);
+    expect(acquire.mock.calls.map(([request]) => request.observation.eventId)).toEqual(['uncertain', 'later']);
+    expect(coordinator.snapshot().queue).toEqual([]);
+    expect(onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'abandoned' }));
+    expect(await coordinator.observe(event('uncertain'))).toBe('duplicate');
   });
 
   it('does not let a missing camera cooldown delay another ready camera', async () => {
@@ -204,7 +230,7 @@ describe('native recording FIFO', () => {
       .toEqual([['corner-first', 1], ['entry-second', 1], ['corner-first', 2]]);
   });
 
-  it('moves the selected ready job into durable ownership and never bypasses it after uncertainty or restart', async () => {
+  it('retains the selected owner during its original lease after restart', async () => {
     const first = setup({ acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }) });
     await first.coordinator.observe(event('not-ready'));
     await first.coordinator.observe(event('ready-uncertain', { occurredAt: Date.now() - 60_000, cameraId: 'corner' }));
@@ -213,7 +239,7 @@ describe('native recording FIFO', () => {
     const saved = first.coordinator.snapshot(); await first.coordinator.stop();
     const restored = setup({ restoredState: saved });
     await restored.coordinator.observe(event('ready-third', { occurredAt: Date.now() - 60_000, moduleId: 'module-2' }));
-    await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    await jest.advanceTimersByTimeAsync(1000);
     expect(restored.acquire).not.toHaveBeenCalled();
     expect(restored.coordinator.snapshot().operation?.operationId).toBe(saved.operation?.operationId);
   });
@@ -270,7 +296,7 @@ describe('native recording FIFO', () => {
     await coordinator.observe(event('uncertain'));
     await jest.advanceTimersByTimeAsync(60_000);
     await coordinator.observe(event('later'));
-    await jest.advanceTimersByTimeAsync(1_000_000);
+    await jest.advanceTimersByTimeAsync(1000);
 
     expect(acquire).toHaveBeenCalledTimes(1);
     expect(coordinator.snapshot().operation?.status).toBe('unresolved');
@@ -319,7 +345,7 @@ describe('native recording FIFO', () => {
     const saved = first.coordinator.snapshot();
     await first.coordinator.stop();
     const restored = setup({ restoredState: saved });
-    await jest.advanceTimersByTimeAsync(1_000_000);
+    await jest.advanceTimersByTimeAsync(1000);
 
     expect(restored.acquire).not.toHaveBeenCalled();
     expect(restored.coordinator.snapshot().operation).toEqual(expect.objectContaining({ operationId: saved.operation!.operationId, status: 'unresolved' }));
@@ -444,7 +470,7 @@ describe('native recording FIFO', () => {
     expect(signal.aborted).toBe(true);
     expect(coordinator.isCameraGenerationCurrent('module-1', 'entry', request.cameraGeneration)).toBe(false);
     first.resolve({ status: 'unresolved' });
-    await jest.advanceTimersByTimeAsync(1_000_000);
+    await jest.advanceTimersByTimeAsync(1000);
     expect(acquire).toHaveBeenCalledTimes(1);
     expect(coordinator.snapshot().queue.map(job => [job.observation.eventId, !!job.cancelled])).toEqual([['entry-active', true], ['corner', false]]);
 
@@ -452,9 +478,9 @@ describe('native recording FIFO', () => {
       status: 'verified-terminal', result: { status: 'skipped' } })).toBe(true);
     await jest.advanceTimersByTimeAsync(10);
 
-    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledTimes(2);
     expect(onJobFinished.mock.calls.map(([result]) => [result.observation.eventId, result.outcome]))
-      .toEqual([['entry-active', 'cancelled'], ['entry-queued', 'cancelled'], ['corner', 'expired']]);
+      .toEqual([['entry-active', 'cancelled'], ['entry-queued', 'cancelled'], ['corner', 'retrieved']]);
   });
 
   it('fences late acquisition results across revoke and reenable without reporting old media as retrieved', async () => {
@@ -502,7 +528,7 @@ describe('native recording FIFO', () => {
     const saved = first.coordinator.snapshot();
     await first.coordinator.stop();
     const restored = setup({ restoredState: saved });
-    await jest.advanceTimersByTimeAsync(1_000_000);
+    await jest.advanceTimersByTimeAsync(1000);
 
     expect(restored.acquire).not.toHaveBeenCalled();
     expect(restored.coordinator.snapshot().queue[0].cancelled).toBe(true);

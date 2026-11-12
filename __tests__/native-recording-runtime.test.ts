@@ -15,6 +15,7 @@ import { FCM_BUNDLE_ID, type Credentials, type FcmNotification, type FcmReceiver
 import type { NativeStorageTransport, NativeStoredMedia } from '../src/blink-api/native-storage';
 import type { NativeMotionDevice } from '../src/blink-api/motion-events';
 import { writeOwnerOnlyJsonFile } from '../src/blink-api/secure-json-file';
+import * as secureJson from '../src/blink-api/secure-json-file';
 import { NativeRecordingDelegate } from '../src/accessories/native-recording-delegate';
 import type { PreparedNativeRecording, prepareNativeRecording } from '../src/accessories/native-recording-preparation';
 import { resolveNativeRecordingConfig, type NativeRecordingConfigInput } from '../src/native-recording-config';
@@ -272,6 +273,7 @@ describe('native recording runtime composition', () => {
     else f.transport.postEmpty.mockRejectedValueOnce(new OperationTimeoutError());
     await f.push(); await jest.advanceTimersByTimeAsync(0);
     await until(async () => (await f.state()).core?.operation?.status === 'unresolved');
+    await f.remoteSave((await f.state()).remoteOperations ?? {});
     const before = (await f.state()).nativeByModule['20:30'].state;
     expect(before.operation?.phase).toBe(acknowledged ? 'accepted' : 'intent');
     await f.runtime.start();
@@ -411,7 +413,8 @@ describe('native recording runtime composition', () => {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const saved: NativeRecordingRuntimeState = { version: 1, scope, nativeByModule: {}, consumed: [], catalogStartedAt: {}, refusedUntil: {}, downloads: [],
       remoteOperations: { liveView: { reservationId: 'retiring-view', accountId: 10, networkId: 20, deviceId: 40,
-        kind: 'camera', phase: 'unresolved', commandId: scenario.commandId, retirementAcknowledged: scenario.acknowledged } } };
+        kind: 'camera', phase: 'unresolved', commandId: scenario.commandId, retirementAcknowledged: scenario.acknowledged,
+        expiresAt: Date.now() + 120000 } } };
     await writeOwnerOnlyJsonFile(path.join(directory, 'state.json'), saved);
     const demand = jest.fn().mockResolvedValue(undefined), report = jest.fn();
     try {
@@ -458,7 +461,7 @@ describe('native recording runtime composition', () => {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const saved: NativeRecordingRuntimeState = { version: 1, scope, nativeByModule: {}, consumed: [], catalogStartedAt: {}, refusedUntil: {}, downloads: [],
       remoteOperations: { liveView: { reservationId: 'existing-manual-view', accountId: 10, networkId: 20, deviceId: 40,
-        kind: 'camera', phase: 'active', commandId: 707, retirementAcknowledged: false } } };
+        kind: 'camera', phase: 'active', commandId: 707, retirementAcknowledged: false, expiresAt: Date.now() + 120000 } } };
     await writeOwnerOnlyJsonFile(path.join(directory, 'state.json'), saved);
     let source!: FcmEventSourceOptions;
     const options: NativeRecordingRuntimeOptions = { client: api, scope, devices: [], matchingDevices: [], storagePath: root,
@@ -481,7 +484,7 @@ describe('native recording runtime composition', () => {
     } finally { globalThis.fetch = originalFetch; }
   });
 
-  it.each(['ordinary', 'live-view', 'native', 'scheduler'] as const)('keeps prior-scope %s obligations fenced after a fresh SDK and client/tier restart', async kind => {
+  it.each(['ordinary', 'live-view', 'native', 'scheduler'] as const)('retains legacy prior-scope %s evidence without permanently vetoing a new client', async kind => {
     const directory = path.join(root, '.blink-native-recording', '10-11-u000');
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const saved: NativeRecordingRuntimeState = { version: 1, scope, nativeByModule: {}, consumed: [], catalogStartedAt: {}, refusedUntil: {}, downloads: [] };
@@ -497,13 +500,13 @@ describe('native recording runtime composition', () => {
     const bytes = await fs.readFile(filename), nextScope = { ...scope, clientId: 12, tier: 'u001' };
     const api = new BlinkApi({ email: '', password: '', hardwareId: 'restart-fence', tier: nextScope.tier });
     jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...nextScope, sharedTier: nextScope.tier });
-    const factory = jest.fn();
-    await expect(NativeRecordingRuntime.create({ client: api, scope: nextScope, devices: [], matchingDevices: [], storagePath: root,
-      config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), eventSourceFactory: factory }))
-      .rejects.toThrow('unresolved Blink operation ownership');
-    await expect(api.withNativeStorageAdmission('must-not-start', async () => { throw new Error('Provider callback must not run'); }, {},
-      { accountId: 10, networkId: 20, syncModuleId: 30 })).rejects.toMatchObject({ dispatched: false });
-    expect(factory).not.toHaveBeenCalled(); expect(await fs.readFile(filename)).toEqual(bytes);
+    const factory = jest.fn().mockReturnValue({ setDemand: jest.fn().mockResolvedValue(undefined), reconnect: jest.fn(), stop: jest.fn().mockResolvedValue(undefined) });
+    const runtime = await NativeRecordingRuntime.create({ client: api, scope: nextScope, devices: [], matchingDevices: [], storagePath: root,
+      config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), eventSourceFactory: factory });
+    runtimes.push(runtime); await runtime.start();
+    await expect(api.withNativeStorageAdmission('fresh-distinct-operation', async () => 'admitted', {},
+      { accountId: 10, networkId: 20, syncModuleId: 30 })).resolves.toBe('admitted');
+    expect(factory).toHaveBeenCalledTimes(1); expect(await fs.readFile(filename)).toEqual(bytes);
   });
 
   it('accepts an idle or terminal prior scope after restart without rewriting its evidence', async () => {
@@ -705,29 +708,34 @@ describe('native recording runtime composition', () => {
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
-  it('retains a lost-ack command fence through later motion, long waits, and restart', async () => {
+  it('abandons a lost acknowledgement within its lease and allows fresh motion after restart without replaying the old event', async () => {
     const f = await setup(); f.transport.postEmpty.mockRejectedValue(new Error('Acknowledgement lost after dispatch'));
     await f.push(); await jest.advanceTimersByTimeAsync(60_000);
     await until(async () => (await f.state()).core?.operation?.status === 'unresolved');
-    await f.push(f.notification('motion-2')); await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+    await f.remoteSave((await f.state()).remoteOperations ?? {});
+    await jest.advanceTimersByTimeAsync(120000);
+    await until(async () => (await f.state()).nativeByModule['20:30'].state.operation?.phase === 'abandoned');
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
     await f.runtime.stop();
     const restored = await setup();
     await restored.push(restored.notification('motion-3')); await jest.advanceTimersByTimeAsync(60_000);
-    expect(restored.transport.postEmpty).not.toHaveBeenCalled(); expect(restored.transport.getJson).not.toHaveBeenCalled();
+    restored.media[0].created_at = new Date(Date.now() - 60000).toISOString();
+    await until(() => restored.events.includes('offered'));
+    await until(async () => (await restored.state()).core?.queue.length === 0);
+    expect(restored.transport.postEmpty).toHaveBeenCalledTimes(2);
     const saved = await restored.state();
-    expect(saved.core?.queue[0].cancelled).toBe(true);
-    expect(saved.nativeByModule['20:30'].state.operation?.phase).toBe('intent');
+    expect(saved.core?.queue).toEqual([]);
+    expect(saved.nativeByModule['20:30'].state.abandoned).toHaveLength(1);
   });
 
   it.each(['ordinary', 'liveView'] as const)('waits using cached %s ownership without requests, then resumes after its terminal release', async kind => {
     const f = await setup();
     f.client.getRemoteOperationState.mockReturnValue({ storage: [], persistenceFailed: false,
       ...(kind === 'ordinary' ? { stateCommand: { reservationId: 'ordinary', accountId: 10, networkId: 20,
-        kind: 'arm', phase: 'accepted', commandId: 70, statusReads: 1 } as const } :
+        kind: 'arm', phase: 'accepted', commandId: 70, statusReads: 1, expiresAt: Date.now() + 120000 } as const } :
         { liveView: { reservationId: 'manual-live-view', accountId: 10, networkId: 20, deviceId: 40,
-          kind: 'camera', phase: 'active', commandId: 71, retirementAcknowledged: false } as const }) });
-    await f.push(); await jest.advanceTimersByTimeAsync(120_000);
+          kind: 'camera', phase: 'active', commandId: 71, retirementAcknowledged: false, expiresAt: Date.now() + 120000 } as const }) });
+    await f.push(); await jest.advanceTimersByTimeAsync(119_000);
     expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.transport.getJson).not.toHaveBeenCalled();
     expect(f.client.withNativeStorageAdmission).not.toHaveBeenCalled(); expect((await f.state()).core?.queue[0].attempts).toBe(0);
     f.client.getRemoteOperationState.mockReturnValue({ storage: [], persistenceFailed: false });
@@ -735,13 +743,14 @@ describe('native recording runtime composition', () => {
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(2); expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
-  it('retains unknown storage ownership and expires undispatched backlog without probing or resetting the owner', async () => {
+  it('treats legacy unknown storage as advisory and permits a fresh motion job without probing the old owner', async () => {
     const f = await setup({ config: { maxJobAgeSeconds: 120 } });
     const remote: ReturnType<BlinkApi['getRemoteOperationState']> = { storage: [{ accountId: 10, networkId: 20, syncModuleId: 30,
       operationId: 'lost-ack', kind: 'catalog', phase: 'intent' }], persistenceFailed: false };
     f.client.getRemoteOperationState.mockReturnValue(remote);
-    await f.push(); await jest.advanceTimersByTimeAsync(120_000); await until(() => f.events.includes('job-expired'));
-    expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.transport.getJson).not.toHaveBeenCalled();
+    await f.push(); await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+    expect(f.transport.getJson.mock.calls.some(([route]) => route.path.includes('lost-ack'))).toBe(false);
     expect(f.client.getRemoteOperationState()).toEqual(remote);
   });
 
@@ -781,6 +790,7 @@ describe('native recording runtime composition', () => {
     f.delegate.updateCameraActive(false);
     await until(async () => (await f.state()).core?.queue.length === 0);
     f.delegate.updateCameraActive(true);
+    await f.runtime.retryConnection();
     await jest.advanceTimersByTimeAsync(120_000);
     expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.readyMotion).not.toHaveBeenCalled();
     await f.push(f.notification('fresh-motion')); f.media[0].created_at = new Date(Date.now()).toISOString();
@@ -933,10 +943,50 @@ describe('native recording runtime composition', () => {
   it('stops acquisition and local delivery even if the isolated receiver reports a stop failure', async () => {
     const f = await setup(); await f.push(); f.stopSource.mockRejectedValueOnce(new Error('Receiver stop failed'));
     await expect(f.runtime.stop()).rejects.toThrow('Receiver stop failed'); runtimes = runtimes.filter(runtime => runtime !== f.runtime);
+    expect(f.releaseOwnership).toHaveBeenCalledTimes(1);
     await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.delegate.policy.allowed).toBe(true);
     expect(f.delegate.snapshot().state).toBe('idle');
     expect(f.readyMotion).not.toHaveBeenCalledWith(true);
+  });
+
+  it('recovers native recording on explicit retry after a transient journal failure', async () => {
+    const f = await setup();
+    const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockRejectedValueOnce(new Error('temporary disk failure'));
+    await expect(f.remoteSave({})).rejects.toThrow('temporary disk failure');
+    saving.mockRestore();
+    await f.push(); expect(f.transport.postEmpty).not.toHaveBeenCalled();
+    await f.runtime.retryConnection();
+    expect(f.events).toContain('persistence-recovered');
+    await f.push(f.notification('fresh-after-disk-recovery'));
+    await jest.advanceTimersByTimeAsync(60000); await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds shutdown during a held journal write and serializes the late file replacement before a new runtime writes', async () => {
+    const f = await setup(), gate = deferred<void>();
+    const write = secureJson.writeOwnerOnlyJsonFile;
+    let held = false;
+    const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementationOnce(async (...args) => {
+      held = true; await gate.promise; return write(...args);
+    });
+    const pending = f.remoteSave({});
+    const pendingFailure = expect(pending).rejects.toBeInstanceOf(OperationTimeoutError);
+    await until(() => held);
+    const stopping = f.runtime.stop();
+    const stopped = expect(stopping).rejects.toBeInstanceOf(OperationTimeoutError);
+    await jest.advanceTimersByTimeAsync(120000); await pendingFailure; await stopped;
+    expect(f.releaseOwnership).toHaveBeenCalledTimes(1);
+    runtimes = runtimes.filter(runtime => runtime !== f.runtime);
+    let replacementStarted = false, replacementSource!: FcmEventSourceOptions;
+    const replacement = f.rebind({ eventSourceFactory: input => {
+      replacementSource = input;
+      return { setDemand: jest.fn().mockResolvedValue(undefined), reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
+    } }).then(runtime => { replacementStarted = true; return runtime; });
+    await Promise.resolve(); expect(replacementStarted).toBe(false);
+    gate.resolve(); await replacement; saving.mockRestore();
+    await replacementSource.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['new-checkpoint'] });
+    expect((await f.state()).push?.persistentIds).toEqual(['new-checkpoint']);
   });
 
   it('bootstraps and reloads Windows-shaped modes without POSIX identity or provider requests', async () => {

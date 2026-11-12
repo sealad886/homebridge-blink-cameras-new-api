@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { budgetedDelay, checkRequestBudget, withinRequestBudget, type RequestOptions } from '../operation-budget';
+import { budgetedDelay, checkRequestBudget, withinRequestBudget, isRemoteOperationLeaseActive,
+  REMOTE_OPERATION_LEASE_MS, type RequestOptions } from '../operation-budget';
 import { requireRemoteId } from './domain-validation';
 import { isBlinkPostRefusal } from './http';
 
@@ -35,17 +36,27 @@ export type NativeStorageFailure = 'command-failed' | 'invalid-result' | 'invali
 export type NativeStorageTerminal<T> = { status: 'ready'; value: T } |
   { status: 'failed'; reason: NativeStorageFailure; remoteStatus?: number; httpStatus?: number };
 export type NativeStorageResult<T> = NativeStorageTerminal<T> |
+  { status: 'abandoned' } |
   { status: 'unresolved'; reason: string; operation?: NativeStorageOperation };
 export interface NativeStorageOperation extends NativeStorageContext {
   kind: 'catalog' | 'clip';
-  phase: 'intent' | 'accepted' | 'prepared' | 'finished';
+  phase: 'intent' | 'accepted' | 'prepared' | 'finished' | 'abandoned';
+  /** Local availability lease; expiry does not prove provider completion. */
+  expiresAt?: number;
+  abandonedAt?: number;
   statusReads: number;
   commandId?: number;
   resultCommandId?: number;
   clip?: NativeStorageClipRequest;
   result?: NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia>;
 }
-export interface NativeStorageState { version: 1; operation?: NativeStorageOperation; }
+export interface NativeStorageState {
+  version: 1;
+  operation?: NativeStorageOperation;
+  /** Bounded local history; deliberately excludes clip/media URLs. */
+  abandoned?: (NativeStorageContext & { kind: 'catalog' | 'clip'; statusReads: number;
+    commandId?: number; resultCommandId?: number; expiresAt?: number; abandonedAt: number })[];
+}
 export interface NativeStorageOwnerOptions {
   transport: NativeStorageTransport;
   /** The client's existing account command queue owns admission; this class adds no remote queue. */
@@ -89,6 +100,7 @@ export class NativeStorageOwner {
   private state: NativeStorageState;
   private running = false;
   private persistenceFailed = false;
+  private generation = 0;
   private readonly maxStatusReads: number;
   private readonly maxJsonBytes: number;
   private readonly maxMediaBytes: number;
@@ -107,31 +119,58 @@ export class NativeStorageOwner {
 
   snapshot(): NativeStorageState { return clone(this.state); }
 
-  /** Cancel a prior permission period using only existing terminal proof or one bounded known-command read. */
-  async reconcilePending(options: RequestOptions = {}): Promise<'terminal' | 'unresolved' | 'none'> {
+  /** Retain uncertain evidence, but stop its local veto without another provider request. */
+  async abandonExpired(): Promise<boolean> {
     const operation = this.state.operation;
-    if (!operation || operation.phase === 'finished') return 'none';
+    if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned'
+      || isRemoteOperationLeaseActive(operation.expiresAt)) return false;
+    this.generation++;
+    this.running = false;
+    this.state.abandoned = [...(this.state.abandoned ?? []).filter(item => item.operationId !== operation.operationId),
+      { operationId: operation.operationId, accountId: operation.accountId, networkId: operation.networkId,
+        syncModuleId: operation.syncModuleId, kind: operation.kind, statusReads: operation.statusReads,
+        ...(operation.commandId !== undefined ? { commandId: operation.commandId } : {}),
+        ...(operation.resultCommandId !== undefined ? { resultCommandId: operation.resultCommandId } : {}),
+        ...(operation.expiresAt !== undefined ? { expiresAt: operation.expiresAt } : {}), abandonedAt: Date.now() }].slice(-32);
+    await this.persist({ ...operation, phase: 'abandoned', abandonedAt: Date.now(), result: undefined });
+    return true;
+  }
+
+  /** Explicit retry rechecks durable storage; it does not replay an uncertain preparation. */
+  async retryPersistence(): Promise<void> {
+    await this.options.saveState(this.snapshot());
+    this.persistenceFailed = false;
+    await this.abandonExpired();
+  }
+
+  /** Cancel a prior permission period using only existing terminal proof or one bounded known-command read. */
+  async reconcilePending(options: RequestOptions = {}): Promise<'terminal' | 'unresolved' | 'none' | 'abandoned'> {
+    if (await this.abandonExpired()) return 'abandoned';
+    const operation = this.state.operation;
+    if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned') return 'none';
     if (this.running || this.persistenceFailed || operation.phase === 'intent') return 'unresolved';
     this.running = true;
+    const generation = this.generation;
     try {
       if (operation.phase === 'prepared') {
-        await this.finish({ status: 'failed', reason: 'discarded' });
+        await this.finish({ status: 'failed', reason: 'discarded' }, generation);
         return 'terminal';
       }
       if (!operation.commandId || operation.statusReads >= this.maxStatusReads) return 'unresolved';
-      const request = { ...options, deadline: Math.min(options.deadline ?? Infinity, Date.now() + this.responseBudgetMs) };
+      const request = { ...options, deadline: Math.min(options.deadline ?? Infinity, Date.now() + this.responseBudgetMs, operation.expiresAt!) };
       checkRequestBudget(request);
-      await this.persist({ ...operation, statusReads: operation.statusReads + 1 });
+      await this.persist({ ...operation, statusReads: operation.statusReads + 1 }, generation);
       checkRequestBudget(request);
       // A command-status read does not allocate a Sync Module operation and needs no new write admission.
       const status = object(this.boundedJson(await withinRequestBudget(this.options.transport.getJson(
         { base: 'root', path: `accounts/${operation.accountId}/networks/${operation.networkId}/commands/${operation.commandId}` },
         this.requestOptions(request, this.maxJsonBytes)), request)));
+      if (generation !== this.generation) return 'abandoned';
       if (status.complete !== true || typeof status.status !== 'number' || !Number.isSafeInteger(status.status)) return 'unresolved';
-      await this.finish({ status: 'failed', reason: 'discarded', remoteStatus: status.status });
+      await this.finish({ status: 'failed', reason: 'discarded', remoteStatus: status.status }, generation);
       return 'terminal';
     } catch { return 'unresolved'; }
-    finally { this.running = false; }
+    finally { if (generation === this.generation) this.running = false; }
   }
 
   readCatalog(context: NativeStorageContext, options: RequestOptions = {}): Promise<NativeStorageResult<NativeStorageCatalog>> {
@@ -151,55 +190,66 @@ export class NativeStorageOwner {
     supplied: RequestOptions): Promise<NativeStorageResult<NativeStorageCatalog | NativeStoredMedia>> {
     this.validateContext(context);
     if (this.persistenceFailed) return this.unresolved('persistence-failed');
+    await this.abandonExpired();
+    if (this.state.abandoned?.some(item => item.operationId === context.operationId)) return { status: 'abandoned' };
     if (this.running) return this.unresolved('caller-in-progress');
     const previous = this.state.operation;
     const same = previous?.operationId === context.operationId;
     if (same && (!scopeMatches(previous, context) || previous.kind !== kind || !clipMatches(previous.clip, clip))) {
       throw new Error('Native operation identity changed');
     }
-    if (previous && !same && previous.phase !== 'finished') return this.unresolved('operation-in-progress');
+    if (same && previous.phase === 'abandoned') return { status: 'abandoned' };
+    if (previous && !same && previous.phase !== 'finished' && previous.phase !== 'abandoned') return this.unresolved('operation-in-progress');
     if (same && previous.phase === 'finished') return clone(previous.result!);
-    const deadline = Math.min(supplied.deadline ?? Infinity, Date.now() + this.responseBudgetMs);
+    const deadline = Math.min(supplied.deadline ?? Infinity, Date.now() + this.responseBudgetMs,
+      same && previous?.expiresAt !== undefined ? previous.expiresAt : Infinity);
     const request = { ...supplied, deadline, queueDeadline: Math.min(supplied.queueDeadline ?? Infinity, deadline) };
     this.running = true;
+    const generation = ++this.generation;
     let entered = false;
     try {
       return await withinRequestBudget(this.options.admit(async () => {
         checkRequestBudget(request);
+        if (generation !== this.generation) return { status: 'abandoned' };
         entered = true;
         const current = this.state.operation;
         const currentMatches = current?.operationId === context.operationId;
         if (currentMatches && current.phase === 'finished') return clone(current.result!);
-        if (current && !currentMatches && current.phase !== 'finished') return this.unresolved('operation-in-progress');
+        if (current && !currentMatches && current.phase !== 'finished' && current.phase !== 'abandoned') return this.unresolved('operation-in-progress');
         if (!currentMatches) {
           const intent: NativeStorageOperation = { ...context, kind, phase: 'intent', statusReads: 0,
+            expiresAt: Math.min(deadline, Date.now() + REMOTE_OPERATION_LEASE_MS),
             ...(clip ? { clip: clone(clip) } : {}) };
-          await this.persist(intent);
+          await this.persist(intent, generation);
+          if (generation !== this.generation) return { status: 'abandoned' };
           try { checkRequestBudget(request); }
           catch {
             // Keep durable proof that cancellation preceded dispatch, even if the bounded caller has returned.
-            await this.persist({ ...intent, phase: 'finished', result: { status: 'failed', reason: 'not-started' } });
+            await this.persist({ ...intent, phase: 'finished', result: { status: 'failed', reason: 'not-started' } }, generation);
             return { status: 'failed', reason: 'not-started' };
           }
           // Once invoked, a thrown POST result is ambiguous. It is never replayed here.
           const ack = this.boundedJson(await withinRequestBudget(this.options.transport.postEmpty(
             this.preparationRoute(intent), this.requestOptions(request, this.maxJsonBytes)), request));
-          await this.persist({ ...intent, phase: 'accepted', commandId: positive(object(ack).id) });
+          if (generation !== this.generation) return { status: 'abandoned' };
+          await this.persist({ ...intent, phase: 'accepted', commandId: positive(object(ack).id) }, generation);
         }
         const operation = this.state.operation!;
         if (operation.phase === 'intent') return this.unresolved('acknowledgement-unknown');
         if (operation.phase === 'accepted') {
-          const terminal = await this.poll(operation, request);
+          const terminal = await this.poll(operation, request, generation);
           if (terminal) return terminal;
         }
-        return await this.retrieve(this.state.operation!, request);
+        return await this.retrieve(this.state.operation!, request, generation);
       }, request, context.operationId, context), request);
     } catch (error) {
+      if (generation !== this.generation) return { status: 'abandoned' };
+      if (!this.persistenceFailed && await this.abandonExpired()) return { status: 'abandoned' };
       if (entered && !this.persistenceFailed && this.state.operation?.operationId === context.operationId
         && this.state.operation.phase === 'prepared') {
         // Preparation already has durable terminal proof. A failed result GET
         // is a local acquisition failure, not an unknown Sync Module command.
-        try { return await this.finish({ status: 'failed', reason: kind === 'clip' ? 'invalid-media' : 'invalid-result' }); }
+        try { return await this.finish({ status: 'failed', reason: kind === 'clip' ? 'invalid-media' : 'invalid-result' }, generation); }
         catch { return this.unresolved('persistence-failed'); }
       }
       const noSend = error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false;
@@ -209,37 +259,38 @@ export class NativeStorageOwner {
         // A refusal consumed one wire attempt. Keep it distinct from local
         // no-send proof so the scheduler cannot erase the catalog cooldown.
         try { return await this.finish(refused ? { status: 'failed', reason: 'refused', httpStatus: error.status }
-          : { status: 'failed', reason: 'not-started' }); }
+          : { status: 'failed', reason: 'not-started' }, generation); }
         catch { return this.unresolved('persistence-failed'); }
       }
       if (!entered && (!previous || previous.phase === 'finished')) return { status: 'failed', reason: 'not-started' };
       return this.unresolved(this.persistenceFailed ? 'persistence-failed' : 'request-outcome-unknown');
-    } finally { this.running = false; }
+    } finally { if (generation === this.generation) this.running = false; }
   }
 
   /** Returns only on terminal failure or uncertainty; success advances the durable result phase. */
-  private async poll(operation: NativeStorageOperation, options: RequestOptions):
+  private async poll(operation: NativeStorageOperation, options: RequestOptions, generation: number):
     Promise<NativeStorageResult<NativeStorageCatalog | NativeStoredMedia> | undefined> {
     while (operation.statusReads < this.maxStatusReads) {
       checkRequestBudget(options);
       operation = { ...operation, statusReads: operation.statusReads + 1 };
-      await this.persist(operation);
+      await this.persist(operation, generation);
       checkRequestBudget(options);
       const raw = object(this.boundedJson(await withinRequestBudget(this.options.transport.getJson(
         { base: 'root', path: `accounts/${operation.accountId}/networks/${operation.networkId}/commands/${operation.commandId}` },
         this.requestOptions(options, this.maxJsonBytes)), options)));
+      if (generation !== this.generation) return { status: 'abandoned' };
       if (typeof raw.complete !== 'boolean' || typeof raw.status !== 'number' || !Number.isSafeInteger(raw.status)) {
         return this.unresolved('invalid-command-status');
       }
       if (raw.complete) {
-        if (raw.status !== 0) return this.finish({ status: 'failed', reason: 'command-failed', remoteStatus: raw.status });
+        if (raw.status !== 0) return this.finish({ status: 'failed', reason: 'command-failed', remoteStatus: raw.status }, generation);
         let resultCommandId: number | undefined;
         if (operation.kind === 'catalog') {
           if (!Array.isArray(raw.commands) || raw.commands.length === 0) return this.unresolved('missing-result-command');
           try { resultCommandId = positive(object(raw.commands[0]).id); }
           catch { return this.unresolved('invalid-result-command'); }
         }
-        await this.persist({ ...operation, phase: 'prepared', ...(resultCommandId ? { resultCommandId } : {}) });
+        await this.persist({ ...operation, phase: 'prepared', ...(resultCommandId ? { resultCommandId } : {}) }, generation);
         return;
       }
       if (operation.statusReads < this.maxStatusReads) await this.delay(POLL_INTERVAL_MS, options);
@@ -247,26 +298,28 @@ export class NativeStorageOwner {
     return this.unresolved('status-budget-exhausted');
   }
 
-  private async retrieve(operation: NativeStorageOperation, options: RequestOptions):
+  private async retrieve(operation: NativeStorageOperation, options: RequestOptions, generation: number):
     Promise<NativeStorageResult<NativeStorageCatalog | NativeStoredMedia>> {
     checkRequestBudget(options);
     if (operation.kind === 'catalog') {
       const value = this.boundedJson(await withinRequestBudget(this.options.transport.getJson(
         { base: 'api', path: `${this.modulePath(operation)}/media/${positive(operation.resultCommandId)}` },
         this.requestOptions(options, this.maxJsonBytes)), options));
-      try { return await this.finish({ status: 'ready', value: this.catalog(value, operation.networkId) }); }
+      if (generation !== this.generation) return { status: 'abandoned' };
+      try { return await this.finish({ status: 'ready', value: this.catalog(value, operation.networkId) }, generation); }
       catch {
         if (this.persistenceFailed) throw new Error('Native storage persistence failed');
-        return this.finish({ status: 'failed', reason: 'invalid-result' });
+        return this.finish({ status: 'failed', reason: 'invalid-result' }, generation);
       }
     }
     const location = this.options.transport.validateMediaUrl(operation.clip!.clip.mediaUrl!);
     const value = await withinRequestBudget(this.options.transport.downloadMedia(location,
       this.requestOptions(options, this.maxMediaBytes)), options);
+    if (generation !== this.generation) return { status: 'abandoned' };
     if (!this.validStoredMedia(value)) {
-      return this.finish({ status: 'failed', reason: 'invalid-media' });
+      return this.finish({ status: 'failed', reason: 'invalid-media' }, generation);
     }
-    return this.finish({ status: 'ready', value: clone(value) });
+    return this.finish({ status: 'ready', value: clone(value) }, generation);
   }
 
   private catalog(value: unknown, networkId: number): NativeStorageCatalog {
@@ -314,13 +367,34 @@ export class NativeStorageOwner {
 
   private validateState(): void {
     if (this.state.version !== 1) throw new Error('Invalid native storage state');
+    if (this.state.abandoned !== undefined && (!Array.isArray(this.state.abandoned) || this.state.abandoned.length > 32
+      || this.state.abandoned.some(item => !item || typeof item.operationId !== 'string' || !item.operationId
+        || item.operationId.length > 256 || !Number.isSafeInteger(item.abandonedAt) || item.abandonedAt < 0))) {
+      throw new Error('Invalid native abandonment history');
+    }
+    for (const item of this.state.abandoned ?? []) {
+      this.validateContext(item);
+      if (item.kind !== 'catalog' && item.kind !== 'clip') throw new Error('Invalid native abandonment kind');
+      integer(item.statusReads, 0, 120);
+      if (item.commandId !== undefined) positive(item.commandId);
+      if (item.resultCommandId !== undefined) positive(item.resultCommandId);
+      if (item.expiresAt !== undefined) integer(item.expiresAt, 0, Number.MAX_SAFE_INTEGER);
+    }
     if (this.state.operation === undefined) return;
     const op = object(this.state.operation) as unknown as NativeStorageOperation;
     this.validateContext(op);
-    if (!['catalog', 'clip'].includes(op.kind) || !['intent', 'accepted', 'prepared', 'finished'].includes(op.phase)) {
+    if (!['catalog', 'clip'].includes(op.kind) || !['intent', 'accepted', 'prepared', 'finished', 'abandoned'].includes(op.phase)) {
       throw new Error('Invalid native storage phase');
     }
     integer(op.statusReads, 0, 120);
+    if (op.expiresAt !== undefined) integer(op.expiresAt, 0, Number.MAX_SAFE_INTEGER);
+    if (op.phase === 'abandoned') {
+      integer(op.abandonedAt!, 0, Number.MAX_SAFE_INTEGER);
+      if (op.commandId !== undefined) positive(op.commandId);
+      if (op.result !== undefined) throw new Error('Abandonment is not provider completion');
+      this.boundedJson(this.state, this.maxJsonBytes + 32768);
+      return;
+    }
     const notStarted = op.phase === 'finished' && op.result?.status === 'failed' && op.result.reason === 'not-started';
     const refused = op.phase === 'finished' && op.result?.status === 'failed' && op.result.reason === 'refused';
     if (notStarted || refused) {
@@ -379,19 +453,25 @@ export class NativeStorageOwner {
     return { status: 'unresolved', reason, ...(this.state.operation ? { operation: clone(this.state.operation) } : {}) };
   }
 
-  private async persist(operation: NativeStorageOperation): Promise<void> {
-    const next: NativeStorageState = { version: 1, operation: clone(operation) };
+  private async persist(operation: NativeStorageOperation, generation = this.generation): Promise<void> {
+    if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
+    const next: NativeStorageState = { version: 1, operation: clone(operation),
+      ...(this.state.abandoned ? { abandoned: clone(this.state.abandoned) } : {}) };
     try {
       this.boundedJson(next, this.maxJsonBytes + 32768);
       await this.options.saveState(clone(next));
+      if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
       this.state = next;
     }
-    catch { this.persistenceFailed = true; throw new Error('Native storage persistence failed'); }
+    catch {
+      if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
+      this.persistenceFailed = true; throw new Error('Native storage persistence failed');
+    }
   }
 
-  private async finish(result: NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia>):
+  private async finish(result: NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia>, generation = this.generation):
     Promise<NativeStorageResult<NativeStorageCatalog | NativeStoredMedia>> {
-    await this.persist({ ...this.state.operation!, phase: 'finished', result: clone(result) });
+    await this.persist({ ...this.state.operation!, phase: 'finished', result: clone(result) }, generation);
     return result;
   }
 }

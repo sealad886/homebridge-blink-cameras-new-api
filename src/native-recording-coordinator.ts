@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isRemoteOperationLeaseActive, REMOTE_OPERATION_LEASE_MS } from './operation-budget';
 
 /** Blink-origin motion, independent of HomeKit's held MotionDetected boolean. */
 export interface NativeRecordingObservation {
@@ -34,6 +35,7 @@ export interface NativeRecordingState {
 
 export interface NativeRecordingAcquisition {
   operationId: string;
+  expiresAt: number;
   moduleId: string;
   observation: NativeRecordingObservation;
   /** One-based; maxRetries=10 permits eleven attempts in total. */
@@ -51,13 +53,13 @@ export type NativeRecordingTerminalResult =
     satisfiedEventIds?: readonly string[];
   };
 
-/** Terminal results require proven remote completion or no provider dispatch. */
-export type NativeRecordingAcquisitionResult = NativeRecordingTerminalResult | { status: 'unresolved' };
+/** Local abandonment is distinct from verified provider completion. */
+export type NativeRecordingAcquisitionResult = NativeRecordingTerminalResult | { status: 'unresolved' } | { status: 'abandoned' };
 
 export interface NativeRecordingJobResult {
   observation: NativeRecordingObservation;
   attempts: number;
-  outcome: 'retrieved' | 'exhausted' | 'cancelled' | 'expired';
+  outcome: 'retrieved' | 'exhausted' | 'cancelled' | 'expired' | 'abandoned';
 }
 
 export interface NativeRecordingCoordinatorOptions {
@@ -78,6 +80,8 @@ export interface NativeRecordingCoordinatorOptions {
   maxJobAgeMs?: number;
   /** Local readiness/cooldown only; must not send provider requests. */
   earliestAcquisitionAt?: (observation: NativeRecordingObservation) => number;
+  /** Local receipt cleanup only; no provider requests or retries. */
+  onOperationAbandoned?: () => Promise<void>;
 }
 
 export type NativeRecordingObservationResult = 'accepted' | 'duplicate' | 'unknown-module' | 'capacity' | 'invalid' | 'stopped' | 'cancelled';
@@ -86,7 +90,7 @@ const eventKey = (event: NativeRecordingObservation): string => JSON.stringify([
 const cloneObservation = (event: NativeRecordingObservation): NativeRecordingObservation => ({ ...event });
 const asError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error));
 
-/** One durable ready FIFO. Local timeouts and shutdown never release uncertain work. */
+/** One durable ready FIFO with a finite local ownership lease. */
 export class NativeRecordingCoordinator {
   private readonly moduleIds: Set<string>;
   private readonly queue: NativeRecordingJob[] = [];
@@ -105,6 +109,7 @@ export class NativeRecordingCoordinator {
   private writes: Promise<void> = Promise.resolve();
   private storageError?: Error;
   private stopped = false;
+  private abandoning = false;
 
   constructor(private readonly options: NativeRecordingCoordinatorOptions) {
     this.initialDelayMs = this.limit(options.initialDelayMs ?? 60_000, 0, 86_400_000);
@@ -197,22 +202,22 @@ export class NativeRecordingCoordinator {
     return cancelled.length;
   }
 
-  /** A matching, verified provider result is required; elapsed time is not proof. */
+  /** Keep explicit local abandonment distinct from verified provider results. */
   async resolveOperation(resolution: {
     moduleId: string;
     operationId: string;
-    status: 'verified-terminal';
+    status: 'verified-terminal' | 'locally-abandoned';
     result: NativeRecordingTerminalResult;
   }): Promise<boolean> {
     if (this.stopped) {
       return false;
     }
     this.assertStorage();
-    if (resolution.status !== 'verified-terminal' || this.operation?.status !== 'unresolved'
+    if (!['verified-terminal', 'locally-abandoned'].includes(resolution.status) || this.operation?.status !== 'unresolved'
       || this.operation.operationId !== resolution.operationId || this.queue[0]?.observation.moduleId !== resolution.moduleId) {
       return false;
     }
-    await this.finishAttempt(resolution.result);
+    await this.finishAttempt(resolution.status === 'locally-abandoned' ? { status: 'abandoned' } : resolution.result);
     this.schedule();
     return true;
   }
@@ -224,6 +229,12 @@ export class NativeRecordingCoordinator {
       queue: this.queue.map(job => ({ ...job, observation: cloneObservation(job.observation) })),
       ...(this.operation ? { operation: { ...this.operation } } : {}),
     };
+  }
+
+  async retryPersistence(): Promise<void> {
+    await this.options.saveState(this.snapshot());
+    this.storageError = undefined;
+    this.schedule();
   }
 
   /** Stop local scheduling; preserve the queue and any uncertain remote owner. */
@@ -242,18 +253,41 @@ export class NativeRecordingCoordinator {
       globalThis.clearTimeout(this.timer);
       this.timer = undefined;
     }
-    if (this.stopped || this.storageError || this.operation || !this.queue.length) {
+    if (this.stopped || this.storageError || this.abandoning || !this.queue.length) {
       return;
     }
     this.timer = globalThis.setTimeout(() => {
       this.timer = undefined;
       void this.run().catch(error => this.options.onError(asError(error)));
-    }, Math.min(2_147_483_647, Math.max(0, Math.min(...this.queue.map(job =>
-      Math.min(this.eligibleAt(job), job.observation.occurredAt + this.maxJobAgeMs))) - Date.now())));
+    }, Math.min(2_147_483_647, Math.max(0, (this.operation ? this.operationExpiry() : Math.min(...this.queue.map(job =>
+      Math.min(this.eligibleAt(job), job.observation.occurredAt + this.maxJobAgeMs)))) - Date.now())));
+  }
+
+  private operationExpiry(): number {
+    const expiry = Math.min(this.operation!.startedAt + REMOTE_OPERATION_LEASE_MS,
+      this.queue[0].observation.occurredAt + this.maxJobAgeMs);
+    return isRemoteOperationLeaseActive(expiry) ? expiry : Date.now();
   }
 
   private async run(): Promise<void> {
-    if (this.stopped || this.storageError || this.operation || !this.queue.length) {
+    if (this.stopped || this.storageError || this.abandoning || !this.queue.length) {
+      return;
+    }
+    if (this.operation) {
+      if (Date.now() < this.operationExpiry()) return;
+      this.controller?.abort();
+      // Invalidate identity before async cleanup so late acquisition cannot publish.
+      const abandoned = this.operation;
+      this.abandoning = true;
+      this.operation = undefined;
+      this.operationDispatched = false;
+      const [job] = this.queue.splice(0, 1);
+      try {
+        await this.options.onOperationAbandoned?.();
+        await this.persist();
+        if (!job.cancelled) this.options.onJobFinished({ observation: cloneObservation(job.observation), attempts: job.attempts, outcome: 'abandoned' });
+        this.options.onError(new Error(`Native recording operation ${abandoned.operationId} was locally abandoned after its availability lease.`));
+      } finally { this.abandoning = false; this.schedule(); }
       return;
     }
     const expiredIndex = this.queue.findIndex(job => Date.now() >= job.observation.occurredAt + this.maxJobAgeMs);
@@ -296,8 +330,9 @@ export class NativeRecordingCoordinator {
         return;
       }
       this.operationDispatched = true;
+      this.schedule();
       const result = await this.options.acquire({
-        operationId: operation.operationId, moduleId: job.observation.moduleId,
+        operationId: operation.operationId, expiresAt: this.operationExpiry(), moduleId: job.observation.moduleId,
         observation: cloneObservation(job.observation), attempt: job.attempts,
         cameraGeneration: job.cameraGeneration,
       }, controller.signal);
@@ -325,9 +360,9 @@ export class NativeRecordingCoordinator {
     }
   }
 
-  private async finishAttempt(result: NativeRecordingTerminalResult): Promise<void> {
+  private async finishAttempt(result: NativeRecordingTerminalResult | { status: 'abandoned' }): Promise<void> {
     const job = this.queue[0];
-    if (result.status !== 'missing' && result.status !== 'retrieved' && result.status !== 'skipped') {
+    if (result.status !== 'missing' && result.status !== 'retrieved' && result.status !== 'skipped' && result.status !== 'abandoned') {
       throw new Error('A verified terminal acquisition result is required');
     }
     this.operation = undefined;
@@ -343,7 +378,7 @@ export class NativeRecordingCoordinator {
     } else {
       this.queue.shift();
       finished.push({ observation: cloneObservation(job.observation), attempts: job.attempts,
-        outcome: result.status === 'retrieved' ? 'retrieved' : result.status === 'skipped' ? 'cancelled' : 'exhausted' });
+        outcome: result.status === 'retrieved' ? 'retrieved' : result.status === 'skipped' ? 'cancelled' : result.status === 'abandoned' ? 'abandoned' : 'exhausted' });
       if (result.status === 'retrieved' && result.satisfiedEventIds?.length) {
         const related = new Set(result.satisfiedEventIds.slice(0, this.maxQueuedJobs));
         for (let index = 0; index < this.queue.length;) {

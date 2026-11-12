@@ -1548,21 +1548,48 @@ describe('BlinkApi', () => {
     } finally { jest.useRealTimers(); }
   });
 
-  it('keeps remote ownership fenced after capture execution budget expires', async () => {
+  it('releases local exclusion after capture execution budget expires without replaying it', async () => {
     jest.useFakeTimers();
     try {
       const { api, http } = createApi();
       api.accountId = 10;
     api.accountId = 10;
-      http.post.mockImplementationOnce(() => new Promise(() => {}));
+      http.post.mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue({ id: 2 });
+      http.get.mockResolvedValue({ complete: true, status: 0 });
       const capture = api.requestCameraThumbnail(5, 1);
       const failed = expect(capture).rejects.toBeInstanceOf(OperationTimeoutError);
       const motion = api.enableCameraMotion(5, 1);
-      const blocked = expect(motion).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+      const completed = expect(motion).resolves.toBeUndefined();
       await jest.advanceTimersByTimeAsync(60_300);
       await failed;
-      await blocked;
-      expect(http.post).toHaveBeenCalledTimes(1);
+      await completed;
+      expect(http.post).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('does not let a late expired live-view allocation replace a newer arm owner', async () => {
+    jest.useFakeTimers();
+    try {
+      const { api, http } = createApi(); api.accountId = 10;
+      const client = api as unknown as BlinkApi;
+      let releaseLive!: (response: { command_id: number; server: string }) => void;
+      let releaseStatus!: (response: { complete: boolean; status: number }) => void;
+      http.post.mockImplementationOnce(() => new Promise(resolve => { releaseLive = resolve; }))
+        .mockResolvedValueOnce({ id: 903 });
+      http.get.mockImplementationOnce(() => new Promise(resolve => { releaseStatus = resolve; }));
+      const live = client.startCameraLiveview(5, 1, 'liveview', undefined, { deadline: Date.now() + 100 });
+      const expired = expect(live).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(101); await expired;
+      const arm = client.armNetwork(5);
+      await jest.advanceTimersByTimeAsync(301);
+      expect(client.getRemoteOperationState().stateCommand).toMatchObject({ commandId: 903 });
+      releaseLive({ command_id: 707, server: 'immis://fixture.invalid' });
+      await jest.advanceTimersByTimeAsync(1);
+      expect(client.getRemoteOperationState().liveView).toBeUndefined();
+      expect(client.getRemoteOperationState().stateCommand).toMatchObject({ commandId: 903 });
+      releaseStatus({ complete: true, status: 0 }); await jest.advanceTimersByTimeAsync(1); await arm;
+      expect(http.post).toHaveBeenCalledTimes(2);
+      expect(client.getRemoteOperationState().abandoned).toEqual([expect.objectContaining({ kind: 'liveview', reason: 'lease-expired' })]);
     } finally { jest.useRealTimers(); }
   });
 

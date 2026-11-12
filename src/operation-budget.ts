@@ -4,6 +4,15 @@ export interface RequestOptions {
   queueDeadline?: number;
 }
 
+/** Local availability limit, never evidence that a provider operation completed. */
+export const REMOTE_OPERATION_LEASE_MS = 120_000;
+
+/** Legacy owners without a deadline cannot veto fresh work indefinitely. */
+export function isRemoteOperationLeaseActive(expiresAt: number | undefined, now = Date.now()): boolean {
+  return expiresAt !== undefined && Number.isSafeInteger(expiresAt) && expiresAt > now
+    && expiresAt <= now + REMOTE_OPERATION_LEASE_MS;
+}
+
 export class OperationTimeoutError extends Error {
   constructor() {
     super('Blink operation exceeded its response deadline.');

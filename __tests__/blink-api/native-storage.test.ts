@@ -45,9 +45,65 @@ function fixture(overrides: Partial<NativeStorageOwnerOptions> = {}) {
 
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
+it('abandons a legacy unknown command locally without probing or replaying it, then permits a distinct event', async () => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  expect(await f.owner.reconcilePending()).toBe('abandoned');
+  expect(f.owner.snapshot().operation).toMatchObject({ operationId: context.operationId, phase: 'abandoned' });
+  expect(f.owner.snapshot().operation?.result).toBeUndefined();
+  expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.transport.getJson).not.toHaveBeenCalled();
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'fresh-event' })).toMatchObject({ status: 'ready' });
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('retains an exhausted known-command budget until lease expiry, then releases only local ownership', async () => {
+  jest.useFakeTimers();
+  const f = fixture({ maxStatusReads: 1 });
+  f.transport.getJson.mockResolvedValueOnce({ complete: false, status: 0 });
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'status-budget-exhausted' });
+  const expiry = f.owner.snapshot().operation!.expiresAt;
+  expect(await f.restart().reconcilePending()).toBe('unresolved');
+  expect(f.transport.getJson).toHaveBeenCalledTimes(1);
+  await jest.advanceTimersByTimeAsync(120000);
+  const next = f.restart();
+  expect(await next.reconcilePending()).toBe('abandoned');
+  expect(next.snapshot().operation).toMatchObject({ commandId: 101, statusReads: 1, phase: 'abandoned', expiresAt: expiry });
+  expect(await next.readCatalog({ ...context, operationId: 'next-motion' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+});
+
+it('ignores a late old acknowledgement after lease abandonment and a newer completed native operation', async () => {
+  jest.useFakeTimers();
+  let acknowledge!: (value: unknown) => void;
+  const f = fixture();
+  f.transport.postEmpty.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+  const old = f.owner.readCatalog(context);
+  while (!acknowledge) await Promise.resolve();
+  await jest.advanceTimersByTimeAsync(120000);
+  expect(await old).toEqual({ status: 'abandoned' });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'new-event' })).toMatchObject({ status: 'ready' });
+  const current = f.owner.snapshot();
+  acknowledge({ id: 999 }); await Promise.resolve(); await Promise.resolve();
+  expect(f.owner.snapshot()).toEqual(current);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  expect(f.transport.getJson.mock.calls.some(([route]) => route.path.endsWith('/commands/999'))).toBe(false);
+});
+
+it('rechecks persistence explicitly after a failed intent without sending work while the journal is unavailable', async () => {
+  const f = fixture();
+  f.saveState.mockRejectedValueOnce(new Error('temporary disk failure'));
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'blocked' })).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  await f.owner.retryPersistence();
+  expect(await f.owner.readCatalog({ ...context, operationId: 'fresh' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it('discards a revoked prepared operation locally without catalog or media retrieval', async () => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'prepared',
-    commandId: 101, resultCommandId: 202, statusReads: 1 } } });
+    commandId: 101, resultCommandId: 202, statusReads: 1, expiresAt: Date.now() + 120000 } } });
   expect(await f.owner.reconcilePending()).toBe('terminal');
   expect(f.owner.snapshot().operation?.result).toEqual({ status: 'failed', reason: 'discarded' });
   expect(await f.owner.reconcilePending()).toBe('none');
@@ -58,7 +114,7 @@ it('discards a revoked prepared operation locally without catalog or media retri
 
 it.each([0, 7])('discards a revoked accepted operation only after one verified terminal status %s', async status => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'clip', phase: 'accepted',
-    commandId: 101, statusReads: 1, clip: clipRequest() } } });
+    commandId: 101, statusReads: 1, clip: clipRequest(), expiresAt: Date.now() + 120000 } } });
   f.transport.getJson.mockResolvedValue({ complete: true, status });
   expect(await f.owner.reconcilePending()).toBe('terminal');
   expect(f.owner.snapshot().operation?.result).toEqual({ status: 'failed', reason: 'discarded', remoteStatus: status });
@@ -71,12 +127,13 @@ it.each([0, 7])('discards a revoked accepted operation only after one verified t
 
 it('keeps revoked pending and lost-ack operations fenced without replacing commands or renewing budgets', async () => {
   const f = fixture({ maxStatusReads: 2, restoredState: { version: 1, operation: { ...context, kind: 'catalog',
-    phase: 'accepted', commandId: 101, statusReads: 1 } } });
+    phase: 'accepted', commandId: 101, statusReads: 1, expiresAt: Date.now() + 120000 } } });
   f.transport.getJson.mockResolvedValue({ complete: false, status: 0 });
   expect(await f.owner.reconcilePending()).toBe('unresolved');
   expect(await f.restart().reconcilePending()).toBe('unresolved');
   expect(f.transport.getJson).toHaveBeenCalledTimes(1);
-  const lost = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  const lost = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0,
+    expiresAt: Date.now() + 120000 } } });
   expect(await lost.owner.reconcilePending()).toBe('unresolved');
   expect(lost.transport.getJson).not.toHaveBeenCalled(); expect(lost.transport.postEmpty).not.toHaveBeenCalled();
 });

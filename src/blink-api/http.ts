@@ -208,152 +208,158 @@ export class BlinkHttp {
     options: BlinkHttpRequestOptions = {},
     retried406 = false,
   ): Promise<T> {
-    checkRequestBudget(options);
-    if (options.maxResponseBytes !== undefined && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes < 1)) {
-      throw new Error('Blink response byte limit is invalid.');
-    }
-    const url = this.buildUrl(path);
-    if (runPreflight) {
-      try { await withinRequestBudget(this.auth.ensureValidToken(), options); }
-      catch (error) {
-        // Preserve the authentication error type while proving that this resource request was never dispatched.
-        if (error instanceof Error && Object.isExtensible(error)) {
-          Object.defineProperty(error, 'dispatched', { value: false, configurable: true });
+    let mayHaveDispatched = false;
+    try {
+      checkRequestBudget(options);
+      if (options.maxResponseBytes !== undefined && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes < 1)) {
+        throw new Error('Blink response byte limit is invalid.');
+      }
+      const url = this.buildUrl(path);
+      if (runPreflight) {
+        await withinRequestBudget(this.auth.ensureValidToken(), options);
+        checkRequestBudget(options);
+      }
+
+      const safeUrl = redactUrlForLogging(url);
+      const safePath = safeUrl.startsWith(this.baseUrl)
+        ? safeUrl.slice(this.baseUrl.length)
+        : '<redacted-path>';
+      const requestId = randomUUID();
+      const headers: Record<string, string> = {
+        ...buildDefaultHeaders(),
+        'Content-Type': 'application/json',
+        ...this.auth.getAuthHeaders(),
+      };
+
+      if (this.debug && attempt === 0) {
+        this.logDebug(`[${requestId}] ${method} ${safeUrl}`);
+        this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
+        if (body) {
+          this.logDebug(`[${requestId}] Request body:`, JSON.stringify(redactBody(body), null, 2));
+        }
+      } else if (this.debug) {
+        this.logDebug(`[${requestId}] ${method} ${safeUrl} (retry attempt ${attempt})`);
+      }
+
+      options.beforeDispatch?.(); checkRequestBudget(options);
+      const startTime = Date.now();
+      const timeoutMs = Math.max(1, Math.min(30_000, (options.deadline ?? startTime + 30_000) - startTime));
+      const timeoutSignal = globalThis.AbortSignal.timeout(timeoutMs);
+      const signal = options.signal ? globalThis.AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+      const requestBody = body ? JSON.stringify(body) : undefined;
+      let response: Awaited<ReturnType<typeof fetch>>;
+      try {
+        mayHaveDispatched = true;
+        response = await withinRequestBudget(fetch(url, {
+          method,
+          redirect: 'error',
+          headers,
+          body: requestBody,
+          signal,
+        }), options);
+      } catch (cause) {
+        // Only the explicit connection-establishment error proves no accepted operation.
+        // Diagnostic traversal also finds nested/aggregate codes, which are not such proof.
+        const transport = cause as { code?: unknown; cause?: { code?: unknown } } | null;
+        if (transport?.code === 'UND_ERR_CONNECT_TIMEOUT'
+          || (transport?.code === undefined && transport?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+          mayHaveDispatched = false;
+        }
+        checkRequestBudget(options);
+        const diagnostic = describeNetworkFailure(cause, url, startTime);
+        const error = new BlinkHttpError('Blink API network request failed or timed out.', 0, '', safeUrl, method,
+          undefined, undefined, 'network', diagnostic);
+        this.log.error(error.toLogString());
+        throw error;
+      }
+      const elapsed = Date.now() - startTime;
+
+      this.logDebug(`[${requestId}] Response status: ${response.status} (${elapsed}ms)`);
+
+      // Token expired or session invalid - refresh once and retry
+      if (options.retry !== false && (response.status === 401 || response.status === 403) && attempt < 1) {
+        this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
+        await response.body?.cancel().catch(() => undefined);
+        await withinRequestBudget(this.auth.refreshTokens(), options);
+        return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
+      }
+
+      // Observed provider 406 refusals can recover on the same read without
+      // changing routing or authentication. Retry once; never replay a mutation.
+      if (options.retry !== false && response.status === 406 && method === 'GET' && !retried406) {
+        await response.body?.cancel().catch(() => undefined);
+        await budgetedDelay(1000, options);
+        return this.request<T>(method, path, body, attempt, false, expectedErrorStatuses, options, true);
+      }
+
+      // Rate limited - exponential backoff
+      if (options.retry !== false && response.status === 429 && attempt < 3) {
+        const delay = 1000 * Math.pow(2, attempt);
+        this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
+        await response.body?.cancel().catch(() => undefined);
+        await budgetedDelay(delay, options);
+        return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
+      }
+
+      // Server error - linear backoff
+      if (options.retry !== false && response.status >= 500 && attempt < 2) {
+        const delay = 500 * (attempt + 1);
+        this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
+        await response.body?.cancel().catch(() => undefined);
+        await budgetedDelay(delay, options);
+        return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
+      }
+
+      if (!response.ok) {
+        const error = new BlinkHttpError(
+          `Blink API ${method} ${safePath} failed: ${response.status}`,
+          response.status,
+          '',
+          safeUrl,
+          method,
+        );
+
+        await response.body?.cancel().catch(() => undefined);
+        if (!expectedErrorStatuses.includes(response.status)) {
+          this.log.error(error.toLogString());
         }
         throw error;
       }
-      checkRequestBudget(options);
-    }
 
-    const safeUrl = redactUrlForLogging(url);
-    const safePath = safeUrl.startsWith(this.baseUrl)
-      ? safeUrl.slice(this.baseUrl.length)
-      : '<redacted-path>';
-    const requestId = randomUUID();
-    const headers: Record<string, string> = {
-      ...buildDefaultHeaders(),
-      'Content-Type': 'application/json',
-      ...this.auth.getAuthHeaders(),
-    };
-
-    if (this.debug && attempt === 0) {
-      this.logDebug(`[${requestId}] ${method} ${safeUrl}`);
-      this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
-      if (body) {
-        this.logDebug(`[${requestId}] Request body:`, JSON.stringify(redactBody(body), null, 2));
+      const bodyOptions = { ...options, maxBytes: options.maxResponseBytes,
+        deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal };
+      if (options.responseType === 'void') {
+        await readBoundedBody(response, { ...bodyOptions, kind: 'command' });
+        return undefined as T;
       }
-    } else if (this.debug) {
-      this.logDebug(`[${requestId}] ${method} ${safeUrl} (retry attempt ${attempt})`);
-    }
+      if (options.responseType === 'binary') return await readBoundedBody(response, { ...bodyOptions, kind: 'native-media' }) as T;
 
-    try { options.beforeDispatch?.(); checkRequestBudget(options); }
-    catch (error) {
-      if (error instanceof Error && Object.isExtensible(error)) {
+      let responseData: T;
+      try {
+        responseData = (await readBoundedJson(response, { ...bodyOptions, kind: options.responseKind ??
+          (/(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command') })) as T;
+      } catch {
+        checkRequestBudget(options);
+        const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,
+          undefined, undefined, 'response');
+        this.log.error(error.toLogString());
+        throw error;
+      }
+
+      if (this.debug) {
+        // Only log response body in debug mode (can be verbose)
+        this.logDebug(`[${requestId}] Response body:`, JSON.stringify(redactBody(responseData), null, 2).slice(0, 500) + '...');
+      }
+
+      return responseData;
+    } catch (error) {
+      // Preserve the original error while letting owned callers release an unstarted intent.
+      // A retry cannot establish that an earlier wire attempt was never accepted.
+      if (!mayHaveDispatched && attempt === 0 && error instanceof Error && Object.isExtensible(error)) {
         Object.defineProperty(error, 'dispatched', { value: false, configurable: true });
       }
       throw error;
     }
-    const startTime = Date.now();
-    const timeoutMs = Math.max(1, Math.min(30_000, (options.deadline ?? startTime + 30_000) - startTime));
-    const timeoutSignal = globalThis.AbortSignal.timeout(timeoutMs);
-    const signal = options.signal ? globalThis.AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-    let response: Awaited<ReturnType<typeof fetch>>;
-    try {
-      response = await withinRequestBudget(fetch(url, {
-        method,
-        redirect: 'error',
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-        signal,
-      }), options);
-    } catch (cause) {
-      checkRequestBudget(options);
-      const diagnostic = describeNetworkFailure(cause, url, startTime);
-      const error = new BlinkHttpError('Blink API network request failed or timed out.', 0, '', safeUrl, method,
-        undefined, undefined, 'network', diagnostic);
-      this.log.error(error.toLogString());
-      throw error;
-    }
-    const elapsed = Date.now() - startTime;
-
-    this.logDebug(`[${requestId}] Response status: ${response.status} (${elapsed}ms)`);
-
-    // Token expired or session invalid - refresh once and retry
-    if (options.retry !== false && (response.status === 401 || response.status === 403) && attempt < 1) {
-      this.logDebug(`[${requestId}] Authentication rejected (${response.status}), refreshing and retrying...`);
-      await response.body?.cancel().catch(() => undefined);
-      await withinRequestBudget(this.auth.refreshTokens(), options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
-    }
-
-    // Observed provider 406 refusals can recover on the same read without
-    // changing routing or authentication. Retry once; never replay a mutation.
-    if (options.retry !== false && response.status === 406 && method === 'GET' && !retried406) {
-      await response.body?.cancel().catch(() => undefined);
-      await budgetedDelay(1000, options);
-      return this.request<T>(method, path, body, attempt, false, expectedErrorStatuses, options, true);
-    }
-
-    // Rate limited - exponential backoff
-    if (options.retry !== false && response.status === 429 && attempt < 3) {
-      const delay = 1000 * Math.pow(2, attempt);
-      this.logDebug(`[${requestId}] Rate limited (429), waiting ${delay}ms before retry...`);
-      await response.body?.cancel().catch(() => undefined);
-      await budgetedDelay(delay, options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
-    }
-
-    // Server error - linear backoff
-    if (options.retry !== false && response.status >= 500 && attempt < 2) {
-      const delay = 500 * (attempt + 1);
-      this.logDebug(`[${requestId}] Server error (${response.status}), waiting ${delay}ms before retry...`);
-      await response.body?.cancel().catch(() => undefined);
-      await budgetedDelay(delay, options);
-      return this.request<T>(method, path, body, attempt + 1, false, expectedErrorStatuses, options, retried406);
-    }
-
-    if (!response.ok) {
-      const error = new BlinkHttpError(
-        `Blink API ${method} ${safePath} failed: ${response.status}`,
-        response.status,
-        '',
-        safeUrl,
-        method,
-      );
-
-      await response.body?.cancel().catch(() => undefined);
-      if (!expectedErrorStatuses.includes(response.status)) {
-        this.log.error(error.toLogString());
-      }
-      throw error;
-    }
-
-    const bodyOptions = { ...options, maxBytes: options.maxResponseBytes,
-      deadline: Math.min(options.deadline ?? Infinity, startTime + timeoutMs), signal };
-    if (options.responseType === 'void') {
-      await readBoundedBody(response, { ...bodyOptions, kind: 'command' });
-      return undefined as T;
-    }
-    if (options.responseType === 'binary') return await readBoundedBody(response, { ...bodyOptions, kind: 'native-media' }) as T;
-
-    let responseData: T;
-    try {
-      responseData = (await readBoundedJson(response, { ...bodyOptions, kind: options.responseKind ??
-        (/(?:\/homescreen|\/users\/(?:info|tier_info)|\/media(?:\?|$)|\/unwatched_media(?:\?|$))/.test(path) ? 'rest' : 'command') })) as T;
-    } catch {
-      checkRequestBudget(options);
-      const error = new BlinkHttpError('Blink API returned an unreadable JSON response.', response.status, '', safeUrl, method,
-        undefined, undefined, 'response');
-      this.log.error(error.toLogString());
-      throw error;
-    }
-
-    if (this.debug) {
-      // Only log response body in debug mode (can be verbose)
-      this.logDebug(`[${requestId}] Response body:`, JSON.stringify(redactBody(responseData), null, 2).slice(0, 500) + '...');
-    }
-
-    return responseData;
   }
 
   /**
