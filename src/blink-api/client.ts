@@ -1,4 +1,5 @@
-import { isBlinkVideoQuality, requireRemoteId, validateCameraTemperature, validateHomescreen, validateVideoQualityState } from './domain-validation';
+import { isBlinkVideoQuality, requireRemoteId, supportsEarlyNotificationControl, validateCameraTemperature,
+  validateEarlyNotificationState, validateHomescreen, validateVideoQualityState } from './domain-validation';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
@@ -66,6 +67,20 @@ export interface BlinkCaptureResult extends BlinkCommandResponse {
   thumbnail?: string;
 }
 
+export interface BlinkEarlyNotificationState {
+  supported: boolean;
+  compatible?: boolean;
+  current?: boolean;
+  changed: boolean;
+}
+
+export interface BlinkEarlyNotificationOptions extends RequestOptions {
+  /** Persist the original value before the owned mutation can be dispatched. */
+  beforeChange?: (current: boolean) => Promise<void>;
+  /** A restoration must leave a subsequently changed vendor value alone. */
+  expectedCurrent?: boolean;
+}
+
 interface ConflictResolution<T> { resolved: boolean; value?: T }
 
 export class BlinkOperationNotStartedError extends Error {
@@ -92,7 +107,7 @@ export interface BlinkStateCommandOwnership {
   accountId: number;
   networkId: number;
   deviceId?: number;
-  kind: 'arm' | 'disarm' | 'motion' | 'capture' | 'quality';
+  kind: 'arm' | 'disarm' | 'motion' | 'capture' | 'quality' | 'early-notification';
   phase: 'starting' | 'accepted' | 'unresolved';
   commandId?: number;
   /** Total wire status reads, retained across timeouts and restart. */
@@ -182,7 +197,7 @@ export class BlinkApi {
 
   /** Serialize remote capture and mutations, including command completion. */
   private queueStateCommand<T>(
-    label: 'Motion' | 'Network' | 'Capture' | 'Quality' | 'NativeStorage' | 'LiveView' | 'Retirement' | 'CommandUpdate',
+    label: 'Motion' | 'Network' | 'Capture' | 'Quality' | 'EarlyNotification' | 'NativeStorage' | 'LiveView' | 'Retirement' | 'CommandUpdate',
     send: (options: RequestOptions) => Promise<T>,
     retryDelays: number[],
     conflictResolution?: (options: RequestOptions) => Promise<ConflictResolution<T>>,
@@ -369,7 +384,7 @@ export class BlinkApi {
     const archived = options.restoredState?.abandoned ?? [];
     if (!Array.isArray(archived) || archived.length > 32 || archived.some(owner => !owner || typeof owner !== 'object'
       || typeof owner.reservationId !== 'string' || !owner.reservationId || owner.reservationId.length > 256
-      || !['liveview', 'arm', 'disarm', 'motion', 'capture', 'quality', 'catalog', 'clip'].includes(owner.kind)
+      || !['liveview', 'arm', 'disarm', 'motion', 'capture', 'quality', 'early-notification', 'catalog', 'clip'].includes(owner.kind)
       || !['legacy-owner', 'lease-expired'].includes(owner.reason) || !Number.isSafeInteger(owner.abandonedAt)
       || owner.abandonedAt < 0 || !Number.isSafeInteger(owner.accountId) || owner.accountId <= 0
       || !Number.isSafeInteger(owner.networkId) || owner.networkId <= 0
@@ -487,7 +502,7 @@ export class BlinkApi {
 
   private validateStateCommandOwner(owner: BlinkStateCommandOwnership): void {
     if (!owner || typeof owner !== 'object' || typeof owner.reservationId !== 'string' || !owner.reservationId
-      || owner.reservationId.length > 256 || !['arm', 'disarm', 'motion', 'capture', 'quality'].includes(owner.kind)
+      || owner.reservationId.length > 256 || !['arm', 'disarm', 'motion', 'capture', 'quality', 'early-notification'].includes(owner.kind)
       || !['starting', 'accepted', 'unresolved'].includes(owner.phase)
       || !Number.isSafeInteger(owner.statusReads) || owner.statusReads < 0 || owner.statusReads > 60) {
       throw new Error('Invalid state command ownership.');
@@ -1321,6 +1336,50 @@ export class BlinkApi {
   async getDeviceVideoQuality(type: BlinkCameraKind, networkId: number, deviceId: number,
     options: RequestOptions = {}): Promise<BlinkVideoQualityState> {
     return validateVideoQualityState(await this.getDeviceConfig(type, networkId, deviceId, options), type);
+  }
+
+  private async readDeviceEarlyNotification(type: BlinkCameraKind, networkId: number, deviceId: number,
+    rawType: unknown, options: RequestOptions): Promise<BlinkEarlyNotificationState> {
+    if (!supportsEarlyNotificationControl(rawType)) return { supported: false, changed: false };
+    const observed = validateEarlyNotificationState(await this.getDeviceConfig(type, networkId, deviceId, options), type);
+    return { supported: observed.compatible, compatible: observed.compatible, changed: false,
+      ...(observed.compatible ? { current: observed.current } : {}) };
+  }
+
+  /** Read fresh vendor state in the same account queue as mutations. */
+  async getDeviceEarlyNotification(type: BlinkCameraKind, networkId: number, deviceId: number,
+    rawType: unknown, options: RequestOptions = {}): Promise<BlinkEarlyNotificationState> {
+    requireRemoteId(networkId); requireRemoteId(deviceId);
+    this.deviceConfigPath(type, 1, networkId, deviceId);
+    return this.queueStateCommand('EarlyNotification', execution =>
+      this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution), [], undefined, options);
+  }
+
+  /** One owned config mutation; a durable original can be committed before its POST. */
+  async setDeviceEarlyNotification(type: BlinkCameraKind, networkId: number, deviceId: number,
+    rawType: unknown, enabled: boolean, options: BlinkEarlyNotificationOptions = {}): Promise<BlinkEarlyNotificationState> {
+    requireRemoteId(networkId); requireRemoteId(deviceId);
+    this.deviceConfigPath(type, 1, networkId, deviceId);
+    if (typeof enabled !== 'boolean' || (options.expectedCurrent !== undefined && typeof options.expectedCurrent !== 'boolean')) {
+      throw new Error('Invalid Blink Early Notification setting.');
+    }
+    const { beforeChange, expectedCurrent, ...requestOptions } = options;
+    return this.queueStateCommand('EarlyNotification', async execution => {
+      const current = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
+      if (!current.supported || typeof current.current !== 'boolean' || current.current === enabled
+        || (expectedCurrent !== undefined && current.current !== expectedCurrent)) return current;
+      await beforeChange?.(current.current);
+      const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      checkRequestBudget(execution);
+      await this.ownedStateCommand('early-notification', accountId, networkId, deviceId,
+        beforeDispatch => this.sharedHttp.post<BlinkCommandResponse>(this.deviceConfigPath(type, accountId, networkId, deviceId),
+          { early_notification: enabled }, [409], { ...execution, retry: false, beforeDispatch }), execution);
+      const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
+      if (!observed.supported || observed.current !== enabled) {
+        throw new Error('Blink Early Notification was not confirmed after the command.');
+      }
+      return { ...observed, changed: true };
+    }, [], undefined, requestOptions);
   }
 
   /** Auto preserves vendor state. Explicit capture quality changes also affect Blink recordings. */

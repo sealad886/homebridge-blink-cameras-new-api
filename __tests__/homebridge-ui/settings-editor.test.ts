@@ -43,6 +43,10 @@ function mount(config: Record<string, unknown>, validate?: (payload: unknown) =>
   const editor = context.window.BlinkSettingsUI.mount(homebridge, schema, [{ platform: 'BlinkCameras', name: 'Blink', ...config }]);
   return { editor, homebridge, elements, schema };
 }
+function earlyNotificationControl(parent: Element): Element {
+  const label = parent.querySelectorAll('label').find(item => item.textContent === 'Disable Early Notification')!;
+  return parent.querySelectorAll('select').find(input => input.id === label.htmlFor)!;
+}
 
 it('identifies every blocking field and stages only after canonical validation succeeds', async () => {
   const validator = new SettingsValidator(() => undefined);
@@ -84,6 +88,82 @@ it('renders a valid zero-selection recording picker without adding a blank selec
   editor.draft.set('pollInterval', 120); await editor.draft.flush();
   expect(homebridge.updatePluginConfig).toHaveBeenLastCalledWith([expect.objectContaining({ unrelated: 'kept', pollInterval: 120 })]);
   expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('deviceSettingOverrides');
+});
+
+it('allows plugin Early Notification management to be on, off, or physically unset', async () => {
+  const { editor, homebridge, elements } = mount({ extension: true });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  const control = earlyNotificationControl(elements.get('sectionFields')!);
+  expect(control.value).toBe('inherit');
+  expect(editor.draft.config).not.toHaveProperty('disableEarlyNotification');
+  for (const [choice, value] of [['yes', true], ['no', false]] as const) {
+    control.value = choice; control.handlers.change(); await editor.draft.flush();
+    expect(editor.draft.config.disableEarlyNotification).toBe(value);
+  }
+  control.value = 'inherit'; control.handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config).not.toHaveProperty('disableEarlyNotification');
+  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('disableEarlyNotification');
+  expect(editor.draft.config.extension).toBe(true);
+  expect(editor.draft.config).not.toHaveProperty('syncModuleSettingOverrides');
+  expect(editor.draft.config).not.toHaveProperty('deviceSettingOverrides');
+});
+
+it.each(['camera', 'module'])('edits and unsets %s Early Notification without losing other settings or parent choices', async level => {
+  const { editor, elements } = mount({ disableEarlyNotification: true,
+    syncModuleFeedLimits: [{ syncModuleId: '100', maxFeeds: 1 }],
+    syncModuleSettingOverrides: [{ syncModuleId: '100', vendorExtension: 8 }, { syncModuleId: 'missing', disableEarlyNotification: false }],
+    deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true, vendorExtension: 7 }, { deviceIdentifier: 'missing', homeKitSecureVideo: true }] });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
+  const fields = elements.get('sectionFields')!;
+  const card = fields.querySelectorAll('details').find(item => item.querySelectorAll('p').some(text => text.textContent === 'camera:1'))!;
+  const control = level === 'camera' ? earlyNotificationControl(card)
+    : fields.querySelectorAll('select').find(input => input.dataset.setting === 'syncModuleSettingOverrides')!;
+  const key = level === 'camera' ? 'deviceSettingOverrides' : 'syncModuleSettingOverrides';
+  const selector = level === 'camera' ? 'deviceIdentifier' : 'syncModuleId';
+  const id = level === 'camera' ? 'camera:1' : '100';
+  expect(control.value).toBe('inherit');
+  for (const [choice, value] of [['yes', true], ['no', false]] as const) {
+    control.value = choice; control.handlers.change(); await editor.draft.flush();
+    expect(editor.draft.config[key].find((row: Record<string, unknown>) => row[selector] === id).disableEarlyNotification).toBe(value);
+    expect(editor.draft.config.disableEarlyNotification).toBe(true);
+  }
+  control.value = 'inherit'; control.handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config[key].find((row: Record<string, unknown>) => row[selector] === id)).not.toHaveProperty('disableEarlyNotification');
+  expect(editor.draft.config.deviceSettingOverrides).toHaveLength(2);
+  expect(editor.draft.config.deviceSettingOverrides).toEqual(expect.arrayContaining([{ deviceIdentifier: 'missing', homeKitSecureVideo: true }, { deviceIdentifier: 'camera:1', homeKitSecureVideo: true, vendorExtension: 7 }]));
+  expect(editor.draft.config.syncModuleFeedLimits).toEqual([{ syncModuleId: '100', maxFeeds: 1 }]);
+  expect(editor.draft.config.syncModuleSettingOverrides).toEqual(expect.arrayContaining([{ syncModuleId: '100', vendorExtension: 8 }, { syncModuleId: 'missing', disableEarlyNotification: false }]));
+});
+
+it.each(['camera', 'module'])('removes a selector-only %s override when its Early Notification choice is unset', async level => {
+  const { editor, elements } = mount({ disableEarlyNotification: true,
+    deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: false }],
+    syncModuleSettingOverrides: [{ syncModuleId: '100', disableEarlyNotification: false }] });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
+  const fields = elements.get('sectionFields')!;
+  const card = fields.querySelectorAll('details').find(item => item.querySelectorAll('p').some(text => text.textContent === 'camera:1'))!;
+  const control = level === 'camera' ? earlyNotificationControl(card)
+    : fields.querySelectorAll('select').find(input => input.dataset.setting === 'syncModuleSettingOverrides')!;
+  control.value = 'inherit'; control.handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config[level === 'camera' ? 'deviceSettingOverrides' : 'syncModuleSettingOverrides']).toEqual([]);
+  expect(editor.draft.config.disableEarlyNotification).toBe(true);
+});
+
+it('preserves and allows removal of unavailable module settings when discovery fails', async () => {
+  const { editor, homebridge, elements } = mount({ syncModuleSettingOverrides: [{ syncModuleId: 'missing', disableEarlyNotification: false }],
+    syncModuleFeedLimits: [{ syncModuleId: 'missing', maxFeeds: 2 }] });
+  await editor.draft.flush();
+  homebridge.request.mockImplementation(async (path, payload?: any) => {
+    if (path === '/settings/inventory') throw new Error('synthetic unavailable');
+    return { revision: payload.revision, valid: true, errors: [], warnings: [] };
+  });
+  editor.setAccountReady(true); await tick(); editor.showSection(1);
+  const fields = elements.get('sectionFields')!;
+  const saved = fields.querySelectorAll('details').find(item => item.querySelectorAll('span').some(node => node.textContent === 'missing'))!;
+  saved.querySelectorAll('button').find(button => button.textContent === 'Remove selection')!.handlers.click();
+  await editor.draft.flush();
+  expect(editor.draft.config.syncModuleSettingOverrides).toEqual([]);
+  expect(editor.draft.config.syncModuleFeedLimits).toEqual([{ syncModuleId: 'missing', maxFeeds: 2 }]);
 });
 
 it('keeps excluded cameras discoverable and re-includes one while preserving unavailable exclusions', async () => {

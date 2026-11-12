@@ -89,6 +89,32 @@ describe('platform native recording and ordinary command ownership', () => {
     await expect(retryControl(platform).onSetHandler!(true)).resolves.toBeUndefined();
   }
 
+  it('binds raw model and unique module policy, replacing only when the effective camera choice changes', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true, type: 'catalina' });
+    const setting = jest.spyOn(client, 'setDeviceEarlyNotification').mockResolvedValue({ supported: true, compatible: true, current: false, changed: false });
+    const deviceSettingOverrides: Array<{ deviceIdentifier: string; disableEarlyNotification?: boolean }> = [
+      { deviceIdentifier: 'camera:40', disableEarlyNotification: false },
+    ];
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', disableEarlyNotification: false,
+      syncModuleSettingOverrides: [{ syncModuleId: '30', disableEarlyNotification: true }], deviceSettingOverrides });
+    expect(createRuntime.mock.calls[0][0].devices[0]).toEqual(expect.objectContaining({ rawType: 'catalina',
+      settings: expect.objectContaining({ disableEarlyNotification: false }) }));
+    expect(setting).not.toHaveBeenCalled();
+    delete deviceSettingOverrides[0].disableEarlyNotification;
+    await refresh(platform, homescreen);
+    expect(createRuntime).toHaveBeenCalledTimes(2);
+    expect(createRuntime.mock.calls[1][0].devices[0].settings.disableEarlyNotification).toBe(true);
+    expect(setting).toHaveBeenCalledWith('camera', 20, 40, 'catalina', false, expect.any(Object));
+    // Removing the now-empty override keeps the same inherited ownership.
+    deviceSettingOverrides.length = 0; await refresh(platform, homescreen);
+    expect(createRuntime).toHaveBeenCalledTimes(2);
+    const changedModel = globalThis.structuredClone(homescreen); changedModel.cameras[0].type = 'unsupported-model';
+    await refresh(platform, changedModel);
+    expect(createRuntime).toHaveBeenCalledTimes(3);
+    expect(createRuntime.mock.calls[2][0].devices[0].rawType).toBe('unsupported-model');
+  });
+
   it('retains the public receiver retry when it joins an ordinary in-flight status poll', async () => {
     const homescreen = emptyHomescreen();
     homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });

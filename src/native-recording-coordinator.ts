@@ -16,6 +16,8 @@ export interface NativeRecordingJob {
   eligibleAt: number;
   attempts: number;
   cameraGeneration: number;
+  /** One opportunistic early read falls back to the ordinary recording delay. */
+  fallbackAt?: number;
   cancelled?: boolean;
 }
 
@@ -38,10 +40,12 @@ export interface NativeRecordingAcquisition {
   expiresAt: number;
   moduleId: string;
   observation: NativeRecordingObservation;
-  /** One-based; maxRetries=10 permits eleven attempts in total. */
+  /** One-based availability attempt; an optional early search does not spend the ordinary retry budget. */
   attempt: number;
   /** Combine this fence with current HomeKit permission before local delivery. */
   cameraGeneration: number;
+  /** Ordinary eligibility after the optional exact-only early lookup. */
+  fallbackAt?: number;
 }
 
 export type NativeRecordingTerminalResult =
@@ -79,7 +83,7 @@ export interface NativeRecordingCoordinatorOptions {
   maxRememberedEvents?: number;
   maxJobAgeMs?: number;
   /** Local readiness/cooldown only; must not send provider requests. */
-  earliestAcquisitionAt?: (observation: NativeRecordingObservation) => number;
+  earliestAcquisitionAt?: (observation: NativeRecordingObservation, fallbackAt?: number) => number;
   /** Local receipt cleanup only; no provider requests or retries. */
   onOperationAbandoned?: () => Promise<void>;
 }
@@ -128,12 +132,15 @@ export class NativeRecordingCoordinator {
     this.schedule();
   }
 
-  async observe(event: NativeRecordingObservation, capturedGeneration?: number): Promise<NativeRecordingObservationResult> {
+  async observe(event: NativeRecordingObservation, capturedGeneration?: number,
+    timing?: { initialDelayMs: number; fallbackAt?: number }): Promise<NativeRecordingObservationResult> {
     if (this.stopped) {
       return 'stopped';
     }
     this.assertStorage();
-    if (!this.validObservation(event)) {
+    const initialDelayMs = timing?.initialDelayMs ?? this.initialDelayMs;
+    if (!this.validObservation(event) || !Number.isSafeInteger(initialDelayMs) || initialDelayMs < 0 || initialDelayMs > 86_400_000
+      || (timing?.fallbackAt !== undefined && (!Number.isSafeInteger(timing.fallbackAt) || timing.fallbackAt < event.occurredAt))) {
       return 'invalid';
     }
     if (!this.moduleIds.has(event.moduleId)) {
@@ -150,7 +157,8 @@ export class NativeRecordingCoordinator {
     if (this.queue.length >= this.maxQueuedJobs) {
       return 'capacity';
     }
-    this.queue.push({ observation: cloneObservation(event), eligibleAt: Math.max(Date.now(), event.occurredAt + this.initialDelayMs), attempts: 0, cameraGeneration });
+    this.queue.push({ observation: cloneObservation(event), eligibleAt: Math.max(Date.now(), event.occurredAt + initialDelayMs), attempts: 0, cameraGeneration,
+      ...(timing?.fallbackAt !== undefined ? { fallbackAt: timing.fallbackAt } : {}) });
     this.remember(key);
     await this.persist();
     this.schedule();
@@ -335,6 +343,7 @@ export class NativeRecordingCoordinator {
         operationId: operation.operationId, expiresAt: this.operationExpiry(), moduleId: job.observation.moduleId,
         observation: cloneObservation(job.observation), attempt: job.attempts,
         cameraGeneration: job.cameraGeneration,
+        ...(job.fallbackAt === undefined ? {} : { fallbackAt: job.fallbackAt }),
       }, controller.signal);
       if (!this.stopped && !this.storageError && this.operation === operation) {
         if (result.status === 'unresolved') {
@@ -371,6 +380,11 @@ export class NativeRecordingCoordinator {
     if (job.cancelled) {
       // Cancellation was already reported; only remote ownership remained.
       this.queue.shift();
+    } else if (result.status === 'missing' && job.fallbackAt !== undefined && job.eligibleAt < job.fallbackAt) {
+      this.queue.shift();
+      job.eligibleAt = job.fallbackAt;
+      job.attempts--; // The optional early lookup does not spend the ordinary availability retry budget.
+      this.queue.push(job);
     } else if (result.status === 'missing' && job.attempts <= this.maxRetries) {
       this.queue.shift();
       job.eligibleAt = Date.now() + this.retryIntervalMs;
@@ -443,6 +457,7 @@ export class NativeRecordingCoordinator {
       if (!this.validObservation(job.observation) || !this.moduleIds.has(job.observation.moduleId)
         || !Number.isFinite(job.eligibleAt) || !Number.isInteger(job.attempts) || job.attempts < 0 || job.attempts > 101
         || !Number.isSafeInteger(job.cameraGeneration) || job.cameraGeneration < 0
+        || (job.fallbackAt !== undefined && (!Number.isSafeInteger(job.fallbackAt) || job.fallbackAt < job.observation.occurredAt))
         || (job.cancelled !== undefined && typeof job.cancelled !== 'boolean')
         || restored.has(eventKey(job.observation))) {
         throw new Error('Invalid native recording job');
@@ -476,7 +491,7 @@ export class NativeRecordingCoordinator {
   }
 
   private eligibleAt(job: NativeRecordingJob): number {
-    const local = this.options.earliestAcquisitionAt?.(cloneObservation(job.observation)) ?? 0;
+    const local = this.options.earliestAcquisitionAt?.(cloneObservation(job.observation), job.fallbackAt) ?? 0;
     if (!Number.isSafeInteger(local) || local < 0) throw new Error('Invalid local acquisition readiness');
     return Math.max(job.eligibleAt, local);
   }

@@ -100,10 +100,12 @@ Add a platform entry to your Homebridge `config.json`:
 | `pollInterval` | No | `60` | Seconds between state polls (min 15) |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `exposeMotionDetected` | No | `true` | Publish motion sensors from Blink push events; per-camera overrides apply |
+| `disableEarlyNotification` | No | Unset (`false`) | Manage supported cameras' Blink Early Notification setting for prompt HSV clip acquisition; Sync Module and device overrides apply |
 | `nativeRecording` | No | See below | Bounded timing, matching and local storage policy for optional HomeKit recording |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
 | `syncModuleFeedLimits` | No | `[]` | Optional live-view `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. These do not govern native clip acquisition. |
+| `syncModuleSettingOverrides` | No | `[]` | Optional `{ syncModuleId, disableEarlyNotification }` entries; omit the boolean to inherit the plugin setting |
 | `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
 | `enableAudio` | No | `true` | Allow camera audio for live viewing and HSV; Home recording-audio permission must also allow it |
@@ -117,7 +119,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
-| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected` and `homeKitSecureVideo`; see below and [input quality](streaming.md#input-and-output-quality) |
+| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected`, `homeKitSecureVideo` and `disableEarlyNotification`; see below and [input quality](streaming.md#input-and-output-quality) |
 
 For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration)
 before restarting; retired CLI and AAC-ELD settings are rejected. Upgrading from
@@ -173,8 +175,8 @@ For example:
 Use the actual camera identifier, serial or exact Blink name. Qualified
 `camera:123`, `owl:123` and `doorbell:123` identifiers disambiguate device types.
 The public sensor is named `<camera display name> Motion Detected`, preserving
-its existing HomeKit service identity. Public motion reports promptly. A separate
-internal recording trigger fires only after the finite local video is prepared,
+its existing HomeKit service identity. Public motion reports when the push arrives.
+A separate internal recording trigger fires only after the finite local video is prepared,
 so Home does not wait for the Blink download on an open recording connection.
 
 `homeKitSecureVideo` defaults to `false`. It needs a supported camera with a
@@ -184,17 +186,67 @@ drive holding daily cloud backups does not establish this capability. Enable
 Apple Home. Changing the plugin setting never arms Blink or enables camera
 motion as a side effect.
 
-Each motion observation creates an independently delayed FIFO job. Matching uses
+Each motion observation creates an independently scheduled FIFO job. Matching uses
 the actual catalog's network, native device name and offset-bearing `created_at`
 timestamp; display aliases and invented URL filenames are not camera identity.
 The first attempt normally occurs after 60 seconds. Ten retries means at most
-11 attempts, subject to maximum job age and remote-command ownership.
+11 ordinary attempts, subject to maximum job age and remote-command ownership.
+Early Notification management can add one opportunistic early attempt.
+
+### Early Notification and clip scheduling
+
+Set `disableEarlyNotification` to `true` to turn off Blink's
+[Early Notification](https://support.blinkforhome.com/en_US/using-your-system/understanding-motion-detection)
+on supported cameras. Blink then sends motion notifications after recording,
+rather than while recording is still in progress. This also changes when the
+public HomeKit motion sensor reports motion. Once the plugin confirms the camera
+setting is off, new motion events can make their first clip attempt immediately.
+Unsupported cameras, unsuccessful setting changes and events from before that
+confirmation retain the configured `initialDelaySeconds`.
+
+The setting inherits from plugin to Sync Module to device; the most specific
+explicit boolean wins. A module override applies only to cameras with a unique
+discovered association to that module. Select the unset or inherited choice in
+the editor to remove a value. **Off** writes `false` and masks an inherited `true`.
+
+```json
+{
+  "disableEarlyNotification": true,
+  "syncModuleSettingOverrides": [
+    { "syncModuleId": "100", "disableEarlyNotification": false }
+  ],
+  "deviceSettingOverrides": [
+    { "deviceIdentifier": "camera:123", "disableEarlyNotification": true }
+  ]
+}
+```
+
+The plugin saves the camera's original value privately before changing it. When
+the effective setting becomes false, it restores that original only if the
+camera still has the value the plugin applied. A manual change in Blink is
+preserved. Removing a device override that still inherits `true` keeps management
+active. Ordinary restarts keep both management and the saved original; stopping
+Homebridge does not toggle camera settings. A camera already off needs no change
+or restoration record. Save and restart the child bridge to apply policy changes.
+
+Immediate eligibility keeps the same FIFO, missing-clip retries, command admission
+and module catalog cooldown. A notification does not identify a USB clip or prove
+that camera-to-module transfer has completed. Download and replay still require a
+matching catalog entry; no setting checks are added to each motion event. The
+opportunistic early attempt requires an exact provider-timestamp match. If none
+exists, the job waits until its ordinary initial-delay time before using the
+configured matching tolerance and availability retries. That fallback requires a
+catalog prepared at or after the ordinary eligibility time, subject to module
+cooldown. This avoids selecting a nearby older clip early without assuming that
+Blink's notification and clip timestamps always describe the same instant.
+
+### Queue timing and storage
 
 | `nativeRecording` field | Default | Allowed values / meaning |
 | --- | --- | --- |
-| `initialDelaySeconds` | `60` | Integer 0–3600; initial motion-to-acquisition delay |
+| `initialDelaySeconds` | `60` | Integer 0–3600; initial motion-to-acquisition delay, also the fallback delay for confirmed Early Notification management |
 | `retryIntervalSeconds` | `5` | Integer 1–300; local missing-clip retry delay |
-| `maxRetries` | `10` | Integer 0–100; retries after the first attempt |
+| `maxRetries` | `10` | Integer 0–100; retries after the first ordinary attempt |
 | `matchToleranceSeconds` | `15` | Integer 0–300; maximum timestamp distance for an unambiguous match |
 | `catalogRefreshSeconds` | `60` | Integer 60–3600; minimum spacing between new catalog preparations for a module |
 | `maxQueuedJobs` | `128` | Integer 1–1024; bounded event backlog |

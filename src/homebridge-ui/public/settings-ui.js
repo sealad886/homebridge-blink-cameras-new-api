@@ -91,13 +91,20 @@
       input.setAttribute('aria-describedby', description.id);
       row.append(description); parent.append(row); return input;
     }
+    function optionalBoolean(key, parent, { property, value, change, inherit = 'Use platform setting', yes = 'On', no = 'Off' }) {
+      return scalar(key, parent, { property: { ...property, type: 'string', enum: ['inherit', 'yes', 'no'], enumNames: [inherit, yes, no] },
+        value: value === undefined ? 'inherit' : value ? 'yes' : 'no',
+        change: next => change(next === 'inherit' ? undefined : next === 'yes') });
+    }
     function unresolved(parent, key, objectKey) {
       const networks = key === 'excludedNetworks';
+      const modules = objectKey === 'syncModuleId';
       const entries = values(key).filter(value => networks
         ? !(inventory?.networks || []).some(network => value === String(network.id) || value === network.name)
-        : resolveSelector(objectKey ? value[objectKey] : value, cameras()).length !== 1);
+        : modules ? !(inventory?.syncModules || []).some(module => module.id === value[objectKey])
+          : resolveSelector(objectKey ? value[objectKey] : value, cameras()).length !== 1);
       if (!entries.length) return;
-      const details = el('details', undefined, 'blink-details'); details.append(el('summary', networks ? 'Unavailable saved Blink systems' : 'Unresolved saved camera selections'));
+      const details = el('details', undefined, 'blink-details'); details.append(el('summary', networks ? 'Unavailable saved Blink systems' : modules ? 'Unavailable saved Sync Module settings' : 'Unresolved saved camera selections'));
       details.append(el('p', 'These values are preserved. Missing or ambiguous selections are not silently removed.', 'blink-help'));
       entries.forEach(value => {
         const row = el('div', undefined, 'blink-unresolved'); row.append(el('span', String(objectKey ? value[objectKey] : value)));
@@ -114,11 +121,12 @@
       const button = el('button', inventory ? 'Refresh cameras' : 'Discover cameras', 'btn btn-sm btn-outline-secondary');
       button.type = 'button'; button.disabled = !accountReady || draft.state.accountAction; button.addEventListener('click', refreshInventory); row.append(button); parent.append(row);
     }
-    function overrideRecord(key, camera) { return values(key).find(item => match(item.deviceIdentifier, camera)); }
-    function changeOverride(key, camera, field, value) {
-      const existing = overrideRecord(key, camera);
-      const next = values(key).filter(item => !match(item.deviceIdentifier, camera));
-      const record = { ...(existing || {}), deviceIdentifier: camera.key };
+    function overrideMatches(record, target, selector) { return selector === 'deviceIdentifier' ? match(record[selector], target) : record[selector] === target.id; }
+    function overrideRecord(key, target, selector = 'deviceIdentifier') { return values(key).find(item => overrideMatches(item, target, selector)); }
+    function changeOverride(key, target, field, value, selector = 'deviceIdentifier') {
+      const existing = overrideRecord(key, target, selector);
+      const next = values(key).filter(item => !overrideMatches(item, target, selector));
+      const record = { ...(existing || {}), [selector]: selector === 'deviceIdentifier' ? target.key : target.id };
       if (value === undefined || value === '') delete record[field]; else record[field] = value;
       if (Object.keys(record).length > 1) next.push(record);
       write(key, next);
@@ -152,16 +160,16 @@
         change: value => changeOverride('deviceNameOverrides', camera, 'customName', value) });
       const setting = overrideRecord('deviceSettingOverrides', camera);
       const definitions = properties.deviceSettingOverrides.items.properties;
-      scalar('deviceSettingOverrides', card, { property: { title: 'Motion Detected in Home', type: 'string', enum: ['inherit', 'yes', 'no'], enumNames: ['Use platform setting', 'Show', 'Hide'] },
-        value: setting?.exposeMotionDetected === undefined ? 'inherit' : setting.exposeMotionDetected ? 'yes' : 'no',
-        change: value => changeOverride('deviceSettingOverrides', camera, 'exposeMotionDetected', value === 'inherit' ? undefined : value === 'yes') });
+      optionalBoolean('deviceSettingOverrides', card, { property: { title: 'Motion Detected in Home' }, value: setting?.exposeMotionDetected, yes: 'Show', no: 'Hide',
+        change: value => changeOverride('deviceSettingOverrides', camera, 'exposeMotionDetected', value) });
       scalar('deviceSettingOverrides', card, { property: definitions.homeKitSecureVideo, value: setting?.homeKitSecureVideo,
         change: value => changeOverride('deviceSettingOverrides', camera, 'homeKitSecureVideo', value) });
       scalar('deviceSettingOverrides', card, { property: definitions.inputQuality, value: setting?.inputQuality,
         change: value => changeOverride('deviceSettingOverrides', camera, 'inputQuality', value) });
-      scalar('deviceSettingOverrides', card, { property: { title: 'Temperature in Home', type: 'string', enum: ['inherit', 'yes', 'no'], enumNames: ['Use platform setting', 'Show', 'Hide'] },
-        value: setting?.exposeTemperature === undefined ? 'inherit' : setting.exposeTemperature ? 'yes' : 'no',
-        change: value => changeOverride('deviceSettingOverrides', camera, 'exposeTemperature', value === 'inherit' ? undefined : value === 'yes') });
+      optionalBoolean('deviceSettingOverrides', card, { property: definitions.disableEarlyNotification, value: setting?.disableEarlyNotification, inherit: 'Use Sync Module or plugin setting',
+        change: value => changeOverride('deviceSettingOverrides', camera, 'disableEarlyNotification', value) });
+      optionalBoolean('deviceSettingOverrides', card, { property: { title: 'Temperature in Home' }, value: setting?.exposeTemperature, yes: 'Show', no: 'Hide',
+        change: value => changeOverride('deviceSettingOverrides', camera, 'exposeTemperature', value) });
       scalar('deviceSettingOverrides', card, { property: { ...definitions.motionTimeout, description: 'Leave blank to use the platform motion timeout.' }, value: setting?.motionTimeout,
         change: value => changeOverride('deviceSettingOverrides', camera, 'motionTimeout', value) });
       parent.append(card);
@@ -170,7 +178,10 @@
       parent.append(el('p', 'Offer completed Blink USB motion clips to HomeKit Secure Video. Apple Home manages recording permission, audio and iCloud retention.'));
       const checklist = el('ol', undefined, 'blink-checklist');
       ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home, allow Stream & Allow Recording and choose recording-audio permission.', 'Keep native Blink motion recording enabled and the associated Sync Module USB storage available.'].forEach(text => checklist.append(el('li', text)));
-      parent.append(checklist, el('p', 'Motion notifications schedule a delayed clip check. No continuous camera feed or idle storage preparation is started. Home receives each saved clip after it is downloaded and prepared, so its timeline time can differ from native capture time.', 'blink-help'));
+      parent.append(checklist, el('p', 'Motion notifications schedule a clip check using the timing below. No continuous camera feed or idle storage preparation is started. Home receives each saved clip after it is downloaded and prepared, so its timeline time can differ from native capture time.', 'blink-help'));
+      optionalBoolean('disableEarlyNotification', parent, { property: properties.disableEarlyNotification, value: draft.config.disableEarlyNotification, inherit: 'Not set (normal delay)',
+        change: value => write('disableEarlyNotification', value) });
+      parent.append(el('p', 'Camera choices override Sync Module choices, which override this plugin choice. When management ends for a camera, its saved original Early Notification setting is restored if it still has the plugin-applied value. Restarting the child bridge keeps management active.', 'blink-help'));
       inventoryTools(parent);
       if (inventory) {
         cameras().forEach(camera => {
@@ -195,11 +206,11 @@
       });
       parent.append(timing);
       const privacy = el('details', undefined, 'blink-details'); privacy.append(el('summary', 'Motion and recording privacy'));
-      privacy.append(el('p', 'Showing a Motion Detected sensor and offering clips to HomeKit are separate choices. Hiding the sensor does not disable recording. Turn recording or the camera off in Apple Home to cancel pending replay. This plugin does not arm Blink or change its motion settings to make a clip. Live viewing is independent.'));
+      privacy.append(el('p', 'Showing a Motion Detected sensor and offering clips to HomeKit are separate choices. Hiding the sensor does not disable recording. Turn recording or the camera off in Apple Home to cancel pending replay. Recording does not arm Blink or enable motion to create a clip. Optional Early Notification management changes notification timing on supported cameras. Live viewing is independent.'));
       parent.append(privacy);
     }
     function renderModules(parent) {
-      const details = el('details', undefined, 'blink-details'); details.append(el('summary', 'Sync Module live-view feed limits'));
+      const details = el('details', undefined, 'blink-details'); details.append(el('summary', 'Sync Module settings and live-view feed limits'));
       details.append(el('p', 'Limits use a module’s Blink-system association, not a proven physical video path. Each actual module defaults to its included associated camera count. Leave blank to use that default.', 'blink-help'));
       const modules = inventory?.syncModules || [];
       modules.forEach(module => {
@@ -207,6 +218,9 @@
         const ambiguous = cameras().some(camera => camera.moduleAssociation.state === 'ambiguous' && camera.moduleAssociation.candidateIds.includes(module.id));
         const row = el('div', undefined, 'blink-module'); row.append(el('h3', module.name || `Sync Module ${module.id}`));
         row.append(el('p', `Module ID ${module.id} · ${module.status} · ${ambiguous ? 'ambiguous system association' : `${associated.length} included cameras by system association`}`, 'blink-help'));
+        optionalBoolean('syncModuleSettingOverrides', row, { property: properties.syncModuleSettingOverrides.items.properties.disableEarlyNotification,
+          value: overrideRecord('syncModuleSettingOverrides', module, 'syncModuleId')?.disableEarlyNotification, inherit: 'Use plugin setting',
+          change: value => changeOverride('syncModuleSettingOverrides', module, 'disableEarlyNotification', value, 'syncModuleId') });
         const current = values('syncModuleFeedLimits').find(item => item.syncModuleId === module.id);
         const input = scalar('syncModuleFeedLimits', row, { property: { ...properties.syncModuleFeedLimits.items.properties.maxFeeds, description: 'Blank uses the discovered camera count. Enter a positive whole number.' }, value: current?.maxFeeds,
           change: value => { const retained = values('syncModuleFeedLimits').filter(item => item.syncModuleId !== module.id); write('syncModuleFeedLimits', value === undefined ? retained : [...retained, { syncModuleId: module.id, maxFeeds: value }]); } });
@@ -222,7 +236,9 @@
         const row = el('div', undefined, 'blink-unresolved'); row.append(el('span', `Unavailable Sync Module ${item.syncModuleId}: ${item.maxFeeds}`));
         const remove = el('button', 'Remove override', 'btn btn-sm btn-outline-secondary'); remove.type = 'button'; remove.disabled = !accountReady || draft.state.accountAction;
         remove.addEventListener('click', () => { write('syncModuleFeedLimits', values('syncModuleFeedLimits').filter(value => value !== item)); render(); }); row.append(remove); details.append(row);
-      }); parent.append(details);
+      });
+      unresolved(details, 'syncModuleSettingOverrides', 'syncModuleId');
+      parent.append(details);
     }
     function render() {
       fields.replaceChildren(); sequence = 0;

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import process from 'node:process';
 import { setImmediate as realImmediate } from 'node:timers/promises';
 import type { CameraRecordingConfiguration } from 'homebridge';
-import { BlinkApi, type BlinkRemoteOperationOwnership } from '../src/blink-api/client';
+import { BlinkApi, type BlinkEarlyNotificationState, type BlinkRemoteOperationOwnership } from '../src/blink-api/client';
 import type { BlinkAuth } from '../src/blink-api/auth';
 import { BLINK_FIREBASE_CLIENT } from '../src/blink-api/fcm-config';
 import { BlinkHttpError } from '../src/blink-api/http';
@@ -61,6 +61,8 @@ describe('native recording runtime composition', () => {
 
   async function setup(overrides: { config?: NativeRecordingConfigInput; exposure?: boolean; hsv?: boolean;
     prepare?: typeof prepareNativeRecording; storagePath?: string; nativeStorage?: boolean; secondCamera?: boolean;
+    start?: boolean;
+    earlyNotification?: boolean; rawType?: string; earlyCurrent?: boolean; earlyCompatible?: boolean; earlyFailure?: 'before-write' | 'after-write';
     matchingDevices?: readonly NativeMotionDevice[]; eventSourceFactory?: NativeRecordingRuntimeOptions['eventSourceFactory'] } = {}) {
     let runtime: NativeRecordingRuntime | undefined, source!: FcmEventSourceOptions;
     let remoteSave!: (state: BlinkRemoteOperationOwnership) => Promise<void>;
@@ -104,6 +106,10 @@ describe('native recording runtime composition', () => {
     };
     const setDemand = jest.fn().mockResolvedValue(undefined), reconnectSource = jest.fn().mockResolvedValue(undefined), stopSource = jest.fn().mockResolvedValue(undefined);
     const releaseOwnership = jest.fn().mockResolvedValue(undefined);
+    const earlyProvider = { current: overrides.earlyCurrent ?? true, compatible: overrides.earlyCompatible ?? true,
+      failure: overrides.earlyFailure as 'before-write' | 'after-write' | undefined };
+    const settingWrites: boolean[] = [];
+    const settingReceipts: Array<{ devices: unknown[] }> = [];
     const client = {
       getCachedIdentity: jest.fn(() => ({ ...scope, sharedTier: 'u001' })),
       getRemoteOperationState: jest.fn<ReturnType<BlinkApi['getRemoteOperationState']>, []>()
@@ -119,13 +125,27 @@ describe('native recording runtime composition', () => {
       }),
       reconcileKnownStateCommand: jest.fn().mockResolvedValue({ confirmed: true }),
       reconcileKnownLiveViews: jest.fn().mockResolvedValue([]),
+      setDeviceEarlyNotification: jest.fn<ReturnType<BlinkApi['setDeviceEarlyNotification']>, Parameters<BlinkApi['setDeviceEarlyNotification']>>()
+        .mockImplementation(async (_kind, _network, _id, _rawType, enabled, options = {}) => {
+          if (earlyProvider.failure === 'before-write') throw new Error('Offline setting read');
+          const current: BlinkEarlyNotificationState = { supported: earlyProvider.compatible, compatible: earlyProvider.compatible,
+            current: earlyProvider.current, changed: false };
+          if (!current.supported || current.current === enabled || (options.expectedCurrent !== undefined && current.current !== options.expectedCurrent)) return current;
+          await options.beforeChange?.(earlyProvider.current);
+          settingReceipts.push(JSON.parse(await fs.readFile(path.join(overrides.storagePath ?? root,
+            '.blink-native-recording', '.early-notification-10-u000.json'), 'utf8')));
+          settingWrites.push(enabled); earlyProvider.current = enabled;
+          if (earlyProvider.failure === 'after-write') throw new Error('Lost setting readback');
+          return { ...current, current: enabled, changed: true };
+        }),
     };
     const devices: NativeRecordingRuntimeOptions['devices'] = [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
+        rawType: overrides.rawType ?? 'catalina',
         ...(overrides.nativeStorage === false ? {} : { nativeStorage: { moduleId: '20:30', syncModuleId: 30 } }),
-        settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true },
+        settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true, disableEarlyNotification: overrides.earlyNotification ?? false },
         motion: publicMotion, recording: () => delegate }, ...(cornerDelegate ? [{
         binding: { accountId: 10, networkId: 20, providerId: 41, target: 'camera', cameraId: 'camera:41', nativeName: 'Corner native name' },
-        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true },
+        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true, disableEarlyNotification: false },
         motion: jest.fn(), recording: () => cornerDelegate,
       }] : [])];
     const options: NativeRecordingRuntimeOptions = { client: client as unknown as BlinkApi, scope, storagePath: overrides.storagePath ?? root,
@@ -133,7 +153,20 @@ describe('native recording runtime composition', () => {
       devices, matchingDevices: overrides.matchingDevices ?? devices.flatMap(device => device.nativeStorage ? [{ ...device.binding, ...device.nativeStorage }] : []),
       eventSourceFactory: input => { source = input; return overrides.eventSourceFactory?.(input) ?? { setDemand, reconnect: reconnectSource, stop: stopSource }; },
     };
-    runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime); await runtime.start();
+    const originalsPath = path.join(overrides.storagePath ?? root, '.blink-native-recording', '.early-notification-10-u000.json');
+    const startAndSettlePreferences = async (value: NativeRecordingRuntime, devices: NativeRecordingRuntimeOptions['devices']) => {
+      const originals = await fs.readFile(originalsPath, 'utf8').then(text => JSON.parse(text).devices.length).catch(error => {
+        if (error.code === 'ENOENT') return 0;
+        throw error;
+      });
+      const since = events.length;
+      await value.start();
+      if (originals || devices.some(device => device.settings.disableEarlyNotification)) {
+        await until(() => events.slice(since).some(event => /^early-notification-(?:confirmed-off|unsupported|.*faulted|restored)$/.test(event)));
+      }
+    };
+    runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime);
+    if (overrides.start !== false) await startAndSettlePreferences(runtime, options.devices);
     const notification = (id = 'motion-1', values: Record<string, string> = {}): FcmNotification => ({
       persistentMessageId: id, scope, receivedAt: Date.now(), activatedAt: Date.now(),
       data: { category: 'motion', event_type: 'cam2sm_motion', camera: '40', target: 'camera', network: '20',
@@ -141,10 +174,12 @@ describe('native recording runtime composition', () => {
     });
     const push = (message = notification()) => source.onNotification(message, new globalThis.AbortController().signal);
     const rebind = async (next: Partial<NativeRecordingRuntimeOptions> = {}) => {
-      runtime = await NativeRecordingRuntime.create({ ...options, ...next }); runtimes.push(runtime); await runtime.start(); return runtime;
+      runtime = await NativeRecordingRuntime.create({ ...options, ...next }); runtimes.push(runtime);
+      await startAndSettlePreferences(runtime, next.devices ?? options.devices); return runtime;
     };
     return { runtime, delegate, prepare, transport, client, source, setDemand, reconnectSource, stopSource, events, publicMotion, readyMotion,
-      media, notification, push, state, remoteSave, cornerReady, releaseOwnership, rebind };
+      media, notification, push, state, remoteSave, cornerReady, releaseOwnership, rebind, devices, earlyProvider, settingWrites, settingReceipts,
+      originalsPath };
   }
 
   it('restores an exhausted real receiver on explicit retry without rebinding or losing durable ownership and acknowledgments', async () => {
@@ -220,6 +255,7 @@ describe('native recording runtime composition', () => {
     const f = await setup({ exposure: false, hsv: false });
     await f.runtime.start(); await f.runtime.retryConnection();
     expect(f.setDemand).toHaveBeenCalledTimes(1); expect(f.reconnectSource).not.toHaveBeenCalled();
+    expect(f.client.setDeviceEarlyNotification).not.toHaveBeenCalled();
     expect(f.transport.postEmpty).not.toHaveBeenCalled();
     await f.runtime.stop();
     await expect(f.runtime.retryConnection()).rejects.toThrow('Native runtime stopped');
@@ -334,7 +370,7 @@ describe('native recording runtime composition', () => {
     const options: NativeRecordingRuntimeOptions = { client: api, scope, storagePath: root,
       config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), matchingDevices: [],
       devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
-        settings: { exposeMotionDetected: true, homeKitSecureVideo: false }, motion: jest.fn(), recording: () => undefined }],
+        settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false }, motion: jest.fn(), recording: () => undefined }],
       eventSourceFactory: input => {
         const source = { options: input, setDemand: jest.fn().mockResolvedValue(undefined),
           reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
@@ -573,6 +609,280 @@ describe('native recording runtime composition', () => {
     expect(motionOnly.publicMotion).toHaveBeenCalledTimes(1); expect(motionOnly.transport.postEmpty).not.toHaveBeenCalled();
     const disabled = await setup({ exposure: false, hsv: false, storagePath: path.join(root, 'disabled') });
     expect(disabled.setDemand).toHaveBeenCalledWith({ motionAccessory: false, hsv: false });
+    expect(f.client.setDeviceEarlyNotification).not.toHaveBeenCalled();
+    expect(motionOnly.client.setDeviceEarlyNotification).not.toHaveBeenCalled();
+    expect(disabled.client.setDeviceEarlyNotification).not.toHaveBeenCalled();
+  });
+
+  it('durably preserves an enabled original before changing Blink, then immediately offers a confirmed completed clip', async () => {
+    const f = await setup({ earlyNotification: true });
+    expect(f.settingWrites).toEqual([false]);
+    expect(f.settingReceipts[0].devices).toEqual([expect.objectContaining({ kind: 'camera', networkId: 20, deviceId: 40, rawType: 'catalina', original: true })]);
+    expect((await fs.stat(f.originalsPath)).mode & 0o777).toBe(0o600);
+    await f.push();
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now());
+    await jest.advanceTimersByTimeAsync(0); await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+    await f.runtime.stop();
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+    expect(f.settingWrites).toEqual([false]);
+  });
+
+  it('does not claim or later restore a camera whose Early Notification was already off', async () => {
+    const f = await setup({ earlyNotification: true, earlyCurrent: false });
+    expect(f.settingWrites).toEqual([]);
+    await expect(fs.stat(f.originalsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await f.runtime.stop(); await f.rebind({ devices: [] });
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts push and public motion before a held setting confirms, coalescing retries while retaining delayed HSV', async () => {
+    const f = await setup({ earlyNotification: true, start: false });
+    const gate = deferred<void>(); let entered = false;
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _rawType, _enabled, options) => {
+      await options?.beforeChange?.(true); entered = true; await gate.promise;
+      return { supported: true, compatible: true, current: false, changed: true };
+    });
+    const starting = f.runtime.start();
+    try {
+      await until(() => entered);
+      expect(f.setDemand).toHaveBeenCalledWith({ motionAccessory: true, hsv: true });
+      await starting;
+      await f.push(f.notification('before-confirmation'));
+      expect(f.publicMotion).toHaveBeenCalledTimes(1);
+      expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+      await Promise.all([f.runtime.retryConnection(), f.runtime.retryConnection()]);
+      expect(f.reconnectSource).toHaveBeenCalledTimes(2);
+      expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(1000); gate.resolve();
+      await until(() => f.events.includes('early-notification-confirmed-off'));
+      f.media[0].created_at = new Date(Date.now()).toISOString();
+      await f.push(f.notification('after-confirmation')); await jest.advanceTimersByTimeAsync(0);
+      await until(() => f.events.includes('offered'));
+      expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+      expect(f.publicMotion).toHaveBeenCalledTimes(2);
+    } finally { gate.resolve(); await starting; }
+  });
+
+  it('reconnects with the real SDK while its accepted preference command is awaiting status', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'preference-reconnect', tier: scope.tier });
+    const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;
+    jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...scope, sharedTier: scope.tier });
+    jest.spyOn(internals.auth, 'ensureValidToken').mockResolvedValue(undefined);
+    jest.spyOn(internals.auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer fixture-auth' });
+    const status = deferred<Response>(), originalFetch = globalThis.fetch;
+    const setDemand = jest.fn().mockResolvedValue(undefined), reconnect = jest.fn().mockResolvedValue(undefined), motion = jest.fn();
+    let source!: FcmEventSourceOptions, configReads = 0, runtime: NativeRecordingRuntime | undefined;
+    const fetch = jest.fn<ReturnType<typeof globalThis.fetch>, Parameters<typeof globalThis.fetch>>().mockImplementation(async (url, request) => {
+      if (String(url).endsWith('/commands/707')) return status.promise;
+      if (request?.method === 'POST') return new Response(JSON.stringify({ id: 707 }));
+      configReads++;
+      return new Response(JSON.stringify({ camera: [{ early_notification_compatible: true, early_notification: configReads === 1 }] }));
+    });
+    try {
+      globalThis.fetch = fetch;
+      runtime = await NativeRecordingRuntime.create({ client: api, scope, storagePath: root,
+        config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), matchingDevices: [],
+        devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry' },
+          rawType: 'catalina', settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: true },
+          motion, recording: () => undefined }],
+        eventSourceFactory: input => { source = input; return { setDemand, reconnect, stop: jest.fn().mockResolvedValue(undefined) }; } });
+      runtimes.push(runtime); await runtime.start();
+      await until(() => fetch.mock.calls.some(([url]) => String(url).endsWith('/commands/707')));
+      expect(setDemand).toHaveBeenCalledWith({ motionAccessory: true, hsv: false });
+      expect(api.getRemoteOperationState().stateCommand).toMatchObject({ kind: 'early-notification', commandId: 707 });
+      await Promise.all([runtime.retryConnection(), runtime.retryConnection()]);
+      expect(reconnect).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledTimes(3); // Config GET, one settings POST, one held status GET.
+      await source.onNotification({ persistentMessageId: 'during-preference', scope, receivedAt: Date.now(), activatedAt: Date.now(),
+        data: { category: 'motion', event_type: 'cam2sm_motion', camera: '40', target: 'camera', network: '20',
+          created_at: new Date(Date.now()).toISOString() } }, new globalThis.AbortController().signal);
+      expect(motion).toHaveBeenCalledTimes(1);
+      let stopped = false; const stopping = runtime.stop().then(() => { stopped = true; });
+      await realImmediate(); expect(stopped).toBe(false);
+      status.resolve(new Response(JSON.stringify({ complete: true, status: 0 })));
+      await stopping;
+      expect(api.getRemoteOperationState().stateCommand).toBeUndefined();
+      expect(JSON.parse(await fs.readFile(path.join(root, '.blink-native-recording', '.early-notification-10-u000.json'), 'utf8')).devices).toHaveLength(1);
+    } finally {
+      status.resolve(new Response(JSON.stringify({ complete: true, status: 0 })));
+      await runtime?.stop().catch(() => undefined);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps preference work stopped during a state-write fault, then resumes after explicit persistence recovery', async () => {
+    const f = await setup({ earlyNotification: true, earlyCurrent: false });
+    const rename = fs.rename.bind(fs);
+    const failStateWrite = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (args[1] === path.join(f.runtime.directory, 'state.json')) throw new Error('Runtime state disk failure');
+      return rename(...args);
+    });
+    await expect(f.source.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: [] }))
+      .rejects.toThrow('Runtime state disk failure');
+    f.client.setDeviceEarlyNotification.mockClear(); f.earlyProvider.current = true;
+    try {
+      await expect(f.runtime.retryConnection()).rejects.toThrow('Runtime state disk failure');
+      expect(f.client.setDeviceEarlyNotification).not.toHaveBeenCalled();
+      await expect(fs.stat(f.originalsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(f.events).toContain('persistence-faulted');
+      failStateWrite.mockRestore();
+      await f.runtime.retryConnection(); await until(() => f.settingWrites.includes(false));
+      expect(f.events).toContain('persistence-recovered');
+      expect(f.client.setDeviceEarlyNotification).toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+    } finally {
+      failStateWrite.mockRestore();
+      await f.runtime.stop();
+      runtimes = runtimes.filter(runtime => runtime !== f.runtime);
+    }
+  });
+
+  it.each([
+    { rawType: 'unsupported-model', calls: 0 },
+    { earlyCompatible: false, calls: 1 },
+    { earlyFailure: 'before-write' as const, calls: 1 },
+    { earlyFailure: 'after-write' as const, calls: 1 },
+  ])('keeps ordinary delay when Early Notification cannot be confirmed off: %p', async scenario => {
+    const f = await setup({ earlyNotification: true, ...scenario });
+    await f.push();
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+    await jest.advanceTimersByTimeAsync(59_999);
+    expect(f.transport.postEmpty).not.toHaveBeenCalled();
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(scenario.calls);
+  });
+
+  it('refuses the setting POST after original persistence fails while keeping delayed recording available', async () => {
+    const rename = fs.rename.bind(fs);
+    const failedJournal = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (String(args[1]).includes('.early-notification-')) throw new Error('Original journal disk failure');
+      return rename(...args);
+    });
+    const f = await setup({ earlyNotification: true });
+    failedJournal.mockRestore();
+    expect(f.settingWrites).toEqual([]); expect(f.earlyProvider.current).toBe(true);
+    expect(f.events).toContain('early-notification-faulted');
+    await f.push(); await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('restores only a still-owned off value when management ends, preserving manual changes: external=%p', async externallyEnabled => {
+    const f = await setup({ earlyNotification: true });
+    await f.runtime.stop();
+    f.earlyProvider.current = externallyEnabled;
+    await f.rebind({ devices: [] });
+    expect(f.earlyProvider.current).toBe(true);
+    expect(f.settingWrites).toEqual(externallyEnabled ? [false] : [false, true]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
+    expect(f.setDemand).toHaveBeenLastCalledWith({ motionAccessory: false, hsv: false });
+  });
+
+  it('retains original ownership across an inherited-true replacement and authenticated client rotation', async () => {
+    const f = await setup({ earlyNotification: true });
+    await f.runtime.stop(); await f.rebind();
+    expect(f.settingWrites).toEqual([false]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+    await f.runtime.stop();
+    f.client.getCachedIdentity.mockReturnValue({ ...scope, clientId: 12, sharedTier: 'u001' });
+    await f.rebind({ scope: { ...scope, clientId: 12 }, devices: [] });
+    expect(f.settingWrites).toEqual([false, true]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
+  });
+
+  it('retains a lost readback original, reconfirms without another write, and delays events from before confirmation', async () => {
+    const f = await setup({ earlyNotification: true, earlyFailure: 'after-write' });
+    expect(f.settingWrites).toEqual([false]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+    const earlier = Date.now();
+    await jest.advanceTimersByTimeAsync(10_000);
+    const since = f.events.length;
+    f.earlyProvider.failure = undefined; await f.runtime.retryConnection();
+    await until(() => f.events.slice(since).includes('early-notification-confirmed-off'));
+    await f.push(f.notification('old-early-event', { created_at: new Date(earlier).toISOString() }));
+    await f.push(f.notification('confirmed-off-event'));
+    const queue = (await f.state()).core!.queue;
+    expect(queue.map(job => [job.observation.eventId, job.observation.occurredAt, job.eligibleAt])).toEqual([
+      [expect.any(String), earlier, earlier + 60_000], [expect.any(String), Date.now(), Date.now()],
+    ]);
+    expect(f.settingWrites).toEqual([false]);
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the original and delayed event path while a setting command remains unresolved without replaying it', async () => {
+    const f = await setup({ earlyNotification: true, earlyFailure: 'after-write' });
+    f.client.getRemoteOperationState.mockReturnValue({ storage: [], persistenceFailed: false,
+      stateCommand: { reservationId: 'setting-command', kind: 'early-notification', accountId: 10, networkId: 20,
+        deviceId: 40, commandId: 707, phase: 'unresolved', statusReads: 1 } });
+    f.client.reconcileKnownStateCommand.mockResolvedValue({ confirmed: false, commandId: 707 });
+    await f.runtime.retryConnection(); await f.push();
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+    expect(f.settingWrites).toEqual([false]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  });
+
+  it('drains in-flight setting reconciliation before releasing ownership and leaves originals for the replacement', async () => {
+    const f = await setup({ earlyNotification: true, earlyCurrent: false });
+    const gate = deferred<void>(); let entered = false;
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _rawType, _enabled, options) => {
+      await options?.beforeChange?.(true); entered = true; await gate.promise;
+      return { supported: true, compatible: true, current: false, changed: true };
+    });
+    const retry = f.runtime.retryConnection(); await until(() => entered);
+    let stopped = false; const stopping = f.runtime.stop().then(() => { stopped = true; });
+    await realImmediate();
+    expect(stopped).toBe(false); expect(f.releaseOwnership).not.toHaveBeenCalled();
+    gate.resolve(); await Promise.all([retry, stopping]);
+    expect(f.releaseOwnership).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+    const before = await fs.readFile(f.originalsPath, 'utf8');
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(await fs.readFile(f.originalsPath, 'utf8')).toBe(before);
+  });
+
+  it('does not replay a nearby unconsumed previous clip when the new immediate clip is still missing', async () => {
+    const f = await setup({ earlyNotification: true });
+    await jest.advanceTimersByTimeAsync(10_000);
+    const occurredAt = Date.now();
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => (await f.state()).core?.queue[0]?.attempts === 0 && (await f.state()).core?.queue[0]?.eligibleAt === Date.now() + 60_000
+      && !(await f.state()).core?.operation);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    expect((await f.state()).core?.queue).toHaveLength(1);
+    expect(f.readyMotion).not.toHaveBeenCalledWith(true);
+    f.media.push({ ...f.media[0], id: 102, created_at: new Date(occurredAt).toISOString(),
+      media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/102/' });
+    // The cached old row must not gain a fuzzy match just because time passes.
+    await jest.advanceTimersByTimeAsync(59_999);
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1); await until(() => f.events.includes('offered'));
+    expect(f.transport.getJson.mock.calls.filter(([route]) => route.base === 'api')).toHaveLength(2);
+    const consumed = (await f.state()).consumed.map(value => JSON.parse(value));
+    expect(consumed).toEqual([expect.arrayContaining([102])]);
+  });
+
+  it('does not promote the early cached clip when a fallback catalog request is refused', async () => {
+    const f = await setup({ earlyNotification: true });
+    await jest.advanceTimersByTimeAsync(10_000);
+    const occurredAt = Date.now();
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => (await f.state()).core?.queue[0]?.attempts === 0
+      && (await f.state()).core?.queue[0]?.eligibleAt === occurredAt + 60_000 && !(await f.state()).core?.operation);
+    f.transport.postEmpty.mockRejectedValueOnce(new BlinkHttpError('Sync Module busy', 409, '',
+      'https://rest-u000.immedia-semi.com/api/v1/example', 'POST'));
+    await jest.advanceTimersByTimeAsync(60_000);
+    await until(async () => f.events.includes('catalog-refused') && !(await f.state()).core?.operation);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    f.media.push({ ...f.media[0], id: 102, created_at: new Date(occurredAt).toISOString(),
+      media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/102/' });
+    await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));
+    const consumed = (await f.state()).consumed.map(value => JSON.parse(value));
+    expect(consumed).toEqual([expect.arrayContaining([102])]);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
   it('reports PIR immediately, then downloads once and only triggers HSV after local preparation', async () => {
@@ -961,6 +1271,32 @@ describe('native recording runtime composition', () => {
     await f.push(f.notification('fresh-after-disk-recovery'));
     await jest.advanceTimersByTimeAsync(60000); await until(() => f.events.includes('offered'));
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  });
+
+  it('drains a late preference journal before a replacement loads its preserved original', async () => {
+    const f = await setup({ earlyNotification: true, earlyCurrent: false }), gate = deferred<void>();
+    const write = secureJson.writeOwnerOnlyJsonFile;
+    let held = false;
+    const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
+      if (!held && path.basename(args[0]) === path.basename(f.originalsPath)) { held = true; await gate.promise; }
+      return write(...args);
+    });
+    try {
+      f.earlyProvider.current = true;
+      await f.runtime.retryConnection(); await until(() => held);
+      const stopping = f.runtime.stop().catch(error => { expect(error).toBeInstanceOf(OperationTimeoutError); });
+      await jest.advanceTimersByTimeAsync(120000); await stopping;
+      runtimes = runtimes.filter(runtime => runtime !== f.runtime);
+      let loaded = false;
+      const replacement = f.rebind().then(value => { loaded = true; return value; });
+      await realImmediate(); expect(loaded).toBe(false);
+      gate.resolve(); await replacement;
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices)
+        .toEqual([expect.objectContaining({ deviceId: 40, original: true })]);
+      expect(f.settingWrites).toEqual([false]);
+    } finally {
+      gate.resolve(); saving.mockRestore();
+    }
   });
 
   it('bounds shutdown during a held journal write and serializes the late file replacement before a new runtime writes', async () => {

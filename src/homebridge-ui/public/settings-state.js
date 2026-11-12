@@ -43,7 +43,8 @@
     }
     set(key, value) {
       if (this.state.accountAction) return false;
-      this.config[key] = copy(value); this.retry(); return true;
+      if (value === undefined) delete this.config[key]; else this.config[key] = copy(value);
+      this.retry(); return true;
     }
     retry() {
       if (this.state.accountAction) return;

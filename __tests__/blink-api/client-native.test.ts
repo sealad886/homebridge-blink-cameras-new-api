@@ -102,6 +102,23 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
   });
 
+  it('does not apply Early Notification after authentication changes the captured account', async () => {
+    const f = fixture();
+    let release!: () => void;
+    const authentication = new Promise<void>(resolve => { release = resolve; });
+    const token = f.auth.ensureValidToken as jest.Mock;
+    token.mockResolvedValueOnce(undefined).mockReturnValueOnce(authentication);
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ camera: [{ early_notification: true, early_notification_compatible: true }] }));
+    const setting = f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false);
+    const failure = expect(setting).rejects.toMatchObject({ reason: 'ownership-unavailable' });
+    while (token.mock.calls.length < 2) await new Promise(resolve => setImmediate(resolve));
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    release();
+    await failure;
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((fetch as jest.Mock).mock.calls[0][1].method).toBe('GET');
+  });
+
   it.each([undefined, -1, 240_000])('abandons an inactive restored ordinary owner without inventing terminal proof (%s)', async offset => {
     const f = fixture(undefined, { reservationId: 'old-known-arm', accountId: 10, networkId: 20, kind: 'arm',
       phase: 'unresolved', commandId: 711, statusReads: 60, ...(offset === undefined ? {} : { expiresAt: Date.now() + offset }) });

@@ -103,6 +103,57 @@ describe('native recording FIFO', () => {
     expect(acquire).toHaveBeenCalledTimes(1);
   });
 
+  it('makes only an explicitly completed-clip observation immediately eligible while preserving FIFO and missing retries', async () => {
+    const { coordinator, acquire } = setup();
+    acquire.mockResolvedValueOnce({ status: 'missing' });
+    await coordinator.observe(event('normal-delay'));
+    await coordinator.observe(event('completed-clip'), undefined, { initialDelayMs: 0 });
+    await coordinator.observe(event('next-completed-clip', { cameraId: 'corner' }), undefined, { initialDelayMs: 0 });
+    await jest.advanceTimersByTimeAsync(1);
+    expect(acquire.mock.calls.map(([request]) => request.observation.eventId)).toEqual(['completed-clip', 'next-completed-clip']);
+    await jest.advanceTimersByTimeAsync(4998);
+    expect(acquire).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(acquire.mock.calls.map(([request]) => request.observation.eventId)).toEqual(['completed-clip', 'next-completed-clip', 'completed-clip']);
+    await jest.advanceTimersByTimeAsync(55_000);
+    expect(acquire.mock.calls.at(-1)?.[0].observation.eventId).toBe('normal-delay');
+  });
+
+  it('preserves the normal availability budget after one exact-only early lookup misses', async () => {
+    const { coordinator, acquire } = setup({ maxRetries: 0 });
+    acquire.mockResolvedValue({ status: 'missing' });
+    const occurredAt = Date.now();
+    await coordinator.observe(event('completed-notice'), undefined, { initialDelayMs: 0, fallbackAt: occurredAt + 300_000 });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(coordinator.snapshot().queue[0]).toEqual(expect.objectContaining({ attempts: 0, eligibleAt: occurredAt + 300_000 }));
+    const saved = coordinator.snapshot(); await coordinator.stop();
+    const restored = setup({ maxRetries: 0, restoredState: saved });
+    restored.acquire.mockResolvedValue({ status: 'missing' });
+    await jest.advanceTimersByTimeAsync(299_999);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(restored.acquire).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(restored.acquire).toHaveBeenCalledTimes(1);
+    expect(restored.coordinator.snapshot().queue).toHaveLength(0);
+    saved.queue[0].fallbackAt = NaN;
+    expect(() => setup({ restoredState: saved })).toThrow('Invalid native recording job');
+  });
+
+  it('keeps the ordinary attempt when an early missing response arrives after fallback eligibility', async () => {
+    const held = deferred<NativeRecordingAcquisitionResult>();
+    const { coordinator, acquire } = setup({ maxRetries: 0 });
+    acquire.mockReturnValueOnce(held.promise);
+    await coordinator.observe(event('slow-early-lookup'), undefined, { initialDelayMs: 0, fallbackAt: Date.now() + 60_000 });
+    await jest.advanceTimersByTimeAsync(60_001);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    held.resolve({ status: 'missing' });
+    await jest.advanceTimersByTimeAsync(1);
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(acquire.mock.calls.map(([request]) => request.attempt)).toEqual([1, 1]);
+    expect(coordinator.snapshot().queue).toHaveLength(0);
+  });
+
   it('preserves distinct FIFO jobs across cameras and modules instead of merging motion', async () => {
     const first = deferred<NativeRecordingAcquisitionResult>();
     const acquire = jest.fn().mockImplementationOnce(() => first.promise).mockResolvedValue({ status: 'retrieved' });
