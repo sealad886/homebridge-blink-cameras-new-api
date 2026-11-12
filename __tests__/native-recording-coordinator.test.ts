@@ -56,6 +56,22 @@ describe('native recording FIFO', () => {
     expect(saveState).not.toHaveBeenCalled();
   });
 
+  it('abandons an expired owner when clock reads advance and still runs the next distinct event', async () => {
+    const acquire = jest.fn().mockResolvedValueOnce({ status: 'unresolved' }).mockResolvedValue({ status: 'retrieved' });
+    const { coordinator, onJobFinished } = setup({ acquire });
+    await coordinator.observe(event('uncertain-head'));
+    await coordinator.observe(event('next-module', { moduleId: 'module-2' }));
+    await jest.advanceTimersByTimeAsync(60000);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    let clock = Date.now() + 120000;
+    const advancing = jest.spyOn(Date, 'now').mockImplementation(() => clock++);
+    try {
+      await jest.advanceTimersByTimeAsync(120010);
+      expect(acquire.mock.calls.map(([request]) => request.observation.eventId)).toEqual(['uncertain-head', 'next-module']);
+      expect(onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'abandoned' }));
+    } finally { advancing.mockRestore(); }
+  });
+
   it('does not let a restored future timestamp renew an ownership lease', async () => {
     const first = setup({ acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }) });
     await first.coordinator.observe(event('old'));

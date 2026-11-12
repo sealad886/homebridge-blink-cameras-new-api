@@ -262,7 +262,7 @@ export class NativeStorageOwner {
           : { status: 'failed', reason: 'not-started' }, generation); }
         catch { return this.unresolved('persistence-failed'); }
       }
-      if (!entered && (!previous || previous.phase === 'finished')) return { status: 'failed', reason: 'not-started' };
+      if (!entered && (!previous || previous.phase === 'finished' || previous.phase === 'abandoned')) return { status: 'failed', reason: 'not-started' };
       return this.unresolved(this.persistenceFailed ? 'persistence-failed' : 'request-outcome-unknown');
     } finally { if (generation === this.generation) this.running = false; }
   }

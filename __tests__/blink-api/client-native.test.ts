@@ -119,6 +119,120 @@ describe('owned native storage SDK', () => {
     expect((fetch as jest.Mock).mock.calls[0][1].method).toBe('GET');
   });
 
+  it.each(['early-notification', 'liveview'] as const)('rejects a superseded %s generation before allocating ownership', async kind => {
+    jest.useFakeTimers();
+    const f = fixture(); await f.release();
+    let releaseOld!: () => void, releaseStatus!: (value: Response) => void;
+    const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+    const beforeChange = jest.fn(async () => oldGate);
+    if (kind === 'liveview') {
+      (f.api as unknown as { accountId: number | null }).accountId = null;
+      jest.spyOn(f.api, 'login').mockImplementationOnce(async () => oldGate);
+    }
+    (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
+      if (url.endsWith('/config') && request.method === 'GET') return json({ camera: [{ early_notification: true, early_notification_compatible: true }] });
+      if (request.method === 'POST') return json({ id: url.endsWith('/config') ? 994 : 991 });
+      if (url.endsWith('/commands/991')) return new Promise<Response>(resolve => { releaseStatus = resolve; });
+      return json({ complete: true, status: 0 });
+    });
+    const old = (kind === 'early-notification'
+      ? f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false, { beforeChange })
+      : f.api.startCameraLiveview(20, 40)).catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    if (kind === 'early-notification') expect(beforeChange).toHaveBeenCalledTimes(1);
+    (f.api as unknown as { accountId: number | null }).accountId = 10;
+    f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
+    const arm = f.api.armNetwork(20);
+    try {
+      await jest.advanceTimersByTimeAsync(301);
+      expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ kind: 'arm', commandId: 991 });
+      releaseOld(); await jest.advanceTimersByTimeAsync(0);
+      expect(await old).toBeInstanceOf(BlinkOperationNotStartedError);
+      expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ kind: 'arm', commandId: 991 });
+      expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+      expect((fetch as jest.Mock).mock.calls.filter(([, request]) => request.method === 'POST')).toHaveLength(1);
+    } finally {
+      releaseOld(); releaseStatus?.(json({ complete: true, status: 0 }));
+      await jest.advanceTimersByTimeAsync(1); await arm.catch(() => undefined); await old;
+    }
+  });
+
+  it('persists each coalesced ownership snapshot before dispatch and before observing completion', async () => {
+    jest.useFakeTimers();
+    const f = fixture(live({ phase: 'unresolved', commandId: undefined, expiresAt: undefined }));
+    let releaseArchive!: () => void, releaseIntent!: () => void, releaseAccepted!: () => void;
+    const archive = new Promise<void>(resolve => { releaseArchive = resolve; });
+    const intent = new Promise<void>(resolve => { releaseIntent = resolve; });
+    const accepted = new Promise<void>(resolve => { releaseAccepted = resolve; });
+    f.saveLive.mockImplementationOnce(async () => archive)
+      .mockImplementationOnce(async () => intent).mockImplementationOnce(async () => accepted);
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
+      ? json({ id: 992 }) : json({ complete: true, status: 0 }));
+    const arm = f.api.armNetwork(20);
+    try {
+      await jest.advanceTimersByTimeAsync(0); expect(fetch).not.toHaveBeenCalled();
+      releaseArchive(); await jest.advanceTimersByTimeAsync(0); expect(fetch).not.toHaveBeenCalled();
+      releaseIntent(); await jest.advanceTimersByTimeAsync(0);
+      expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST']);
+      releaseAccepted(); await jest.advanceTimersByTimeAsync(0); await arm;
+      expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST', 'GET']);
+      expect(f.api.getRemoteOperationState().persistenceFailed).toBe(false);
+    } finally {
+      releaseArchive(); releaseIntent(); releaseAccepted();
+      await jest.advanceTimersByTimeAsync(1); await arm.catch(() => undefined);
+    }
+  });
+
+  it('warns at the fixed coalesced persistence budget before allowing degraded dispatch', async () => {
+    jest.useFakeTimers();
+    const f = fixture(live({ phase: 'unresolved', commandId: undefined, expiresAt: undefined }));
+    let releaseArchive!: () => void;
+    const archive = new Promise<void>(resolve => { releaseArchive = resolve; });
+    f.saveLive.mockImplementationOnce(async () => archive);
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => {
+      if (request.method === 'POST') {
+        expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+        expect(f.messages.some(message => String(message[0]).includes('Ownership journal unavailable'))).toBe(true);
+        return json({ id: 995 });
+      }
+      return json({ complete: true, status: 0 });
+    });
+    const arm = f.api.armNetwork(20);
+    try {
+      await jest.advanceTimersByTimeAsync(999); expect(fetch).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1); expect(fetch).toHaveBeenCalledTimes(1);
+      releaseArchive(); await jest.advanceTimersByTimeAsync(1); await arm;
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(f.api.getRemoteOperationState().persistenceFailed).toBe(false);
+    } finally {
+      releaseArchive(); await jest.advanceTimersByTimeAsync(3001); await arm.catch(() => undefined);
+    }
+  });
+
+  it.each(['retire', 'reconcile', 'queued-reconcile'] as const)('releases queued %s at the existing live-view lease deadline', async action => {
+    jest.useFakeTimers();
+    const f = fixture(live({ expiresAt: Date.now() + 1000, retirementAcknowledged: action !== 'retire' }));
+    let releaseAuth!: () => void;
+    const authentication = new Promise<void>(resolve => { releaseAuth = resolve; });
+    (f.auth.ensureValidToken as jest.Mock).mockReturnValueOnce(authentication);
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
+      ? json({ id: 993 }) : json({ complete: true, status: 0 }));
+    const prior = action === 'queued-reconcile' ? f.api.updateCommand(20, 707).catch(error => error) : undefined;
+    await jest.advanceTimersByTimeAsync(0);
+    const retirement = (action === 'retire' ? f.api.completeCommand(20, 707) : f.api.reconcileKnownLiveViews()).catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    const arm = f.api.armNetwork(20);
+    try {
+      await jest.advanceTimersByTimeAsync(1301);
+      expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST', 'GET']);
+      await expect(arm).resolves.toEqual({ id: 993 });
+      expect(f.api.getRemoteOperationState().abandoned).toEqual([expect.objectContaining({ kind: 'liveview', commandId: 707 })]);
+    } finally {
+      releaseAuth(); await jest.advanceTimersByTimeAsync(60_000);
+      await arm.catch(() => undefined); await retirement; await prior;
+    }
+  });
+
   it.each([undefined, -1, 240_000])('abandons an inactive restored ordinary owner without inventing terminal proof (%s)', async offset => {
     const f = fixture(undefined, { reservationId: 'old-known-arm', accountId: 10, networkId: 20, kind: 'arm',
       phase: 'unresolved', commandId: 711, statusReads: 60, ...(offset === undefined ? {} : { expiresAt: Date.now() + offset }) });
@@ -144,11 +258,12 @@ describe('owned native storage SDK', () => {
     (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
       ? json({ id: 991 }) : new Promise<Response>(resolve => { releaseStatus = resolve; }));
     const arm = f.api.armNetwork(20);
-    await jest.advanceTimersByTimeAsync(301);
+    await jest.advanceTimersByTimeAsync(4000);
     expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ commandId: 991 });
     expect(fetch).toHaveBeenCalledTimes(2);
-    releaseStatus(json({ complete: true, status: 0 })); await jest.advanceTimersByTimeAsync(1); await arm;
-    await f.release();
+    releaseStatus(json({ complete: true, status: 0 })); await jest.advanceTimersByTimeAsync(1001); await arm;
+    const releasing = f.release({ deadline: Date.now() + 100 });
+    await jest.advanceTimersByTimeAsync(101); await releasing;
     const next = jest.fn().mockResolvedValue(undefined);
     f.api.configureRemoteOperationOwnership({ saveState: next });
     releaseWrite(); await jest.advanceTimersByTimeAsync(1);

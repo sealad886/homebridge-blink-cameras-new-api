@@ -57,6 +57,24 @@ it('abandons a legacy unknown command locally without probing or replaying it, t
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
+it.each(['catalog', 'clip'] as const)('reports rejected %s admission after abandonment as not started', async kind => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  await f.owner.reconcilePending();
+  const predecessor = f.owner.snapshot();
+  const fresh = { ...context, operationId: `fresh-event:${kind}` };
+  const acquire = () => kind === 'catalog' ? f.owner.readCatalog(fresh) : f.owner.downloadClip(fresh, clipRequest());
+  f.admit.mockRejectedValueOnce(new OperationTimeoutError());
+
+  expect(await acquire()).toEqual({ status: 'failed', reason: 'not-started' });
+  expect(f.owner.snapshot()).toEqual(predecessor);
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+  expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+
+  expect(await acquire()).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it('retains an exhausted known-command budget until lease expiry, then releases only local ownership', async () => {
   jest.useFakeTimers();
   const f = fixture({ maxStatusReads: 1 });

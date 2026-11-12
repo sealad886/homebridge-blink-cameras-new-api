@@ -537,7 +537,16 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       binding.cameraId, binding.nativeName, binding.networkId, rawType, settings.exposeMotionDetected, settings.homeKitSecureVideo, settings.disableEarlyNotification,
     ])).sort()]);
     if (this.nativeRuntimeKey === key) return;
-    if (this.nativeRuntime) await this.nativeRuntime.stop();
+    if (this.nativeRuntime) {
+      const previous = this.nativeRuntime;
+      try { await previous.stop(); }
+      finally {
+        if (previous.localWriterReleased) {
+          this.nativeRuntime = undefined;
+          this.nativeRuntimeKey = undefined;
+        }
+      }
+    }
     this.nativeRuntime = undefined;
     this.nativeRuntimeKey = undefined;
     const storagePath = this.api.user.storagePath();

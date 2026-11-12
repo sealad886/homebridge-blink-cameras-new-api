@@ -354,6 +354,26 @@ describe('native recording runtime composition', () => {
     expect(f.setDemand).toHaveBeenCalledTimes(1);
   });
 
+  it('finishes connection retry when its selected native job expires during a held status read', async () => {
+    const f = await setup({ config: { initialDelaySeconds: 0 } }), terminal = deferred<unknown>();
+    f.transport.getJson.mockRejectedValueOnce(new OperationTimeoutError());
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(async () => (await f.state()).core?.operation?.status === 'unresolved');
+    await jest.advanceTimersByTimeAsync(119000);
+    f.transport.getJson.mockImplementationOnce(() => terminal.promise);
+    const retry = f.runtime.retryConnection();
+    const completed = expect(retry).resolves.toBeUndefined();
+    try {
+      await until(() => f.transport.getJson.mock.calls.length === 2);
+      await jest.advanceTimersByTimeAsync(1000);
+      await until(async () => (await f.state()).core?.queue.length === 0);
+      terminal.resolve({ complete: true, status: 0 }); await completed;
+      expect((await f.state()).core?.operation).toBeUndefined();
+      expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+      expect(f.reconnectSource).toHaveBeenCalledTimes(1);
+    } finally { terminal.resolve({ complete: true, status: 0 }); }
+  });
+
   it.each(['startup', 'retry'] as const)('drains held %s recovery before real SDK writer handoff without reopening its receiver', async phase => {
     const seed = await setup({ config: { initialDelaySeconds: 0 } });
     seed.transport.getJson.mockRejectedValueOnce(new OperationTimeoutError());
@@ -543,6 +563,30 @@ describe('native recording runtime composition', () => {
     await expect(api.withNativeStorageAdmission('fresh-distinct-operation', async () => 'admitted', {},
       { accountId: 10, networkId: 20, syncModuleId: 30 })).resolves.toBe('admitted');
     expect(factory).toHaveBeenCalledTimes(1); expect(await fs.readFile(filename)).toEqual(bytes);
+  });
+
+  it('expires a prior scheduler intent without a native receipt using its original fixed lease', async () => {
+    const directory = path.join(root, '.blink-native-recording', '10-11-u000');
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const observation = { source: 'provider' as const, kind: 'motion-start' as const, eventId: 'receipt-not-yet-saved',
+      moduleId: '20:30', cameraId: 'camera:40', occurredAt: Date.now() };
+    const saved: NativeRecordingRuntimeState = { version: 1, scope, nativeByModule: {}, consumed: [], catalogStartedAt: {}, refusedUntil: {}, downloads: [],
+      core: { version: 1, rememberedEvents: [], queue: [{ observation, eligibleAt: Date.now(), attempts: 1, cameraGeneration: 0 }],
+        operation: { operationId: 'intent-only', jobKey: JSON.stringify(['20:30', 'camera:40', observation.eventId]),
+          startedAt: Date.now(), status: 'unresolved' } } };
+    const filename = path.join(directory, 'state.json'); await writeOwnerOnlyJsonFile(filename, saved);
+    const bytes = await fs.readFile(filename), nextScope = { ...scope, clientId: 12 };
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'intent-only-expiry', tier: scope.tier });
+    jest.spyOn(api, 'getCachedIdentity').mockReturnValue({ ...nextScope, sharedTier: scope.tier });
+    const create = () => NativeRecordingRuntime.create({ client: api, scope: nextScope, devices: [], matchingDevices: [], storagePath: root,
+      config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(),
+      eventSourceFactory: () => ({ setDemand: jest.fn(), reconnect: jest.fn(), stop: jest.fn().mockResolvedValue(undefined) }) });
+    await expect(create()).rejects.toThrow('Prior client/tier scope');
+    await jest.advanceTimersByTimeAsync(120000);
+    const replacement = await create(); runtimes.push(replacement); await replacement.start();
+    await expect(api.withNativeStorageAdmission('fresh-after-intent-lease', async () => 'admitted', {},
+      { accountId: 10, networkId: 20, syncModuleId: 30 })).resolves.toBe('admitted');
+    expect(await fs.readFile(filename)).toEqual(bytes);
   });
 
   it('accepts an idle or terminal prior scope after restart without rewriting its evidence', async () => {
@@ -1260,6 +1304,29 @@ describe('native recording runtime composition', () => {
     expect(f.readyMotion).not.toHaveBeenCalledWith(true);
   });
 
+  it('preserves accepted and terminal command writes while SDK ownership drains at shutdown', async () => {
+    const f = await setup(), gate = deferred<void>();
+    f.releaseOwnership.mockImplementationOnce(async () => {
+      await gate.promise;
+      await f.remoteSave({ stateCommand: { reservationId: 'arm-draining', accountId: 10, networkId: 20,
+        kind: 'arm', commandId: 707, phase: 'accepted', statusReads: 0, expiresAt: Date.now() + 120000 } });
+      await f.remoteSave({});
+    });
+    const stopping = f.runtime.stop();
+    const stopped = expect(stopping).resolves.toBeUndefined();
+    try {
+      await until(() => f.releaseOwnership.mock.calls.length === 1);
+      const releasedBeforeDrain = f.runtime.localWriterReleased;
+      gate.resolve(); await stopped;
+      expect(releasedBeforeDrain).toBe(false);
+      expect((await f.state()).remoteOperations).toEqual({});
+      expect(f.runtime.localWriterReleased).toBe(true);
+      expect(f.events).not.toContain('persistence-faulted');
+      const replacement = await f.rebind();
+      expect(replacement.localWriterReleased).toBe(false);
+    } finally { gate.resolve(); }
+  });
+
   it('recovers native recording on explicit retry after a transient journal failure', async () => {
     const f = await setup();
     const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockRejectedValueOnce(new Error('temporary disk failure'));
@@ -1275,8 +1342,14 @@ describe('native recording runtime composition', () => {
 
   it('drains a late preference journal before a replacement loads its preserved original', async () => {
     const f = await setup({ earlyNotification: true, earlyCurrent: false }), gate = deferred<void>();
-    const write = secureJson.writeOwnerOnlyJsonFile;
-    let held = false;
+    const write = secureJson.writeOwnerOnlyJsonFile, realpath = fs.realpath.bind(fs), lstat = fs.lstat.bind(fs);
+    let held = false, replacementResolvingRoot = false;
+    const resolving = jest.spyOn(fs, 'realpath').mockImplementation(async location => {
+      const resolved = await realpath(location);
+      if (location === root) replacementResolvingRoot = true;
+      return resolved;
+    });
+    const loading = jest.spyOn(fs, 'lstat').mockImplementation(location => lstat(location));
     const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
       if (!held && path.basename(args[0]) === path.basename(f.originalsPath)) { held = true; await gate.promise; }
       return write(...args);
@@ -1284,45 +1357,59 @@ describe('native recording runtime composition', () => {
     try {
       f.earlyProvider.current = true;
       await f.runtime.retryConnection(); await until(() => held);
-      const stopping = f.runtime.stop().catch(error => { expect(error).toBeInstanceOf(OperationTimeoutError); });
+      const stopping = expect(f.runtime.stop()).rejects.toBeInstanceOf(OperationTimeoutError);
       await jest.advanceTimersByTimeAsync(120000); await stopping;
       runtimes = runtimes.filter(runtime => runtime !== f.runtime);
-      let loaded = false;
-      const replacement = f.rebind().then(value => { loaded = true; return value; });
-      await realImmediate(); expect(loaded).toBe(false);
-      gate.resolve(); await replacement;
+      loading.mockClear();
+      const blocked = expect(f.rebind()).rejects.toBeInstanceOf(OperationTimeoutError);
+      await until(() => replacementResolvingRoot);
+      await jest.advanceTimersByTimeAsync(120000); await blocked;
+      expect(loading).not.toHaveBeenCalledWith(f.originalsPath);
+      expect(loading).not.toHaveBeenCalledWith(path.join(f.runtime.directory, 'state.json'));
+      gate.resolve(); await f.rebind();
       expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices)
         .toEqual([expect.objectContaining({ deviceId: 40, original: true })]);
       expect(f.settingWrites).toEqual([false]);
     } finally {
-      gate.resolve(); saving.mockRestore();
+      gate.resolve(); saving.mockRestore(); resolving.mockRestore(); loading.mockRestore();
     }
   });
 
   it('bounds shutdown during a held journal write and serializes the late file replacement before a new runtime writes', async () => {
     const f = await setup(), gate = deferred<void>();
-    const write = secureJson.writeOwnerOnlyJsonFile;
-    let held = false;
+    const write = secureJson.writeOwnerOnlyJsonFile, realpath = fs.realpath.bind(fs), lstat = fs.lstat.bind(fs);
+    let held = false, replacementResolvingRoot = false;
+    const resolving = jest.spyOn(fs, 'realpath').mockImplementation(async location => {
+      const resolved = await realpath(location);
+      if (location === root) replacementResolvingRoot = true;
+      return resolved;
+    });
+    const loading = jest.spyOn(fs, 'lstat').mockImplementation(location => lstat(location));
     const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementationOnce(async (...args) => {
       held = true; await gate.promise; return write(...args);
     });
-    const pending = f.remoteSave({});
-    const pendingFailure = expect(pending).rejects.toBeInstanceOf(OperationTimeoutError);
-    await until(() => held);
-    const stopping = f.runtime.stop();
-    const stopped = expect(stopping).rejects.toBeInstanceOf(OperationTimeoutError);
-    await jest.advanceTimersByTimeAsync(120000); await pendingFailure; await stopped;
-    expect(f.releaseOwnership).toHaveBeenCalledTimes(1);
-    runtimes = runtimes.filter(runtime => runtime !== f.runtime);
-    let replacementStarted = false, replacementSource!: FcmEventSourceOptions;
-    const replacement = f.rebind({ eventSourceFactory: input => {
-      replacementSource = input;
-      return { setDemand: jest.fn().mockResolvedValue(undefined), reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
-    } }).then(runtime => { replacementStarted = true; return runtime; });
-    await Promise.resolve(); expect(replacementStarted).toBe(false);
-    gate.resolve(); await replacement; saving.mockRestore();
-    await replacementSource.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['new-checkpoint'] });
-    expect((await f.state()).push?.persistentIds).toEqual(['new-checkpoint']);
+    try {
+      const pending = f.remoteSave({});
+      const pendingFailure = expect(pending).rejects.toBeInstanceOf(OperationTimeoutError);
+      await until(() => held);
+      const stopped = expect(f.runtime.stop()).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(120000); await pendingFailure; await stopped;
+      expect(f.releaseOwnership).toHaveBeenCalledTimes(1);
+      runtimes = runtimes.filter(runtime => runtime !== f.runtime);
+      loading.mockClear();
+      const blocked = expect(f.rebind()).rejects.toBeInstanceOf(OperationTimeoutError);
+      await until(() => replacementResolvingRoot);
+      await jest.advanceTimersByTimeAsync(120000); await blocked;
+      expect(loading).not.toHaveBeenCalledWith(path.join(f.runtime.directory, 'state.json'));
+      gate.resolve();
+      let replacementSource!: FcmEventSourceOptions;
+      await f.rebind({ eventSourceFactory: input => {
+        replacementSource = input;
+        return { setDemand: jest.fn().mockResolvedValue(undefined), reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
+      } });
+      await replacementSource.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['new-checkpoint'] });
+      expect((await f.state()).push?.persistentIds).toEqual(['new-checkpoint']);
+    } finally { gate.resolve(); saving.mockRestore(); resolving.mockRestore(); loading.mockRestore(); }
   });
 
   it('bootstraps and reloads Windows-shaped modes without POSIX identity or provider requests', async () => {

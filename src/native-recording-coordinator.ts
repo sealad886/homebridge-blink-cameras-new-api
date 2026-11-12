@@ -271,10 +271,10 @@ export class NativeRecordingCoordinator {
       Math.min(this.eligibleAt(job), job.observation.occurredAt + this.maxJobAgeMs)))) - Date.now())));
   }
 
-  private operationExpiry(): number {
+  private operationExpiry(now = Date.now()): number {
     const expiry = Math.min(this.operation!.startedAt + REMOTE_OPERATION_LEASE_MS,
       this.queue[0].observation.occurredAt + this.maxJobAgeMs);
-    return isRemoteOperationLeaseActive(expiry) ? expiry : Date.now();
+    return isRemoteOperationLeaseActive(expiry, now) ? expiry : now;
   }
 
   private async run(): Promise<void> {
@@ -282,7 +282,8 @@ export class NativeRecordingCoordinator {
       return;
     }
     if (this.operation) {
-      if (Date.now() < this.operationExpiry()) return;
+      const now = Date.now();
+      if (now < this.operationExpiry(now)) { this.schedule(); return; }
       this.controller?.abort();
       // Invalidate identity before async cleanup so late acquisition cannot publish.
       const abandoned = this.operation;

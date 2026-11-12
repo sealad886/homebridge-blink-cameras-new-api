@@ -15,7 +15,7 @@ import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type Nativ
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
 import type { NativeRecordingConfig, NativeRecordingDevicePolicy } from './native-recording-config';
 import type { NativeRecordingDelegate, NativeRecordingPolicy } from './accessories/native-recording-delegate';
-import { isRemoteOperationLeaseActive, REMOTE_OPERATION_LEASE_MS, withinRequestBudget } from './operation-budget';
+import { isRemoteOperationLeaseActive, REMOTE_OPERATION_LEASE_MS, withinRequestBudget, type RequestOptions } from './operation-budget';
 import type { BlinkCameraKind } from './types';
 
 export interface NativeRuntimeDevice {
@@ -112,7 +112,7 @@ export class NativeRecordingRuntime {
   private recovery?: Promise<void>;
   private preferences?: Promise<void>;
   private cacheBytes = 0;
-  private releaseOwnership?: () => Promise<void>;
+  private releaseOwnership?: (options?: RequestOptions) => Promise<void>;
   private writerReleased = false;
   readonly directory: string;
   private cachePath: string;
@@ -266,7 +266,9 @@ export class NativeRecordingRuntime {
     // Only existing command IDs may be examined during recovery; no new prepare.
     for (const owner of this.owners.values()) await owner.reconcilePending();
     if (operation?.status === 'unresolved') {
-      const job = this.core.snapshot().queue[0];
+      const current = this.core.snapshot(), job = current.queue[0];
+      if (current.operation?.operationId !== operation.operationId || current.operation.jobKey !== operation.jobKey
+        || !job || observationKey(job.observation) !== operation.jobKey) return;
       const state = this.owners.get(job.observation.moduleId)?.snapshot().operation;
       if (!state || state.phase === 'finished' || state.phase === 'abandoned') {
         await this.core.resolveOperation({ moduleId: job.observation.moduleId, operationId: operation.operationId,
@@ -415,6 +417,9 @@ export class NativeRecordingRuntime {
 
   deliveryOutcome(outcome: string): void { this.options.report(`home-${outcome}`); this.pumpDelivery(); }
 
+  /** New runtimes still pass the shared physical-write and SDK ownership guards. */
+  get localWriterReleased(): boolean { return this.writerReleased; }
+
   async stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopped = true; this.active = false;
@@ -433,8 +438,12 @@ export class NativeRecordingRuntime {
           if (failed) throw failed.reason;
         })(), { deadline });
       } finally {
-        this.writerReleased = true;
-        await withinRequestBudget(this.releaseOwnership?.() ?? Promise.resolve(), { deadline });
+        try {
+          await withinRequestBudget(this.releaseOwnership?.({ deadline }) ?? Promise.resolve(), { deadline });
+        } finally {
+          try { await withinRequestBudget(this.writes, { deadline }); }
+          finally { this.writerReleased = true; }
+        }
       }
     })();
     return this.stopping;
@@ -712,10 +721,12 @@ export class NativeRecordingRuntime {
         || (entry.state.operation !== undefined && (!terminal(entry.state)
           || entry.state.operation.accountId !== entry.scope.accountId || entry.state.operation.networkId !== entry.scope.networkId
           || entry.state.operation.syncModuleId !== entry.scope.syncModuleId)));
-      const queuedModule = prior.core?.queue?.[0]?.observation?.moduleId;
+      const queued = prior.core?.queue?.[0], queuedModule = queued?.observation?.moduleId;
+      const coreLease = prior.core?.operation && queued ? Math.min(prior.core.operation.startedAt + REMOTE_OPERATION_LEASE_MS,
+        queued.observation.occurredAt + this.options.config.maxJobAgeMs) : undefined;
       if (isRemoteOperationLeaseActive(prior.remoteOperations?.liveView?.expiresAt)
         || isRemoteOperationLeaseActive(prior.remoteOperations?.stateCommand?.expiresAt) || pendingNative
-        || (prior.core?.operation && queuedModule && !terminal(prior.nativeByModule[queuedModule]?.state))) {
+        || (isRemoteOperationLeaseActive(coreLease) && queuedModule && !terminal(prior.nativeByModule[queuedModule]?.state))) {
         throw new Error('Prior client/tier scope has unresolved Blink operation ownership');
       }
       if (prior.remoteOperations?.liveView || prior.remoteOperations?.stateCommand || prior.core?.operation) this.options.report('prior-scope-operation-advisory');

@@ -149,6 +149,10 @@ interface CommandAdmission {
   networkId?: number;
   commandId?: number;
 }
+interface CommandRequestOptions extends RequestOptions {
+  generation: number;
+  beforeDispatch(): void;
+}
 
 export class BlinkApi {
   private stateCommandTail: Promise<void> = Promise.resolve();
@@ -169,14 +173,14 @@ export class BlinkApi {
   private saveRemoteOperationState?: (state: BlinkRemoteOperationOwnership) => Promise<void>;
   private remoteOperationWriter?: RemoteOperationWriter;
   private queuedStateCommands = 0;
-  private ownershipWrites = 0;
   private stateCommandReconciliation?: Promise<void>;
   private reconcilingStateCommand = false;
   private stateCommandRunning?: string;
   private ownershipPersistenceFailed = false;
   private writerGeneration = 0;
   private pendingOwnershipWrite?: Promise<void>;
-  private ownershipFlushRequested = false;
+  private queuedOwnershipWrite?: { state: BlinkRemoteOperationOwnership; generation: number;
+    save: (state: BlinkRemoteOperationOwnership) => Promise<void> };
   private abandonedOperations: BlinkAbandonedOperation[] = [];
 
   constructor(private readonly config: BlinkConfig) {
@@ -198,12 +202,16 @@ export class BlinkApi {
   /** Serialize remote capture and mutations, including command completion. */
   private queueStateCommand<T>(
     label: 'Motion' | 'Network' | 'Capture' | 'Quality' | 'EarlyNotification' | 'NativeStorage' | 'LiveView' | 'Retirement' | 'CommandUpdate',
-    send: (options: RequestOptions) => Promise<T>,
+    send: (options: CommandRequestOptions) => Promise<T>,
     retryDelays: number[],
     conflictResolution?: (options: RequestOptions) => Promise<ConflictResolution<T>>,
     options: RequestOptions = {},
     admission: CommandAdmission = { kind: 'state' },
   ): Promise<T> {
+    const live = this.liveViewOwner;
+    const ownerExpiresAt = (admission.kind === 'retire' || admission.kind === 'update') && live
+      && live.networkId === admission.networkId && live.commandId === admission.commandId
+      ? live.expiresAt ?? Date.now() : undefined;
     this.expireOperationOwners();
     const generation = this.writerGeneration;
     this.queuedStateCommands++;
@@ -214,6 +222,7 @@ export class BlinkApi {
         if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
         options.signal?.throwIfAborted();
         if (options.queueDeadline !== undefined && options.queueDeadline <= Date.now()) throw new OperationTimeoutError();
+        if (ownerExpiresAt !== undefined && ownerExpiresAt <= Date.now()) throw new OperationTimeoutError();
       };
       checkQueued();
       this.assertCommandAdmission(admission);
@@ -223,10 +232,14 @@ export class BlinkApi {
       started = true;
       if (queueTimer) globalThis.clearTimeout(queueTimer);
       this.hasSentStateCommand = true;
-      const execution = { ...options, deadline: Math.min(options.deadline ?? Infinity,
-        Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)) };
-      for (let attempt = 0; ; attempt++) {
+      const execution: CommandRequestOptions = { ...options, generation, deadline: Math.min(options.deadline ?? Infinity,
+        ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
+      beforeDispatch: () => {
         checkRequestBudget(execution);
+        if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
+      } };
+      for (let attempt = 0; ; attempt++) {
+        execution.beforeDispatch();
         this.assertCommandAdmission(admission);
         try {
           const sent = send(execution);
@@ -368,7 +381,7 @@ export class BlinkApi {
   /** Return a shutdown lease. Released writers remain usable for late owned cleanup until a validated handoff. */
   configureRemoteOperationOwnership(options: { restoredState?: BlinkRemoteOperationOwnership;
     restoredNativeStorage?: readonly { scope: NativeStorageScope; state: NativeStorageState }[];
-    scope?: RemoteOperationScope; saveState: (state: BlinkRemoteOperationOwnership) => Promise<void> }): () => Promise<void> {
+    scope?: RemoteOperationScope; saveState: (state: BlinkRemoteOperationOwnership) => Promise<void> }): (options?: RequestOptions) => Promise<void> {
     this.expireOperationOwners();
     if ((!this.remoteOperationWriter?.released && (this.activeNativeAdmission || this.queuedStateCommands || this.stateCommandRunning || this.reconcilingStateCommand))
       || (this.saveRemoteOperationState && !this.remoteOperationWriter?.released)) {
@@ -443,12 +456,14 @@ export class BlinkApi {
     this.stateCommandRunning = undefined;
     this.activeNativeAdmission = undefined;
     this.expireOperationOwners();
-    return () => {
+    if (this.pendingOwnershipWrite) void this.writeRemoteOperationState(this.remoteOperationSnapshot());
+    return (request: RequestOptions = {}) => {
       if (this.remoteOperationWriter !== writer) return Promise.resolve();
       if (!writer.releasing) writer.releasing = (async () => {
         try {
-          await withinRequestBudget(Promise.all([this.stateCommandTail, this.stateCommandReconciliation]),
-            { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });
+          const budget = { ...request, deadline: Math.min(request.deadline ?? Infinity, Date.now() + REMOTE_OPERATION_LEASE_MS) };
+          await withinRequestBudget(Promise.all([this.stateCommandTail, this.stateCommandReconciliation]), budget);
+          if (this.pendingOwnershipWrite) await withinRequestBudget(this.pendingOwnershipWrite, budget);
         } catch { this.log.warn('[Command] Local ownership handoff deadline expired.'); }
         finally { writer.released = true; }
       })();
@@ -458,29 +473,29 @@ export class BlinkApi {
 
   private async writeRemoteOperationState(state: BlinkRemoteOperationOwnership): Promise<void> {
     const save = this.saveRemoteOperationState, generation = this.writerGeneration;
-    const degraded = () => {
+    const deadline = Date.now() + 1000;
+    const degraded = (ownerGeneration: number) => {
+      if (ownerGeneration !== this.writerGeneration) return;
       if (!this.ownershipPersistenceFailed) this.log.warn('[Command] Ownership journal unavailable; controls use bounded in-memory ownership.');
       this.ownershipPersistenceFailed = true;
     };
-    if (!save) { degraded(); return; }
-    if (this.pendingOwnershipWrite) { this.ownershipFlushRequested = true; return; }
-    this.ownershipWrites++;
-    const writing = Promise.resolve().then(() => save(state));
-    this.pendingOwnershipWrite = writing;
-    void writing.then(() => {
-      if (this.writerGeneration === generation) this.ownershipPersistenceFailed = false;
-    }, () => { if (this.writerGeneration === generation) degraded(); }).finally(() => {
-      this.ownershipWrites--;
-      if (this.pendingOwnershipWrite === writing) {
-        this.pendingOwnershipWrite = undefined;
-        if (this.ownershipFlushRequested) {
-          this.ownershipFlushRequested = false;
-          void this.writeRemoteOperationState(this.remoteOperationSnapshot());
+    if (!save) { degraded(generation); return; }
+    this.queuedOwnershipWrite = { state, generation, save };
+    this.pendingOwnershipWrite ??= Promise.resolve().then(async () => {
+      try {
+        while (this.queuedOwnershipWrite) {
+          const next = this.queuedOwnershipWrite;
+          this.queuedOwnershipWrite = undefined;
+          if (next.generation !== this.writerGeneration) continue;
+          try {
+            await next.save(next.state);
+            if (next.generation === this.writerGeneration) this.ownershipPersistenceFailed = false;
+          } catch { degraded(next.generation); }
         }
-      }
+      } finally { this.pendingOwnershipWrite = undefined; }
     });
-    try { await withinRequestBudget(writing, { deadline: Date.now() + 1000 }); }
-    catch { if (this.writerGeneration === generation) degraded(); }
+    try { await withinRequestBudget(this.pendingOwnershipWrite, { deadline }); }
+    catch { degraded(generation); }
   }
 
   private validateLiveViewOwner(owner: BlinkLiveViewOwnership): void {
@@ -524,11 +539,12 @@ export class BlinkApi {
   }
 
   private async ownedStateCommand(kind: BlinkStateCommandOwnership['kind'], accountId: number, networkId: number,
-    deviceId: number | undefined, send: (beforeDispatch: () => void) => Promise<BlinkCommandResponse>, options: RequestOptions): Promise<BlinkCommandResponse> {
+    deviceId: number | undefined, send: (beforeDispatch: () => void) => Promise<BlinkCommandResponse>, options: CommandRequestOptions): Promise<BlinkCommandResponse> {
+    options.beforeDispatch();
     const intent: BlinkStateCommandOwnership = { reservationId: randomUUID(), accountId, networkId, kind,
       phase: 'starting', statusReads: 0, expiresAt: Math.min(options.deadline ?? Infinity, Date.now() + REMOTE_OPERATION_LEASE_MS),
       ...(deviceId ? { deviceId } : {}) };
-    const generation = this.writerGeneration;
+    const generation = options.generation;
     const current = () => {
       checkRequestBudget(options);
       if (generation !== this.writerGeneration || this.stateCommandOwner?.reservationId !== intent.reservationId
@@ -538,7 +554,7 @@ export class BlinkApi {
     let dispatched = false;
     let acknowledged = false;
     try {
-      await this.persistStateCommandOwner(intent);
+      await this.persistStateCommandOwner(intent, undefined, generation);
       current();
       dispatched = true;
       const response = await send(current);
@@ -1631,16 +1647,17 @@ export class BlinkApi {
     requireRemoteId(networkId); requireRemoteId(deviceId);
     return this.queueStateCommand('LiveView', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      execution.beforeDispatch();
       const owner: BlinkLiveViewOwnership = { reservationId: randomUUID(), accountId, networkId, deviceId, kind,
         phase: 'starting', retirementAcknowledged: false,
         expiresAt: Math.min(execution.deadline ?? Infinity, Date.now() + REMOTE_OPERATION_LEASE_MS) };
-      const generation = this.writerGeneration;
+      const generation = execution.generation;
       const current = () => {
         checkRequestBudget(execution);
         if (generation !== this.writerGeneration || this.liveViewOwner?.reservationId !== owner.reservationId
           || this.getCachedIdentity().accountId !== accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
       };
-      await this.persistLiveViewOwner(owner);
+      await this.persistLiveViewOwner(owner, undefined, generation);
       let dispatched = false;
       let commandId: number | undefined;
       try {
@@ -1749,9 +1766,10 @@ export class BlinkApi {
     checkRequestBudget(options);
     return this.queueStateCommand('Retirement', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      execution.beforeDispatch();
       const owned = this.liveViewOwner?.networkId === networkId && this.liveViewOwner.commandId === commandId
         ? this.liveViewOwner : undefined;
-      const generation = this.writerGeneration;
+      const generation = execution.generation;
       const current = () => {
         checkRequestBudget(execution);
         if (generation !== this.writerGeneration || (owned && this.liveViewOwner?.reservationId !== owned.reservationId)) {
@@ -1779,10 +1797,11 @@ export class BlinkApi {
     }, [], undefined, options, { kind: 'retire', networkId, commandId });
   }
 
-  private async confirmLiveViewRetirement(owner: BlinkLiveViewOwnership, options: RequestOptions): Promise<boolean> {
+  private async confirmLiveViewRetirement(owner: BlinkLiveViewOwnership, options: CommandRequestOptions): Promise<boolean> {
     if (!owner.commandId || !owner.retirementAcknowledged) return false;
     const current = this.liveViewOwner;
-    const generation = this.writerGeneration;
+    const generation = options.generation;
+    options.beforeDispatch();
     if (!current || current.reservationId !== owner.reservationId) return false;
     if (this.getCachedIdentity().accountId !== owner.accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
     try {
