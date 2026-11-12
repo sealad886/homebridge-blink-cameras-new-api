@@ -7,6 +7,35 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.1] - 2026-11-12
+
+### Changed
+- Add inherited plugin, Sync Module and camera Early Notification controls,
+  including unset/inherit and explicit false overrides. Preserve original Blink
+  preferences and restore them when management ends while respecting manual changes.
+- Permit one immediate exact-timestamp clip lookup after Early Notification is
+  confirmed off, retaining ordinary delayed fallback and its retry budget.
+- Replace indefinite local operation vetoes with fixed leases of at most two
+  minutes. Retain expired outcomes as uncertain history, allow fresh distinct
+  actions, and prevent late callbacks from replacing newer ownership.
+- Keep arm/disarm and other controls available with warned in-memory ownership
+  during recording-journal faults. Classify proven connection-establishment
+  failures as unstarted rather than leaving a permanent Live View reservation.
+- Show canonical validation paths and blocking status in the settings editor.
+
+### Upgrade and limits
+- Back up private Homebridge configuration, auth and recording state before
+  updating. Legacy owners without deadlines become advisory automatically;
+  no manual state deletion or standalone Blink diagnostic helper is needed.
+- New native abandonment receipts require this corrected reader. Older betas
+  may reject them; retain the pre-update state backup for a reviewed rollback.
+- Local abandonment does not prove a remote operation ended. Blink may still
+  refuse a fresh request while remote work remains active. Recording degrades
+  during genuine storage faults; unpersisted control history can be lost if
+  the process exits during such a fault.
+- Publish on the beta channel without moving stable latest. Pi installation,
+  live preference mutation and retained Home playback remain operator validation.
+
 ## [1.1.0-beta.0] - 2026-11-09
 
 ### Changed
