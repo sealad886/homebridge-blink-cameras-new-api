@@ -76,6 +76,11 @@ the resulting squash commit. Wrap body prose to 100 characters or fewer.
 
 ## Gates and publication
 
+Before installing an upgrade that migrates saved configuration, close all settings
+and JSON Config editors and stop other configuration writers until installation
+completes. Migration's final check and atomic replacement do not lock Homebridge's
+settings service against concurrent saves.
+
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
 build, and package contents. Jest runs serially, matching CI and the contributor
 validation workflow while preserving every assertion and deadline.

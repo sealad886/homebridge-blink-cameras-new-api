@@ -11,6 +11,11 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
 ## Upgrade from 1.1.0-beta.1
 
+Close all settings and JSON Config editors and stop other configuration writers
+until installation or explicit migration completes. The final file check and
+atomic replacement do not form a lock shared with Homebridge's settings service;
+concurrent writers are outside this migration's supported operating requirements.
+
 On POSIX Homebridge npm installations, the installed package's postinstall step
 runs this one-time migration against `config.json` in the explicit
 `UIX_STORAGE_PATH` supplied by the installer. Without that authoritative path,
