@@ -88,3 +88,17 @@ The original failed run is preserved. No unresolved demonstrated logging defect
 remains within the reviewed scope. Live provider/Pi execution and physical
 Home/iCloud acceptance were not performed. All changes remain local on
 `codex/logging-audit`; no version bump, push, PR, release or installation occurred.
+
+## Beta.3 release review follow-up
+
+The maintainer subsequently authorized PR review, merge and beta publication.
+CodeRabbit's first beta.3 review identified two additional logging defects:
+acknowledgement before generator resumption could omit the transfer-completion
+receipt, and the camera-label URL expression missed RTSP/IMMIS capabilities.
+Completion is now reported at the final-packet handoff, exactly once before an
+acknowledgement can retire the stream. Camera labels now reuse canonical free-text
+redaction before serial/control/length sanitization. Existing completion/ACK,
+privacy and revocation behavior is preserved. Four regression cases cover early
+ACK and rtsp/rtsps/immis labels; 48 delegate/platform tests and type/lint checks pass.
+The local/regional/global search found one finite-stream reporting owner and the
+existing canonical URL/text helper, so no new logging framework was introduced.

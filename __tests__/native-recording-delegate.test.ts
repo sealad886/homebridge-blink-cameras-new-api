@@ -128,6 +128,21 @@ describe('finite native recording delegate', () => {
     expect(f.delegate.available).toBe(true);
   });
 
+  it('reports finite transfer completion once when Home acknowledges before the generator resumes', async () => {
+    const f = setup(); f.enable(); await f.delegate.offerDownloaded(source, f.metadata());
+    const stream = f.delegate.handleRecordingStreamRequest(8);
+    await stream.next(); await stream.next();
+    const final = stream.next(); await jest.advanceTimersByTimeAsync(1000);
+    expect((await final).value?.isLast).toBe(true);
+    f.delegate.acknowledgeStream(8);
+    expect(f.deliveryOutcome.mock.calls.map(([event]) => event.outcome))
+      .toEqual(['requested', 'transfer-finished', 'transport-acknowledged']);
+    expect(f.prepared[0].disposed).toBe(true);
+    expect((await stream.next()).done).toBe(true);
+    f.delegate.acknowledgeStream(8);
+    expect(f.deliveryOutcome.mock.calls.filter(([event]) => event.outcome === 'transfer-finished')).toHaveLength(1);
+  });
+
   it('ignores ACK before a final fragment and refuses simultaneous stream requests', async () => {
     const f = setup(); f.enable(); await f.delegate.offerDownloaded(source, f.metadata());
     const stream = f.delegate.handleRecordingStreamRequest(1); await stream.next();

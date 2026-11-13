@@ -55,6 +55,7 @@ import type { NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './acce
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
 import type { NativeMotionDevice } from './blink-api/motion-events';
 import { migrateEarlyNotificationConfig } from './early-notification-config';
+import { redactDiagnosticText } from './blink-api/redaction';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -553,8 +554,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     this.nativeRuntime = await NativeRecordingRuntime.create({ client: this.apiClient, scope, devices, matchingDevices, storagePath,
       config: resolveNativeRecordingConfig(this.config.nativeRecording), firebase: BLINK_FIREBASE_CLIENT, appVersion: BLINK_NOTIFICATION_APP_VERSION,
       report: (event, context) => {
-        const camera = context?.camera?.replace(/[\p{C}\u2028\u2029]/gu, ' ')
-          .replace(/https?:\/\/\S+|\b(?=[a-z0-9-]{12,}\b)(?=[a-z0-9-]*\d)[a-z0-9-]+\b/gi, '<redacted>').slice(0, 80);
+        const camera = context?.camera && redactDiagnosticText(context.camera).replace(/[\p{C}\u2028\u2029]/gu, ' ')
+          .replace(/\b(?=[a-z0-9-]{12,}\b)(?=[a-z0-9-]*\d)[a-z0-9-]+\b/gi, '<redacted>').slice(0, 80);
         const flow = context?.flow && /^flow-[a-f0-9]{10}$/.test(context.flow) ? context.flow : undefined;
         const details = [camera && `camera=${JSON.stringify(camera)}`, flow,
           Number.isSafeInteger(context?.attempt) && `attempt=${context!.attempt}`].filter(Boolean).join(' ');

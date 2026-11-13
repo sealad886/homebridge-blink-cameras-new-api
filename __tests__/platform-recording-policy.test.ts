@@ -110,6 +110,20 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(output).not.toContain('Entry\\n');
   });
 
+  it.each(['rtsp', 'rtsps', 'immis'])('redacts %s capability URLs from normal camera-context logs', async scheme => {
+    const platform = await launch(emptyHomescreen());
+    const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
+    log.info.mockClear();
+    createRuntime.mock.calls[0][0].report('motion-decoded', {
+      camera: `Entry ${scheme}://private-user:private-password@private-host/private-capability?token=private-token`,
+    });
+    const output = JSON.stringify(log.info.mock.calls);
+    expect(output).toContain('Entry'); expect(output).toContain('<redacted>');
+    for (const secret of ['private-user', 'private-password', 'private-host', 'private-capability', 'private-token']) {
+      expect(output).not.toContain(secret);
+    }
+  });
+
   it('binds raw model and unique module policy, replacing only when the effective camera choice changes', async () => {
     const homescreen = emptyHomescreen();
     homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true, type: 'catalina' });

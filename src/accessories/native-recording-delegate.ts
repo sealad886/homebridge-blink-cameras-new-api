@@ -216,8 +216,9 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
         if (stream.closed) return;
         if (!allowed() || stream.owner.signal.aborted || stream.prepared.disposed) throw new Error('Native recording permission was revoked');
         const isLast = index === stream.prepared.fragments.length - 1;
-        if (isLast) stream.finalSent = true;
-        yield { data: Buffer.from(fragment.data), isLast };
+        const packet = { data: Buffer.from(fragment.data), isLast };
+        if (isLast) { stream.finalSent = true; this.report(stream, 'transfer-finished'); }
+        yield packet;
       }
     } finally {
       stream.generatorFinished = true;
@@ -225,7 +226,6 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
         this.setMotionSafely(false);
         if (!stream.finalSent) this.finishStream(stream, stream.closed ? 'closed' : 'uncertain');
         else {
-          this.report(stream, 'transfer-finished');
           this.acknowledgementTimer = globalThis.setTimeout(() => this.finishStream(stream, 'uncertain'), this.acknowledgementTimeout);
         }
       }
