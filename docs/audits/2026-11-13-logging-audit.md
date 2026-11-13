@@ -1,0 +1,55 @@
+# Logging audit, 13 November 2026
+
+## Scope and acceptance
+
+User requested normal push and HSV handoff visibility, an adversarial audit of
+normal/debug logging, simplification and milestone commits. Preserve removal of
+full Blink state capture. No new release or Pi installation is part of this work.
+
+1. Implement semantic lifecycle receipts through existing real-camera delegates.
+2. Audit transport/auth, camera/media/native and UI sinks; remove confirmed noise
+   and obsolete documentation, preserving privacy and failure reporting.
+3. Verify integrated behavior and create local milestone commits.
+
+## Milestone 1
+
+Normal push receipt, decoded motion and explicit HSV gating reasons now lead to
+camera-scoped queue/acquisition/catalog/download/preparation/offer receipts.
+Home requests, transfer completion and terminal delivery outcomes remain distinct.
+A local salted flow label links stages without logging vendor identifiers.
+The report callback is guarded so logging cannot alter resource ownership.
+
+Worker checks: TypeScript, owned-source ESLint, diff check and 156 focused tests
+passed. These establish host behavior, not installed Pi or iCloud retention.
+
+## Audit ledger
+
+| Finding | Evidence | Disposition |
+| --- | --- | --- |
+| Push/HSV visibility gap | Most existing report events were debug-only; policy gates returned silently | Corrected in milestone 1 |
+| Snapshot chatter | 50 unavailable snapshots produced 50 identical lines with mediaDebug off | Remove routine request/cache messages |
+| Logger callback ownership | Synthetic throwing snapshot logger prevented required callback | Guard canonical callbacks |
+| Token preflight chatter | Valid token expiry printed on every HTTP preflight | Remove routine success line; preserve refresh/errors |
+| Duplicate OAuth receipt | Headers-received line follows status/timing receipt | Remove duplicate |
+| Placeholder diagnostic output | Literal redacted lines and unused cookie parsing | Remove placeholders; retain counts/status/errors |
+| Duplicated URL redaction | Auth private redactor duplicates canonical helper; no exploitable caller found | Reuse canonical helper and verify privacy |
+| UI auth progress machinery | Percent/ETA for at most two files | Remove progress machinery; keep decisions and loaded receipt |
+| Stale HSV documentation | Describes retired rolling-buffer states | Replaced with actual finite clip lifecycle |
+
+No raw HTTP/auth payload dump, native stderr forwarding, packet/frame logging or
+unbounded provider-message path was demonstrated in inspected production sinks.
+Native stderr draining and binary stdout IPC must remain intact.
+
+## Replay accessory readback
+
+The synthetic name exists only in a standalone prototype helper in the primary
+checkout, outside current main and the npm package. Targeted process inventories
+on Mac and Pi found no running helper; Pi configuration has no matching target.
+No process or data was deleted. A retained Home pairing must be removed in Home.
+Real-camera delegate routing is covered by existing runtime/delegate tests.
+
+## Verification limits
+
+Initial media tests had five UDP-bind failures under sandbox; independent bind
+probe returned EPERM. Host-access checks are required before final qualification.
+Physical Home delivery and iCloud retention are not established by source tests.

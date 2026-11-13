@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
@@ -14,7 +14,7 @@ import { readOwnerOnlyJsonFile, writeOwnerOnlyJsonFile } from './blink-api/secur
 import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type NativeRecordingAcquisitionResult,
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
 import type { NativeRecordingConfig, NativeRecordingDevicePolicy } from './native-recording-config';
-import type { NativeRecordingDelegate, NativeRecordingPolicy } from './accessories/native-recording-delegate';
+import type { NativeRecordingDelegate, NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
 import { isRemoteOperationLeaseActive, REMOTE_OPERATION_LEASE_MS, withinRequestBudget, type RequestOptions } from './operation-budget';
 import type { BlinkCameraKind } from './types';
 
@@ -42,7 +42,9 @@ interface EarlyNotificationOriginals {
   scope: { accountId: number; tier: string };
   devices: EarlyNotificationOriginal[];
 }
+export interface NativeRecordingLogContext { camera?: string; flow?: string; attempt?: number; }
 interface DownloadedAsset {
+  logFlow?: string;
   reference: string; bytes: number; sha256: string; identity: string; capturedAt: string;
   moduleId: string; cameraId: string; jobId: string; policyEpoch: number; cameraGeneration: number;
 }
@@ -69,7 +71,7 @@ export interface NativeRecordingRuntimeOptions {
   config: NativeRecordingConfig;
   firebase: FirebaseConfig;
   appVersion: string;
-  report(event: string): void;
+  report(event: string, context?: NativeRecordingLogContext): void;
   /** Explicit offline transport qualification; production uses the isolated receiver. */
   eventSourceFactory?: (options: FcmEventSourceOptions) => Pick<FcmEventSource, 'setDemand' | 'reconnect' | 'stop'>;
 }
@@ -88,6 +90,7 @@ const settingKey = (device: Pick<EarlyNotificationOriginal, 'kind' | 'networkId'
 
 /** Account composition: one writer, one FIFO, per-module protocol owners, no idle catalogs. */
 export class NativeRecordingRuntime {
+  private readonly logSalt = randomUUID();
   private state!: NativeRecordingRuntimeState;
   private core!: NativeRecordingCoordinator;
   private source!: Pick<FcmEventSource, 'setDemand' | 'reconnect' | 'stop'>;
@@ -205,14 +208,20 @@ export class NativeRecordingRuntime {
       retryIntervalMs: this.options.config.retryIntervalMs, maxRetries: this.options.config.maxRetries,
       maxQueuedJobs: this.options.config.maxQueuedJobs, maxJobAgeMs: this.options.config.maxJobAgeMs,
       earliestAcquisitionAt: (event, fallbackAt) => this.earliest(event, fallbackAt),
-      acquire: (request, signal) => this.acquire(request, signal),
+      acquire: async (request, signal) => {
+        const context = this.observationContext(request.observation, request.attempt);
+        this.report('acquisition-attempt', context);
+        const result = await this.acquire(request, signal);
+        this.report(`acquisition-${result.status}`, context);
+        return result;
+      },
       saveState: core => this.commit(next => { next.core = clone(core); }),
-      onError: () => this.options.report('acquisition-faulted'),
+      onError: () => this.report('acquisition-faulted'),
       onOperationAbandoned: async () => {
         for (const owner of this.owners.values()) await owner.abandonExpired();
-        this.options.report('operation-locally-abandoned');
+        this.report('operation-locally-abandoned');
       },
-      onJobFinished: result => { this.epochs.delete(observationKey(result.observation)); this.options.report(`job-${result.outcome}`); },
+      onJobFinished: result => { this.epochs.delete(observationKey(result.observation)); this.report(`job-${result.outcome}`, this.observationContext(result.observation, result.attempts)); },
     });
     // Old permission-period work is never republished. Its cancelled head retains
     // remote uncertainty only within the original finite local lease.
@@ -230,7 +239,7 @@ export class NativeRecordingRuntime {
         if (!this.currentScope()) throw new Error('Push receiver account/client scope changed');
       },
       onNotification: (notification, signal) => this.receive(notification, signal),
-      onAudit: event => this.options.report(`push-${event.event}${event.reason ? `:${event.reason}` : ''}`
+      onAudit: event => this.report(`push-${event.event}${event.reason ? `:${event.reason}` : ''}`
         + `${event.disposition ? `:${event.disposition}` : ''}${event.retryInMs !== undefined ? `:retry-ms=${event.retryInMs}` : ''}`),
     });
   }
@@ -259,9 +268,9 @@ export class NativeRecordingRuntime {
   private async performKnownRecovery(): Promise<void> {
     // Startup/operator retry may resolve known ownership, but never resends its POST.
     const liveViews = await this.options.client.reconcileKnownLiveViews();
-    if (liveViews.some(owner => !owner.confirmed)) this.options.report('live-view-recovery-required');
+    if (liveViews.some(owner => !owner.confirmed)) this.report('live-view-recovery-required');
     const ordinary = await this.options.client.reconcileKnownStateCommand();
-    if (ordinary.commandId !== undefined && !ordinary.confirmed) this.options.report('ordinary-recovery-required');
+    if (ordinary.commandId !== undefined && !ordinary.confirmed) this.report('ordinary-recovery-required');
     const operation = this.core.snapshot().operation;
     if (operation?.status === 'active') return;
     // Only existing command IDs may be examined during recovery; no new prepare.
@@ -274,7 +283,7 @@ export class NativeRecordingRuntime {
       if (!state || state.phase === 'finished' || state.phase === 'abandoned') {
         await this.core.resolveOperation({ moduleId: job.observation.moduleId, operationId: operation.operationId,
           status: state?.phase === 'abandoned' ? 'locally-abandoned' : 'verified-terminal', result: { status: 'skipped' } });
-      } else this.options.report('recovery-required');
+      } else this.report('recovery-required');
     }
   }
 
@@ -282,7 +291,7 @@ export class NativeRecordingRuntime {
 
   private startPreferenceReconciliation(): void {
     if (!this.preferenceWorkAllowed()) return;
-    this.preferences ??= this.reconcileEarlyNotification().catch(() => this.options.report('early-notification-faulted'))
+    this.preferences ??= this.reconcileEarlyNotification().catch(() => this.report('early-notification-faulted'))
       .finally(() => { this.preferences = undefined; });
   }
 
@@ -302,7 +311,7 @@ export class NativeRecordingRuntime {
     } catch (error) {
       if ((error as { code?: string }).code === 'ENOENT') {
         this.earlyNotificationOriginals = { version: 2, scope: { accountId: this.options.scope.accountId, tier: this.options.scope.tier }, devices: [] };
-      } else this.options.report('early-notification-state-faulted');
+      } else this.report('early-notification-state-faulted');
     }
   }
 
@@ -324,7 +333,7 @@ export class NativeRecordingRuntime {
       if (device.settings.earlyNotificationMode !== 'on' && device.settings.earlyNotificationMode !== 'off') continue;
       const kind = device.binding.target;
       if (!['camera', 'owl', 'doorbell'].includes(kind) || !supportsEarlyNotificationControl(device.rawType)) {
-        this.options.report('early-notification-unsupported'); continue;
+        this.report('early-notification-unsupported'); continue;
       }
       const identity = { kind: kind as BlinkCameraKind, networkId: device.binding.networkId, deviceId: device.binding.providerId, rawType: device.rawType! };
       desired.set(settingKey(identity), { device, identity });
@@ -339,9 +348,9 @@ export class NativeRecordingRuntime {
           original.rawType, original.original, { expectedCurrent: !original.original });
         if (result.supported && result.current === original.original) {
           await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals.devices.filter(row => settingKey(row) !== settingKey(original)));
-          this.options.report('early-notification-restored');
+          this.report('early-notification-restored');
         }
-      } catch { this.options.report('early-notification-restore-faulted'); }
+      } catch { this.report('early-notification-restore-faulted'); }
     }
     for (const [key, { device, identity }] of desired) {
       if (!this.preferenceWorkAllowed()) return;
@@ -360,9 +369,9 @@ export class NativeRecordingRuntime {
         });
         if (result.supported && result.compatible && result.current === enabled && this.preferenceWorkAllowed()) {
           if (!enabled) this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
-          this.options.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off');
-        } else this.options.report('early-notification-unsupported');
-      } catch { this.options.report('early-notification-faulted'); }
+          this.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off');
+        } else this.report('early-notification-unsupported');
+      } catch { this.report('early-notification-faulted'); }
     }
   }
 
@@ -394,7 +403,7 @@ export class NativeRecordingRuntime {
       for (const owner of this.owners.values()) await owner.retryPersistence();
       await this.core.retryPersistence();
       this.failed = false;
-      this.options.report('persistence-recovered');
+      this.report('persistence-recovered');
       this.pumpDelivery();
     } catch (error) { this.failed = true; throw error; }
   }
@@ -410,6 +419,7 @@ export class NativeRecordingRuntime {
   private async applyPolicyChange(cameraId: string, policy: NativeRecordingPolicy): Promise<void> {
     const device = [...this.devices.values()].find(item => item.binding.cameraId === cameraId);
     if (!device) return;
+    this.report(policy.allowed ? 'home-policy-allowed' : 'home-policy-inactive', { camera: device.binding.nativeName });
     const previousEpoch = this.policyEpochs.get(cameraId);
     this.policyEpochs.set(cameraId, policy.epoch);
     const cancel = !policy.allowed || (previousEpoch !== undefined && previousEpoch !== policy.epoch);
@@ -424,7 +434,22 @@ export class NativeRecordingRuntime {
     this.pumpDelivery();
   }
 
-  deliveryOutcome(outcome: string): void { this.options.report(`home-${outcome}`); this.pumpDelivery(); }
+  deliveryOutcome(outcome: string, cameraId?: string, event?: NativeRecordingDeliveryEvent): void {
+    const device = [...this.devices.values()].find(item => item.binding.cameraId === cameraId);
+    this.report(`home-${outcome}`, { camera: device?.binding.nativeName, flow: event?.metadata?.logFlow });
+    this.pumpDelivery();
+  }
+
+  private observationContext(event: NativeRecordingObservation, attempt?: number): NativeRecordingLogContext {
+    const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId);
+    return { camera: device?.binding.nativeName,
+      flow: `flow-${createHash('sha256').update(this.logSalt).update(observationKey(event)).digest('hex').slice(0, 10)}`, attempt };
+  }
+
+  private report(event: string, context?: NativeRecordingLogContext): void {
+    try { this.options.report(event, context); }
+    catch { /* Logging cannot change acquisition, delivery, or persistence ownership. */ }
+  }
 
   /** New runtimes still pass the shared physical-write and SDK ownership guards. */
   get localWriterReleased(): boolean { return this.writerReleased; }
@@ -459,21 +484,27 @@ export class NativeRecordingRuntime {
   }
 
   private async receive(notification: FcmNotification, signal: globalThis.AbortSignal): Promise<void> {
+    this.report('push-received');
     if (!this.active || this.stopped || this.failed || signal.aborted || !this.currentScope()
       || notification.scope.accountId !== this.options.scope.accountId || notification.scope.clientId !== this.options.scope.clientId
-      || notification.scope.tier !== this.options.scope.tier) return;
+      || notification.scope.tier !== this.options.scope.tier) { this.report('motion-suppressed-runtime-unavailable'); return; }
     const decoded = decodeBlinkMotionMessage(notification, { accountId: this.options.scope.accountId, tier: this.options.scope.tier,
       resolveDevice: identity => {
         const candidates = [...this.devices.values()].filter(item => item.binding.providerId === identity.providerId
           && item.binding.target === identity.target && (identity.networkId === undefined || item.binding.networkId === identity.networkId));
         return candidates.length === 1 ? candidates[0].binding : undefined;
       } });
-    if (decoded.status !== 'motion') { this.options.report(`motion-${decoded.reason}`); return; }
+    if (decoded.status !== 'motion') { this.report(`motion-${decoded.reason}`); return; }
     const device = this.devices.get(bindingKey(decoded.device))!;
-    if (device.settings.exposeMotionDetected) { try { device.motion(); } catch { this.options.report('public-motion-failed'); } }
+    if (device.settings.exposeMotionDetected) { try { device.motion(); } catch { this.report('public-motion-failed'); } }
+    const context = this.observationContext({ ...decoded.observation, moduleId: device.nativeStorage?.moduleId ?? '' });
+    this.report('motion-decoded', context);
     const recording = device.recording();
-    if (!device.settings.homeKitSecureVideo || !recording?.policy.allowed || decoded.eventType !== 'native-usb' || !device.nativeStorage
-      || decoded.observation.occurredAt < (this.enabledSince.get(decoded.device.cameraId) ?? Infinity)) return;
+    const suppression = !device.settings.homeKitSecureVideo ? 'hsv-disabled' : !recording?.policy.allowed ? 'home-policy-inactive'
+      : decoded.eventType !== 'native-usb' ? 'event-not-native' : !device.nativeStorage ? 'missing-module'
+        : decoded.observation.occurredAt < (this.enabledSince.get(decoded.device.cameraId) ?? Infinity) ? 'stale-permission-period' : undefined;
+    if (suppression) { this.report(`motion-suppressed-${suppression}`, context); return; }
+    if (!recording || !device.nativeStorage) return;
     const observation = { ...decoded.observation, moduleId: device.nativeStorage.moduleId };
     const key = observationKey(observation);
     const previousEpoch = this.epochs.get(key);
@@ -484,7 +515,8 @@ export class NativeRecordingRuntime {
     const fallbackAt = observation.occurredAt + this.options.config.initialDelayMs;
     const result = await this.core.observe(observation, this.core.cameraGeneration(observation.moduleId, observation.cameraId),
       { initialDelayMs, ...(initialDelayMs === 0 && fallbackAt > Date.now() ? { fallbackAt } : {}) });
-    if (result !== 'accepted') { if (previousEpoch === undefined) this.epochs.delete(key); this.options.report(`motion-job-${result}`); }
+    if (result !== 'accepted' && previousEpoch === undefined) this.epochs.delete(key);
+    this.report(result === 'accepted' ? 'acquisition-queued' : `motion-job-${result}`, context);
   }
 
   private matching(event: NativeRecordingObservation, fallbackAt?: number) {
@@ -547,11 +579,12 @@ export class NativeRecordingRuntime {
       if (!permitted()) return { status: 'skipped' };
       if (this.failed) return { status: 'deferred' };
       if (!allowed()) return { status: 'skipped' };
+      this.report('catalog-requested', this.observationContext(event, request.attempt));
       const result = await owner.readCatalog({ ...context, operationId: `${request.operationId}:catalog` }, { signal, deadline: request.expiresAt });
       if (result.status === 'abandoned') return { status: 'abandoned' };
       if (result.status === 'unresolved') return unresolved(result.notDispatched);
       if (result.status !== 'ready') {
-        this.options.report(`catalog-${result.reason}`);
+        this.report(`catalog-${result.reason}`, this.observationContext(event, request.attempt));
         if (result.reason === 'not-started') {
           // Definite local admission refusal allocated no provider operation.
           // Requeue within the existing attempt/age bound, without inventing a
@@ -567,27 +600,29 @@ export class NativeRecordingRuntime {
         }
         return { status: 'skipped' };
       }
+      this.report('catalog-ready', this.observationContext(event, request.attempt));
       this.catalogs.set(event.moduleId, { catalog: result.value, startedAt });
       match = this.matching(event, request.fallbackAt);
     }
     if (!allowed()) return { status: 'skipped' };
     if (match.status === 'missing') return { status: 'missing' };
-    if (match.status !== 'matched') { this.options.report(`clip-${match.status}`); return { status: 'skipped' }; }
+    if (match.status !== 'matched') { this.report(`clip-${match.status}`, this.observationContext(event, request.attempt)); return { status: 'skipped' }; }
     if (match.captureTimeMs < (this.enabledSince.get(event.cameraId) ?? Infinity)) return { status: 'skipped' };
+    this.report('download-started', this.observationContext(event, request.attempt));
     const result = await owner.downloadClip({ ...context, operationId: `${request.operationId}:clip` },
       { manifestId: match.manifestId, clip: match.clip }, { signal, deadline: request.expiresAt });
     if (result.status === 'abandoned') return { status: 'abandoned' };
     if (result.status === 'unresolved') return unresolved(result.notDispatched);
     if (result.status !== 'ready') {
-      this.options.report(`download-${result.reason}`);
+      this.report(`download-${result.reason}`, this.observationContext(event, request.attempt));
       if (result.reason === 'refused') await this.deferRefusal(event.moduleId);
       return { status: result.reason === 'not-started' || result.reason === 'refused' ? 'missing' : 'skipped' };
     }
-    const asset: DownloadedAsset = { ...result.value, identity: match.identity, capturedAt: match.clip.capturedAt!, moduleId: event.moduleId,
+    const asset: DownloadedAsset = { logFlow: this.observationContext(event).flow, ...result.value, identity: match.identity, capturedAt: match.clip.capturedAt!, moduleId: event.moduleId,
       cameraId: event.cameraId, jobId: request.operationId, policyEpoch, cameraGeneration: request.cameraGeneration };
     await this.commit(next => { next.consumed = [...new Set([...next.consumed, asset.identity])].slice(-2048); next.downloads.push(asset); });
     this.cacheBytes += asset.bytes;
-    this.options.report('downloaded');
+    this.report('downloaded', this.observationContext(event, request.attempt));
     if (!allowed()) await this.removeOwnedAsset(asset);
     else this.pumpDelivery();
     return { status: 'retrieved' };
@@ -611,13 +646,15 @@ export class NativeRecordingRuntime {
           && this.core.cameraGeneration(asset.moduleId, asset.cameraId) === asset.cameraGeneration;
         if (!recording || !current()) { await this.removeOwnedAsset(asset); continue; }
         if (!recording.available) continue;
+        const context = { camera: device?.binding.nativeName, flow: asset.logFlow };
+        this.report('preparation-started', context);
         const result = await recording.offerDownloaded({ filePath: asset.reference, expectedBytes: asset.bytes, expectedSha256: asset.sha256 },
-          { jobId: asset.jobId, clipIdentity: asset.identity, capturedAt: asset.capturedAt, policyEpoch: asset.policyEpoch }, current);
-        if (result.status === 'ready' || result.status === 'uncertain') this.options.report('prepared');
-        this.options.report(result.status === 'ready' ? 'offered' : `delivery-${result.status}-${result.reason}`);
+          { logFlow: asset.logFlow, jobId: asset.jobId, clipIdentity: asset.identity, capturedAt: asset.capturedAt, policyEpoch: asset.policyEpoch }, current);
+        if (result.status === 'ready' || result.status === 'uncertain') this.report('prepared', context);
+        this.report(result.status === 'ready' ? 'offered' : `delivery-${result.status}-${result.reason}`, context);
         await this.removeOwnedAsset(asset);
       }
-    })().catch(() => { this.failed = true; this.options.report('local-delivery-faulted'); }).finally(() => {
+    })().catch(() => { this.failed = true; this.report('local-delivery-faulted'); }).finally(() => {
       this.delivering = false;
       if (this.delivery === delivery) this.delivery = undefined;
       if (this.state.downloads.length && !this.stopped && !this.failed) this.deliveryTimer = globalThis.setTimeout(() => {
@@ -682,7 +719,7 @@ export class NativeRecordingRuntime {
       if (!CACHE_ARTIFACT.test(name)) continue;
       const reference = path.join(this.cacheDirectory, name), stat = await fs.lstat(reference);
       await this.removeCacheFile({ reference, bytes: stat.size });
-      this.options.report('orphan-cache-retired');
+      this.report('orphan-cache-retired');
     }
   }
 
@@ -694,7 +731,7 @@ export class NativeRecordingRuntime {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsupported entry in owned recording cache');
       this.cacheBytes += stat.size;
     }
-    if (this.cacheBytes > this.options.config.maxCachedBytes) this.options.report('cache-capacity-exceeded');
+    if (this.cacheBytes > this.options.config.maxCachedBytes) this.report('cache-capacity-exceeded');
   }
 
   private async privateDirectory(directory: string): Promise<void> {
@@ -756,7 +793,7 @@ export class NativeRecordingRuntime {
         || (isRemoteOperationLeaseActive(coreLease) && queuedModule && !terminal(prior.nativeByModule[queuedModule]?.state))) {
         throw new Error('Prior client/tier scope has unresolved Blink operation ownership');
       }
-      if (prior.remoteOperations?.liveView || prior.remoteOperations?.stateCommand || prior.core?.operation) this.options.report('prior-scope-operation-advisory');
+      if (prior.remoteOperations?.liveView || prior.remoteOperations?.stateCommand || prior.core?.operation) this.report('prior-scope-operation-advisory');
     }
   }
 
@@ -776,7 +813,7 @@ export class NativeRecordingRuntime {
       // Every module survives every shared write; no finished owner erases another fence.
       for (const entry of Object.values(next.nativeByModule)) this.options.client.setNativeStorageOwner(entry.scope, entry.state);
     });
-    this.writes = write.catch(() => { this.failed = true; this.options.report('persistence-faulted'); });
+    this.writes = write.catch(() => { this.failed = true; this.report('persistence-faulted'); });
     return write;
   }
 

@@ -51,7 +51,7 @@ import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recor
 import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput,
   type NativeRecordingDeviceOverride, type NativeRecordingPolicyConfig } from './native-recording-config';
 import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
-import type { NativeRecordingPolicy } from './accessories/native-recording-delegate';
+import type { NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
 import type { NativeMotionDevice } from './blink-api/motion-events';
 import { migrateEarlyNotificationConfig } from './early-notification-config';
@@ -494,7 +494,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     return this.nativeRuntime?.policyChanged(`${kind}:${id}`, policy) ?? Promise.resolve();
   }
 
-  nativeRecordingDeliveryOutcome(outcome: string): void { this.nativeRuntime?.deliveryOutcome(outcome); }
+  nativeRecordingDeliveryOutcome(outcome: string, cameraId?: string, event?: NativeRecordingDeliveryEvent): void {
+    this.nativeRuntime?.deliveryOutcome(outcome, cameraId, event);
+  }
 
   private async prepareNativeRuntime(homescreen: BlinkHomescreen): Promise<void> {
     const candidates = [...homescreen.cameras.map(device => ({ kind: device.type === 'owl' ? 'owl' as const : 'camera' as const,
@@ -550,10 +552,15 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const storagePath = this.api.user.storagePath();
     this.nativeRuntime = await NativeRecordingRuntime.create({ client: this.apiClient, scope, devices, matchingDevices, storagePath,
       config: resolveNativeRecordingConfig(this.config.nativeRecording), firebase: BLINK_FIREBASE_CLIENT, appVersion: BLINK_NOTIFICATION_APP_VERSION,
-      report: event => {
-        const message = `[NativeRecording] ${event}`;
-        if (event.includes('faulted') || event.endsWith('recovery-required')) this.log.warn(message);
-        else if (event === 'push-ready' || event === 'push-client-bound') this.log.info(message);
+      report: (event, context) => {
+        const camera = context?.camera?.replace(/[\p{C}\u2028\u2029]/gu, ' ')
+          .replace(/https?:\/\/\S+|\b(?=[a-z0-9]{12,}\b)(?=[a-z0-9]*\d)[a-z0-9]+\b/gi, '[redacted]').slice(0, 80);
+        const flow = context?.flow && /^flow-[a-f0-9]{10}$/.test(context.flow) ? context.flow : undefined;
+        const details = [camera && `camera=${JSON.stringify(camera)}`, flow,
+          Number.isSafeInteger(context?.attempt) && `attempt=${context!.attempt}`].filter(Boolean).join(' ');
+        const message = `[NativeRecording] ${event}${details ? ` ${details}` : ''}`;
+        if (event.includes('faulted') || event.endsWith('recovery-required') || /^(?:delivery-not-offered-preparation-failed|cache-capacity-exceeded|job-(?:exhausted|abandoned))$/.test(event)) this.log.warn(message);
+        else if (/^(?:push-(?:ready|client-bound|received|message-accepted|message-ignored|retrying)|motion-|acquisition-|job-|catalog-|clip-|download|preparation-|prepared$|offered$|delivery-|home-)/.test(event)) this.log.info(message);
         else this.log.debug(message);
       } });
     this.nativeRuntimeKey = key;

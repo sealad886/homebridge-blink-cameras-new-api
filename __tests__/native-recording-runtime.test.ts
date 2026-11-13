@@ -61,12 +61,13 @@ describe('native recording runtime composition', () => {
 
   async function setup(overrides: { config?: NativeRecordingConfigInput; exposure?: boolean; hsv?: boolean;
     prepare?: typeof prepareNativeRecording; storagePath?: string; nativeStorage?: boolean; secondCamera?: boolean;
-    start?: boolean;
+    start?: boolean; report?: NativeRecordingRuntimeOptions['report'];
     earlyNotification?: boolean; earlyNotificationMode?: 'on' | 'off' | 'unmanaged'; rawType?: string; earlyCurrent?: boolean; earlyCompatible?: boolean; earlyFailure?: 'before-write' | 'after-write';
     matchingDevices?: readonly NativeMotionDevice[]; eventSourceFactory?: NativeRecordingRuntimeOptions['eventSourceFactory'] } = {}) {
     let runtime: NativeRecordingRuntime | undefined, source!: FcmEventSourceOptions;
     let remoteSave!: (state: BlinkRemoteOperationOwnership) => Promise<void>;
     let directory = '', nextCommand = 100, insideProvider = false;
+    const reports: { event: string; context?: Parameters<NativeRecordingRuntimeOptions['report']>[1] }[] = [];
     const events: string[] = [], publicMotion = jest.fn(), readyMotion = jest.fn();
     const media = [{ id: 101, network_id: 20, device_name: 'Entry native name', created_at: new Date(Date.now()).toISOString(),
       media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/101/' }];
@@ -78,12 +79,12 @@ describe('native recording runtime composition', () => {
     const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() },
       prepare: overrides.prepare ?? prepare, readyMotion,
       policyChanged: policy => runtime?.policyChanged('camera:40', policy),
-      deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome) });
+      deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome, 'camera:40', event) });
     delegate.updateRecordingConfiguration(configuration()); delegate.updateRecordingActive(true);
     const cornerReady = jest.fn();
     const cornerDelegate = overrides.secondCamera ? new NativeRecordingDelegate({
       preparation: { admit: work => work() }, prepare, readyMotion: cornerReady,
-      policyChanged: policy => runtime?.policyChanged('camera:41', policy), deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome),
+      policyChanged: policy => runtime?.policyChanged('camera:41', policy), deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome, 'camera:41', event),
     }) : undefined;
     cornerDelegate?.updateRecordingConfiguration(configuration()); cornerDelegate?.updateRecordingActive(true);
     const state = async () => JSON.parse(await fs.readFile(path.join(runtime!.directory, 'state.json'), 'utf8')) as NativeRecordingRuntimeState;
@@ -150,7 +151,7 @@ describe('native recording runtime composition', () => {
         motion: jest.fn(), recording: () => cornerDelegate,
       }] : [])];
     const options: NativeRecordingRuntimeOptions = { client: client as unknown as BlinkApi, scope, storagePath: overrides.storagePath ?? root,
-      config: resolveNativeRecordingConfig(overrides.config), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: event => events.push(event),
+      config: resolveNativeRecordingConfig(overrides.config), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: (event, context) => { events.push(event); reports.push({ event, context }); overrides.report?.(event, context); },
       devices, matchingDevices: overrides.matchingDevices ?? devices.flatMap(device => device.nativeStorage ? [{ ...device.binding, ...device.nativeStorage }] : []),
       eventSourceFactory: input => { source = input; return overrides.eventSourceFactory?.(input) ?? { setDemand, reconnect: reconnectSource, stop: stopSource }; },
     };
@@ -178,7 +179,7 @@ describe('native recording runtime composition', () => {
       runtime = await NativeRecordingRuntime.create({ ...options, ...next }); runtimes.push(runtime);
       await startAndSettlePreferences(runtime, next.devices ?? options.devices); return runtime;
     };
-    return { runtime, delegate, prepare, transport, client, source, setDemand, reconnectSource, stopSource, events, publicMotion, readyMotion,
+    return { reports, runtime, delegate, prepare, transport, client, source, setDemand, reconnectSource, stopSource, events, publicMotion, readyMotion,
       media, notification, push, state, remoteSave, cornerReady, releaseOwnership, rebind, devices, earlyProvider, settingWrites, settingReceipts,
       originalsPath };
   }
@@ -985,6 +986,32 @@ describe('native recording runtime composition', () => {
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [{ hsv: false }, {}, 'hsv-disabled'],
+    [{}, { event_type: 'cloud_motion' }, 'event-not-native'],
+    [{ nativeStorage: false }, {}, 'missing-module'],
+  ] as const)('reports the HSV gate without exposing provider event identity: %s', async (options, values, reason) => {
+    const f = await setup(options);
+    await f.push(f.notification('private-provider-message', values));
+    expect(f.events).toContain(`motion-suppressed-${reason}`);
+    expect(f.transport.postEmpty).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.reports)).not.toContain('private-provider-message');
+  });
+
+  it('reports inactive Home permission and survives a throwing log observer', async () => {
+    const f = await setup({ report: () => { throw new Error('Logger unavailable'); } });
+    f.delegate.updateRecordingActive(false);
+    await f.push();
+    expect(f.events).toContain('motion-suppressed-home-policy-inactive');
+    f.delegate.updateRecordingActive(true);
+    await f.push(f.notification('next-event'));
+    await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));
+    const flows = f.reports.filter(report => ['acquisition-queued', 'acquisition-attempt', 'downloaded', 'prepared', 'offered'].includes(report.event))
+      .map(report => report.context?.flow);
+    expect(new Set(flows).size).toBe(1);
+    expect(flows[0]).toMatch(/^flow-[a-f0-9]{10}$/);
+  });
+
   it('reports PIR immediately, then downloads once and only triggers HSV after local preparation', async () => {
     const f = await setup();
     await f.push(); await f.push();
@@ -996,14 +1023,14 @@ describe('native recording runtime composition', () => {
     expect(f.transport.getJson).toHaveBeenCalledTimes(3);
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
     expect(f.prepare).toHaveBeenCalledTimes(1); expect(f.readyMotion).toHaveBeenLastCalledWith(true);
-    expect(f.events).toEqual(expect.arrayContaining(['downloaded', 'prepared', 'offered']));
+    expect(f.events).toEqual(expect.arrayContaining(['push-received', 'motion-decoded', 'acquisition-queued', 'acquisition-attempt', 'acquisition-retrieved', 'download-started', 'downloaded', 'preparation-started', 'prepared', 'offered']));
     expect(f.events.some(event => event.includes('retained'))).toBe(false);
     const stream = f.delegate.handleRecordingStreamRequest(7);
     expect((await stream.next()).value?.isLast).toBe(false);
     expect((await stream.next()).value?.isLast).toBe(true);
     expect((await stream.next()).done).toBe(true);
     f.delegate.acknowledgeStream(7);
-    expect(f.events).toContain('home-transport-acknowledged');
+    expect(f.events).toEqual(expect.arrayContaining(['home-requested', 'home-transfer-finished', 'home-transport-acknowledged']));
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(2); expect(f.transport.getJson).toHaveBeenCalledTimes(3);
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
     await until(async () => (await f.state()).downloads.length === 0);
