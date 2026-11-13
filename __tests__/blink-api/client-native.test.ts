@@ -688,6 +688,47 @@ describe('owned native storage SDK', () => {
     expect(maxPhysicalWrites).toBe(1);
   });
 
+  it.each(['account', 'client', 'tier'] as const)
+  ('rejects a stale %s-scoped writer before arm admission and resumes after a matching writer handoff', async changed => {
+    const f = fixture();
+    if (changed === 'account') {
+      (f.api as unknown as { accountId: number | null }).accountId = 11;
+      (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    } else if (changed === 'client') (f.auth.getClientId as jest.Mock).mockReturnValue(91);
+    else (f.api as unknown as { config: { tier: string } }).config.tier = 'u002';
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
+      ? json({ id: 901 }) : json({ complete: true, status: 0 }));
+    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(f.saveLive).not.toHaveBeenCalled();
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    await f.release();
+    const next = jest.fn().mockResolvedValue(undefined);
+    f.api.configureRemoteOperationOwnership({ saveState: next });
+    await expect(f.api.armNetwork(20)).resolves.toEqual({ id: 901 });
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ stateCommand: expect.objectContaining({
+      accountId: changed === 'account' ? 11 : 10, kind: 'arm',
+    }) }));
+    expect(f.saveLive).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows ordinary controls through an unscoped writer even while its journal is unavailable', async () => {
+    const f = fixture(); await f.release();
+    (f.auth.getClientId as jest.Mock).mockReturnValue(null);
+    const save = jest.fn().mockRejectedValue(new Error('fixture journal unavailable'));
+    f.api.configureRemoteOperationOwnership({ saveState: save });
+    (f.auth.getClientId as jest.Mock).mockReturnValue(91);
+    (f.api as unknown as { accountId: number | null }).accountId = 11;
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
+      ? json({ id: 902 }) : json({ complete: true, status: 0 }));
+    await expect(f.api.armNetwork(20)).resolves.toEqual({ id: 902 });
+    await expect(f.api.disarmNetwork(20)).resolves.toEqual({ id: 902 });
+    expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
   it('hands an idle writer to a replacement after shutdown and persists subsequent controls only through the replacement', async () => {
     const f = fixture(), next = jest.fn().mockResolvedValue(undefined);
     expect(() => f.api.configureRemoteOperationOwnership({ saveState: next })).toThrow('active operation ownership');

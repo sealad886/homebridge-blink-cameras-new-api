@@ -519,12 +519,15 @@ export class NativeRecordingRuntime {
     const event = request.observation;
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
     const owner = this.owners.get(event.moduleId), policyEpoch = this.epochs.get(observationKey(event));
-    const permitted = () => this.active && !this.stopped && !signal.aborted && this.currentScope()
+    // A storage fault aborts execution without revoking the camera's permission period.
+    const permitted = () => this.active && !this.stopped && this.currentScope()
       && !!device?.recording()?.policy.allowed && device.recording()!.policy.epoch === policyEpoch
+      && this.core.cameraGeneration(event.moduleId, event.cameraId) === request.cameraGeneration;
+    const allowed = () => permitted() && !this.failed && !signal.aborted
       && this.core.isCameraGenerationCurrent(event.moduleId, event.cameraId, request.cameraGeneration);
-    const allowed = () => permitted() && !this.failed;
     if (!device || !owner || policyEpoch === undefined || !permitted()) return { status: 'skipped' };
     if (this.failed) return { status: 'deferred' };
+    if (!allowed()) return { status: 'skipped' };
     const context = { accountId: device.binding.accountId, networkId: device.binding.networkId, syncModuleId: device.nativeStorage!.syncModuleId };
     let match = this.matching(event, request.fallbackAt);
     if (match.status !== 'matched') {
@@ -537,9 +540,11 @@ export class NativeRecordingRuntime {
       }
       if (!permitted()) return { status: 'skipped' };
       if (this.failed) return { status: 'deferred' };
+      if (!allowed()) return { status: 'skipped' };
       const result = await owner.readCatalog({ ...context, operationId: `${request.operationId}:catalog` }, { signal, deadline: request.expiresAt });
       if (result.status === 'abandoned') return { status: 'abandoned' };
-      if (result.status === 'unresolved') return { status: 'unresolved' };
+      if (result.status === 'unresolved') return { status: result.notDispatched
+        ? permitted() ? 'deferred' : 'skipped' : 'unresolved' };
       if (result.status !== 'ready') {
         this.options.report(`catalog-${result.reason}`);
         if (result.reason === 'not-started') {

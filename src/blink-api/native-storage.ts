@@ -37,7 +37,9 @@ export type NativeStorageTerminal<T> = { status: 'ready'; value: T } |
   { status: 'failed'; reason: NativeStorageFailure; remoteStatus?: number; httpStatus?: number };
 export type NativeStorageResult<T> = NativeStorageTerminal<T> |
   { status: 'abandoned' } |
-  { status: 'unresolved'; reason: string; operation?: NativeStorageOperation };
+  { status: 'unresolved'; reason: string; operation?: NativeStorageOperation;
+    /** This invocation failed to persist its new intent before invoking the provider. */
+    notDispatched?: true };
 export interface NativeStorageOperation extends NativeStorageContext {
   kind: 'catalog' | 'clip';
   phase: 'intent' | 'accepted' | 'prepared' | 'finished' | 'abandoned';
@@ -240,7 +242,11 @@ export class NativeStorageOwner {
           const intent: NativeStorageOperation = { ...context, kind, phase: 'intent', statusReads: 0,
             expiresAt: Math.min(deadline, Date.now() + REMOTE_OPERATION_LEASE_MS),
             ...(clip ? { clip: clone(clip) } : {}) };
-          await this.persist(intent, generation);
+          try { await this.persist(intent, generation); }
+          catch {
+            if (generation !== this.generation) return { status: 'abandoned' };
+            return this.unresolved('persistence-failed', true);
+          }
           if (generation !== this.generation) return { status: 'abandoned' };
           try { checkRequestBudget(request); }
           catch {
@@ -469,8 +475,9 @@ export class NativeStorageOwner {
     return { ...options, maxBytes, retry: false };
   }
 
-  private unresolved(reason: string): NativeStorageResult<never> {
-    return { status: 'unresolved', reason, ...(this.state.operation ? { operation: clone(this.state.operation) } : {}) };
+  private unresolved(reason: string, notDispatched?: true): NativeStorageResult<never> {
+    return { status: 'unresolved', reason, ...(this.state.operation ? { operation: clone(this.state.operation) } : {}),
+      ...(notDispatched ? { notDispatched } : {}) };
   }
 
   private queueWrite(save: () => Promise<void>): Promise<void> {

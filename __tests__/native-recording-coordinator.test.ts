@@ -613,7 +613,7 @@ describe('native recording FIFO', () => {
     const acquire = jest.fn<Promise<NativeRecordingAcquisitionResult>, [NativeRecordingAcquisition, AbortSignal]>()
       .mockReturnValueOnce(held.promise).mockResolvedValue({ status: 'retrieved' });
     let readyAt = Date.now();
-    const f = setup({ acquire, maxRetries: 0, earliestAcquisitionAt: () => readyAt });
+    const f = setup({ acquire, maxRetries: 0, retryIntervalMs: 1000, earliestAcquisitionAt: () => readyAt });
     const observation = event('unsent-before-recovery');
     await f.coordinator.observe(observation);
     await jest.advanceTimersByTimeAsync(60000);
@@ -632,6 +632,21 @@ describe('native recording FIFO', () => {
     expect(f.coordinator.snapshot().operation).toBeUndefined();
     expect(f.onJobFinished).toHaveBeenCalledTimes(1);
     expect(f.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: cancelled ? 'cancelled' : 'retrieved' }));
+  });
+
+  it('backs off repeated deferrals without a readiness callback and expires at the original job age', async () => {
+    const acquire = jest.fn().mockResolvedValue({ status: 'deferred' });
+    const f = setup({ acquire, initialDelayMs: 0, retryIntervalMs: 1000, maxJobAgeMs: 3000, maxRetries: 0 });
+    await f.coordinator.observe(event('temporarily-unavailable'));
+    await jest.advanceTimersByTimeAsync(50);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(f.coordinator.snapshot().queue[0].attempts).toBe(0);
+    await jest.advanceTimersByTimeAsync(2950);
+    expect(acquire).toHaveBeenCalledTimes(3);
+    expect(acquire.mock.calls.map(([request]: [NativeRecordingAcquisition]) => request.attempt)).toEqual([1, 1, 1]);
+    expect(f.coordinator.snapshot().queue).toEqual([]);
+    expect(f.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'expired' }));
+    expect(f.saveState.mock.calls.length).toBeLessThan(10);
   });
 
   it('cancels only the selected camera queued jobs and never replays them after new jobs are allowed', async () => {

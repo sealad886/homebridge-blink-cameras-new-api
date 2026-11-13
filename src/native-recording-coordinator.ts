@@ -348,11 +348,12 @@ export class NativeRecordingCoordinator {
         cameraGeneration: job.cameraGeneration,
         ...(job.fallbackAt === undefined ? {} : { fallbackAt: job.fallbackAt }),
       }, controller.signal);
-      if (!this.stopped && !this.storageError && this.operation === operation) {
+      if (!this.stopped && this.operation === operation && (result.status === 'deferred' || !this.storageError)) {
         if (result.status === 'deferred' && !job.cancelled) {
           this.operation = undefined;
           this.operationDispatched = false;
           job.attempts--;
+          job.eligibleAt = Date.now() + this.retryIntervalMs;
           await this.persist();
         } else if (result.status === 'unresolved') {
           operation.status = 'unresolved';

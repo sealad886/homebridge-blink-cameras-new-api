@@ -331,8 +331,12 @@ captured when its queued write executes; a retry cannot overtake an older save.
 Recovery keeps acquisition unready until SDK, native-owner and coordinator
 persistence is current. Temporary storage unavailability before provider
 invocation defers the accepted job without consuming an attempt; permission
-revocation still cancels it. This proof cannot refund dispatched or restored
-uncertain work. Recovery reports success only after every participant is saved.
+revocation still cancels it. Camera permission is independent of storage health.
+A rejected new catalog-intent save supplies call-local no-dispatch proof; missing
+owner state does not. Deferred work waits the existing retry interval, including
+when no readiness callback is present. This proof cannot refund dispatched or
+restored uncertain work. Recovery reports success only after every participant
+is saved.
 Dispatch/transition diagnostics are local; generating a diagnostic report must
 not issue verification requests.
 Push diagnostics retain only fixed event/reason/disposition labels and bounded

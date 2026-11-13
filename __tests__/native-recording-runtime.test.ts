@@ -1430,6 +1430,41 @@ describe('native recording runtime composition', () => {
       } finally { disk.resolve(); flush.resolve(); saving.mockRestore(); }
     });
 
+  it.each(['concurrent-core-save', 'initial-owner-intent'] as const)(
+    'recovers an unsent accepted job after %s persistence failure without losing permission', async phase => {
+      const f = await setup({ config: { maxRetries: 0 } }), intent = deferred<void>();
+      const write = secureJson.writeOwnerOnlyJsonFile;
+      let held = false, failedOwner = false;
+      const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
+        const state = args[1] as NativeRecordingRuntimeState;
+        if (phase === 'concurrent-core-save' && !held && state.core?.operation?.status === 'active'
+          && state.catalogStartedAt['20:30'] === undefined) { held = true; await intent.promise; }
+        if (phase === 'initial-owner-intent' && !failedOwner && state.nativeByModule?.['20:30']?.state.operation?.phase === 'intent') {
+          failedOwner = true; throw new Error('initial owner intent disk failure');
+        }
+        return write(...args);
+      });
+      try {
+        await f.push(f.notification('must-survive-storage-health-fault'));
+        await jest.advanceTimersByTimeAsync(60000);
+        if (phase === 'concurrent-core-save') {
+          await until(() => held);
+          const queued = f.push(f.notification('later-job'));
+          saving.mockRejectedValueOnce(new Error('concurrent coordinator disk failure'));
+          const rejected = expect(queued).rejects.toThrow('concurrent coordinator disk failure');
+          intent.resolve(); await rejected;
+        } else await until(() => failedOwner);
+        await until(() => f.events.includes('persistence-faulted'));
+        expect(f.transport.postEmpty).not.toHaveBeenCalled();
+        await f.runtime.retryConnection();
+        await jest.advanceTimersByTimeAsync(phase === 'initial-owner-intent' ? 60000 : 5000);
+        await until(() => f.events.includes('offered'));
+        expect(f.events).not.toContain('job-cancelled');
+        expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+        expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+      } finally { intent.resolve(); saving.mockRestore(); }
+    });
+
   it('keeps every durable core snapshot monotonic when local delivery faults during queued observations and recovery', async () => {
     const f = await setup(), offer = deferred<void>(), disk = deferred<void>(), flush = deferred<void>();
     const offering = jest.spyOn(f.delegate, 'offerDownloaded').mockImplementationOnce(async () => {

@@ -353,6 +353,7 @@ export class BlinkApi {
   }
 
   private assertCommandAdmission(admission: CommandAdmission): void {
+    this.assertWriterScope(true); // An initial login may still need to resolve the account.
     this.expireOperationOwners();
     const live = this.liveViewOwner;
     const matchesLive = Boolean(live?.commandId && live.networkId === admission.networkId && live.commandId === admission.commandId);
@@ -551,10 +552,21 @@ export class BlinkApi {
     if (this.ownershipPersistenceFailed) throw new Error('Blink ownership journal unavailable.');
   }
 
+  private assertWriterScope(allowUnresolvedAccount = false): void {
+    const scope = this.remoteOperationWriter?.scope;
+    if (!scope) return;
+    const identity = this.getCachedIdentity();
+    if ((scope.accountId !== identity.accountId && !(allowUnresolvedAccount && identity.accountId === null))
+      || scope.clientId !== identity.clientId || scope.tier !== identity.tier) {
+      throw new BlinkOperationNotStartedError('ownership-unavailable');
+    }
+  }
+
   private captureOperationAuthority(accountId: number, generation: number,
     owner?: readonly [kind: 'liveView' | 'stateCommand', reservationId: string]): (cleared?: boolean) => void {
     const kind = owner?.[0], reservationId = owner?.[1];
     return (cleared = false) => {
+      this.assertWriterScope();
       const current = kind === 'liveView' ? this.liveViewOwner : this.stateCommandOwner;
       if (generation !== this.writerGeneration || this.getCachedIdentity().accountId !== accountId
         || (kind !== undefined && (cleared ? current !== undefined : current?.reservationId !== reservationId))) {
@@ -576,6 +588,9 @@ export class BlinkApi {
     generation = this.writerGeneration): Promise<boolean> {
     if (generation !== this.writerGeneration || (expected !== undefined && this.liveViewOwner?.reservationId !== expected)) return false;
     if (owner) this.validateLiveViewOwner(owner);
+    if (owner && this.remoteOperationWriter?.scope && owner.accountId !== this.remoteOperationWriter.scope.accountId) {
+      throw new BlinkOperationNotStartedError('ownership-unavailable');
+    }
     this.liveViewOwner = owner ? { ...owner } : undefined;
     const revision = ++this.liveViewRevision;
     await this.writeRemoteOperationState(this.remoteOperationSnapshot());
@@ -601,6 +616,9 @@ export class BlinkApi {
     generation = this.writerGeneration): Promise<boolean> {
     if (generation !== this.writerGeneration || (expected !== undefined && this.stateCommandOwner?.reservationId !== expected)) return false;
     if (owner) this.validateStateCommandOwner(owner);
+    if (owner && this.remoteOperationWriter?.scope && owner.accountId !== this.remoteOperationWriter.scope.accountId) {
+      throw new BlinkOperationNotStartedError('ownership-unavailable');
+    }
     this.stateCommandOwner = owner ? { ...owner } : undefined;
     const revision = ++this.stateCommandRevision;
     await this.writeRemoteOperationState(this.remoteOperationSnapshot());

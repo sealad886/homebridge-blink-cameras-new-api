@@ -65,7 +65,9 @@ persistence resumes the canonical journal. Arm/disarm failure logs include the s
 without printing provider error messages.
 
 SDK operations capture account and writer generation through one authority guard,
-with a reservation when the workflow owns one. Check that captured authority
+with a reservation when the workflow owns one. New work must also match the
+active journal writer's account, client and tier; late old-operation evidence may
+still be saved through its matching writer. Check that captured authority
 before dispatch and after awaited work before publishing state or success;
 the shared account queue also checks captured account authority before returning
 a result, and terminal owner clears require the original revision. Request budgets

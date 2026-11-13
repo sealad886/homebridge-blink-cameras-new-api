@@ -261,6 +261,41 @@ it('rechecks persistence explicitly after a failed intent without sending work w
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
+it.each([
+  ['catalog', false], ['catalog', true], ['clip', false], ['clip', true],
+] as const)('proves only the current %s intent-save failure was not dispatched (finished predecessor: %s)', async (kind, finished) => {
+  const f = fixture();
+  const acquire = (operationId: string, owner = f.owner) => kind === 'catalog'
+    ? owner.readCatalog({ ...context, operationId }) : owner.downloadClip({ ...context, operationId }, clipRequest());
+  if (finished) expect(await acquire('predecessor')).toMatchObject({ status: 'ready' });
+  const previous = f.owner.snapshot(), postCount = f.transport.postEmpty.mock.calls.length;
+  f.saveState.mockRejectedValueOnce(new Error('intent save failed'));
+
+  expect(await acquire('unsent-event')).toMatchObject({ status: 'unresolved', reason: 'persistence-failed', notDispatched: true });
+  expect(f.owner.snapshot()).toEqual(previous);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(postCount);
+  // The same snapshot alone proves nothing about another invocation.
+  expect(await acquire('while-faulted')).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  await f.owner.retryPersistence();
+  expect(await acquire('unsent-event')).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(postCount + 1);
+});
+
+it.each(['catalog', 'clip'] as const)('does not claim no dispatch when saving the %s acknowledgement fails', async kind => {
+  const f = fixture({ saveState: async state => {
+    if (state.operation?.phase === 'accepted') throw new Error('accepted save failed');
+  } });
+  const acquire = (owner = f.owner) => kind === 'catalog' ? owner.readCatalog(context) : owner.downloadClip(context, clipRequest());
+  const result = await acquire();
+  expect(result).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(result).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  expect(f.owner.snapshot().operation?.phase).toBe('intent');
+  await f.owner.retryPersistence();
+  expect(await acquire()).toMatchObject({ status: 'unresolved', reason: 'acknowledgement-unknown' });
+  expect(await acquire(f.restart())).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it('discards a revoked prepared operation locally without catalog or media retrieval', async () => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'prepared',
     commandId: 101, resultCommandId: 202, statusReads: 1, expiresAt: Date.now() + 120000 } } });
@@ -612,7 +647,9 @@ it.each([
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
   controller.abort(unrelatedProof);
 
-  expect(await request).toMatchObject({ status: 'unresolved', reason: 'request-outcome-unknown' });
+  const result = await request;
+  expect(result).toMatchObject({ status: 'unresolved', reason: 'request-outcome-unknown' });
+  expect(result).toEqual(expect.not.objectContaining({ notDispatched: true }));
   expect(f.owner.snapshot().operation).toMatchObject({ phase: 'intent', statusReads: 0 });
   if (proof === 'no-send') expect(Reflect.get(unrelatedProof, 'dispatched')).toBe(false);
   const restarted = f.restart();
@@ -632,7 +669,9 @@ it('does not dispatch when cancellation arrives while the intent is being saved'
   const pending = f.owner.readCatalog(context, { signal: controller.signal });
   for (let i = 0; i < 20 && saveState.mock.calls.length === 0; i += 1) await Promise.resolve();
   controller.abort(); release();
-  expect(await pending).toMatchObject({ status: 'unresolved' });
+  const result = await pending;
+  expect(result).toMatchObject({ status: 'unresolved' });
+  expect(result).toEqual(expect.not.objectContaining({ notDispatched: true }));
   expect(f.transport.postEmpty).not.toHaveBeenCalled();
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
   expect(await f.owner.readCatalog(context)).toEqual({ status: 'failed', reason: 'not-started' });
