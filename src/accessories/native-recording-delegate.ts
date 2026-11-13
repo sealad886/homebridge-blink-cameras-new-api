@@ -5,6 +5,7 @@ import { prepareNativeRecording, snapshotNativeRecordingConfiguration, type Nati
   type NativeRecordingSource, type PreparedNativeRecording } from './native-recording-preparation';
 
 export interface NativeRecordingDeliveryMetadata {
+  logFlow?: string;
   jobId: string;
   clipIdentity: string;
   capturedAt: string;
@@ -22,8 +23,8 @@ export interface NativeRecordingPolicy {
 }
 export type NativeRecordingOfferResult = { status: 'ready' } | { status: 'uncertain'; reason: 'motion-publication-failed' | 'policy-changed-after-offer' } |
   { status: 'not-offered'; reason: 'disabled' | 'busy' | 'duplicate' | 'policy-changed' | 'preparation-failed' };
-export type NativeRecordingDeliveryOutcome = 'transport-acknowledged' | 'closed' | 'cancelled' | 'not-requested' | 'uncertain';
-export interface NativeRecordingDeliveryEvent { metadata: NativeRecordingDeliveryMetadata; outcome: NativeRecordingDeliveryOutcome; }
+export type NativeRecordingDeliveryOutcome = 'request-rejected' | 'requested' | 'transfer-finished' | 'transport-acknowledged' | 'closed' | 'cancelled' | 'not-requested' | 'uncertain';
+export interface NativeRecordingDeliveryEvent { metadata?: NativeRecordingDeliveryMetadata; outcome: NativeRecordingDeliveryOutcome; }
 export interface NativeRecordingDelegateOptions {
   preparation: NativeRecordingPreparationOptions;
   /** Internal HSV trigger only. Do not feed this signal back into provider acquisition. */
@@ -192,6 +193,7 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
     if (!this.policy.allowed || !offer || !current || this.stream || offer.epoch !== this.epoch
       || offer.revision !== this.configurationRevision || offer.prepared.disposed) {
       if (offer && !current) this.cancelPending();
+      this.report(offer, 'request-rejected');
       throw new Error('No permitted prepared native recording is available');
     }
     this.ready = undefined;
@@ -199,6 +201,7 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
     this.offerTimer = undefined;
     const stream: RecordingStream = { ...offer, streamId, owner: new globalThis.AbortController(), closed: false, finalSent: false, generatorFinished: false };
     this.stream = stream;
+    this.report(stream, 'requested');
     const startedAt = Date.now();
     const allowed = () => !this.stopped && this.recordingActive && this.cameraActive && (!stream.prepared.audioActive || this.audioActive)
       && this.isCurrent(stream.current);
@@ -213,15 +216,18 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
         if (stream.closed) return;
         if (!allowed() || stream.owner.signal.aborted || stream.prepared.disposed) throw new Error('Native recording permission was revoked');
         const isLast = index === stream.prepared.fragments.length - 1;
-        if (isLast) stream.finalSent = true;
-        yield { data: Buffer.from(fragment.data), isLast };
+        const packet = { data: Buffer.from(fragment.data), isLast };
+        if (isLast) { stream.finalSent = true; this.report(stream, 'transfer-finished'); }
+        yield packet;
       }
     } finally {
       stream.generatorFinished = true;
       if (this.stream === stream) {
         this.setMotionSafely(false);
         if (!stream.finalSent) this.finishStream(stream, stream.closed ? 'closed' : 'uncertain');
-        else this.acknowledgementTimer = globalThis.setTimeout(() => this.finishStream(stream, 'uncertain'), this.acknowledgementTimeout);
+        else {
+          this.acknowledgementTimer = globalThis.setTimeout(() => this.finishStream(stream, 'uncertain'), this.acknowledgementTimeout);
+        }
       }
     }
   }
@@ -282,8 +288,8 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
     try { void Promise.resolve(this.options.policyChanged?.(this.policy)).catch(() => undefined); }
     catch { /* Local privacy fences are already applied. */ }
   }
-  private report(offer: Offer, outcome: NativeRecordingDeliveryOutcome): void {
-    try { void Promise.resolve(this.options.deliveryOutcome?.({ metadata: offer.metadata, outcome })).catch(() => undefined); }
+  private report(offer: Offer | undefined, outcome: NativeRecordingDeliveryOutcome): void {
+    try { void Promise.resolve(this.options.deliveryOutcome?.({ metadata: offer?.metadata, outcome })).catch(() => undefined); }
     catch { /* Observers cannot retain media resources. */ }
   }
 }

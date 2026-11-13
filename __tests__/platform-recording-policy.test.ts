@@ -89,6 +89,41 @@ describe('platform native recording and ordinary command ownership', () => {
     await expect(retryControl(platform).onSetHandler!(true)).resolves.toBeUndefined();
   }
 
+  it('logs push and HSV handoffs by default with bounded safe camera context', async () => {
+    const platform = await launch(emptyHomescreen());
+    const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
+    const report = createRuntime.mock.calls[0][0].report;
+    log.info.mockClear(); log.debug.mockClear(); log.warn.mockClear();
+    report('motion-suppressed-home-policy-inactive', { camera: 'Entry\nG8T1234567890123 (G8T1-K001-1234-5678) https://private.invalid/token',
+      flow: 'flow-0123456789', attempt: 1 });
+    report('push-received'); report('home-transport-acknowledged');
+    report('public-motion-failed'); report('delivery-uncertain-motion-publication-failed');
+    report('push-credentials-saved'); report('delivery-not-offered-preparation-failed');
+    expect(log.info).toHaveBeenCalledTimes(3);
+    expect(log.debug).toHaveBeenCalledWith('[NativeRecording] push-credentials-saved');
+    expect(log.warn).toHaveBeenCalledWith('[NativeRecording] delivery-not-offered-preparation-failed');
+    const output = JSON.stringify(log.info.mock.calls);
+    expect(output).toContain('Entry'); expect(output).toContain('flow-0123456789');
+    expect(log.warn).toHaveBeenCalledTimes(3);
+    expect(output).not.toContain('G8T1-K001-1234-5678');
+    expect(output).not.toContain('G8T1234567890123'); expect(output).not.toContain('private.invalid');
+    expect(output).not.toContain('Entry\\n');
+  });
+
+  it.each(['rtsp', 'rtsps', 'immis'])('redacts %s capability URLs from normal camera-context logs', async scheme => {
+    const platform = await launch(emptyHomescreen());
+    const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
+    log.info.mockClear();
+    createRuntime.mock.calls[0][0].report('motion-decoded', {
+      camera: `Entry ${scheme}://private-user:private-password@private-host/private-capability?token=private-token`,
+    });
+    const output = JSON.stringify(log.info.mock.calls);
+    expect(output).toContain('Entry'); expect(output).toContain('<redacted>');
+    for (const secret of ['private-user', 'private-password', 'private-host', 'private-capability', 'private-token']) {
+      expect(output).not.toContain(secret);
+    }
+  });
+
   it('binds raw model and unique module policy, replacing only when the effective camera choice changes', async () => {
     const homescreen = emptyHomescreen();
     homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true, type: 'catalina' });

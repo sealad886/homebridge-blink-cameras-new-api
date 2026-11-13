@@ -21,7 +21,8 @@ This spec defines bounded operational diagnostics for authentication, HTTP, and 
 ## Camera and HomeKit State
 
 The plugin does not install characteristic read/write/change audit hooks or
-emit automatic motion/ring state audit records. Camera snapshots and stream
+emit blanket motion/ring characteristic audit records. Push motion and recording
+handoffs have the operational receipts described below. Camera snapshots and stream
 callbacks retain their ordinary bounded operational diagnostics; they do not
 serialize camera, system, characteristic, or controller state.
 
@@ -36,7 +37,7 @@ serialize camera, system, characteristic, or controller state.
 
 - Log OAuth step, method, redacted URL, redirect policy, status, and elapsed time.
 - Never log OAuth request headers or form bodies.
-- Log token expiry timing and refresh attempts.
+- Log token expiry transitions and refresh attempts; omit valid-token preflight chatter.
 - On failure, emit bounded status, allowlisted error category, and update/2FA
   hints. Raw server messages and response bodies are not error diagnostics.
 - Refresh transport/429/5xx failures are temporary; malformed responses and
@@ -114,19 +115,28 @@ Operator settings, recording locations and codec behavior are owned by the
 - Camera delegate diagnostics: `src/accessories/camera-source.ts`.
 - Canonical sensitive-key and URL/text redaction: `src/blink-api/redaction.ts`.
 - HTTP outcomes and errors: `src/blink-api/http.ts`.
-- Auth outcomes and URL redaction: `src/blink-api/auth.ts` (`redactUrlForLogging`).
+- Auth outcomes and URL redaction: `src/blink-api/auth.ts`, using shared `redactDiagnosticUrl`.
 - Error formatting: `BlinkHttpError.toLogString`, `BlinkAuthenticationError.toLogString`.
 
-## HomeKit Secure Video state
+## Push and HomeKit Secure Video lifecycle
 
-Opted-in cameras log HSV state transitions as `off`, `warming`, `ready`,
-`recording` or `fault`. Faults are warnings at the ordinary log level; other
-transitions require debug logging. Reasons are fixed categories such as
-`capture_failed`, `discontinuity`, `buffer_exhausted` or `startup_timeout`.
-Footage, native diagnostic text, recording initialization data, fragments,
-capability URLs and HomeKit stream identifiers are never included.
+Normal logs show push receipt and motion decoding, then either an explicit HSV
+suppression reason or acquisition queue/attempt/outcome. Suppression reasons
+include disabled HSV, inactive Home recording permission, non-local events,
+missing storage module and stale events. No notification payload is logged.
 
-A `ready` state means the local buffer contains enough complete fragments.
-It does not confirm that a Home hub requested, acknowledged or saved a clip in
-iCloud. A discontinuity cancels the affected recording and rewarms the buffer;
-it cannot restore missing upstream footage.
+Each real camera offers its saved Blink clip through its own HomeKit recording
+delegate. Normal logs cover catalog requests, download, preparation, offer,
+Home request, transfer completion and acknowledgement/close/cancel/expiry.
+Camera names are sanitized and bounded; opaque process-local flow labels connect
+handoffs without exposing provider event identifiers. Logging failures cannot
+change acquisition, persistence or delivery ownership.
+
+An offer means a prepared clip is available. Transfer completion means the
+finite stream was emitted; transport acknowledgement means Home acknowledged
+that stream. None proves iCloud retention. Blink clips remain saved footage,
+with acquisition delay; there is no synthetic replay camera in the plugin.
+
+Routine credential persistence and cache maintenance remain debug diagnostics.
+Footage, frames, native diagnostic text, recording initialization data,
+fragments, capability URLs and HomeKit stream identifiers are never logged.

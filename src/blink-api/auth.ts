@@ -49,7 +49,7 @@ import {
   readOwnerOnlyJsonFile,
   SecureJsonFileSecurityError,
 } from './secure-json-file';
-import { isSensitiveDiagnosticKey } from './redaction';
+import { redactDiagnosticUrl } from './redaction';
 import { HostedOAuthCoordinator } from './hosted-oauth';
 import { buildRefreshForm, resolveOAuthProfile } from './oauth-profile';
 import { InvalidAuthStateError, isPersistedAuthState } from './auth-state';
@@ -382,21 +382,6 @@ export class BlinkAuth {
     }
   }
 
-  private redactUrlForLogging(value: string): string {
-    try {
-      const url = new URL(value);
-      for (const key of [...new Set(url.searchParams.keys())]) {
-        if (isSensitiveDiagnosticKey(key)
-            || /^(?:error|error_description|id_token|state|token)$/i.test(key)) {
-          url.searchParams.set(key, '<redacted>');
-        }
-      }
-      return url.toString();
-    } catch {
-      return '<redacted-url>';
-    }
-  }
-
   /**
    * Centralized fetch wrapper for all OAuth requests.
    * Provides: request ID tracking, detailed debug logging, network error handling.
@@ -411,7 +396,7 @@ export class BlinkAuth {
 
     if (this.debug) {
       this.logDebug(`[${requestId}] ── ${stepLabel} ──`);
-      this.logDebug(`[${requestId}] ${method} ${this.redactUrlForLogging(url)}`);
+      this.logDebug(`[${requestId}] ${method} ${redactDiagnosticUrl(url)}`);
       if (init.redirect) {
         this.logDebug(`[${requestId}] Redirect policy: ${init.redirect}`);
       }
@@ -473,7 +458,6 @@ export class BlinkAuth {
 
     const elapsed = Date.now() - startTime;
     this.logDebug(`[${requestId}] Response status: ${response.status} (${elapsed}ms)`);
-    this.logDebug(`[${requestId}] Response headers received.`);
 
     return response;
   }
@@ -1217,7 +1201,6 @@ export class BlinkAuth {
     }
 
     this.logDebug('Starting OAuth 2.0 Authorization Code Flow with PKCE...');
-    this.logDebug('  Email: <redacted>');
     this.logDebug(`  OAuth profile: ${OAUTH_CLIENT_ID} (iOS)`);
 
     // Reset session state
@@ -1571,8 +1554,6 @@ export class BlinkAuth {
         this.log.warn('[Auth] Proactive token refresh failed; continuing with current legacy token.');
         this.logDebug('ensureValidToken → proactive refresh failed → continuing with current token');
       }
-    } else {
-      this.logDebug(`ensureValidToken → token valid until ${this.tokenExpiry?.toISOString()}`);
     }
   }
 

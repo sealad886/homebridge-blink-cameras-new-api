@@ -189,7 +189,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
         preparation: this.platform.getNativeRecordingPreparation(),
         readyMotion: active => recordingMotion.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(active),
         policyChanged: policy => this.platform.nativeRecordingPolicyChanged(cameraSourceType, device.id, policy),
-        deliveryOutcome: event => this.platform.nativeRecordingDeliveryOutcome(event.outcome),
+        deliveryOutcome: event => this.platform.nativeRecordingDeliveryOutcome(event.outcome, `${cameraSourceType}:${device.id}`, event),
       });
       controllerOptions.recording = {
         delegate: this.nativeRecording,

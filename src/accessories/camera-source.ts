@@ -231,7 +231,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
   private cameraEpoch = 0;
   private snapshotAbort = new globalThis.AbortController();
   private cachedSnapshotTime = 0;
-  private lastSuccessfulCaptureTime = 0;
   private freshSnapshotPromise: Promise<Buffer> | null = null;
   private freshSnapshotCaptures = false;
   private manualSnapshotPromise: Promise<Buffer> | null = null;
@@ -266,6 +265,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly onInputObservation?: (observation: InputVideoObservation) => void,
     private readonly acquireFeed?: () => FeedLease,
   ) {
+    // Diagnostics must not interrupt HomeKit callbacks or media cleanup.
+    this.log = message => { try { log(message); } catch { /* Ignore logger failure. */ } };
+    this.errorLog = message => { try { errorLog(message); } catch { /* Ignore logger failure. */ } };
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
     this.sharedFeed = new SharedCameraFeed((sink, signal) => this.startVendorFeed(sink, signal));
   }
@@ -299,8 +301,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     request: SnapshotRequest,
     callback: SnapshotRequestCallback,
   ): Promise<void> {
-    this.log(`Snapshot requested (${request.width}x${request.height})`);
-
     if (!this.cameraActive || !this.isDeviceAvailable()) {
       this.cachedSnapshot = null;
       this.cachedSnapshotTime = 0;
@@ -310,7 +310,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     const persistSnapshotCache = this.streamingConfig.persistSnapshotCache ?? false;
     if (this.cachedSnapshot && persistSnapshotCache) {
-      this.log(`Snapshot returned from persistent cache (${this.cachedSnapshot.length} bytes, download age ${Math.round((Date.now() - this.cachedSnapshotTime) / 1000)}s, capture age ${this.lastSuccessfulCaptureTime ? Math.round((Date.now() - this.lastSuccessfulCaptureTime) / 1000) + 's' : 'unknown'})`);
       callback(undefined, this.cachedSnapshot);
       return;
     }
@@ -320,7 +319,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     // Return cached snapshot if still valid by TTL
     if (this.cachedSnapshot && cacheTTL > 0 && cacheAge < cacheTTL) {
-      this.log(`Snapshot returned from cache (${this.cachedSnapshot.length} bytes, age ${Math.round(cacheAge / 1000)}s)`);
       callback(undefined, this.cachedSnapshot);
       return;
     }
@@ -332,7 +330,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       callback(toHapError(this.hap, error));
       return;
     }
-    this.log(`Snapshot returned (${buffer.length} bytes)`);
     callback(undefined, buffer);
   }
 
@@ -345,8 +342,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       throw new Error('Camera is unavailable/offline');
     }
 
-    const buffer = await this.fetchFreshSnapshot(true);
-    this.log(`Snapshot cache refreshed manually (${buffer.length} bytes)`);
+    await this.fetchFreshSnapshot(true);
   }
 
   private fetchFreshSnapshot(capture = !this.streamingConfig.passiveSnapshots): Promise<Buffer> {
@@ -426,7 +422,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     checkRequestBudget({ deadline, signal });
     const url = capture.thumbnail;
     if (capture.completed) {
-      this.lastSuccessfulCaptureTime = Date.now();
       this.log('Thumbnail capture completed');
     } else if (requestCapture) {
       this.log('Thumbnail capture busy; downloading existing thumbnail');

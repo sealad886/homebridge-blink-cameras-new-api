@@ -28,14 +28,9 @@ function mergeCookies(setCookieHeaders: string[] | undefined): void {
     if (!name) continue;
 
     // Remove any existing cookie with same name
-    const oldCount = cookieJar.length;
     cookieJar = cookieJar.filter(c => !c.startsWith(name.trim() + '='));
     // Add new cookie
     cookieJar.push(cookiePart);
-
-    if (oldCount !== cookieJar.length - 1) {
-      console.log(`      🍪 Updated ${'<redacted>'} cookie`);
-    }
   }
 }
 
@@ -85,7 +80,7 @@ async function httpsRequestWithRedirects(url: string, options: https.RequestOpti
         return { ...res, rawSetCookies: allSetCookies, finalUrl: location };
       }
       currentUrl = diagnosticUrl(location, currentUrl).toString();
-      console.log(`    [Redirect ${i}] ${res.statusCode} -> ${'<redacted>'}...`);
+      console.log(`    [Redirect ${i}] Following redirect (${res.statusCode})`);
 
       // For 303, change to GET
       if (res.statusCode === 303 || ([301, 302].includes(res.statusCode) && options.method === 'POST')) {
@@ -118,10 +113,6 @@ async function main() {
 
   const { codeChallenge } = generatePKCEPair();
 
-  console.log(`📧 Email: ${'<redacted>'}`);
-  console.log(`🔑 Hardware ID: ${'<redacted>'}`);
-  console.log(`📝 Code Challenge: ${'<redacted>'}`);
-
   const baseHeaders = buildOAuthHeaders();
 
   // Step 1: Authorize request (follow redirects)
@@ -140,21 +131,17 @@ async function main() {
   authorizeUrl.searchParams.set('device_os_version', '26.1');
   authorizeUrl.searchParams.set('hardware_id', hardwareId);
 
-  console.log(`  URL: ${'<redacted>'}...`);
-
   const authorizeRes = await httpsRequestWithRedirects(authorizeUrl.toString(), {
     method: 'GET',
     headers: baseHeaders,
   });
 
   console.log(`  Final status: ${authorizeRes.statusCode}`);
-  console.log(`  Final URL: ${'<redacted>'}...`);
   console.log(`  Total cookies: ${cookieJar.length}`);
 
   // Step 2: Get signin page (follow redirects)
   console.log('\n📡 Step 2: Get Signin Page');
   const signinUrl = getOAuthSigninUrl({});
-  console.log(`  URL: ${'<redacted>'}`);
 
   const signinPageRes = await httpsRequestWithRedirects(signinUrl, {
     method: 'GET',
@@ -165,11 +152,9 @@ async function main() {
   console.log(`  Total cookies: ${cookieJar.length}`);
 
   const csrfToken = extractCsrfToken(signinPageRes.body);
-  console.log(`  CSRF Token: ${'<redacted>'}...`);
 
   if (!csrfToken) {
     console.error('❌ Failed to extract CSRF token');
-    console.log('  HTML snippet:', '<redacted>');
     return;
   }
 
@@ -195,10 +180,8 @@ async function main() {
   }, formData);
 
   console.log(`  Final status: ${signinRes.statusCode}`);
-  console.log(`  Final URL: ${'<redacted>'}`);
 
   if (signinRes.statusCode >= 400) {
-    console.log(`  Body: ${'<redacted>'}`);
     return;
   }
 
@@ -211,7 +194,7 @@ async function main() {
   // Check if the auth code is in the final URL (native app redirect)
   const codeMatch = signinRes.finalUrl.match(/[?&]code=([^&]+)/);
   if (codeMatch) {
-    console.log(`\n🎉 Authorization Code: ${'<redacted>'}...`);
+    console.log('\n🎉 Authorization code received');
     return;
   }
 
@@ -223,16 +206,14 @@ async function main() {
   });
 
   console.log(`  Final status: ${authCodeRes.statusCode}`);
-  console.log(`  Final URL: ${'<redacted>'}`);
 
   const codeMatch2 = authCodeRes.finalUrl.match(/[?&]code=([^&]+)/);
   if (codeMatch2) {
-    console.log(`\n🎉 Authorization Code: ${'<redacted>'}...`);
+    console.log('\n🎉 Authorization code received');
     return;
   }
 
   console.log('\n⚠️ Flow completed but no auth code found');
-  console.log(`  Body snippet: ${'<redacted>'}`);
 }
 
 main().catch(() => {

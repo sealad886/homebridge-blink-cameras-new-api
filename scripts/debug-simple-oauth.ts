@@ -77,8 +77,7 @@ async function main() {
   authorizeUrl.searchParams.set('hardware_id', hardwareId);
 
   let res = await request(authorizeUrl.toString(), { method: 'GET', headers: baseHeaders });
-  console.log(`  Status: ${res.status}, Location: ${'<redacted>'}, Cookies: ${res.cookies.length}`);
-  console.log(`  Body preview: ${'<redacted>'}`);
+  console.log(`  Status: ${res.status}, Cookies: ${res.cookies.length}`);
   mergeCookies(res.cookies);
 
   // Step 2: If redirected, follow to signin
@@ -90,7 +89,7 @@ async function main() {
       method: 'GET',
       headers: { ...baseHeaders, 'Cookie': getCookieHeader() },
     });
-    console.log(`  Status: ${res.status}, Location: ${'<redacted>'}, Cookies: ${res.cookies.length}`);
+    console.log(`  Status: ${res.status}, Cookies: ${res.cookies.length}`);
     mergeCookies(res.cookies);
   }
 
@@ -103,39 +102,28 @@ async function main() {
       method: 'GET',
       headers: { ...baseHeaders, 'Cookie': getCookieHeader() },
     });
-    console.log(`  Status: ${res.status}, Location: ${'<redacted>'}, Cookies: ${res.cookies.length}`);
+    console.log(`  Status: ${res.status}, Cookies: ${res.cookies.length}`);
     mergeCookies(res.cookies);
   }
 
   // Now we should have the signin page
   if (res.status !== 200) {
     console.log(`\n❌ Expected 200 at signin page, got ${res.status}`);
-    console.log(`  Body: ${'<redacted>'}`);
     return;
   }
 
   console.log('\n📡 Step 3: Parse signin page');
 
-  // Show more of the page structure
   console.log('  Looking for oauth-args script...');
   const oauthArgsMatch = res.body.match(/<script\s+id="oauth-args"[^>]*>([^<]+)<\/script>/i);
   if (oauthArgsMatch) {
-    console.log(`  oauth-args content: ${'<redacted>'}`);
+    console.log('  Found oauth-args script');
   } else {
     console.log('  ❌ No oauth-args script found');
-    // Show first 2000 chars of body
-    console.log(`  Body preview: ${'<redacted>'}`);
   }
 
   const csrfToken = extractCsrfToken(res.body);
-  console.log(`\n  CSRF Token: ${'<redacted>'}`);
   console.log(`  Cookies in jar: ${cookieJar.length}`);
-
-  // Print current cookies
-  for (const c of cookieJar) {
-    const [name, value] = c.split('=');
-    console.log(`    ${'<redacted>'}=${'<redacted>'}...`);
-  }
 
   if (!csrfToken) {
     console.log('❌ No CSRF token found');
@@ -164,27 +152,15 @@ async function main() {
   }, formData);
 
   console.log(`  Status: ${res.status}`);
-  console.log(`  Location: ${'<redacted>'}`);
   console.log(`  Cookies: ${res.cookies.length}`);
   mergeCookies(res.cookies);
 
   if (res.status >= 400 && res.status !== 412) {
-    console.log(`  Body: ${'<redacted>'}`);
     return;
   }
 
   if (res.status === 412) {
     console.log('\n🔐 2FA Required!');
-    const twoFaData = JSON.parse(res.body) as {
-      next_time_in_secs?: number;
-      phone?: string;
-      tsv_state?: string;
-      user_id?: number;
-    };
-    console.log(`  Phone: ${'<redacted>'}`);
-    console.log(`  TSV State: ${'<redacted>'}`);
-    console.log(`  User ID: ${'<redacted>'}`);
-    console.log(`  Wait time: ${'<redacted>'}s`);
 
     // Read 2FA code from stdin
     console.log('\n  Enter 2FA code: ');
@@ -222,30 +198,25 @@ async function main() {
     }, twoFaFormData);
 
     console.log(`  Status: ${res.status}`);
-    console.log(`  Location: ${'<redacted>'}`);
     console.log(`  Cookies: ${res.cookies.length}`);
     mergeCookies(res.cookies);
 
     if (res.status >= 400) {
-      console.log(`  Body: ${'<redacted>'}`);
       return;
     }
 
     if (res.status === 201) {
       console.log('  ✅ 2FA verification successful!');
-      console.log(`  Body: ${'<redacted>'}`);
 
       // After 2FA, go back to authorize WITHOUT params - session remembers the original request
       console.log('\n📡 Step 6: Get authorization code');
       const bareAuthorizeUrl = 'https://api.oauth.blink.com/oauth/v2/authorize';
-      console.log(`  URL: ${'<redacted>'}`);
 
       res = await request(bareAuthorizeUrl, {
         method: 'GET',
         headers: { ...baseHeaders, 'Cookie': getCookieHeader() },
       });
       console.log(`  Status: ${res.status}`);
-      console.log(`  Location: ${'<redacted>'}`);
 
       // Check if the location contains the code (successful redirect to app)
       let codeMatch = (res.location || '').match(/[?&]code=([^&]+)/);
@@ -259,14 +230,13 @@ async function main() {
           headers: { ...baseHeaders, 'Cookie': getCookieHeader() },
         });
         console.log(`  Status: ${res.status}`);
-        console.log(`  Location: ${'<redacted>'}`);
         codeMatch = (res.location || '').match(/[?&]code=([^&]+)/);
       }
 
       // The redirect should contain the code
       if (codeMatch) {
         const authCode = codeMatch[1];
-        console.log(`\n🎉 Authorization Code: ${'<redacted>'}`);
+        console.log('\n🎉 Authorization code received');
 
         // Step 7: Exchange for token
         console.log('\n📡 Step 7: Exchange code for tokens');
@@ -291,20 +261,19 @@ async function main() {
         }, tokenData);
 
         console.log(`  Status: ${res.status}`);
-        console.log(`  Body: ${'<redacted>'}`);
 
         if (res.status === 200) {
           console.log('\n✅ OAuth flow complete! Tokens received.');
         }
       } else {
-        console.log(`  ⚠️ No code in redirect URL: ${'<redacted>'}`);
+        console.log('  ⚠️ No authorization code in redirect');
       }
     }
   }
 
   // Check for redirect to 2FA or back to authorize
   if ([301, 302, 303].includes(res.status)) {
-    console.log(`\n✅ Got redirect: ${'<redacted>'}`);
+    console.log('\n✅ Redirect received');
 
     if (res.location?.includes('2fa') || res.location?.includes('verify')) {
       console.log('🔐 2FA verification needed');
@@ -320,12 +289,12 @@ async function main() {
         method: 'GET',
         headers: { ...baseHeaders, 'Cookie': getCookieHeader() },
       });
-      console.log(`  Status: ${res.status}, Location: ${'<redacted>'}`);
+      console.log(`  Status: ${res.status}`);
 
       // Extract code from location or body
       const codeMatch = (res.location || '').match(/[?&]code=([^&]+)/);
       if (codeMatch) {
-        console.log(`\n🎉 Authorization Code: ${'<redacted>'}`);
+        console.log('\n🎉 Authorization code received');
 
         // Step 6: Exchange for token
         console.log('\n📡 Step 6: Exchange code for tokens');
@@ -350,7 +319,6 @@ async function main() {
         }, tokenData);
 
         console.log(`  Status: ${res.status}`);
-        console.log(`  Body: ${'<redacted>'}`);
       }
     }
   }

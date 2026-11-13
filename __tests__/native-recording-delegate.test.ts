@@ -100,6 +100,12 @@ describe('finite native recording delegate', () => {
     expect(f.prepared[0].disposed).toBe(true);
   });
 
+  it('reports rejected Home requests even when no clip was offered', async () => {
+    const f = setup(); f.enable();
+    await expect(f.delegate.handleRecordingStreamRequest(1).next()).rejects.toThrow('No permitted prepared');
+    expect(f.deliveryOutcome).toHaveBeenCalledWith({ metadata: undefined, outcome: 'request-rejected' });
+  });
+
   it('streams initialization then paced finite fragments with exactly one final marker; ACK means transport acknowledgement', async () => {
     const f = setup(); f.enable(); await f.delegate.offerDownloaded(source, f.metadata());
     const stream = f.delegate.handleRecordingStreamRequest(7);
@@ -114,12 +120,27 @@ describe('finite native recording delegate', () => {
     expect(packets[2]).toMatchObject({ isLast: true });
     expect((await stream.next()).done).toBe(true);
     expect(f.delegate.snapshot().state).toBe('awaiting-ack');
-    expect(f.deliveryOutcome).not.toHaveBeenCalled();
+    expect(f.deliveryOutcome.mock.calls.map(([event]) => event.outcome)).toEqual(['requested', 'transfer-finished']);
     f.delegate.acknowledgeStream(7);
     expect(f.deliveryOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'transport-acknowledged' }));
     expect(f.prepared[0].disposed).toBe(true);
     expect(packets[0].data.toString()).toBe('initialization');
     expect(f.delegate.available).toBe(true);
+  });
+
+  it('reports finite transfer completion once when Home acknowledges before the generator resumes', async () => {
+    const f = setup(); f.enable(); await f.delegate.offerDownloaded(source, f.metadata());
+    const stream = f.delegate.handleRecordingStreamRequest(8);
+    await stream.next(); await stream.next();
+    const final = stream.next(); await jest.advanceTimersByTimeAsync(1000);
+    expect((await final).value?.isLast).toBe(true);
+    f.delegate.acknowledgeStream(8);
+    expect(f.deliveryOutcome.mock.calls.map(([event]) => event.outcome))
+      .toEqual(['requested', 'transfer-finished', 'transport-acknowledged']);
+    expect(f.prepared[0].disposed).toBe(true);
+    expect((await stream.next()).done).toBe(true);
+    f.delegate.acknowledgeStream(8);
+    expect(f.deliveryOutcome.mock.calls.filter(([event]) => event.outcome === 'transfer-finished')).toHaveLength(1);
   });
 
   it('ignores ACK before a final fragment and refuses simultaneous stream requests', async () => {
