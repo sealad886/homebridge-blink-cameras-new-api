@@ -131,3 +131,29 @@ Historical fault cause remains unproved; live readback established all four
 cameras off at the observed time. Source/host qualification is not installed Pi,
 physical Home delivery or iCloud-retention acceptance. Automatic converter scope
 remains POSIX; Windows legacy values require manual canonical JSON conversion.
+
+## Beta.4 review corrections
+
+The maintainer authorized reviewed publication as 1.1.0-beta.4. Local canonical
+qualification at `0cc0f34` passed lint, build, 2,238 tests with 18 existing skips,
+and package preview. Fresh independent review passed 199 focused tests and found
+two completion gaps: stale rollback permission instructions and an obsolete
+synthetic-preview migration route. Both are corrected in the next review batch.
+
+Installer review also established that a global package prefix does not identify
+Homebridge's active storage. Automatic conversion now requires the installer's
+explicit absolute `UIX_STORAGE_PATH`; without it the installed hook leaves files
+untouched and gives explicit migration guidance. Source checkout dependency
+installs skip before any config access, even with an inherited storage path.
+The installer/migration suite passed 36 tests for this correction.
+
+The repair panel now includes Windows manual conversion guidance without adding
+legacy interpretation to the editor. Eight existing recovery tests and the
+generated-preview syntax/canonical-validation check passed. Normal Homebridge
+UI 5.30.0 Save closes the editor; plugin-owned account saves replace the baseline.
+Review allegations about a stale baseline after normal Save and delayed ACK
+reapplying config were rejected using the pinned host's actual lifecycle.
+
+Final exact-source review, CI, native installed-package qualification, registry
+identity and release readback remain required. No Pi config write, installation
+or restart is part of this source task.

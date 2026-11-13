@@ -41,15 +41,19 @@ describePosix('one-time installed configuration migration', () => {
     expect(JSON.stringify(result)).not.toContain('PRIVATE_CONFIG_VALUE');
   });
 
-  it('uses only the config beside its exact installed local scoped package prefix', () => {
-    fs.writeFileSync(file(), JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: false }] }));
-    const packageRoot = join(directory, 'node_modules/@sealad886/homebridge-blink-cameras-new-api');
-    expect(installer.run({}, packageRoot)).toEqual({ action: 'Applied' });
-    expect(JSON.parse(fs.readFileSync(file(), 'utf8')).platforms[0])
-      .toEqual({ platform: 'BlinkCameras', earlyNotificationMode: 'unmanaged' });
+  it('never inspects adjacent package-prefix config when active Homebridge storage is unidentified', () => {
+    const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: false }] });
+    fs.writeFileSync(file(), bytes);
+    const probe = jest.spyOn(fs, 'lstatSync');
+    const result = installer.run({}, installedRoot());
+    expect(result).toMatchObject({ action: 'Skipped', code: 'storage-path-unavailable',
+      message: expect.stringContaining('UIX_STORAGE_PATH') });
+    expect(result).toHaveProperty('message', expect.stringContaining('docs/native-recording-config-migration.md'));
+    expect(probe).not.toHaveBeenCalled();
+    expect(fs.readFileSync(file(), 'utf8')).toBe(bytes); expect(backups()).toEqual([]);
   });
 
-  it('gives the explicit Homebridge storage path priority over an installed package prefix', () => {
+  it('uses explicit Homebridge storage without changing adjacent package-prefix config', () => {
     const other = join(directory, 'other'); fs.mkdirSync(other);
     fs.writeFileSync(file(), JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: true }] }));
     const otherFile = join(other, 'config.json'), otherBytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: false }] });
@@ -75,7 +79,8 @@ describePosix('one-time installed configuration migration', () => {
     const result = spawnSync(process.execPath, [join(source, 'postinstall.cjs')], {
       cwd: directory, env: { PATH: process.env.PATH, UIX_STORAGE_PATH: directory }, encoding: 'utf8',
     });
-    expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ action: 'Skipped', code: 'config-absent' });
+    expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ action: 'Skipped', code: 'config-absent',
+      message: expect.stringContaining('docs/native-recording-config-migration.md') });
     expect(fs.readdirSync(directory)).toEqual(['node_modules']);
   });
 

@@ -304,8 +304,9 @@ to request or retain them. Delayed offers cannot establish pre-event recording,
 historic timeline insertion or successful iCloud retention.
 
 For earlier configuration, use the
-[one-off configuration migration](native-recording-config-migration.md). Review its dry run and
-backup before applying it; it is never run automatically on the Pi.
+[one-off configuration migration](native-recording-config-migration.md). Supported
+POSIX installations run it when the installer supplies `UIX_STORAGE_PATH`.
+Otherwise, review the explicit dry run and backup before applying it yourself.
 
 ## Camera temperature
 

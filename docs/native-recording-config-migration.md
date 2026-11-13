@@ -12,10 +12,11 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 ## Upgrade from 1.1.0-beta.1
 
 On POSIX Homebridge npm installations, the installed package's postinstall step
-runs this one-time migration against the installer-identified `config.json`. It uses
-`UIX_STORAGE_PATH`, or the config beside the installed scoped `node_modules`
-package prefix. It does not search other hosts, home directories or storage
-roots. Source checkout dependency installs never access Homebridge config, even
+runs this one-time migration against `config.json` in the explicit
+`UIX_STORAGE_PATH` supplied by the installer. Without that authoritative path,
+it leaves config untouched and reports how to run the explicit converter.
+It never infers storage from a global package prefix or searches home directories
+or other storage roots. Source checkout dependency installs never access Homebridge config, even
 when they inherit `UIX_STORAGE_PATH`; installation is verified before using that
 path. The existing guarded converter writes an owner-only backup of the exact
 original bytes before atomic replacement, preserving file ownership and unrelated
@@ -116,8 +117,9 @@ beside the configuration:
 config.json.native-recording-backup-<unique-id>.json
 ```
 
-Both the backup and replacement use mode `0600` and retain the original file's
-owner and group. The replacement is staged in the same directory and promoted
+The backup uses mode `0600`; the replacement preserves the original config's
+access permission bits. Both retain the original file's owner and group.
+The replacement is staged in the same directory and promoted
 with an atomic rename. Unchanged input creates no backup. Repeating a completed
 migration leaves the file unchanged. A failure before promotion preserves the
 original; a completed backup is retained. The error code
@@ -217,5 +219,7 @@ another operation. Enable recording permission separately in Apple Home, and
 restart the Blink child bridge after reviewing and applying configuration.
 
 To restore the original configuration, retain the current file separately and
-restore the selected private backup under the original owner with mode `0600`.
+restore a copy of the selected backup under the original owner and group, with
+the original config's required access permissions (for example, `0640` when the
+Homebridge service reads through its group). Keep the backup itself private at `0600`.
 The migration tool does not automatically restore backups or manage services.

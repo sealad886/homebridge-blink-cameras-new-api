@@ -3,6 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const manualMigration = 'Set UIX_STORAGE_PATH to the active Homebridge storage, or follow docs/native-recording-config-migration.md to convert the explicit config before starting with legacy settings.';
 
 function run(environment = process.env, packageRoot = path.resolve(__dirname, '..')) {
   const scope = path.dirname(packageRoot), modules = path.dirname(scope);
@@ -11,18 +12,14 @@ function run(environment = process.env, packageRoot = path.resolve(__dirname, '.
     || path.basename(scope) !== '@sealad886' || path.basename(modules) !== 'node_modules') {
     return { action: 'Skipped', code: 'storage-path-unavailable' };
   }
-  let config;
-  if (environment.UIX_STORAGE_PATH) {
-    if (!path.isAbsolute(environment.UIX_STORAGE_PATH)) return { action: 'Failed', code: 'absolute-storage-path-required' };
-    config = path.join(environment.UIX_STORAGE_PATH, 'config.json');
-  } else {
-    config = path.join(path.dirname(modules), 'config.json');
-  }
+  if (!environment.UIX_STORAGE_PATH) return { action: 'Skipped', code: 'storage-path-unavailable', message: manualMigration };
+  if (!path.isAbsolute(environment.UIX_STORAGE_PATH)) return { action: 'Failed', code: 'absolute-storage-path-required' };
+  const config = path.join(environment.UIX_STORAGE_PATH, 'config.json');
   let migration;
   try {
     try { fs.lstatSync(config); }
     catch (error) {
-      if (error.code === 'ENOENT') return { action: 'Skipped', code: 'config-absent' };
+      if (error.code === 'ENOENT') return { action: 'Skipped', code: 'config-absent', message: manualMigration };
       throw error;
     }
     if (process.platform === 'win32') {
