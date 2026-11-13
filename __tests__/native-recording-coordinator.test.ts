@@ -95,6 +95,35 @@ describe('native recording FIFO', () => {
     expect(f.acquire).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['retry-last', 'retry-between-observations'] as const)('never rolls durable queue evidence backward across pending saves: %s', async order => {
+    const hold = deferred<void>(), started = deferred<void>();
+    const writes: string[][] = [];
+    let physical = Promise.resolve();
+    const saveState = (state: NativeRecordingState) => {
+      const write = physical.then(async () => {
+        if (!writes.length) { started.resolve(); await hold.promise; }
+        writes.push(state.queue.map(job => job.observation.eventId));
+      });
+      physical = write.catch(() => undefined);
+      return write;
+    };
+    const f = setup({ saveState });
+    try {
+      const a = f.coordinator.observe(event('A')); await started.promise;
+      const b = f.coordinator.observe(event('B'));
+      const pending: Array<Promise<unknown>> = [a, b];
+      if (order === 'retry-between-observations') pending.push(f.coordinator.retryPersistence());
+      pending.push(f.coordinator.observe(event('C')));
+      if (order === 'retry-last') pending.push(f.coordinator.retryPersistence());
+      hold.resolve(); await Promise.all(pending);
+      for (let index = 1; index < writes.length; index++) {
+        expect(writes[index]).toEqual(expect.arrayContaining(writes[index - 1]));
+      }
+      expect(writes.at(-1)).toEqual(['A', 'B', 'C']);
+      expect(f.acquire).not.toHaveBeenCalled();
+    } finally { hold.resolve(); }
+  });
+
   it.each([false, true])('retries a proven undispatched intent without spending its attempt after retry-save failure=%s', async failRetry => {
     const f = setup({ maxRetries: 0 });
     await f.coordinator.observe(event('intent-not-dispatched'));

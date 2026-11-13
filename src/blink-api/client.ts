@@ -248,11 +248,18 @@ export class BlinkApi {
       started = true;
       if (queueTimer) globalThis.clearTimeout(queueTimer);
       this.hasSentStateCommand = true;
+      let accountAuthority: (() => void) | undefined;
       const execution: CommandRequestOptions = { ...options, generation, mutationAcknowledged: false, deadline: Math.min(options.deadline ?? Infinity,
         ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
       beforeDispatch: () => {
         checkRequestBudget(execution);
         if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
+        if (!accountAuthority) {
+          // Bind once to the routing account; an initial login may populate an empty cache.
+          const accountId = admission.scope?.accountId ?? this.accountId ?? this.auth.getAccountId();
+          if (accountId !== null) accountAuthority = this.captureOperationAuthority(accountId, generation);
+        }
+        accountAuthority?.();
       } };
       const checkCompletion = () => {
         try { execution.beforeDispatch(); }
@@ -1815,11 +1822,13 @@ export class BlinkApi {
         authority();
       };
       try {
-        return await this.sharedRootHttp.post<BlinkCommandStatus>(
+        const response = await this.sharedRootHttp.post<BlinkCommandStatus>(
           `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`, undefined, [404],
           { ...execution, retry: false, beforeDispatch: current });
+        execution.mutationAcknowledged = true;
+        return response;
       } catch (error) {
-        if (error instanceof BlinkHttpError && error.status === 404) return null;
+        if (isBlinkPostRefusal(error) && error.status === 404) return null;
         throw error;
       }
     }, [], undefined, {}, { kind: 'update', networkId, commandId });
@@ -1866,7 +1875,7 @@ export class BlinkApi {
       } catch (error) {
         if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'unresolved',
           retirementAcknowledged: acknowledged || owned.retirementAcknowledged }, owned.reservationId, generation);
-        if (!acknowledged && error instanceof BlinkHttpError && error.status === 404) return null;
+        if (!acknowledged && isBlinkPostRefusal(error) && error.status === 404) return null;
         throw error;
       }
     }, [], undefined, options, { kind: 'retire', networkId, commandId });

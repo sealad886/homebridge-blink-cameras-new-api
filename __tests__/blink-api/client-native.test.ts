@@ -8,7 +8,7 @@ import { URL } from 'node:url';
 import { BlinkApi, BlinkOperationNotStartedError, type BlinkLiveViewOwnership, type BlinkRemoteOperationOwnership,
   type BlinkStateCommandOwnership } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
-import { BlinkHttp } from '../../src/blink-api/http';
+import { BlinkHttp, BlinkHttpError } from '../../src/blink-api/http';
 import { NativeStorageOwner, type NativeStorageScope, type NativeStorageState,
   type NativeStorageOperation, type NativeStorageRequestOptions } from '../../src/blink-api/native-storage';
 import { OperationTimeoutError, withinRequestBudget } from '../../src/operation-budget';
@@ -266,6 +266,118 @@ describe('owned native storage SDK', () => {
       .toMatchObject({ commandId: 707, phase: 'unresolved', retirementAcknowledged: false });
   });
 
+  it.each((['owned-retirement', 'unowned-retirement', 'command-update'] as const).flatMap(action =>
+    ([200, 404] as const).map(status => [action, status] as const)))
+  ('rejects stale-account %s completion after its held POST returns HTTP%s', async (action, status) => {
+    const f = fixture(action === 'owned-retirement' ? live() : undefined);
+    let reply!: (value: Response) => void, sent!: () => void;
+    const dispatched = new Promise<void>(resolve => { sent = resolve; });
+    (fetch as jest.Mock).mockImplementationOnce(() => { sent(); return new Promise<Response>(resolve => { reply = resolve; }); });
+    const operation = (action === 'command-update' ? f.api.updateCommand(20, 707) : f.api.completeCommand(20, 707)).catch(error => error);
+    await dispatched;
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    reply(status === 404 ? json({}, 404) : action === 'command-update' ? json({ complete: false }) : new Response(null, { status: 204 }));
+    const failure = await operation;
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(BlinkOperationNotStartedError);
+    expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBe(status === 404 ? undefined : true);
+    if (action === 'owned-retirement') expect(f.api.getRemoteOperationState().liveView)
+      .toMatchObject({ commandId: 707, phase: 'unresolved', retirementAcknowledged: status !== 404 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['owned-retirement', 'unowned-retirement', 'command-update'] as const)
+  ('does not accept a prior authentication POST404 as %s missing-command proof', async action => {
+    const f = fixture(action === 'owned-retirement' ? live() : undefined);
+    (f.auth.ensureValidToken as jest.Mock).mockRejectedValueOnce(new BlinkHttpError('prior auth refusal', 404, '',
+      'https://fixture.invalid/prior', 'POST'));
+    await expect(action === 'command-update' ? f.api.updateCommand(20, 707) : f.api.completeCommand(20, 707))
+      .rejects.toMatchObject({ dispatched: false, status: 404 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['liveview-save', 'early-readback', 'quality-readback', 'thumbnail-readback', 'native-callback', 'read-only'] as const)
+  ('rejects late account rotation at the shared completion boundary for %s', async action => {
+    const f = fixture();
+    let reads = 0;
+    const rotate = () => { (f.auth.getAccountId as jest.Mock).mockReturnValue(11); };
+    f.saveLive.mockImplementation(async state => {
+      if (action === 'liveview-save' && state.liveView?.phase === 'active') rotate();
+    });
+    (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
+      if (request.method === 'POST') return json(action === 'liveview-save' ? { command_id: 707, server: 'immis://fixture.invalid' } : { id: 101 });
+      if (url.endsWith('/config')) {
+        reads++;
+        if (reads === 2 || action === 'read-only') rotate();
+        return json({ camera: [{ early_notification: reads === 1, early_notification_compatible: true,
+          video_quality: reads === 1 ? 'standard' : 'best', video_quality_support: ['standard', 'best'] }] });
+      }
+      if (url.endsWith('/homescreen')) {
+        rotate();
+        return json({ account: { account_id: 10 }, networks: [],
+          cameras: [{ id: 40, network_id: 20, name: 'Camera', thumbnail: '/current.jpg' }], owls: [], doorbells: [] });
+      }
+      return json({ complete: true, status: 0 });
+    });
+    const operation = action === 'liveview-save' ? f.api.startCameraLiveview(20, 40)
+      : action === 'early-readback' ? f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false)
+        : action === 'quality-readback' ? f.api.setDeviceVideoQuality('camera', 20, 40, 'best')
+          : action === 'thumbnail-readback' ? f.api.requestCameraThumbnail(20, 40)
+            : action === 'read-only' ? f.api.getDeviceEarlyNotification('camera', 20, 40, 'catalina')
+              : f.api.withNativeStorageAdmission('event', async () => { rotate(); return 'old-account-result'; }, {}, scope);
+    const failure = await operation.catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBe(action === 'native-callback' || action === 'read-only' ? undefined : true);
+    expect((fetch as jest.Mock).mock.calls.filter(([, request]) => request.method === 'POST'))
+      .toHaveLength(action === 'native-callback' || action === 'read-only' ? 0 : 1);
+  });
+
+  it.each(['stable', 'authentication', 'response'] as const)('keeps a newly resolved account bound through its first resource %s', async phase => {
+    const f = fixture();
+    (f.api as unknown as { accountId: number | null }).accountId = null;
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(null);
+    const login = jest.spyOn(f.api, 'login').mockImplementation(async () => {
+      (f.api as unknown as { accountId: number | null }).accountId = 10;
+      (f.auth.getAccountId as jest.Mock).mockReturnValue(10);
+    });
+    (f.auth.ensureValidToken as jest.Mock).mockImplementationOnce(async () => {
+      if (phase === 'authentication') (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    });
+    (fetch as jest.Mock).mockImplementationOnce(async () => {
+      if (phase === 'response') (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+      return json({ camera: [{ early_notification: true, early_notification_compatible: true }] });
+    });
+    const operation = f.api.getDeviceEarlyNotification('camera', 20, 40, 'catalina');
+    if (phase === 'authentication') {
+      await expect(operation).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+      expect(fetch).not.toHaveBeenCalled();
+    } else if (phase === 'response') {
+      const failure = await operation.catch(error => error);
+      expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+      expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(operation).resolves.toMatchObject({ current: true });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+    expect(login).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an account change during conflict reconciliation without retrying the refused mutation', async () => {
+    const f = fixture();
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 409)).mockImplementationOnce(async () => {
+      (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+      return json({ account: { account_id: 10 }, networks: [{ id: 20, name: 'Home', armed: true }], cameras: [], owls: [], doorbells: [] });
+    });
+    const failure = await f.api.armNetwork(20).catch(error => error);
+    expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    expect((fetch as jest.Mock).mock.calls.map(([, request]) => request.method)).toEqual(['POST', 'GET']);
+  });
+
   it('keeps the native command account guard after authentication yields', async () => {
     const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
     let releaseAuthentication!: () => void;
@@ -375,7 +487,7 @@ describe('owned native storage SDK', () => {
     const failure = await operation;
     expect(failure).toBeInstanceOf(Error);
     expect(failure).not.toBeInstanceOf(BlinkOperationNotStartedError);
-    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBe(kind === 'update-post' ? true : undefined);
     expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
     expect(fetch).toHaveBeenCalledTimes(kind === 'read-only-native-work' ? 0 : 1);
   });

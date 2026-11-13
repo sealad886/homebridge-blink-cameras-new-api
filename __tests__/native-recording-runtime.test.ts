@@ -1430,6 +1430,39 @@ describe('native recording runtime composition', () => {
       } finally { disk.resolve(); flush.resolve(); saving.mockRestore(); }
     });
 
+  it('keeps every durable core snapshot monotonic when local delivery faults during queued observations and recovery', async () => {
+    const f = await setup(), offer = deferred<void>(), disk = deferred<void>(), flush = deferred<void>();
+    const offering = jest.spyOn(f.delegate, 'offerDownloaded').mockImplementationOnce(async () => {
+      await offer.promise; throw new Error('local delivery failed independently of journal');
+    });
+    const write = secureJson.writeOwnerOnlyJsonFile, ids = ['queued-A', 'queued-B', 'queued-C'];
+    const writes: string[][] = [];
+    let held = false, flushing = false;
+    const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
+      const queued = (args[1] as NativeRecordingRuntimeState).core?.queue.map(job => job.observation.eventId).filter(id => ids.includes(id)) ?? [];
+      if (queued.length && !held) { held = true; await disk.promise; }
+      await write(...args);
+      if (held) writes.push(queued);
+    });
+    f.client.retryRemoteOperationPersistence.mockImplementationOnce(async () => { flushing = true; await flush.promise; });
+    try {
+      await f.push(); await jest.advanceTimersByTimeAsync(60000);
+      await until(async () => offering.mock.calls.length === 1 && (await f.state()).core?.queue.length === 0);
+      const a = f.push(f.notification(ids[0])); await until(() => held);
+      const b = f.push(f.notification(ids[1])), c = f.push(f.notification(ids[2]));
+      offer.resolve(); await until(() => f.events.includes('local-delivery-faulted'));
+      const retry = f.runtime.retryConnection();
+      disk.resolve(); await until(() => flushing); await Promise.all([a, b, c]);
+      for (let index = 1; index < writes.length; index++) {
+        expect(writes[index]).toEqual(expect.arrayContaining(writes[index - 1]));
+      }
+      expect(writes.at(-1)).toEqual(ids);
+      expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+      flush.resolve(); await retry;
+      expect((await f.state()).core?.queue.map(job => job.observation.eventId)).toEqual(ids);
+    } finally { offer.resolve(); disk.resolve(); flush.resolve(); saving.mockRestore(); offering.mockRestore(); }
+  });
+
   it.each([false, true])('flushes latest real SDK ownership before recovering its journal (acknowledged: %s)', async acknowledged => {
     const api = new BlinkApi({ email: '', password: '', hardwareId: 'runtime-journal-recovery', tier: scope.tier });
     const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;

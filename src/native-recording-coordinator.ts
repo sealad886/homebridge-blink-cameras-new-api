@@ -242,12 +242,7 @@ export class NativeRecordingCoordinator {
   }
 
   async retryPersistence(): Promise<void> {
-    if (this.operation && !this.operationDispatched) {
-      this.operation = undefined;
-      this.queue[0].attempts--;
-    }
-    await this.options.saveState(this.snapshot());
-    this.storageError = undefined;
+    await this.persist(true);
     this.schedule();
   }
 
@@ -426,22 +421,26 @@ export class NativeRecordingCoordinator {
     }
   }
 
-  private async persist(): Promise<void> {
-    const snapshot = this.snapshot();
+  private async persist(retry = false): Promise<void> {
     const write = this.writes.then(async () => {
-      this.assertStorage();
-      await this.options.saveState(snapshot);
+      try {
+        if (!retry) this.assertStorage();
+        if (retry && this.operation && !this.operationDispatched) {
+          this.operation = undefined;
+          this.queue[0].attempts--;
+        }
+        await this.options.saveState(this.snapshot());
+        if (retry) this.storageError = undefined;
+      } catch (error) {
+        if (!this.storageError) {
+          this.storageError = asError(error);
+          this.suspend();
+        }
+        throw retry ? asError(error) : this.storageError;
+      }
     });
     this.writes = write.catch(() => undefined);
-    try {
-      await write;
-    } catch (error) {
-      if (!this.storageError) {
-        this.storageError = asError(error);
-        this.suspend();
-      }
-      throw this.storageError;
-    }
+    await write;
   }
 
   private suspend(): void {

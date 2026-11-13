@@ -67,8 +67,9 @@ without printing provider error messages.
 SDK operations capture account and writer generation through one authority guard,
 with a reservation when the workflow owns one. Check that captured authority
 before dispatch and after awaited work before publishing state or success;
-terminal owner clears also require the original revision. Request budgets and
-request-local transport proof remain separate from operation acknowledgment.
+the shared account queue also checks captured account authority before returning
+a result, and terminal owner clears require the original revision. Request budgets
+and request-local transport proof remain separate from operation acknowledgment.
 A journal fault clears only after the latest required snapshot for the current
 writer is saved, rather than after an older physical write completes.
 
