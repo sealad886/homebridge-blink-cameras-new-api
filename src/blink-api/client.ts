@@ -290,6 +290,13 @@ export class BlinkApi {
             this.expireOperationOwners();
           }
         } catch (error) {
+          if (error instanceof BlinkHttpError && error.method === 'GET') {
+            try { checkAuthority(); }
+            catch (authorityError) {
+              throw afterWorkFailure(authorityError, execution.mutationAcknowledged
+                || (error as BlinkHttpError & { dispatched?: boolean }).dispatched === true);
+            }
+          }
           // Preserve mutation dispatch proof through status and public readback failures.
           if (execution.mutationAcknowledged) throw afterWorkFailure(error, true);
           if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;

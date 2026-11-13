@@ -340,6 +340,38 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().stateCommand).toEqual(owner);
   });
 
+  it.each(['stable', 'account', 'writer'] as const)('fences a terminal initial config GET503 under %s authority without a preference POST', async authority => {
+    jest.useFakeTimers();
+    const f = fixture(), beforeChange = jest.fn();
+    let reads = 0;
+    (fetch as jest.Mock).mockImplementation(async () => {
+      if (++reads === 3) {
+        if (authority === 'account') (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+        if (authority === 'writer') {
+          await f.release({ deadline: Date.now() });
+          f.api.configureRemoteOperationOwnership({ saveState: f.saveLive });
+        }
+      }
+      return json({}, 503);
+    });
+    const operation = f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false,
+      { deadline: Date.now() + 10_000, beforeChange }).catch(error => error);
+    await jest.advanceTimersByTimeAsync(1600);
+    const failure = await operation;
+    if (authority === 'stable') {
+      expect(failure).toBeInstanceOf(BlinkHttpError);
+      expect(failure).toMatchObject({ method: 'GET', failure: 'http', status: 503 });
+    } else {
+      expect(failure).not.toBeInstanceOf(BlinkHttpError);
+      expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+      expect(failure.dispatched).toBeUndefined();
+    }
+    expect(beforeChange).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect((fetch as jest.Mock).mock.calls.every(([, request]) => request.method === 'GET')).toBe(true);
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+  });
+
   it.each((['deadline', 'cancel'] as const).flatMap(limit =>
     (['error-cleanup', 'success-response'] as const).map(stage => [limit, stage] as const)))
   ('releases conflict readback and the command queue on %s during held %s', async (limit, stage) => {

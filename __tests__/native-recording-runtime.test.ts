@@ -759,6 +759,42 @@ describe('native recording runtime composition', () => {
     } finally { writes.mockRestore(); }
   });
 
+  it('supports reviewed offline pending recovery while preserving unrelated evidence and recording a fresh original', async () => {
+    const f = await setup({ earlyNotification: true, start: false }); await f.runtime.stop();
+    const other = { kind: 'camera', networkId: 20, deviceId: 41, rawType: 'catalina', original: true };
+    const legacy = JSON.stringify({ version: 2, scope: { accountId: 10, tier: 'u000' }, devices: [
+      { ...other, deviceId: 40, original: false }, other,
+    ] });
+    await fs.writeFile(f.originalsPath, legacy, { mode: 0o600 });
+    const migrated = await f.rebind();
+    expect(f.settingWrites).toEqual([]);
+    const backup = (await fs.readdir(path.dirname(f.originalsPath))).find(name => name.startsWith(path.basename(f.originalsPath) + '.v2-backup-'))!;
+    expect(await fs.readFile(path.join(path.dirname(f.originalsPath), backup), 'utf8')).toBe(legacy);
+    await migrated.stop();
+    const reviewedBackup = f.originalsPath + '.review-backup';
+    await fs.copyFile(f.originalsPath, reviewedBackup);
+    const reviewed = JSON.parse(await fs.readFile(f.originalsPath, 'utf8'));
+    const unrelated = reviewed.devices.find((row: { deviceId: number }) => row.deviceId === 41);
+    // Simulate the documented operator review while the bridge is stopped.
+    f.earlyProvider.current = true;
+    reviewed.devices = reviewed.devices.filter((row: { deviceId: number }) => row.deviceId !== 40);
+    await fs.writeFile(f.originalsPath, JSON.stringify(reviewed));
+    expect((await fs.stat(f.originalsPath)).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(reviewedBackup)).mode & 0o777).toBe(0o600);
+    const restarted = await f.rebind();
+    await until(() => f.events.includes('early-notification-confirmed-off'));
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual(expect.arrayContaining([
+      unrelated, expect.objectContaining({ deviceId: 40, original: true, ownership: 'owned' }),
+    ]));
+    expect(f.settingWrites).toEqual([false]);
+    await restarted.stop(); await f.rebind({ devices: [] });
+    await until(() => f.events.includes('early-notification-restored'));
+    expect(f.earlyProvider.current).toBe(true);
+    expect(f.settingWrites).toEqual([false, true]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([unrelated]);
+    expect(JSON.parse(await fs.readFile(reviewedBackup, 'utf8')).devices).toHaveLength(2);
+  });
+
   it('bounds a held migration and fences its late backup before a replacement migrates', async () => {
     const f = await setup(); await f.runtime.stop();
     const legacy = JSON.stringify({ version: 2, scope: { accountId: 10, tier: 'u000' }, devices: [] });
@@ -1229,13 +1265,13 @@ describe('native recording runtime composition', () => {
   });
 
   it.each(['reapply', 'restore'] as const)('keeps %s pending after unproven HTTP outcomes despite a realistic callback value', async pathway => {
-    for (const kind of ['unknown-post', 'sent-post', 'unsent-get', 'get-409', 'post-408', 'post-500', 'lookalike', 'wrapped', 'stale'] as const) {
+    for (const kind of ['unknown-post', 'sent-post', 'unsent-get', 'get-409', 'get-503', 'post-408', 'post-500', 'lookalike', 'wrapped', 'stale'] as const) {
       const f = await setup({ earlyNotification: true, storagePath: path.join(root, `http-${pathway}-${kind}`) });
       if (pathway === 'restore') await f.runtime.stop(); else f.earlyProvider.current = true;
       f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
         await options?.beforeChange?.(f.earlyProvider.current);
-        const method = kind === 'unsent-get' || kind === 'get-409' ? 'GET' : 'POST';
-        const status = kind === 'get-409' ? 409 : kind === 'post-408' ? 408 : kind === 'post-500' ? 500 : 0;
+        const method = kind === 'unsent-get' || kind === 'get-409' || kind === 'get-503' ? 'GET' : 'POST';
+        const status = kind === 'get-409' ? 409 : kind === 'get-503' ? 503 : kind === 'post-408' ? 408 : kind === 'post-500' ? 500 : 0;
         const error = new BlinkHttpError('Request failed', status, '', 'https://example.com/config', method, undefined, undefined, status ? 'http' : 'network');
         if (kind === 'unsent-get' || kind === 'stale') Object.defineProperty(error, 'dispatched', { value: false });
         if (kind === 'sent-post') Object.defineProperty(error, 'dispatched', { value: true });
@@ -1323,17 +1359,23 @@ describe('native recording runtime composition', () => {
     await f.push(); expect(f.publicMotion).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves a pre-existing original as unverified after failed revalidation', async () => {
+  it.each((['reapply', 'restore'] as const).flatMap(pathway =>
+    (['http', 'network', 'response'] as const).map(failure => [pathway, failure] as const)))
+  ('retains %s ownership after a terminal initial config GET %s failure and recovers normally', async (pathway, failure) => {
     const f = await setup({ earlyNotification: true });
-    const original = await fs.readFile(f.originalsPath, 'utf8');
-    f.earlyProvider.current = true;
-    f.client.setDeviceEarlyNotification.mockImplementationOnce(async () => {
-      throw new BlinkHttpError('Read refused', 409, '', 'https://example.com/config', 'GET');
-    });
-    await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-http-409-faulted'));
-    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);
-    expect(JSON.parse(original).devices[0].original).toBe(true);
+    if (pathway === 'restore') await f.runtime.stop();
+    f.client.setDeviceEarlyNotification.mockRejectedValueOnce(new BlinkHttpError('Read failed', failure === 'http' ? 503 : 0,
+      '', 'https://example.com/config', 'GET', undefined, undefined, failure));
+    let current = f.runtime;
+    if (pathway === 'restore') current = await f.rebind({ devices: [] }); else await current.retryConnection();
+    await until(() => f.events.some(event => event.endsWith('-faulted')));
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'owned' }]);
     expect(f.settingWrites).toEqual([false]);
+    const since = f.events.length; await current.retryConnection();
+    await until(() => f.events.slice(since).includes(pathway === 'restore' ? 'early-notification-restored' : 'early-notification-confirmed-off'));
+    if (pathway === 'reapply') { await current.stop(); await f.rebind({ devices: [] }); }
+    expect(f.settingWrites).toEqual([false, true]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
   });
 
   it.each([false, true])('restores only a still-owned off value when management ends, preserving manual changes: external=%p', async externallyEnabled => {

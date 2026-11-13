@@ -69,10 +69,14 @@ an owned change merely because someone later supplies the same value manually.
 An unchanged read may reconfirm continuity only for a previously confirmed-owned
 entry when no intervening change was observed; it cannot establish ownership of a
 new, migrated or otherwise unverified pending entry.
-A definite Live View or storage admission refusal that started no work may retain
-that same prior ownership, provided no change callback ran and the account/writer scope is
-still current. Routine Live View or storage contention therefore does not turn
-a previously owned entry into an unverified change.
+A definite Live View, storage or unrelated ordinary-command admission refusal
+that started no work may retain that same prior ownership, provided no change
+callback ran and the account/writer scope is still current. Routine contention
+therefore does not turn a previously owned entry into an unverified change. A
+typed terminal failure of the initial configuration GET can retain the same
+prior ownership: that read has ended without reaching the change callback or a
+setting POST. The SDK checks account/writer authority on failure as well as
+success; a stale continuation cannot supply that proof.
 Typed request-local proof that no request was sent is treated similarly. If a
 reapply read observed the original value, an unsent or refused write cannot own a
 new change, so its pending intent is discarded. If restoration observed the

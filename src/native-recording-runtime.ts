@@ -395,8 +395,9 @@ export class NativeRecordingRuntime {
     const untouched = beforeChangeCurrent === undefined;
     const busy = error instanceof BlinkOperationNotStartedError && error.dispatched === false
       && ['liveview-pending', 'storage-pending', 'state-command-pending'].includes(error.reason);
-    if (!isUnacceptedPreferencePost(error)
-      && !(untouched && (busy || (isUnsentPreferenceHttp(error) && error.method === 'GET')))) return;
+    const readFailed = error instanceof BlinkHttpError && error.method === 'GET'
+      && ['http', 'network', 'response'].includes(error.failure);
+    if (!isUnacceptedPreferencePost(error) && !(untouched && (busy || readFailed))) return;
     checkRequestBudget({ deadline });
     await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals!.devices.map(row =>
       row.ownership === 'pending' && settingKey(row) === settingKey(original) && row.original === original.original

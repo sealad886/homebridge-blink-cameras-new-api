@@ -340,3 +340,32 @@ in logs/notification-settings-beta4/round10-repair-final.json. Intermediate test
 fixture failures remain preserved; they exercised invalid writer handoffs and
 were corrected without weakening production authority guards. No physical
 occurrence or camera/Pi acceptance is inferred from these local tests.
+
+## Terminal initial reads preserve prior ownership
+
+A typed terminal initial configuration GET can fail after durable demotion but
+before the change callback or any preference POST. That read has ended, so it
+supplies different evidence from a generic timeout whose continuation may still
+be running. Prior confirmed ownership can now survive this terminal read failure,
+subject to the existing untouched callback, current scope, budget and durable
+write guards. Shared SDK handling checks authority before exposing canonical GET
+errors as this proof. Stale account/writer/generation failures use the existing
+unknown-outcome wrapper, preserving positive dispatch evidence. Established typed
+admission and native dispatch errors retain their existing propagation.
+
+All 511 SDK/runtime tests, TypeScript, source lint and diff checks passed. Real
+SDK cases prove terminal initial GET503 with no preference POST and account/writer
+invalidation exclusion. Runtime cases cover HTTP, network and response read
+failures for both reapplication and restoration, followed by recovery. Post-change
+GET503 remains pending. An intermediate unconditional authority guard broke ten
+existing dispatch contracts; the guard was narrowed to the newly accepted GET
+proof boundary and those assertions passed unchanged in intent. Failed evidence
+is preserved in logs/notification-settings-beta4/round11-repair-final.json.
+
+The conditional pending-recovery finding was already addressed by the supported
+stopped manual workflow in the migration guide. A new lifecycle regression proves
+legacy migration/private backup, removal of only one reviewed pending entry,
+fresh original capture distinct from the legacy original, confirmed forcing and
+guarded restoration while retaining unrelated pending evidence. No new recovery
+handler, ownership inference or runtime legacy interpretation was introduced.
+These are local synthetic checks; no production journal or Pi was changed.
