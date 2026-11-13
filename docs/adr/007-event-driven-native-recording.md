@@ -142,28 +142,21 @@ No relay is installed, and no generic Blink SSE/webhook endpoint is claimed.
 
 ## Optional Early Notification management
 
-`disableEarlyNotification` is an optional plugin, Sync Module or device boolean.
-The canonical policy resolver applies device, uniquely associated module, then
-plugin precedence; explicit false masks inherited true. Unsetting deletes the
-value and resumes inheritance. This setting is independent of motion exposure
-and HSV selection, so changing either consumer does not lose a managed original.
+In 1.1.0-beta.2, `earlyNotificationMode` replaces the negative Boolean UI with
+`on`, `off` and `unmanaged`. Camera, uniquely associated module, then global
+precedence applies; omitted overrides inherit. The canonical migration preserves
+old true as off and explicit false as unmanaged. This policy stays independent
+of motion exposure and HSV selection.
 
-For effective true, use APK61's positive device capability and the config's
-`early_notification_compatible` field before changing `early_notification` to
-false. Both setting reads and the minimal JSON control POST use the existing
-account queue and durable command owner. The shared config decoder handles the
-camera-array and flat Owl response forms for this setting and video quality.
-Unsupported or unconfirmed devices retain ordinary recording delay; no settings
-request is added to the notification handler.
-
-Before an actual change, durably save the original in an account-and-tier-scoped
-companion journal under the existing private directory. It survives client
-re-login and ordinary stop. A camera already off needs no POST or saved original.
-When effective ownership ends, restore through the same queue only if a fresh
-read still equals the plugin-written false; preserve an external manual change.
-Unsetting a device that still inherits true does not end ownership. Start the
-coalesced preference task after push demand or reconnect begins, independently of
-known-command recovery. Drain both tasks before releasing the runtime's lease.
+Both force directions use APK61's positive device capability and the config's
+`early_notification_compatible` field. Reads and minimal control POSTs use the
+existing account queue and durable command owner. Before an actual change, save
+the original Boolean privately under the account/tier-scoped journal. Receipt
+version 2 supports both values and imports validated version 1 originals.
+Restoration uses a fresh expected-current check against the plugin-applied value,
+preserving manual changes. Reversing force direction first reconciles the old
+receipt. Stop preserves originals; both preference and recovery tasks drain before
+releasing the runtime lease. No settings request is added to the motion handler.
 
 Blink documents delayed notifications with Early Notification off, but the
 inspected APK and retained payloads do not prove whether notification

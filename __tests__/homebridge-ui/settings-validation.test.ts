@@ -11,6 +11,13 @@ const inventory = projectSettingsInventory({ networks: [{ id: 10, name: 'System'
 describe('full settings draft validation', () => {
   const validator = new SettingsValidator(() => inventory);
 
+  it('requires canonical migration of legacy settings and rejects malformed legacy choices', () => {
+    expect(validator.validate({ revision: 1, config: { name: 'Blink', disableEarlyNotification: false } }))
+      .toMatchObject({ valid: false, errors: expect.arrayContaining([expect.objectContaining({ code: 'migration_required' })]) });
+    expect(validator.validate({ revision: 1, config: { name: 'Blink', disableEarlyNotification: 'false', earlyNotificationMode: 'on' } }))
+      .toMatchObject({ valid: false, errors: expect.arrayContaining([expect.objectContaining({ code: 'early_notification' })]) });
+  });
+
   it('accepts six qualified recording cameras, absent/empty recording overrides and unknown fields without mutation', () => {
     const config = { name: 'Blink', deviceSettingOverrides: inventory.cameras.map(camera => ({ deviceIdentifier: camera.key, homeKitSecureVideo: true })),
       _bridge: { username: 'private-existing-value' }, futureSetting: { keep: true } };
@@ -41,11 +48,11 @@ describe('full settings draft validation', () => {
     expect(result.valid).toBe(true); expect(result.capacity?.global).toBe(6);
   });
 
-  it('preserves optional and explicit false early notification choices at all scopes', () => {
-    for (const disableEarlyNotification of [undefined, false, true]) {
-      const config = { name: 'Blink', ...(disableEarlyNotification === undefined ? {} : { disableEarlyNotification }),
+  it('preserves inherited and explicit Early Notification modes at all scopes', () => {
+    for (const earlyNotificationMode of [undefined, 'unmanaged', 'off', 'on']) {
+      const config = { name: 'Blink', ...(earlyNotificationMode === undefined ? {} : { earlyNotificationMode }),
         syncModuleSettingOverrides: [{ syncModuleId: '20' }],
-        deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: false }] };
+        deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'unmanaged' }] };
       const before = structuredClone(config);
       expect(validator.validate({ revision: 1, config }).valid).toBe(true);
       expect(config).toEqual(before);
@@ -53,12 +60,12 @@ describe('full settings draft validation', () => {
   });
 
   it.each([
-    [{ name: 'Blink', disableEarlyNotification: 'false' }, '/disableEarlyNotification'],
+    [{ name: 'Blink', earlyNotificationMode: 'false' }, '/earlyNotificationMode'],
     [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: ' ' }] }, '/syncModuleSettingOverrides/0/syncModuleId'],
     [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: 20 }] }, '/syncModuleSettingOverrides/0/syncModuleId'],
-    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: '20', disableEarlyNotification: 'true' }] }, '/syncModuleSettingOverrides/0/disableEarlyNotification'],
-    [{ name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: null }] }, '/deviceSettingOverrides/0/disableEarlyNotification'],
-    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: '20' }, { syncModuleId: '20', disableEarlyNotification: false }] }, '/syncModuleSettingOverrides/1/syncModuleId'],
+    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: '20', earlyNotificationMode: 'true' }] }, '/syncModuleSettingOverrides/0/earlyNotificationMode'],
+    [{ name: 'Blink', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: null }] }, '/deviceSettingOverrides/0/earlyNotificationMode'],
+    [{ name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: '20' }, { syncModuleId: '20', earlyNotificationMode: 'unmanaged' }] }, '/syncModuleSettingOverrides/1/syncModuleId'],
   ])('rejects invalid early notification settings at their field path: %j', (config, path) => {
     const before = structuredClone(config);
     const result = validator.validate({ revision: 1, config });
@@ -68,7 +75,7 @@ describe('full settings draft validation', () => {
   });
 
   it('preserves unresolved Sync Module settings as warnings, including without discovery', () => {
-    const config = { name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: 'unavailable-module', disableEarlyNotification: true }] };
+    const config = { name: 'Blink', syncModuleSettingOverrides: [{ syncModuleId: 'unavailable-module', earlyNotificationMode: 'off' }] };
     for (const instance of [validator, new SettingsValidator(() => undefined)]) {
       const result = instance.validate({ revision: 1, config });
       expect(result.valid).toBe(true);

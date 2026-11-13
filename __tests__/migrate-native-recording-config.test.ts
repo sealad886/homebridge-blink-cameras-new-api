@@ -19,6 +19,26 @@ describePosix('explicit native recording configuration migration', () => {
   const run = (apply = false, extra: string[] = []) => spawnSync(process.execPath, [...extra, script, file, ...(apply ? ['--apply'] : [])], { encoding: 'utf8' });
   const backups = () => readdirSync(directory).filter(name => name.includes('.native-recording-backup-'));
 
+  it('migrates Early Notification choices with the canonical helper, backing up exact original bytes', () => {
+    const input = { platforms: [{ platform: 'Other', disableEarlyNotification: 'keep' }, { platform: 'BlinkCameras', disableEarlyNotification: true,
+      syncModuleSettingOverrides: [{ syncModuleId: '20', disableEarlyNotification: false, future: 3 }],
+      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on', disableEarlyNotification: true }] }] };
+    const bytes = JSON.stringify(input); writeFileSync(file, bytes);
+    expect(run().status).toBe(0); expect(readFileSync(file, 'utf8')).toBe(bytes); expect(backups()).toEqual([]);
+    expect(run(true).status).toBe(0);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ platforms: [input.platforms[0], { platform: 'BlinkCameras', earlyNotificationMode: 'off',
+      syncModuleSettingOverrides: [{ syncModuleId: '20', earlyNotificationMode: 'unmanaged', future: 3 }],
+      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on' }] }] });
+    expect(readFileSync(join(directory, backups()[0]), 'utf8')).toBe(bytes);
+    expect(run(true).status).toBe(0); expect(backups()).toHaveLength(1);
+  });
+
+  it('refuses malformed legacy Early Notification even alongside a valid explicit mode', () => {
+    const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', earlyNotificationMode: 'on', disableEarlyNotification: 'false' }] });
+    writeFileSync(file, bytes);
+    expect(run(true).status).toBe(2); expect(readFileSync(file, 'utf8')).toBe(bytes); expect(backups()).toEqual([]);
+  });
+
   it('previews changes by default without rewriting the file or creating backup data', () => {
     const bytes = '{ "platforms": [{"platform":"BlinkCameras", "enableMotionPolling":false,"hksvCameras":["camera:12"]}] }\n';
     writeFileSync(file, bytes);

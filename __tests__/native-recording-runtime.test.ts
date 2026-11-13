@@ -62,7 +62,7 @@ describe('native recording runtime composition', () => {
   async function setup(overrides: { config?: NativeRecordingConfigInput; exposure?: boolean; hsv?: boolean;
     prepare?: typeof prepareNativeRecording; storagePath?: string; nativeStorage?: boolean; secondCamera?: boolean;
     start?: boolean;
-    earlyNotification?: boolean; rawType?: string; earlyCurrent?: boolean; earlyCompatible?: boolean; earlyFailure?: 'before-write' | 'after-write';
+    earlyNotification?: boolean; earlyNotificationMode?: 'on' | 'off' | 'unmanaged'; rawType?: string; earlyCurrent?: boolean; earlyCompatible?: boolean; earlyFailure?: 'before-write' | 'after-write';
     matchingDevices?: readonly NativeMotionDevice[]; eventSourceFactory?: NativeRecordingRuntimeOptions['eventSourceFactory'] } = {}) {
     let runtime: NativeRecordingRuntime | undefined, source!: FcmEventSourceOptions;
     let remoteSave!: (state: BlinkRemoteOperationOwnership) => Promise<void>;
@@ -143,10 +143,10 @@ describe('native recording runtime composition', () => {
     const devices: NativeRecordingRuntimeOptions['devices'] = [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
         rawType: overrides.rawType ?? 'catalina',
         ...(overrides.nativeStorage === false ? {} : { nativeStorage: { moduleId: '20:30', syncModuleId: 30 } }),
-        settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true, disableEarlyNotification: overrides.earlyNotification ?? false },
+        settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true, earlyNotificationMode: overrides.earlyNotificationMode ?? (overrides.earlyNotification ? 'off' : 'unmanaged') },
         motion: publicMotion, recording: () => delegate }, ...(cornerDelegate ? [{
         binding: { accountId: 10, networkId: 20, providerId: 41, target: 'camera', cameraId: 'camera:41', nativeName: 'Corner native name' },
-        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true, disableEarlyNotification: false },
+        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true, earlyNotificationMode: 'unmanaged' as const },
         motion: jest.fn(), recording: () => cornerDelegate,
       }] : [])];
     const options: NativeRecordingRuntimeOptions = { client: client as unknown as BlinkApi, scope, storagePath: overrides.storagePath ?? root,
@@ -162,8 +162,8 @@ describe('native recording runtime composition', () => {
       });
       const since = events.length;
       await value.start();
-      if (originals || devices.some(device => device.settings.disableEarlyNotification)) {
-        await until(() => events.slice(since).some(event => /^early-notification-(?:confirmed-off|unsupported|.*faulted|restored)$/.test(event)));
+      if (originals || devices.some(device => device.settings.earlyNotificationMode !== 'unmanaged')) {
+        await until(() => events.slice(since).some(event => /^early-notification-(?:confirmed-(?:on|off)|unsupported|.*faulted|restored)$/.test(event)));
       }
     };
     runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime);
@@ -391,7 +391,7 @@ describe('native recording runtime composition', () => {
     const options: NativeRecordingRuntimeOptions = { client: api, scope, storagePath: root,
       config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), matchingDevices: [],
       devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
-        settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false }, motion: jest.fn(), recording: () => undefined }],
+        settings: { exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'unmanaged' as const }, motion: jest.fn(), recording: () => undefined }],
       eventSourceFactory: input => {
         const source = { options: input, setDemand: jest.fn().mockResolvedValue(undefined),
           reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) };
@@ -684,6 +684,60 @@ describe('native recording runtime composition', () => {
     expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])('forces On with a durable disabled original, then restores conditionally (manual=%s)', async manual => {
+    const f = await setup({ earlyNotificationMode: 'on', earlyCurrent: false });
+    expect(f.settingWrites).toEqual([true]);
+    expect(f.settingReceipts[0].devices).toEqual([expect.objectContaining({ original: false })]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).version).toBe(2);
+    await f.push();
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+    await f.runtime.stop();
+    if (manual) f.earlyProvider.current = false;
+    await f.rebind({ devices: [] });
+    expect(f.earlyProvider.current).toBe(false);
+    expect(f.settingWrites).toEqual(manual ? [true] : [true, false]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
+  });
+
+  it('switches force Off to force On through the saved original without changing the baseline', async () => {
+    const f = await setup({ earlyNotification: true });
+    await f.runtime.stop();
+    await f.rebind({ devices: [{ ...f.devices[0], settings: { ...f.devices[0].settings, earlyNotificationMode: 'on' } }] });
+    expect(f.settingWrites).toEqual([false, true]);
+    expect(f.earlyProvider.current).toBe(true);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
+    await f.runtime.stop(); await f.rebind({ devices: [] });
+    expect(f.settingWrites).toEqual([false, true]);
+  });
+
+  it('reads the version-one enabled original and migrates its journal when restoration completes', async () => {
+    const f = await setup({ earlyNotification: true });
+    await f.runtime.stop();
+    const prior = JSON.parse(await fs.readFile(f.originalsPath, 'utf8'));
+    await fs.writeFile(f.originalsPath, JSON.stringify({ ...prior, version: 1 }), { mode: 0o600 });
+    await f.rebind({ devices: [] });
+    expect(f.settingWrites).toEqual([false, true]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8'))).toMatchObject({ version: 2, devices: [] });
+  });
+
+  it('keeps a version-one journal intact and refuses force On when its required new original cannot persist', async () => {
+    const filename = path.join(root, '.blink-native-recording', '.early-notification-10-u000.json');
+    await fs.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const legacy = JSON.stringify({ version: 1, scope: { accountId: 10, tier: 'u000' }, devices: [] });
+    await fs.writeFile(filename, legacy, { mode: 0o600 });
+    const rename = fs.rename.bind(fs);
+    const failedJournal = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (String(args[1]).includes('.early-notification-')) throw new Error('Original journal disk failure');
+      return rename(...args);
+    });
+    try {
+      const f = await setup({ earlyNotificationMode: 'on', earlyCurrent: false });
+      expect(f.settingWrites).toEqual([]); expect(f.earlyProvider.current).toBe(false);
+      expect(f.events).toContain('early-notification-faulted');
+      expect(await fs.readFile(filename, 'utf8')).toBe(legacy);
+    } finally { failedJournal.mockRestore(); }
+  });
+
   it('starts push and public motion before a held setting confirms, coalescing retries while retaining delayed HSV', async () => {
     const f = await setup({ earlyNotification: true, start: false });
     const gate = deferred<void>(); let entered = false;
@@ -732,7 +786,7 @@ describe('native recording runtime composition', () => {
       runtime = await NativeRecordingRuntime.create({ client: api, scope, storagePath: root,
         config: resolveNativeRecordingConfig(undefined), firebase: BLINK_FIREBASE_CLIENT, appVersion: '61.0', report: jest.fn(), matchingDevices: [],
         devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry' },
-          rawType: 'catalina', settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: true },
+          rawType: 'catalina', settings: { exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'off' as const },
           motion, recording: () => undefined }],
         eventSourceFactory: input => { source = input; return { setDemand, reconnect, stop: jest.fn().mockResolvedValue(undefined) }; } });
       runtimes.push(runtime); await runtime.start();
@@ -1684,7 +1738,7 @@ describe('native recording runtime composition', () => {
           events.push(event);
           if (event === 'persistence-recovered') recovered.push(JSON.parse(readFileSync(filename, 'utf8')));
         }, devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry' },
-          settings: { exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false }, motion, recording: () => undefined }],
+          settings: { exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'unmanaged' as const }, motion, recording: () => undefined }],
         eventSourceFactory: input => { source = input; return { setDemand: jest.fn().mockResolvedValue(undefined),
           reconnect: jest.fn().mockResolvedValue(undefined), stop: jest.fn().mockResolvedValue(undefined) }; } });
       filename = path.join(runtime.directory, 'state.json');

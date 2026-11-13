@@ -10,7 +10,7 @@
   const copy = value => structuredClone(value);
   const numberValue = value => value === '' ? undefined : /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
 
-  function mount(homebridge, schema, blocks) {
+  function mount(homebridge, schema, blocks, initialConfig) {
     const properties = schema.schema.properties;
     const sections = schema.layout;
     const nav = document.getElementById('settingsNavigation');
@@ -26,12 +26,14 @@
     let inventoryFailed = false;
     let accountReady = false;
     let sequence = 0;
+    let dismissHelp = () => {};
+    root.addEventListener?.('keydown', event => { if (event.key === 'Escape' && dismissHelp()) event.stopPropagation(); });
     const draft = new Draft(blocks, {
       validate: payload => deadline(homebridge.request('/settings/validate', payload)),
       stage: data => deadline(homebridge.updatePluginConfig(data)),
       saveEnabled: enabled => enabled ? homebridge.enableSaveButton() : homebridge.disableSaveButton(),
       changed: refreshState,
-    });
+    }, initialConfig);
     function values(key) { return Array.isArray(draft.config[key]) ? draft.config[key] : []; }
     function cameras() { return inventory?.cameras || []; }
     function match(token, camera) { const result = resolveSelector(token, cameras()); return result.length === 1 && result[0].key === camera.key; }
@@ -59,9 +61,10 @@
       const choices = property.enum ? property.enum.map((value, index) => ({ value, title: property.enumNames?.[index] || value }))
         : property.oneOf?.map(item => ({ value: item.enum[0], title: item.title }));
       const value = override ? override.value ?? property.default : Object.hasOwn(draft.config, key) ? draft.config[key] : property.default;
+      const heading = el('div', undefined, 'blink-field-heading');
       if (property.type === 'boolean') {
         const checkbox = check(property.title, value === true, checked => (override?.change || (next => write(key, next)))(checked));
-        input = checkbox.querySelector('input'); input.id = id; row.append(checkbox);
+        input = checkbox.querySelector('input'); input.id = id; heading.append(checkbox); row.append(heading);
       } else {
         if (choices) {
           input = el('select', undefined, 'form-select form-control');
@@ -71,30 +74,59 @@
           }
         } else if (property.type === 'string' || property.type === 'integer') {
           input = el('input', undefined, 'form-control'); input.type = 'text';
-          if (property.type === 'integer') input.inputMode = 'numeric';
+          if (property.type === 'integer') input.inputMode = override?.parse ? 'decimal' : 'numeric';
           if (property.placeholder) input.placeholder = property.placeholder;
           if (property.maxLength) input.maxLength = property.maxLength;
         } else throw new Error('Unsupported settings control.');
-        input.id = id; input.value = value === undefined ? '' : String(value); input.disabled = !accountReady || draft.state.accountAction;
+        input.id = id; input.value = value === undefined ? '' : String(override?.format ? override.format(value) : value); input.disabled = !accountReady || draft.state.accountAction;
         input.addEventListener(choices ? 'change' : 'input', () => {
-          const next = property.type === 'integer' ? numberValue(input.value) : input.value || undefined;
+          const next = override?.parse ? override.parse(input.value) : property.type === 'integer' ? numberValue(input.value) : input.value || undefined;
           (override?.change || (changed => write(key, changed)))(next);
         });
-        row.append(label, input);
+        heading.append(label); row.append(heading, input);
       }
       input.dataset.setting = key;
-      const description = el('p', property.description || '', 'blink-help'); description.id = `${id}-help`;
+      let help = property.description || '';
       if (key === 'snapshotCacheTTL' && draft.config.persistSnapshotCache === true) {
         input.disabled = true;
-        description.textContent = 'Inactive while previews are kept until manual refresh. Your duration is preserved; turn that option off to edit it.';
+        help = 'Inactive while previews are kept until manual refresh. Your duration is preserved; turn that option off to edit it.';
       }
-      input.setAttribute('aria-describedby', description.id);
-      row.append(description); parent.append(row); return input;
+      if (help) {
+        const container = el('span', undefined, 'blink-info');
+        const button = el('button', 'i', 'blink-info-button'); button.type = 'button';
+        const description = el('span', help, 'blink-info-text'); description.id = `${id}-help`; description.hidden = true;
+        description.setAttribute('role', 'tooltip');
+        button.setAttribute('aria-label', `Help for ${property.title || key}`);
+        button.setAttribute('aria-describedby', description.id);
+        button.setAttribute('aria-expanded', 'false');
+        input.setAttribute('aria-describedby', description.id);
+        let pinned = false;
+        const hide = () => { const visible = !description.hidden; pinned = false; description.hidden = true; button.setAttribute('aria-expanded', 'false'); return visible; };
+        const show = visible => {
+          if (!visible) { hide(); return; }
+          if (dismissHelp !== hide) dismissHelp();
+          dismissHelp = hide; description.hidden = false; button.setAttribute('aria-expanded', 'true');
+          description.dataset.placement = 'below';
+          const bounds = description.getBoundingClientRect?.();
+          if (bounds && bounds.bottom > root.innerHeight && heading.getBoundingClientRect().top >= bounds.height) description.dataset.placement = 'above';
+        };
+        container.addEventListener('mouseenter', () => show(true));
+        heading.addEventListener('mouseleave', () => { if (!pinned) show(false); });
+        button.addEventListener('focus', () => show(true));
+        button.addEventListener('blur', () => { pinned = false; show(false); });
+        button.addEventListener('click', () => { pinned = !pinned; show(pinned); });
+        container.append(button, description); heading.append(container);
+      }
+      parent.append(row); return input;
     }
     function optionalBoolean(key, parent, { property, value, change, inherit = 'Use platform setting', yes = 'On', no = 'Off' }) {
       return scalar(key, parent, { property: { ...property, type: 'string', enum: ['inherit', 'yes', 'no'], enumNames: [inherit, yes, no] },
         value: value === undefined ? 'inherit' : value ? 'yes' : 'no',
         change: next => change(next === 'inherit' ? undefined : next === 'yes') });
+    }
+    function earlyNotification(key, parent, { property, value, change, inherit }) {
+      return scalar(key, parent, { property: { ...property, type: 'string', enum: ['inherit', 'on', 'off', 'unmanaged'], enumNames: [inherit, 'Force on', 'Force off', 'Leave unchanged'], default: undefined },
+        value: value === undefined ? 'inherit' : value, change: next => change(next === 'inherit' ? undefined : next) });
     }
     function unresolved(parent, key, objectKey) {
       const networks = key === 'excludedNetworks';
@@ -134,6 +166,7 @@
     function renderCameras(parent) {
       inventoryTools(parent);
       scalar('exposeMotionDetected', parent);
+      scalar('exposeTemperature', parent);
       if (inventory) {
         inventory.networks.forEach(network => {
           const excluded = values('excludedNetworks').some(value => value === String(network.id) || value === network.name);
@@ -166,8 +199,8 @@
         change: value => changeOverride('deviceSettingOverrides', camera, 'homeKitSecureVideo', value) });
       scalar('deviceSettingOverrides', card, { property: definitions.inputQuality, value: setting?.inputQuality,
         change: value => changeOverride('deviceSettingOverrides', camera, 'inputQuality', value) });
-      optionalBoolean('deviceSettingOverrides', card, { property: definitions.disableEarlyNotification, value: setting?.disableEarlyNotification, inherit: 'Use Sync Module or plugin setting',
-        change: value => changeOverride('deviceSettingOverrides', camera, 'disableEarlyNotification', value) });
+      earlyNotification('deviceSettingOverrides', card, { property: definitions.earlyNotificationMode, value: setting?.earlyNotificationMode, inherit: 'Inherit Sync Module or plugin setting',
+        change: value => changeOverride('deviceSettingOverrides', camera, 'earlyNotificationMode', value) });
       optionalBoolean('deviceSettingOverrides', card, { property: { title: 'Temperature in Home' }, value: setting?.exposeTemperature, yes: 'Show', no: 'Hide',
         change: value => changeOverride('deviceSettingOverrides', camera, 'exposeTemperature', value) });
       scalar('deviceSettingOverrides', card, { property: { ...definitions.motionTimeout, description: 'Leave blank to use the platform motion timeout.' }, value: setting?.motionTimeout,
@@ -179,9 +212,8 @@
       const checklist = el('ol', undefined, 'blink-checklist');
       ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home, allow Stream & Allow Recording and choose recording-audio permission.', 'Keep native Blink motion recording enabled and the associated Sync Module USB storage available.'].forEach(text => checklist.append(el('li', text)));
       parent.append(checklist, el('p', 'Motion notifications schedule a clip check using the timing below. No continuous camera feed or idle storage preparation is started. Home receives each saved clip after it is downloaded and prepared, so its timeline time can differ from native capture time.', 'blink-help'));
-      optionalBoolean('disableEarlyNotification', parent, { property: properties.disableEarlyNotification, value: draft.config.disableEarlyNotification, inherit: 'Not set (normal delay)',
-        change: value => write('disableEarlyNotification', value) });
-      parent.append(el('p', 'Camera choices override Sync Module choices, which override this plugin choice. When management ends for a camera, its saved original Early Notification setting is restored if it still has the plugin-applied value. Restarting the child bridge keeps management active.', 'blink-help'));
+      scalar('earlyNotificationMode', parent, { property: { ...properties.earlyNotificationMode, default: 'unmanaged' },
+        value: draft.config.earlyNotificationMode, change: value => write('earlyNotificationMode', value) });
       inventoryTools(parent);
       if (inventory) {
         cameras().forEach(camera => {
@@ -197,7 +229,27 @@
       unresolved(parent, 'deviceSettingOverrides', 'deviceIdentifier');
       const timing = el('details', undefined, 'blink-details'); timing.append(el('summary', 'Clip timing and storage limits'));
       Object.entries(properties.nativeRecording.properties).forEach(([key, property]) => {
-        const input = scalar('nativeRecording', timing, { property, value: draft.config.nativeRecording?.[key], change: value => {
+        const cache = key === 'maxCachedBytes';
+        const input = scalar('nativeRecording', timing, { property: cache ? { ...property, title: 'Maximum local clip cache (MiB)', description: 'Private downloaded clips on this Homebridge host. 1 MiB = 1,048,576 bytes. Default 128 MiB; allowed range 32–1024 MiB.' } : property,
+          value: draft.config.nativeRecording?.[key],
+          ...(cache ? { format: value => {
+            if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return value;
+            const bytes = BigInt(value);
+            const fraction = ((bytes % 1048576n) * (5n ** 20n)).toString().padStart(20, '0').replace(/0+$/, '');
+            return `${bytes / 1048576n}${fraction ? `.${fraction}` : ''}`;
+          },
+            parse: value => {
+              if (value === '') return undefined;
+              const match = /^(\d+)(?:\.(\d+))?$/.exec(value);
+              if (!match || value.length > 100) return value;
+              const fraction = (match[2] || '').replace(/0+$/, '');
+              if (fraction.length > 20) return value;
+              const scale = 10n ** BigInt(fraction.length);
+              const scaled = (BigInt(match[1]) * scale + BigInt(fraction || '0')) * 1048576n;
+              if (scaled % scale !== 0n) return value;
+              const bytes = Number(scaled / scale);
+              return Number.isSafeInteger(bytes) && bytes >= property.minimum && bytes <= property.maximum ? bytes : value;
+            } } : {}), change: value => {
           const next = { ...(draft.config.nativeRecording || {}) };
           if (value === undefined) delete next[key]; else next[key] = value;
           write('nativeRecording', Object.keys(next).length ? next : undefined);
@@ -205,9 +257,6 @@
         input.dataset.setting = `nativeRecording/${key}`;
       });
       parent.append(timing);
-      const privacy = el('details', undefined, 'blink-details'); privacy.append(el('summary', 'Motion and recording privacy'));
-      privacy.append(el('p', 'Showing a Motion Detected sensor and offering clips to HomeKit are separate choices. Hiding the sensor does not disable recording. Turn recording or the camera off in Apple Home to cancel pending replay. Recording does not arm Blink or enable motion to create a clip. Optional Early Notification management changes notification timing on supported cameras. Live viewing is independent.'));
-      parent.append(privacy);
     }
     function renderModules(parent) {
       const details = el('details', undefined, 'blink-details'); details.append(el('summary', 'Sync Module settings and live-view feed limits'));
@@ -218,9 +267,9 @@
         const ambiguous = cameras().some(camera => camera.moduleAssociation.state === 'ambiguous' && camera.moduleAssociation.candidateIds.includes(module.id));
         const row = el('div', undefined, 'blink-module'); row.append(el('h3', module.name || `Sync Module ${module.id}`));
         row.append(el('p', `Module ID ${module.id} · ${module.status} · ${ambiguous ? 'ambiguous system association' : `${associated.length} included cameras by system association`}`, 'blink-help'));
-        optionalBoolean('syncModuleSettingOverrides', row, { property: properties.syncModuleSettingOverrides.items.properties.disableEarlyNotification,
-          value: overrideRecord('syncModuleSettingOverrides', module, 'syncModuleId')?.disableEarlyNotification, inherit: 'Use plugin setting',
-          change: value => changeOverride('syncModuleSettingOverrides', module, 'disableEarlyNotification', value, 'syncModuleId') });
+        earlyNotification('syncModuleSettingOverrides', row, { property: properties.syncModuleSettingOverrides.items.properties.earlyNotificationMode,
+          value: overrideRecord('syncModuleSettingOverrides', module, 'syncModuleId')?.earlyNotificationMode, inherit: 'Inherit plugin setting',
+          change: value => changeOverride('syncModuleSettingOverrides', module, 'earlyNotificationMode', value, 'syncModuleId') });
         const current = values('syncModuleFeedLimits').find(item => item.syncModuleId === module.id);
         const input = scalar('syncModuleFeedLimits', row, { property: { ...properties.syncModuleFeedLimits.items.properties.maxFeeds, description: 'Blank uses the discovered camera count. Enter a positive whole number.' }, value: current?.maxFeeds,
           change: value => { const retained = values('syncModuleFeedLimits').filter(item => item.syncModuleId !== module.id); write('syncModuleFeedLimits', value === undefined ? retained : [...retained, { syncModuleId: module.id, maxFeeds: value }]); } });
@@ -260,6 +309,7 @@
       refreshState(draft.state);
     }
     function refreshState(state) {
+      status.dataset.state = state.error || state.errors.length ? 'error' : state.dirty ? 'dirty' : state.pending || state.accountAction ? 'pending' : 'clean';
       status.textContent = state.accountAction ? 'Account action in progress. Settings are temporarily unavailable.' : state.pending ? 'Checking changes…'
         : state.error ? 'Settings could not be validated or staged. Retry before saving.'
           : state.errors.length ? `${state.errors.length} settings error${state.errors.length === 1 ? '' : 's'}. Correct the fields below before saving.`
@@ -271,8 +321,10 @@
       state.errors.forEach(error => {
         const key = error.path.split('/')[1];
         const field = properties[key]?.title;
-        const location = field && error.path ? `${field} (${error.path})` : field || error.path || 'Settings';
-        const row = el('p', `${location}: ${error.message}`);
+        const cache = error.path === '/nativeRecording/maxCachedBytes';
+        const location = cache ? 'Maximum local clip cache (MiB)' : field && error.path ? `${field} (${error.path})` : field || error.path || 'Settings';
+        const message = cache ? 'Enter 32–1024 MiB. The size must represent a whole number of bytes.' : error.message;
+        const row = el('p', `${location}: ${message}`);
         const section = sections.findIndex(item => item.items.includes(key));
         if (section >= 0 && section !== active) {
           const review = el('button', 'Review', 'btn btn-sm btn-outline-secondary'); review.type = 'button';

@@ -1,6 +1,6 @@
 # Configuration reference
 
-Last reviewed: 9 November 2026.
+Last reviewed: 13 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -16,13 +16,20 @@ only the form draft. Apply runtime changes through your normal operator-owned
 child-bridge restart workflow.
 
 For sign-in and token-storage behavior, see [authentication](authentication.md).
+Stored sign-in is tested once when the editor opens. A green check indicates a
+verified connection; a red X indicates a failed test. Use **Test Connection** for
+further checks. Testing does not save Homebridge configuration.
+
+Information buttons beside field labels provide help on hover, keyboard focus
+or touch; Escape dismisses it. Unsaved changes have a contrasting warning banner.
+The local clip-cache control displays MiB; JSON retains integer bytes.
 
 The editor separates five tasks:
 
 | Section | Use it for |
 | --- | --- |
 | Overview & connection | Sign in, inspect stored-session facts and test the Blink connection. |
-| Cameras in Home | Choose systems/cameras, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional live-view feed limits. Excluded cameras remain visible here so you can include them again. |
+| Cameras in Home | Choose systems/cameras, expose motion and temperature sensors, assign Home names and edit per-camera overrides. Inspect Sync Module associations and their optional live-view feed limits. Excluded cameras remain visible here so you can include them again. |
 | HomeKit recording | Choose discovered cameras and review recording, motion and privacy prerequisites. |
 | Live viewing & sound | Allow live viewing, choose a picture preset and allow shared HomeKit audio. |
 | Advanced & troubleshooting | Polling, previews, exact tuning values, diagnostics and immediate account maintenance. |
@@ -96,16 +103,16 @@ Add a platform entry to your Homebridge `config.json`:
 | `authLocked` | No | `false` | Keep normal operation token-only; hosted sign-in sets this to `true` |
 | `tier` | No | `prod` | Last Blink tier discovered from `v1/users/tier_info`; do not guess it from locale |
 | `sharedTier` | No | - | Advanced manual override for shared REST routing; defaults to `tier` and is intentionally hidden from the UI schema |
-| `debugAuth` | No | `false` | Enable verbose authentication logging |
-| `pollInterval` | No | `60` | Seconds between state polls (min 15) |
+| `debugAuth` | No | `false` | Enable bounded authentication diagnostics without HTTP/OAuth headers, bodies or provider-state dumps |
+| `pollInterval` | No | `60` | Seconds between Blink status/settings refreshes (min 15); independent of saved-clip lookup retries |
 | `motionTimeout` | No | `30` | Seconds motion stays active |
 | `exposeMotionDetected` | No | `true` | Publish motion sensors from Blink push events; per-camera overrides apply |
-| `disableEarlyNotification` | No | Unset (`false`) | Manage supported cameras' Blink Early Notification setting for prompt HSV clip acquisition; Sync Module and device overrides apply |
+| `earlyNotificationMode` | No | `unmanaged` | `on`, `off` or `unmanaged`: force Early Notification on/off or leave unchanged; module and camera overrides apply |
 | `nativeRecording` | No | See below | Bounded timing, matching and local storage policy for optional HomeKit recording |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
 | `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
 | `syncModuleFeedLimits` | No | `[]` | Optional live-view `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. These do not govern native clip acquisition. |
-| `syncModuleSettingOverrides` | No | `[]` | Optional `{ syncModuleId, disableEarlyNotification }` entries; omit the boolean to inherit the plugin setting |
+| `syncModuleSettingOverrides` | No | `[]` | Optional `{ syncModuleId, earlyNotificationMode }` entries; omit the mode to inherit the plugin setting |
 | `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
 | `maxStreams` | No | `1` | Max concurrent HomeKit streams per camera |
 | `enableAudio` | No | `true` | Allow camera audio for live viewing and HSV; Home recording-audio permission must also allow it |
@@ -119,7 +126,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |
 | `deviceNameOverrides` | No | - | Array of `{ deviceIdentifier, customName }` entries for custom HomeKit display names (legacy `deviceNames` is still accepted) |
-| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected`, `homeKitSecureVideo` and `disableEarlyNotification`; see below and [input quality](streaming.md#input-and-output-quality) |
+| `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected`, `homeKitSecureVideo` and `earlyNotificationMode`; see below and [input quality](streaming.md#input-and-output-quality) |
 
 For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration)
 before restarting; retired CLI and AAC-ELD settings are rejected. Upgrading from
@@ -195,39 +202,46 @@ Early Notification management can add one opportunistic early attempt.
 
 ### Early Notification and clip scheduling
 
-Set `disableEarlyNotification` to `true` to turn off Blink's
-[Early Notification](https://support.blinkforhome.com/en_US/using-your-system/understanding-motion-detection)
-on supported cameras. Blink then sends motion notifications after recording,
-rather than while recording is still in progress. This also changes when the
-public HomeKit motion sensor reports motion. Once the plugin confirms the camera
-setting is off, new motion events can make their first clip attempt immediately.
-Unsupported cameras, unsuccessful setting changes and events from before that
-confirmation retain the configured `initialDelaySeconds`.
+Choose **Force on**, **Force off**, or **Leave unchanged**. The JSON setting
+`earlyNotificationMode` accepts `on`, `off`, or `unmanaged` respectively.
+Force on enables Blink's [Early Notification](https://support.blinkforhome.com/en_US/using-your-system/understanding-motion-detection),
+so motion may arrive while recording is still in progress. Force off delays
+notification until after recording; once confirmed off, new motion may make one
+immediate clip lookup. Force on, unsupported cameras, unconfirmed changes and
+older events use the normal `initialDelaySeconds`.
 
-The setting inherits from plugin to Sync Module to device; the most specific
-explicit boolean wins. A module override applies only to cameras with a unique
-discovered association to that module. Select the unset or inherited choice in
-the editor to remove a value. **Off** writes `false` and masks an inherited `true`.
+The most specific explicit camera, uniquely associated Sync Module, then global
+mode wins. Omit an override to inherit. **Leave unchanged** explicitly masks an
+inherited force mode and ends plugin management for that camera.
 
 ```json
 {
-  "disableEarlyNotification": true,
+  "earlyNotificationMode": "on",
   "syncModuleSettingOverrides": [
-    { "syncModuleId": "100", "disableEarlyNotification": false }
+    { "syncModuleId": "100", "earlyNotificationMode": "unmanaged" }
   ],
   "deviceSettingOverrides": [
-    { "deviceIdentifier": "camera:123", "disableEarlyNotification": true }
+    { "deviceIdentifier": "camera:123", "earlyNotificationMode": "off" }
   ]
 }
 ```
 
-The plugin saves the camera's original value privately before changing it. When
-the effective setting becomes false, it restores that original only if the
-camera still has the value the plugin applied. A manual change in Blink is
-preserved. Removing a device override that still inherits `true` keeps management
-active. Ordinary restarts keep both management and the saved original; stopping
-Homebridge does not toggle camera settings. A camera already off needs no change
-or restoration record. Save and restart the child bridge to apply policy changes.
+Before changing a camera, the plugin durably saves its original Boolean value.
+Ending management restores that value only if Blink still has the plugin-applied
+value. Manual changes are preserved. Switching force direction first reconciles
+the saved original. Ordinary restarts keep management and its receipt; stopping
+Homebridge does not toggle settings. Already-correct cameras need no change or
+restoration record. Save and restart the child bridge to apply policy changes.
+
+Upgrading automatically interprets old `disableEarlyNotification: true` as
+`off`, explicit `false` as `unmanaged`, and missing overrides as inheritance.
+It never turns an old false into force on. Opening the editor stages the same
+migration for your review. Save persists it; an immediate account action can also
+persist migration-only changes while recovering sign-in. Other user edits still
+require Save or discard before an account action, and connection tests never
+save configuration. For explicit file
+migration and rollback considerations, see
+[configuration migration](native-recording-config-migration.md).
 
 Immediate eligibility keeps the same FIFO, missing-clip retries, command admission
 and module catalog cooldown. A notification does not identify a USB clip or prove

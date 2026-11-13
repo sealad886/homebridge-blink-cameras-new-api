@@ -24,6 +24,7 @@ import {
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { OperationTimeoutError, withResponseBudget } from '../../src/operation-budget';
 
 let mockUiStorageRoot = '.';
 const mockUiHandlers = new Map<string, (payload: unknown) => Promise<unknown>>();
@@ -1329,6 +1330,75 @@ describe('HostedAuthService', () => {
     expect(replacementStatus.verified).toBeUndefined();
   });
 
+  it.each([false, true])('shares queued and active tests after caller timeout, then allows a fresh retry (failure=%s)', async fails => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger(), api = createApiDouble();
+    let release!: () => void, reject!: (error: Error) => void, entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+    api.login.mockImplementationOnce(async () => { entered(); await gate; });
+    const factory = jest.fn(() => asBlinkApi(api));
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: factory });
+    const reopened = new HostedAuthService({ storageRoot: path.join(storageRoot, '.'), logger, apiFactory: factory });
+    const first = service.testConnection({ deviceId: 'same-device' });
+    const queued = reopened.testConnection({ deviceId: ' same-device ' });
+    try {
+      await started;
+      await expect(withResponseBudget(first, 1)).rejects.toBeInstanceOf(OperationTimeoutError);
+      const retries = Array.from({ length: 12 }, () => reopened.testConnection({ deviceId: 'same-device' }));
+      expect(api.login).toHaveBeenCalledTimes(1);
+      if (fails) reject(new Error('fixture test failed')); else release();
+      const results = await Promise.all([first, queued, ...retries]);
+      expect(results.every(result => result.success === !fails)).toBe(true);
+      expect(api.login).toHaveBeenCalledTimes(1);
+      expect(api.getHomescreen).toHaveBeenCalledTimes(fails ? 0 : 1);
+      await expect(service.testConnection({ deviceId: 'same-device' })).resolves.toMatchObject({ success: true });
+      expect(api.login).toHaveBeenCalledTimes(2);
+    } finally { release(); await Promise.allSettled([first, queued]); }
+  });
+
+  it.each(['logout', 'new-login'] as const)('does not share a test across a queued %s or enqueue replacements', async action => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger(), api = createApiDouble();
+    let release!: () => void, entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    api.login.mockImplementationOnce(async () => { entered(); await gate; });
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+    const first = service.testConnection({});
+    await started;
+    const mutation = action === 'logout' ? service.clear() : service.start({ deviceId: 'new-device' });
+    try {
+      for (let retry = 0; retry < 12; retry++) {
+        await expect(service.testConnection({})).rejects.toMatchObject({ category: 'authentication', status: 409 });
+      }
+      expect(api.login).toHaveBeenCalledTimes(1);
+      release(); await first; await mutation;
+      if (action === 'logout') await expect(fs.access(authStoragePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      else expect(api.beginHostedLogin).toHaveBeenCalledTimes(1);
+      await writeOwnerOnlyState(authStoragePath, persistedState({ accessToken: 'new-session-fixture' }));
+      await expect(service.testConnection({})).resolves.toMatchObject({ success: true });
+      expect(api.login).toHaveBeenCalledTimes(2);
+    } finally { release(); await Promise.allSettled([first, mutation]); }
+  });
+
+  it('validates every retry and never borrows another device test', async () => {
+    await writeOwnerOnlyState(authStoragePath, persistedState());
+    const { logger } = createLogger(), api = createApiDouble();
+    let release!: () => void, entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    api.login.mockImplementationOnce(async () => { entered(); await gate; });
+    const service = new HostedAuthService({ storageRoot, logger, apiFactory: () => asBlinkApi(api) });
+    const first = service.testConnection({ deviceId: 'first-device' }); await started;
+    try {
+      await expect(service.testConnection({ deviceId: 'second-device' })).rejects.toMatchObject({ category: 'authentication', status: 409 });
+      await expect(service.testConnection({ deviceId: 'invalid/device' })).rejects.toMatchObject({ category: 'invalid_request' });
+      await expect(service.testConnection({ username: 'unused' } as never)).rejects.toMatchObject({ category: 'invalid_request' });
+      expect(api.login).toHaveBeenCalledTimes(1);
+    } finally { release(); await first; }
+  });
+
   it('rejects credential-bearing connection payloads and bounds connection failures', async () => {
     await writeOwnerOnlyState(authStoragePath, persistedState());
     const secret = 'connectionFailureSentinel_5Jt8';
@@ -1601,6 +1671,7 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/getNetworks',
       '/settings/inventory',
       '/settings/validate',
+      '/settings/migrate',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });
@@ -1620,6 +1691,47 @@ describe('BlinkUiServer hosted authentication routes', () => {
     await expect(mockUiHandlers.get('/settings/validate')!(draft)).resolves.toMatchObject({ revision: 1, valid: true });
     expect(validate).toHaveBeenCalledWith(draft);
     expect(await fs.readFile(path.join(serverStorageRoot, 'config.json'), 'utf8')).toBe(text);
+  });
+
+  it('migrates only the supplied draft without reading or writing saved settings', async () => {
+    const filename = path.join(serverStorageRoot, 'config.json'), saved = '{"saved":"unchanged"}';
+    await fs.writeFile(filename, saved);
+    new BlinkUiServer();
+    const config = { name: 'Blink', disableEarlyNotification: false,
+      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on', disableEarlyNotification: true }], extension: 7 };
+    const before = structuredClone(config);
+    await expect(mockUiHandlers.get('/settings/migrate')!({ config })).resolves.toEqual({ changed: true, config: {
+      name: 'Blink', earlyNotificationMode: 'unmanaged', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on' }], extension: 7,
+    } });
+    expect(config).toEqual(before); expect(await fs.readFile(filename, 'utf8')).toBe(saved);
+    await expect(mockUiHandlers.get('/settings/migrate')!({ config: { disableEarlyNotification: 'false' } })).rejects.toThrow();
+    expect(await fs.readFile(filename, 'utf8')).toBe(saved);
+  });
+
+  it.each([
+    [{ disableEarlyNotification: 'malformed-choice-fixture' }, '/disableEarlyNotification'],
+    [{ deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: false }] }, '/deviceSettingOverrides/0/earlyNotificationMode'],
+  ])('returns a safe actionable migration path without the submitted configuration: %j', async (config, expectedPath) => {
+    const filename = path.join(serverStorageRoot, 'config.json'), saved = '{"saved":"unchanged"}';
+    await fs.writeFile(filename, saved); new BlinkUiServer();
+    const failure = await mockUiHandlers.get('/settings/migrate')!({ config }).catch(error => error);
+    expect(failure).toBeInstanceOf(RequestError);
+    if (!(failure instanceof RequestError)) throw failure;
+    expect(failure.requestError).toMatchObject({ status: 400, category: 'invalid_request', path: expectedPath,
+      message: expect.any(String) });
+    expect(failure.requestError).not.toHaveProperty('config');
+    expect(JSON.stringify(failure.requestError)).not.toContain('malformed-choice-fixture');
+    expect(await fs.readFile(filename, 'utf8')).toBe(saved);
+  });
+
+  it('keeps malformed migration requests generic rather than presenting a configuration field error', async () => {
+    new BlinkUiServer();
+    for (const payload of [null, {}, { config: [] }]) {
+      const failure = await mockUiHandlers.get('/settings/migrate')!(payload).catch(error => error);
+      if (!(failure instanceof RequestError)) throw failure;
+      expect(failure.requestError).toMatchObject({ status: 400, category: 'invalid_request' });
+      expect(failure.requestError).not.toHaveProperty('path');
+    }
   });
 
   it('delegates hosted start, complete, status, verify, and token-only connection requests', async () => {

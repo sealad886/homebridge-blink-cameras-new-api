@@ -8,6 +8,7 @@ const process = require('node:process');
 const { Buffer } = require('node:buffer');
 const { randomUUID } = require('node:crypto');
 const { TextDecoder } = require('node:util');
+const { migrateEarlyNotificationConfig } = require('../dist/early-notification-config.js');
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const OBSOLETE_RECORDING_KEYS = ['hksvSource', 'syncModuleRecording'];
@@ -31,7 +32,7 @@ function convert(document) {
   const platforms = (document.platforms ?? []).map((entry, platformIndex) => {
     if (!object(entry) || entry.platform !== 'BlinkCameras') return entry;
     summary.platforms++;
-    const next = { ...entry };
+    let next = { ...entry };
     const retire = key => {
       delete next[key]; summary.retiredKeys++;
       if (!summary.removedKeys.includes(key)) summary.removedKeys.push(key);
@@ -41,6 +42,8 @@ function convert(document) {
         issues.push({ platformIndex, code, severity });
       }
     };
+    try { next = migrateEarlyNotificationConfig(next).config; }
+    catch { issue('invalid-early-notification-choice'); }
     if (has(next, 'hksv')) issue('unverified-hksv-shape');
     if (has(next, 'exposeMotionDetected') && typeof next.exposeMotionDetected !== 'boolean') issue('invalid-motion-choice');
     if (has(next, 'enableMotionPolling')) {
@@ -183,6 +186,7 @@ function main(args) {
     process.stdout.write('Usage: node scripts/migrate-native-recording-config.cjs /explicit/config.json [--apply]\n'
       + 'Default: preview only. --apply preserves exact original bytes in a private local backup before atomic replacement.\n'
       + 'Converts enableMotionPolling and verified hksvCameras selectors.\n'
+      + 'Migrates disableEarlyNotification to earlyNotificationMode at plugin, module, and camera scopes. Requires the installed dist helper.\n'
       + 'Removes obsolete hksvSource and syncModuleRecording after backup; preserves live-view feed limits.\n'
       + 'Does not contact Blink or restart Homebridge.\n');
     return 0;

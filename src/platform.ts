@@ -54,7 +54,7 @@ import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } f
 import type { NativeRecordingPolicy } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
 import type { NativeMotionDevice } from './blink-api/motion-events';
-import { HomeKitAudit } from './homekit-audit';
+import { migrateEarlyNotificationConfig } from './early-notification-config';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -154,7 +154,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private lastSuccessfulPoll: number | null = null;
   private outageConfirmedAt: number | null = null;
   private readonly reportedNameAdjustments = new Set<string>();
-  private readonly homeKitAudit: HomeKitAudit;
 
   // Maps for quick accessory lookup by device ID
   private networkAccessories = new Map<number, NetworkAccessory>();
@@ -169,7 +168,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
-    this.homeKitAudit = new HomeKitAudit(this.log);
+
+    this.config = migrateEarlyNotificationConfig(this.config).config as BlinkPlatformConfig;
 
     // Validate configuration
     this.validateConfig();
@@ -254,7 +254,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         ...this.doorbellAccessories.values(),
         ...this.owlAccessories.values(),
       ]);
-      this.homeKitAudit.dispose();
     });
   }
 
@@ -437,7 +436,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
-    this.homeKitAudit.observe(accessory);
     const cachedDevice = accessory.context.device;
     if (
       cachedDevice &&
@@ -534,7 +532,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const key = JSON.stringify([scope, matchingDevices.map(device => JSON.stringify([
       device.cameraId, device.nativeName, device.networkId, device.syncModuleId,
     ])).sort(), devices.map(({ binding, rawType, settings }) => JSON.stringify([
-      binding.cameraId, binding.nativeName, binding.networkId, rawType, settings.exposeMotionDetected, settings.homeKitSecureVideo, settings.disableEarlyNotification,
+      binding.cameraId, binding.nativeName, binding.networkId, rawType, settings.exposeMotionDetected, settings.homeKitSecureVideo, settings.earlyNotificationMode,
     ])).sort()]);
     if (this.nativeRuntimeKey === key) return;
     if (this.nativeRuntime) {
@@ -700,14 +698,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     const hapDisplayName = this.hapName(displayName, 'Blink Connection');
     if (!accessory) {
       accessory = new this.api.platformAccessory(hapDisplayName, uuid);
-      this.homeKitAudit.observe(accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
     } else {
       accessory.displayName = hapDisplayName;
     }
     accessory.context[contextKey] = true;
-    this.homeKitAudit.observe(accessory);
     accessory.getService(this.Service.AccessoryInformation)
       ?.setCharacteristic(this.Characteristic.Name, hapDisplayName);
     return accessory;
@@ -1033,7 +1029,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       await this.shutdownMotionHandlers(retiring);
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, removed);
       for (const accessory of removed) {
-        this.homeKitAudit.remove(accessory);
         this.accessories.splice(this.accessories.indexOf(accessory), 1);
         const id = (currentDevices.get(accessory.UUID) ?? accessory.context.device).id;
         if (accessory.UUID === this.api.hap.uuid.generate(`blink-network-${id}`)) this.networkAccessories.delete(id);
@@ -1063,17 +1058,13 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       existing.getService(this.Service.AccessoryInformation)
         ?.setCharacteristic(this.Characteristic.Name, displayName);
       existing.context.device = device;
-      this.homeKitAudit.observe(existing);
       const handler = new HandlerClass(this, existing, device);
-      this.homeKitAudit.observe(existing);
       accessoryMap.set(device.id, handler);
       this.log.info(`Restored Blink ${deviceLabel} from cache:`, displayName);
     } else {
       const accessory = new this.api.platformAccessory(displayName, uuid);
       accessory.context.device = device;
-      this.homeKitAudit.observe(accessory);
       const handler = new HandlerClass(this, accessory, device);
-      this.homeKitAudit.observe(accessory);
       accessoryMap.set(device.id, handler);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);

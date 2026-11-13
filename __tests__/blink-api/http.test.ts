@@ -438,7 +438,7 @@ describe('BlinkHttp', () => {
     expect(serialized).not.toContain('private-path');
   });
 
-  it('redacts stream capability URLs embedded in otherwise ordinary response fields', async () => {
+  it('omits stream capabilities and ordinary provider response fields from debug logs', async () => {
     const messages: unknown[][] = [];
     const record = (...args: unknown[]): void => { messages.push(args); };
     const http = new BlinkHttp(mockAuth(), { ...mockConfig, debugAuth: true,
@@ -457,7 +457,7 @@ describe('BlinkHttp', () => {
     for (const secret of ['path-secret', 'client-secret', 'password-secret', 'token-secret', 'fragment-secret', 'thumbnail-path-secret', 'liveview-value-secret', 'https-capability-secret', 'private-host-secret']) {
       expect(output).not.toContain(secret);
     }
-    expect(output).toContain('visible');
+    expect(output).not.toContain('visible');
   });
 
   it('releases retry and ignored error responses without reporting expected 404s', async () => {
@@ -497,7 +497,7 @@ describe('BlinkHttp', () => {
     expect(auth.ensureValidToken).toHaveBeenCalled();
   });
 
-  it('fully redacts stable identity values from debug request and response bodies', async () => {
+  it('omits request headers and request/response payloads from debug logs', async () => {
     const hardwareId = 'hardwareHttpSecret_2Kq7Wy';
     const deviceIdentifier = 'deviceHttpSecret_6Pt3Nz';
     const email = 'privateHttpSecret_5Jm8Vr@example.com';
@@ -515,6 +515,7 @@ describe('BlinkHttp', () => {
       error: record,
     };
     const auth = mockAuth();
+    jest.mocked(auth.getAuthHeaders).mockReturnValue({ Authorization: 'Bearer token', 'X-Payload-Canary': 'header-payload-canary' });
     const http = new BlinkHttp(auth, { ...mockConfig, debugAuth: true, logger });
     (fetch as jest.Mock).mockResolvedValue(response(200, {
       hardware_id: hardwareId,
@@ -545,12 +546,18 @@ describe('BlinkHttp', () => {
     expect(diagnostic).not.toContain(email);
     expect(diagnostic).not.toContain(phone);
     expect(diagnostic).toContain('safe-query-value');
-    expect(diagnostic).toContain('safe-request-value');
-    expect(diagnostic).toContain('safe-response-value');
-    expect(diagnostic).toContain('safe-status-code');
-    expect(diagnostic).toContain('safe-error-code');
-    expect(diagnostic).toContain('safe-country-code');
-    expect(diagnostic).toContain('safe-codec');
+    expect(diagnostic).toMatch(/POST .*identity-redaction/);
+    expect(diagnostic).toMatch(/Response status: 200 \(\d+ms\)/);
+    expect(diagnostic).not.toContain('header-payload-canary');
+    expect(diagnostic).not.toContain('Request headers:');
+    expect(diagnostic).not.toContain('Request body:');
+    expect(diagnostic).not.toContain('Response body:');
+    expect(diagnostic).not.toContain('safe-request-value');
+    expect(diagnostic).not.toContain('safe-response-value');
+    expect(diagnostic).not.toContain('safe-status-code');
+    expect(diagnostic).not.toContain('safe-error-code');
+    expect(diagnostic).not.toContain('safe-country-code');
+    expect(diagnostic).not.toContain('safe-codec');
   });
 
   it('fully redacts stable identity values from HTTP error URLs and messages', async () => {

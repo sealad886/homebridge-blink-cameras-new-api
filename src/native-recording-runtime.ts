@@ -35,10 +35,10 @@ interface EarlyNotificationOriginal {
   networkId: number;
   deviceId: number;
   rawType: string;
-  original: true;
+  original: boolean;
 }
 interface EarlyNotificationOriginals {
-  version: 1;
+  version: 2;
   scope: { accountId: number; tier: string };
   devices: EarlyNotificationOriginal[];
 }
@@ -292,16 +292,16 @@ export class NativeRecordingRuntime {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_STATE_BYTES
         || (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o777) !== 0o600))) throw new Error('Unsafe Early Notification originals');
       const state = await readOwnerOnlyJsonFile<EarlyNotificationOriginals>(this.earlyNotificationPath);
-      if (!state || state.version !== 1 || state.scope?.accountId !== this.options.scope.accountId || state.scope?.tier !== this.options.scope.tier
+      if (!state || ![1, 2].includes(state.version) || state.scope?.accountId !== this.options.scope.accountId || state.scope?.tier !== this.options.scope.tier
         || !Array.isArray(state.devices) || state.devices.length > 1000
         || state.devices.some(device => !device || !['camera', 'owl', 'doorbell'].includes(device.kind)
           || !Number.isSafeInteger(device.networkId) || device.networkId <= 0 || !Number.isSafeInteger(device.deviceId) || device.deviceId <= 0
-          || !supportsEarlyNotificationControl(device.rawType) || device.original !== true)
+          || !supportsEarlyNotificationControl(device.rawType) || typeof device.original !== 'boolean' || (Number(state.version) === 1 && device.original !== true))
         || new Set(state.devices.map(settingKey)).size !== state.devices.length) throw new Error('Invalid Early Notification originals');
-      this.earlyNotificationOriginals = state;
+      this.earlyNotificationOriginals = { ...state, version: 2 };
     } catch (error) {
       if ((error as { code?: string }).code === 'ENOENT') {
-        this.earlyNotificationOriginals = { version: 1, scope: { accountId: this.options.scope.accountId, tier: this.options.scope.tier }, devices: [] };
+        this.earlyNotificationOriginals = { version: 2, scope: { accountId: this.options.scope.accountId, tier: this.options.scope.tier }, devices: [] };
       } else this.options.report('early-notification-state-faulted');
     }
   }
@@ -321,7 +321,7 @@ export class NativeRecordingRuntime {
     if (remote.persistenceFailed || remote.liveView || remote.stateCommand || remote.storage.length) return;
     const desired = new Map<string, { device: NativeRuntimeDevice; identity: Omit<EarlyNotificationOriginal, 'original'> }>();
     for (const device of this.devices.values()) {
-      if (!device.settings.disableEarlyNotification) continue;
+      if (device.settings.earlyNotificationMode !== 'on' && device.settings.earlyNotificationMode !== 'off') continue;
       const kind = device.binding.target;
       if (!['camera', 'owl', 'doorbell'].includes(kind) || !supportsEarlyNotificationControl(device.rawType)) {
         this.options.report('early-notification-unsupported'); continue;
@@ -331,11 +331,12 @@ export class NativeRecordingRuntime {
     }
     // Removed/excluded consumers still leave a durable original to restore.
     for (const original of [...this.earlyNotificationOriginals.devices]) {
-      if (desired.has(settingKey(original))) continue;
+      const selected = desired.get(settingKey(original));
+      if (selected && (selected.device.settings.earlyNotificationMode === 'on') !== original.original) continue;
       if (!this.preferenceWorkAllowed()) return;
       try {
         const result = await this.options.client.setDeviceEarlyNotification(original.kind, original.networkId, original.deviceId,
-          original.rawType, original.original, { expectedCurrent: false });
+          original.rawType, original.original, { expectedCurrent: !original.original });
         if (result.supported && result.current === original.original) {
           await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals.devices.filter(row => settingKey(row) !== settingKey(original)));
           this.options.report('early-notification-restored');
@@ -344,21 +345,22 @@ export class NativeRecordingRuntime {
     }
     for (const [key, { device, identity }] of desired) {
       if (!this.preferenceWorkAllowed()) return;
+      const enabled = device.settings.earlyNotificationMode === 'on';
       const binding = bindingKey(device.binding), previouslyOffSince = this.earlyNotificationOffSince.get(binding);
       this.earlyNotificationOffSince.delete(binding);
       try {
-        const result = await this.options.client.setDeviceEarlyNotification(identity.kind, identity.networkId, identity.deviceId, identity.rawType, false, {
+        const result = await this.options.client.setDeviceEarlyNotification(identity.kind, identity.networkId, identity.deviceId, identity.rawType, enabled, {
           beforeChange: async current => {
-            if (!this.preferenceWorkAllowed() || current !== true) throw new Error('Early Notification ownership changed');
+            if (!this.preferenceWorkAllowed() || current === enabled) throw new Error('Early Notification ownership changed');
             if (!this.earlyNotificationOriginals!.devices.some(row => settingKey(row) === key)) {
-              await this.saveEarlyNotificationOriginals([...this.earlyNotificationOriginals!.devices, { ...identity, original: true }]);
+              await this.saveEarlyNotificationOriginals([...this.earlyNotificationOriginals!.devices, { ...identity, original: current }]);
             }
             if (!this.preferenceWorkAllowed()) throw new Error('Early Notification ownership changed');
           },
         });
-        if (result.supported && result.compatible && result.current === false && this.preferenceWorkAllowed()) {
-          this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
-          this.options.report('early-notification-confirmed-off');
+        if (result.supported && result.compatible && result.current === enabled && this.preferenceWorkAllowed()) {
+          if (!enabled) this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
+          this.options.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off');
         } else this.options.report('early-notification-unsupported');
       } catch { this.options.report('early-notification-faulted'); }
     }
@@ -477,7 +479,7 @@ export class NativeRecordingRuntime {
     const previousEpoch = this.epochs.get(key);
     if (previousEpoch === undefined) this.epochs.set(key, recording.policy.epoch);
     const confirmedOffSince = this.earlyNotificationOffSince.get(bindingKey(device.binding));
-    const initialDelayMs = device.settings.disableEarlyNotification && confirmedOffSince !== undefined && observation.occurredAt >= confirmedOffSince
+    const initialDelayMs = device.settings.earlyNotificationMode === 'off' && confirmedOffSince !== undefined && observation.occurredAt >= confirmedOffSince
       ? 0 : this.options.config.initialDelayMs;
     const fallbackAt = observation.occurredAt + this.options.config.initialDelayMs;
     const result = await this.core.observe(observation, this.core.cameraGeneration(observation.moduleId, observation.cameraId),

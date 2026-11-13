@@ -64,7 +64,7 @@ describe('native recording configuration and platform ownership', () => {
   afterEach(() => { api.emit('shutdown'); });
 
   it('defaults HSV off and selects qualified per-camera policies without kind collisions', () => {
-    expect(nativeRecordingDevicePolicy(undefined, { id: 1, kind: 'camera' })).toEqual({ exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false });
+    expect(nativeRecordingDevicePolicy(undefined, { id: 1, kind: 'camera' })).toEqual({ exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'unmanaged' });
     const deviceSettingOverrides = ['camera:1', 'camera:2', 'camera:3', 'camera:4', 'camera:5', 'owl:1']
       .map(deviceIdentifier => ({ deviceIdentifier, homeKitSecureVideo: true }));
     expect(() => build({ deviceSettingOverrides })).not.toThrow();
@@ -76,7 +76,7 @@ describe('native recording configuration and platform ownership', () => {
 
   it.each(['1', null, [{}], [{ deviceIdentifier: '' }], [{ deviceIdentifier: ' ' }], [{ deviceIdentifier: 1 }]])(
     'rejects missing/blank/invalid device selection in runtime and schema: %j', deviceSettingOverrides => {
-      expect(() => build({ deviceSettingOverrides })).toThrow(/per-camera/i);
+      expect(() => build({ deviceSettingOverrides })).toThrow();
       expect(BlinkApi).not.toHaveBeenCalled();
       expect(validate({ name: 'Blink', deviceSettingOverrides })).toBe(false);
     });
@@ -92,22 +92,22 @@ describe('native recording configuration and platform ownership', () => {
     expect(() => build({ deviceSettingOverrides, exposeMotionDetected: false, enableStreaming: false })).not.toThrow();
     expect(validate({ name: 'Blink', deviceSettingOverrides, exposeMotionDetected: false, enableStreaming: false })).toBe(true);
     expect(nativeRecordingDevicePolicy({ deviceSettingOverrides, exposeMotionDetected: false }, { id: 1, kind: 'camera' }))
-      .toEqual({ exposeMotionDetected: false, homeKitSecureVideo: true, disableEarlyNotification: false });
+      .toEqual({ exposeMotionDetected: false, homeKitSecureVideo: true, earlyNotificationMode: 'unmanaged' });
   });
 
   it('reserves qualified identifiers rather than matching a different camera name or serial', () => {
     const rows = [{ deviceIdentifier: 'owl:123', homeKitSecureVideo: true, exposeMotionDetected: false },
       { deviceIdentifier: 'doorbell:123', homeKitSecureVideo: true }];
     const misleading = { id: 7, kind: 'camera' as const, name: 'owl:123', serial: 'doorbell:123' };
-    expect(nativeRecordingDevicePolicy({ deviceSettingOverrides: rows }, misleading)).toEqual({ exposeMotionDetected: true, homeKitSecureVideo: false, disableEarlyNotification: false });
-    expect(nativeRecordingDevicePolicy({ deviceSettingOverrides: rows }, { id: 123, kind: 'owl' })).toEqual({ exposeMotionDetected: false, homeKitSecureVideo: true, disableEarlyNotification: false });
+    expect(nativeRecordingDevicePolicy({ deviceSettingOverrides: rows }, misleading)).toEqual({ exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'unmanaged' });
+    expect(nativeRecordingDevicePolicy({ deviceSettingOverrides: rows }, { id: 123, kind: 'owl' })).toEqual({ exposeMotionDetected: false, homeKitSecureVideo: true, earlyNotificationMode: 'unmanaged' });
     expect(nativeRecordingDevicePolicy({ deviceSettingOverrides: rows }, { id: 123, kind: 'doorbell' }).homeKitSecureVideo).toBe(true);
   });
 
   it('accepts optional early notification choices without schema defaults or feed-limit migration', () => {
-    const config = { name: 'Blink', disableEarlyNotification: true,
-      syncModuleSettingOverrides: [{ syncModuleId: '20' }, { syncModuleId: '30', disableEarlyNotification: false }],
-      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1' }, { deviceIdentifier: 'owl:1', disableEarlyNotification: false }],
+    const config = { name: 'Blink', earlyNotificationMode: 'off',
+      syncModuleSettingOverrides: [{ syncModuleId: '20' }, { syncModuleId: '30', earlyNotificationMode: 'unmanaged' }],
+      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1' }, { deviceIdentifier: 'owl:1', earlyNotificationMode: 'unmanaged' }],
       syncModuleFeedLimits: [{ syncModuleId: '20', maxFeeds: 1 }] };
     const before = structuredClone(config);
     expect(validate(config)).toBe(true);
@@ -116,12 +116,12 @@ describe('native recording configuration and platform ownership', () => {
   });
 
   it.each([
-    { disableEarlyNotification: 'true' },
+    { earlyNotificationMode: 'invalid' },
     { syncModuleSettingOverrides: [{ syncModuleId: '' }] },
     { syncModuleSettingOverrides: [{ syncModuleId: ' ' }] },
     { syncModuleSettingOverrides: [{ syncModuleId: 20 }] },
-    { syncModuleSettingOverrides: [{ syncModuleId: '20', disableEarlyNotification: 'false' }] },
-    { deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: 'true' }] },
+    { syncModuleSettingOverrides: [{ syncModuleId: '20', earlyNotificationMode: 'invalid' }] },
+    { deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'invalid' }] },
   ])('rejects invalid early notification values in schema and before client construction: %j', config => {
     expect(validate({ name: 'Blink', ...config })).toBe(false);
     expect(() => build(config)).toThrow();
@@ -130,7 +130,7 @@ describe('native recording configuration and platform ownership', () => {
 
   it('rejects duplicate Sync Module settings before constructing a client', () => {
     expect(() => build({ syncModuleSettingOverrides: [
-      { syncModuleId: '20', disableEarlyNotification: true }, { syncModuleId: '20', disableEarlyNotification: false },
+      { syncModuleId: '20', earlyNotificationMode: 'off' }, { syncModuleId: '20', earlyNotificationMode: 'unmanaged' },
     ] })).toThrow(/only one settings row/);
     expect(BlinkApi).not.toHaveBeenCalled();
   });

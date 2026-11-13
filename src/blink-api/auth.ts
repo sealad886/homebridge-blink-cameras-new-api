@@ -376,41 +376,10 @@ export class BlinkAuth {
     }
   }
 
-  private logDebug(message: string, ...args: unknown[]): void {
+  private logDebug(message: string): void {
     if (this.debug) {
-      this.log.info(`[Auth Debug] ${message}`, ...args);
+      this.log.info(`[Auth Debug] ${message}`);
     }
-  }
-
-  /**
-   * Redact sensitive form body fields for logging
-   */
-  private redactFormBody(body: string): string {
-    const params = new URLSearchParams(body);
-    const redacted = new URLSearchParams();
-    for (const [key, value] of params.entries()) {
-      if (isSensitiveDiagnosticKey(key)) {
-        redacted.set(key, '<redacted>');
-      } else {
-        redacted.set(key, value);
-      }
-    }
-    return redacted.toString();
-  }
-
-  /**
-   * Redact authorization-related headers for logging
-   */
-  private redactHeaders(headers: Headers): Record<string, string> {
-    const result: Record<string, string> = {};
-    headers.forEach((value, key) => {
-      if (isSensitiveDiagnosticKey(key)) {
-        result[key] = '<redacted>';
-      } else {
-        result[key] = value;
-      }
-    });
-    return result;
   }
 
   private redactUrlForLogging(value: string): string {
@@ -443,10 +412,6 @@ export class BlinkAuth {
     if (this.debug) {
       this.logDebug(`[${requestId}] ── ${stepLabel} ──`);
       this.logDebug(`[${requestId}] ${method} ${this.redactUrlForLogging(url)}`);
-      this.logDebug(`[${requestId}] Request headers: ${JSON.stringify(this.redactHeaders(init.headers as Headers))}`);
-      if (init.body) {
-        this.logDebug(`[${requestId}] Request body: ${this.redactFormBody(init.body as string)}`);
-      }
       if (init.redirect) {
         this.logDebug(`[${requestId}] Redirect policy: ${init.redirect}`);
       }

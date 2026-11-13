@@ -23,7 +23,6 @@ import {
 } from 'homebridge';
 import { withResponseBudget, withinRequestBudget, RequestOptions, checkRequestBudget } from '../operation-budget';
 import { toHapError } from '../hap-errors';
-import type { HomeKitAuditEvent } from '../homekit-audit';
 import { BlinkApi } from '../blink-api/client';
 import { FeedAdmissionError, type FeedLease } from './feed-admission';
 import { readBoundedBody } from '../blink-api/response-body';
@@ -265,7 +264,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     private readonly errorLog: (message: string) => void = log,
     private readonly beforeLiveview?: (options: RequestOptions) => Promise<void>,
     private readonly onInputObservation?: (observation: InputVideoObservation) => void,
-    private readonly auditEvent?: (event: HomeKitAuditEvent) => void,
     private readonly acquireFeed?: () => FeedLease,
   ) {
     this.streamingConfig = resolveStreamingConfig(streamingConfig);
@@ -274,14 +272,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
   private logError(message: string): void {
     this.errorLog(redactDiagnosticText(message));
-  }
-
-  private audit(event: HomeKitAuditEvent): void {
-    try {
-      this.auditEvent?.(event);
-    } catch {
-      // Observability must not change HomeKit callback or media ownership behavior.
-    }
   }
 
   /** HomeKit camera-off applies to every live and recording consumer. */
@@ -309,14 +299,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     request: SnapshotRequest,
     callback: SnapshotRequestCallback,
   ): Promise<void> {
-    this.audit({ direction: 'HomeKit -> bridge', event: 'Snapshot', outcome: 'requested',
-      width: request.width, height: request.height });
     this.log(`Snapshot requested (${request.width}x${request.height})`);
 
     if (!this.cameraActive || !this.isDeviceAvailable()) {
       this.cachedSnapshot = null;
       this.cachedSnapshotTime = 0;
-      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'unavailable' });
       callback(new Error('Camera is unavailable/offline'));
       return;
     }
@@ -324,7 +311,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const persistSnapshotCache = this.streamingConfig.persistSnapshotCache ?? false;
     if (this.cachedSnapshot && persistSnapshotCache) {
       this.log(`Snapshot returned from persistent cache (${this.cachedSnapshot.length} bytes, download age ${Math.round((Date.now() - this.cachedSnapshotTime) / 1000)}s, capture age ${this.lastSuccessfulCaptureTime ? Math.round((Date.now() - this.lastSuccessfulCaptureTime) / 1000) + 's' : 'unknown'})`);
-      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'persistent cache', bytes: this.cachedSnapshot.length });
       callback(undefined, this.cachedSnapshot);
       return;
     }
@@ -335,7 +321,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     // Return cached snapshot if still valid by TTL
     if (this.cachedSnapshot && cacheTTL > 0 && cacheAge < cacheTTL) {
       this.log(`Snapshot returned from cache (${this.cachedSnapshot.length} bytes, age ${Math.round(cacheAge / 1000)}s)`);
-      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'cache', bytes: this.cachedSnapshot.length });
       callback(undefined, this.cachedSnapshot);
       return;
     }
@@ -344,12 +329,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     try {
       buffer = await withResponseBudget(this.fetchFreshSnapshot());
     } catch (error) {
-      this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'failed' });
       callback(toHapError(this.hap, error));
       return;
     }
     this.log(`Snapshot returned (${buffer.length} bytes)`);
-    this.audit({ direction: 'bridge -> HomeKit', event: 'Snapshot', outcome: 'fresh', bytes: buffer.length });
     callback(undefined, buffer);
   }
 
@@ -520,20 +503,13 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Prepare stream - allocate ports and SRTP parameters for HomeKit.
    */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    this.audit({ direction: 'HomeKit -> bridge', event: 'Prepare stream', outcome: 'requested',
-      audio: this.streamingConfig.audio.enabled, talkback: false });
-    const complete: PrepareStreamCallback = (...args) => {
-      this.audit({ direction: 'bridge -> HomeKit', event: 'Prepare stream', outcome: args[0] ? 'failed' : 'prepared',
-        audio: this.streamingConfig.audio.enabled, talkback: false });
-      callback(...args);
-    };
     if (!this.cameraActive || !this.streamingConfig.enabled) {
       this.log('Stream preparation requested but streaming is disabled');
-      complete(new Error('Live streaming disabled'));
+      callback(new Error('Live streaming disabled'));
       return;
     }
 
-    void this.prepareStreamInternal(request, complete);
+    void this.prepareStreamInternal(request, callback);
   }
 
   private async prepareStreamInternal(
@@ -625,19 +601,9 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Handle generation-owned private media streaming.
    */
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
-    const event = request.type === 'start' ? 'Stream start' : request.type === 'reconfigure' ? 'Stream reconfigure' : 'Stream stop';
-    this.audit({ direction: 'HomeKit -> bridge', event, outcome: 'requested',
-      ...(request.type === 'start' ? { width: request.video.width, height: request.video.height,
-        audio: this.streamingConfig.audio.enabled && Boolean(request.audio), talkback: false } : {}) });
-    const complete: StreamRequestCallback = (...args) => {
-      const outcome = args[0] ? 'failed' : !this.streamingConfig.enabled ? 'disabled'
-        : request.type === 'reconfigure' ? 'unsupported' : 'completed';
-      this.audit({ direction: 'bridge -> HomeKit', event, outcome });
-      callback(...args);
-    };
     if (!this.streamingConfig.enabled) {
       this.log('Stream request received but streaming is disabled');
-      complete();
+      callback();
       return;
     }
 
@@ -645,15 +611,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
     switch (request.type) {
       case 'start':
-        void this.startStream(sessionId, request, complete);
+        void this.startStream(sessionId, request, callback);
         break;
       case 'reconfigure':
         this.log(`Stream reconfigure requested for session ${sessionId} (unsupported)`);
-        complete();
+        callback();
         break;
       case 'stop':
         this.log(`Stream stop requested for session ${sessionId}`);
-        void this.stopStream(sessionId).finally(() => complete());
+        void this.stopStream(sessionId).finally(() => callback());
         break;
     }
   }
@@ -722,7 +688,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         void media.whenClosed.then(() => {
           owner.mediaClosed = true; owner.release?.();
           if (this.ownsSession(sessionId, active)) {
-            this.audit({ direction: 'bridge -> HAP', event: 'Stream media ended', outcome: media.failed ? 'failed' : 'completed' });
             if (media.failed) this.markStreamFailure(sessionId, active);
             void this.stopStream(sessionId, owner);
           }
@@ -741,7 +706,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           end: () => media.end(),
           fail: () => {
             if (!this.ownsSession(sessionId, active)) return;
-            this.audit({ direction: 'bridge -> HAP', event: 'Stream transport', outcome: 'failed' });
             this.markStreamFailure(sessionId, active);
             void this.stopStream(sessionId, owner);
           },
@@ -802,7 +766,6 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     const pending = this.pendingSessions.get(sessionId);
     if (!owner || (expectedOwner && owner !== expectedOwner)) return;
     if (owner.retirement) return owner.retirement;
-    this.audit({ direction: 'bridge -> HAP', event: 'Stream retirement', outcome: 'requested', talkback: false });
     owner.phase = 'RETIRING';
     recordSecurityBoundaryEvent('cancellation');
     owner.abort.abort(new Error('Streaming session retired'));
@@ -819,14 +782,12 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     owner.retirement = (async () => {
       const release = (): void => {
         if (owner.preparing || owner.localStarting || owner.mediaClosed === false || owner.transportClosed === false) return;
-        const wasClosed = owner.phase === 'CLOSED';
         for (const port of owner.ports) releasePort(port);
         owner.ports.clear(); owner.phase = 'CLOSED';
         const session = active ?? pending;
         session?.videoSRTP.fill(0); session?.audioSRTP?.fill(0);
         if (this.sessionOwners.get(sessionId) === owner) this.sessionOwners.delete(sessionId);
         if (this.ongoingSessions.get(sessionId) === active) this.ongoingSessions.delete(sessionId);
-        if (!wasClosed) this.audit({ direction: 'bridge -> HAP', event: 'Stream retirement', outcome: 'completed', talkback: false });
       };
       owner.release = release;
       if (transportClosure) {

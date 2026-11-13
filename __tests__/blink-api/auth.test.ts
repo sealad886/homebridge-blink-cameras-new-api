@@ -102,46 +102,6 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     expect(sanitized).not.toContain(email);
   });
 
-  it('fully redacts stable identity values from authentication forms and headers', () => {
-    const auth = new BlinkAuth(baseConfig);
-    const hardwareId = 'hardwareFormSecret_3Hs8Nx';
-    const deviceIdentifier = 'deviceIdentifierSecret_9Jt5Lp';
-    const email = 'privateFormSecret_7Rc4Vm@example.com';
-    const phone = '+353860001234';
-    const form = (
-      auth as unknown as { redactFormBody(value: string): string }
-    ).redactFormBody(new URLSearchParams({
-      hardware_id: hardwareId,
-      device_identifier: deviceIdentifier,
-      username: email,
-      phone_number: phone,
-      grant_type: 'authorization_code',
-      status_code: 'safe-status-code',
-      error_code: 'safe-error-code',
-      country_code: 'safe-country-code',
-      codec: 'safe-codec',
-    }).toString());
-    const headers = (
-      auth as unknown as { redactHeaders(value: Headers): Record<string, string> }
-    ).redactHeaders(new Headers({
-      hardware_id: hardwareId,
-      'x-device-identifier': deviceIdentifier,
-      'x-safe-header': 'safe-value',
-    }));
-    const diagnostic = `${form}\n${JSON.stringify(headers)}`;
-
-    expect(diagnostic).not.toContain(hardwareId);
-    expect(diagnostic).not.toContain(deviceIdentifier);
-    expect(diagnostic).not.toContain(email);
-    expect(diagnostic).not.toContain(phone);
-    expect(new URLSearchParams(form).get('grant_type')).toBe('authorization_code');
-    expect(new URLSearchParams(form).get('status_code')).toBe('safe-status-code');
-    expect(new URLSearchParams(form).get('error_code')).toBe('safe-error-code');
-    expect(new URLSearchParams(form).get('country_code')).toBe('safe-country-code');
-    expect(new URLSearchParams(form).get('codec')).toBe('safe-codec');
-    expect(headers['x-safe-header']).toBe('safe-value');
-  });
-
   describe('successful login flow', () => {
     it('completes full OAuth flow and stores tokens', async () => {
       const fetchMock = mockFetch();
@@ -332,7 +292,7 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
       }));
     });
 
-    it('fully redacts legacy OAuth state, redirect code, CSRF, and token values from debug logs', async () => {
+    it('omits OAuth request headers and bodies while retaining bounded debug outcomes', async () => {
       const fetchMock = mockFetch();
       const { logger, entries } = createCapturingLogger();
       const csrfToken = 'legacyCsrfSentinel_4Lp8Qx';
@@ -398,6 +358,11 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
         expectSecretAbsent(log, secret);
       }
       expect(log).not.toContain(`${email.slice(0, 3)}...${email.slice(-3)}`);
+      expect(log).not.toContain('Request headers:');
+      expect(log).not.toContain('Request body:');
+      expect(log).not.toContain('grant_type=authorization_code');
+      expect(log).toContain('Response status: 200');
+      expect(log).toContain('Token exchange successful');
     });
   });
 

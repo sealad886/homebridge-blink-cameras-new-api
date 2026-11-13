@@ -182,6 +182,8 @@ const durableSessionIdentity = (state: BlinkAuthState): string => {
 // Serialize every UI operation that can persist or remove authentication for a
 // storage root. Separate UI service instances must share the same logout barrier.
 const authOperationsByRoot = new Map<string, Promise<void>>();
+type ConnectionTestResult = { success: boolean; message: string };
+const connectionTestsByRoot = new Map<string, { deviceId?: string; tail: Promise<void>; result: Promise<ConnectionTestResult> }>();
 
 export class HostedAuthService {
   private readonly apiFactory: (config: BlinkConfig) => BlinkApi;
@@ -416,17 +418,27 @@ export class HostedAuthService {
   }
 
   async testConnection(payload: { deviceId?: string }): Promise<{ success: boolean; message: string }> {
-    return this.enqueueAuthOperation(() => this.testConnectionUnlocked(payload));
+    const request = this.requirePayload(payload, ['deviceId']);
+    const deviceId = request.deviceId === undefined ? undefined : normalizeHardwareId(request.deviceId, false);
+    const key = path.resolve(this.options.storageRoot), pending = connectionTestsByRoot.get(key);
+    if (pending) {
+      // Never borrow an earlier scope's result across queued sign-in/logout work,
+      // or let retries accumulate behind a test whose caller already timed out.
+      if (pending.deviceId === deviceId && authOperationsByRoot.get(key) === pending.tail) return pending.result;
+      throw new HostedAuthServiceError('A Blink connection test is already pending. Try again shortly.', 'authentication', 409);
+    }
+    const result = this.enqueueAuthOperation(() => this.testConnectionUnlocked(deviceId));
+    const entry = { deviceId, tail: authOperationsByRoot.get(key)!, result };
+    connectionTestsByRoot.set(key, entry);
+    const settled = () => { if (connectionTestsByRoot.get(key) === entry) connectionTestsByRoot.delete(key); };
+    void result.then(settled, settled);
+    return result;
   }
 
-  private async testConnectionUnlocked(payload: { deviceId?: string }): Promise<{ success: boolean; message: string }> {
-    const request = this.requirePayload(payload, ['deviceId']);
-    if (request.deviceId !== undefined) {
-      normalizeHardwareId(request.deviceId, false);
-    }
+  private async testConnectionUnlocked(deviceId: string | undefined): Promise<ConnectionTestResult> {
     let checkedSessionIdentity: string | null = null;
     try {
-      const context = await this.getPersistedApiContext(request.deviceId);
+      const context = await this.getPersistedApiContext(deviceId);
       checkedSessionIdentity = this.apiSessionIdentity;
       await context.api.login();
       const loggedIn = await this.loadPersistedAuthState();
