@@ -49,7 +49,7 @@ const preferenceFailure = (error: unknown): string => {
   if (error instanceof BlinkEarlyNotificationNotConfirmedError) return 'readback-unconfirmed';
   if (error instanceof OperationTimeoutError) return 'timeout';
   if (error instanceof BlinkOperationNotStartedError) {
-    return ['storage-pending', 'liveview-pending', 'ownership-unavailable', 'invalid-native-route'].includes(error.reason)
+    return ['storage-pending', 'liveview-pending', 'state-command-pending', 'ownership-unavailable', 'invalid-native-route'].includes(error.reason)
       ? `not-started-${error.reason}` : 'not-started';
   }
   if (error instanceof BlinkHttpError) {
@@ -394,7 +394,7 @@ export class NativeRecordingRuntime {
       || (beforeChangeCurrent !== undefined && beforeChangeCurrent !== !original.original)) return;
     const untouched = beforeChangeCurrent === undefined;
     const busy = error instanceof BlinkOperationNotStartedError && error.dispatched === false
-      && ['liveview-pending', 'storage-pending'].includes(error.reason);
+      && ['liveview-pending', 'storage-pending', 'state-command-pending'].includes(error.reason);
     if (!isUnacceptedPreferencePost(error)
       && !(untouched && (busy || (isUnsentPreferenceHttp(error) && error.method === 'GET')))) return;
     checkRequestBudget({ deadline });

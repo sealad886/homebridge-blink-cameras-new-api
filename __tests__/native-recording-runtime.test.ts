@@ -920,6 +920,7 @@ describe('native recording runtime composition', () => {
 
   it.each([
     [new BlinkOperationNotStartedError('storage-pending'), 'not-started-storage-pending'],
+    [new BlinkOperationNotStartedError('state-command-pending'), 'not-started-state-command-pending'],
     [Object.assign(new BlinkOperationNotStartedError('storage-pending'), { reason: 'PRIVATE_PROVIDER_TEXT' }), 'not-started'],
     [new BlinkHttpError('password=PRIVATE_PROVIDER_TEXT', 409, '', 'https://private.invalid/token', 'POST'), 'http-409'],
     [new BlinkHttpError('PRIVATE_PROVIDER_TEXT', 0, '', 'https://private.invalid/token', 'GET', undefined, undefined, 'network'), 'network'],
@@ -1099,6 +1100,7 @@ describe('native recording runtime composition', () => {
   it.each([
     ['reapply', 'liveview-pending'], ['restore', 'liveview-pending'],
     ['reapply', 'storage-pending'], ['restore', 'storage-pending'],
+    ['reapply', 'state-command-pending'], ['restore', 'state-command-pending'],
   ] as const)('retains prior ownership after %s admission is blocked by %s during durable demotion', async (pathway, reason) => {
     const f = await setup({ earlyNotification: true });
     if (pathway === 'restore') await f.runtime.stop();

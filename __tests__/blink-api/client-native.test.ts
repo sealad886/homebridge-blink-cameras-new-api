@@ -317,6 +317,29 @@ describe('owned native storage SDK', () => {
     expect((fetch as jest.Mock).mock.calls[0][1].method).toBe('GET');
   });
 
+  it.each(['arm', 'disarm', 'motion', 'capture', 'quality', 'early-notification'] as const)
+  ('distinguishes occupied %s admission without reading or changing a camera preference', async kind => {
+    const owner: BlinkStateCommandOwnership = { reservationId: 'pending-command', accountId: 10, networkId: 20,
+      deviceId: 40, kind, phase: 'unresolved', commandId: 101, statusReads: 1, expiresAt: Date.now() + 120_000 };
+    const f = fixture(undefined, owner);
+    await expect(f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false)).rejects.toMatchObject({
+      dispatched: false, reason: kind === 'early-notification' ? 'ownership-unavailable' : 'state-command-pending',
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(f.api.getRemoteOperationState().stateCommand).toEqual(owner);
+  });
+
+  it('preserves account authority refusal ahead of an occupied ordinary-command slot', async () => {
+    const owner: BlinkStateCommandOwnership = { reservationId: 'pending-command', accountId: 10, networkId: 20,
+      kind: 'arm', phase: 'unresolved', commandId: 101, statusReads: 1, expiresAt: Date.now() + 120_000 };
+    const f = fixture(undefined, owner);
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    await expect(f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false))
+      .rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(f.api.getRemoteOperationState().stateCommand).toEqual(owner);
+  });
+
   it.each((['deadline', 'cancel'] as const).flatMap(limit =>
     (['error-cleanup', 'success-response'] as const).map(stage => [limit, stage] as const)))
   ('releases conflict readback and the command queue on %s during held %s', async (limit, stage) => {
@@ -871,7 +894,7 @@ describe('owned native storage SDK', () => {
     await expect(f.api.retryRemoteOperationPersistence()).resolves.toBeUndefined();
     expect(f.savedRemote.at(-1)).toEqual({ stateCommand: current });
     expect(f.api.getRemoteOperationState().persistenceFailed).toBe(false);
-    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ reason: 'ownership-unavailable' });
+    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ reason: 'state-command-pending' });
     expect(fetch).toHaveBeenCalledTimes(acknowledgment === 'known' ? 2 : 1);
   });
 
@@ -1097,7 +1120,7 @@ describe('owned native storage SDK', () => {
       kind: 'arm', phase: 'unresolved', commandId: 101, statusReads: 1, expiresAt: Date.now() + 120_000 };
     const f = fixture(undefined, owner);
     await expect(f.api.withNativeStorageAdmission('event', async () => undefined, {}, scope))
-      .rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+      .rejects.toMatchObject({ dispatched: false, reason: 'state-command-pending' });
     (fetch as jest.Mock).mockResolvedValueOnce(json({ complete: true, status: 'complete' }))
       .mockResolvedValueOnce(json({ complete: true, status: 7 }));
     await expect(f.api.reconcileKnownStateCommand()).resolves.toEqual({ commandId: 101, confirmed: false });
@@ -1172,7 +1195,7 @@ describe('owned native storage SDK', () => {
     }));
     await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: true, cause: { failure: 'network', dispatched: false } });
     expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ phase: 'unresolved', commandId: 101 });
-    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+    await expect(f.api.armNetwork(20)).rejects.toMatchObject({ dispatched: false, reason: 'state-command-pending' });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 

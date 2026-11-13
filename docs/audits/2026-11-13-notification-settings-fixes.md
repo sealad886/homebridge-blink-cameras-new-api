@@ -316,3 +316,27 @@ against an uncooperative concurrent writer remains a documented operating limit.
 Closing editors and stopping configuration writes was already an upgrade
 requirement; the automatic-migration and release guides now state it explicitly.
 No installer-only lock or unsupported atomic-comparison guarantee was added.
+
+## Ordinary command admission preserves unchanged preference ownership
+
+Final source review found a reachable race between the initial remote-operation
+snapshot and the awaited durable preference demotion. An unrelated ordinary
+command can acquire an unresolved slot during that write. Preference admission
+then fails before any preference request, but the shared ownership-unavailable
+reason could not distinguish that definite deferral from authority loss.
+
+Shared SDK admission now emits state-command-pending only for occupied arm,
+disarm, motion, capture or quality slots. Existing typed, untouched, prior-owned
+continuity handling accepts that reason; bounded diagnostics name it directly.
+An unresolved Early Notification slot remains conservative because it could have
+changed the preference. Account, writer and generation invalidation remain
+excluded. No mutation is retried or outstanding owner cleared by this repair.
+
+All 502 SDK/runtime boundary tests, TypeScript, source lint and diff checks passed.
+Regressions cover all six occupied command kinds with no preference requests,
+account invalidation preceding occupancy, and held-write reapplication/restoration
+races followed by successful retry and eventual restoration. Frozen evidence is
+in logs/notification-settings-beta4/round10-repair-final.json. Intermediate test
+fixture failures remain preserved; they exercised invalid writer handoffs and
+were corrected without weakening production authority guards. No physical
+occurrence or camera/Pi acceptance is inferred from these local tests.

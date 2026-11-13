@@ -95,7 +95,7 @@ class AuthMetadataChangedError extends Error {
 
 export class BlinkOperationNotStartedError extends Error {
   readonly dispatched = false;
-  constructor(public readonly reason: 'storage-pending' | 'liveview-pending' | 'ownership-unavailable' | 'invalid-native-route') {
+  constructor(public readonly reason: 'storage-pending' | 'liveview-pending' | 'state-command-pending' | 'ownership-unavailable' | 'invalid-native-route') {
     super(`Blink operation was not started: ${reason}.`);
     this.name = 'BlinkOperationNotStartedError';
   }
@@ -374,7 +374,9 @@ export class BlinkApi {
     this.expireOperationOwners();
     const live = this.liveViewOwner;
     const matchesLive = Boolean(live?.commandId && live.networkId === admission.networkId && live.commandId === admission.commandId);
-    if (this.stateCommandOwner) throw new BlinkOperationNotStartedError('ownership-unavailable');
+    if (this.stateCommandOwner) throw new BlinkOperationNotStartedError(
+      ['arm', 'disarm', 'motion', 'capture', 'quality'].includes(this.stateCommandOwner.kind)
+        ? 'state-command-pending' : 'ownership-unavailable');
     // Closing an owned view can resolve a restored conflict; never clean up an unrelated command.
     if (admission.kind === 'retire' && matchesLive) return;
     for (const fence of this.nativeStorageFences.values()) {
