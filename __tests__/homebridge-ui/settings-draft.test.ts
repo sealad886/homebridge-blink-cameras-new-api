@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import Ajv from 'ajv';
-import { migrateEarlyNotificationConfig } from '../../src/early-notification-config';
 import { SettingsValidator } from '../../src/homebridge-ui/settings-validation';
 
 function load() {
@@ -13,31 +12,14 @@ function load() {
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const valid = (revision: number) => ({ revision, valid: true, errors: [], warnings: [] });
 
-it('presents canonical startup migration without staging or marking an unchanged draft dirty', async () => {
-  const { Draft } = load();
-  const original = [{ platform: 'Other', keep: true }, { platform: 'BlinkCameras', disableEarlyNotification: true, extension: { keep: 1 } }];
-  const migrated = migrateEarlyNotificationConfig(original[1]);
-  const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)), stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
-  const draft = new Draft(original, host, migrated.config);
-  draft.retry(); await draft.flush();
-  expect(draft.state.dirty).toBe(false);
-  expect(JSON.parse(draft.baseline)).toEqual(original);
-  expect(draft.blocks[0]).toEqual(original[0]);
-  expect(draft.config).toEqual({ platform: 'BlinkCameras', earlyNotificationMode: 'off', extension: { keep: 1 } });
-  expect(host.stage).not.toHaveBeenCalled();
-  expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
-  expect(original[1]).toHaveProperty('disableEarlyNotification', true);
-});
-
 it.each([
   { platform: 'BlinkCameras', name: 'Blink', pollInterval: 60 },
-  { platform: 'BlinkCameras', name: 'Blink', disableEarlyNotification: true },
-  { platform: 'BlinkCameras', name: 'Blink', earlyNotificationMode: 'off', disableEarlyNotification: true },
-])('stages only a real edit and its revert, preserving normalized startup values: %s', async config => {
+  { platform: 'BlinkCameras', name: 'Blink', earlyNotificationMode: 'off' },
+])('stages only a real edit and its revert, preserving canonical saved values: %s', async config => {
   const { Draft } = load();
   const original = [{ platform: 'Other', keep: true }, config];
   const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)), stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
-  const draft = new Draft(original, host, migrateEarlyNotificationConfig(config).config);
+  const draft = new Draft(original, host);
   draft.retry(); await draft.flush();
   draft.inventoryRevision = 'discovery'; draft.retry(); await draft.flush();
   const action = draft.beginAccountAction(); action.finish(); await draft.flush();
@@ -51,7 +33,7 @@ it.each([
   draft.set('name', undefined); await draft.flush();
   draft.set('name', 'Blink'); await draft.flush();
   expect(draft.state.dirty).toBe(false);
-  expect(host.stage).toHaveBeenLastCalledWith([original[0], migrateEarlyNotificationConfig(config).config]);
+  expect(host.stage).toHaveBeenLastCalledWith(original);
   expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
   expect(JSON.parse(draft.baseline)).toEqual(original);
 });
@@ -94,14 +76,14 @@ it('adopts an externally saved baseline without a second host change notificatio
   expect(host.stage).not.toHaveBeenCalled(); expect(draft.state.dirty).toBe(false);
 });
 
-it('allows migration-only auth recovery without discovery while blocking pending validation, user edits and overlapping actions', async () => {
+it('allows saved-account recovery without discovery while blocking pending validation, user edits and overlapping actions', async () => {
   const { Draft } = load();
-  const original = [{ platform: 'BlinkCameras', name: 'Blink', disableEarlyNotification: true,
+  const original = [{ platform: 'BlinkCameras', name: 'Blink', earlyNotificationMode: 'off',
     syncModuleFeedLimits: [{ syncModuleId: '20', maxFeeds: 1 }] }];
   const validator = new SettingsValidator(() => undefined);
   const host = { validate: jest.fn(async (payload: unknown) => validator.validate(payload)),
     stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
-  const draft = new Draft(original, host, migrateEarlyNotificationConfig(original[0]).config);
+  const draft = new Draft(original, host);
   draft.retry();
   expect(draft.beginAccountAction()).toBeNull();
   await draft.flush();

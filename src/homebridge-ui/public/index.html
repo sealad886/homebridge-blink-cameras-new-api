@@ -9,7 +9,7 @@
     <ol>
       <li>Close this plugin settings window. Open the Homebridge menu and choose <strong>JSON Config</strong>.</li>
       <li>In <code>platforms</code>, find the object with <code>"platform": "BlinkCameras"</code>. Repair the indicated path inside that object. Keep existing entries and unrelated fields.</li>
-      <li>Save in JSON Config, then reopen this plugin’s settings. The editor will migrate valid legacy choices automatically and let you review changes before saving.</li>
+      <li>Save in JSON Config, then reopen this plugin’s settings. If a legacy setting is indicated, complete the one-time configuration migration before reopening.</li>
     </ol>
     <p>Your saved configuration has not been changed by this editor.</p>
   </section>
@@ -179,7 +179,7 @@
     document.getElementById('settingsRepairField').textContent = `${problem.path || 'BlinkCameras'}: ${problem.message}`;
     let guidance = 'Correct the indicated saved value in the Homebridge JSON Config editor.';
     if (problem.path.endsWith('/earlyNotificationMode')) guidance = 'Early Notification must be exactly "on", "off", or "unmanaged", using lowercase text.';
-    else if (problem.path.endsWith('/disableEarlyNotification')) guidance = 'The legacy disableEarlyNotification value must be a JSON boolean: true or false, without quotation marks. Keep your intended choice; the editor converts valid legacy choices automatically.';
+    else if (problem.path.endsWith('/disableEarlyNotification')) guidance = 'This retired setting requires the one-time configuration migration. Run node scripts/migrate-native-recording-config.cjs with the explicit config.json path to preview, then repeat with --apply. The converter preserves the intended choice and creates a private backup.';
     else if (/^\/(deviceSettingOverrides|syncModuleSettingOverrides)(\/\d+)?$/.test(problem.path)) guidance = 'Override lists must be JSON arrays of objects. Keep existing entries and repair their structure; each camera entry uses deviceIdentifier and each Sync Module entry uses syncModuleId.';
     document.getElementById('settingsRepairGuidance').textContent = guidance;
     document.getElementById('settingsRepair').hidden = false;
@@ -270,16 +270,18 @@
   try {
     const schema = await window.BlinkSettings.deadline(homebridge.getPluginConfigSchema());
     const existing = pluginConfig.find(block => block.platform === 'BlinkCameras') || { platform: 'BlinkCameras', name: 'Blink' };
-    const migrated = await window.BlinkSettings.deadline(homebridge.request('/settings/migrate', { config: existing }));
-    if (!migrated?.config || typeof migrated.config !== 'object' || Array.isArray(migrated.config)) throw new Error('Invalid migration response.');
-    settings = window.BlinkSettingsUI.mount(homebridge, schema, pluginConfig, migrated.config);
+    const validation = await window.BlinkSettings.deadline(homebridge.request('/settings/validate', { revision: 0, config: existing }));
+    if (!validation || !Array.isArray(validation.errors)) throw new Error('Invalid validation response.');
+    const repair = validation.errors.find(error => error.code === 'migration_required' || error.code === 'early_notification');
+    if (repair) throw Object.assign(new Error('Saved Blink settings need repair.'), { error: { ...repair, category: 'invalid_request' } });
+    settings = window.BlinkSettingsUI.mount(homebridge, schema, pluginConfig);
     homebridge.hideSchemaForm();
   } catch (error) {
     const problem = error?.error;
     if (problem?.category === 'invalid_request' && typeof problem.path === 'string' && typeof problem.message === 'string') {
       showBootError('Saved Blink settings need repair before this editor can open.');
       showSettingsRepair(problem);
-    } else showBootError('The configuration definitions or settings migration could not load. Retry loading settings.');
+    } else showBootError('The configuration definitions or saved settings could not be checked. Retry loading settings.');
     return;
   }
 

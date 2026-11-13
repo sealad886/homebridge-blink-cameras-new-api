@@ -2,7 +2,7 @@ import Ajv, { type ErrorObject } from 'ajv';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveNativeRecordingConfig, validateSyncModuleSettingOverrides } from '../native-recording-config';
-import { migrateEarlyNotificationConfig } from '../early-notification-config';
+import { assertCanonicalEarlyNotificationConfig } from '../early-notification-config';
 import { deriveFeedCapacity, matchesCameraIdentifier, SettingsConstraintError,
   validateModuleFeedLimits, type FeedCapacity, type SettingsInventory } from '../settings-inventory';
 
@@ -40,11 +40,11 @@ export class SettingsValidator {
     }
     const config = request.config as Record<string, unknown>;
     try {
-      const migration = migrateEarlyNotificationConfig(config);
-      if (migration.changed) result.errors.push({ path: '', code: 'migration_required', message: 'Migrate the saved Early Notification choices before saving.' });
+      assertCanonicalEarlyNotificationConfig(config);
     } catch (error) {
-      result.errors.push({ path: error instanceof SettingsConstraintError ? error.path : '', code: 'early_notification',
-        message: 'Use on, off, or unmanaged for Early Notification; legacy choices must be booleans.' });
+      const path = error instanceof SettingsConstraintError ? error.path : '';
+      result.errors.push({ path, code: path.endsWith('/disableEarlyNotification') ? 'migration_required' : 'early_notification',
+        message: error instanceof SettingsConstraintError ? error.message : 'Use on, off, or unmanaged for Early Notification.' });
     }
     if (!validateSchema(config)) result.errors.push(...(validateSchema.errors ?? []).map(schemaError));
     const nativeRetired = ['enableMotionPolling', 'hksvCameras', 'hksvSource', 'syncModuleRecording'];

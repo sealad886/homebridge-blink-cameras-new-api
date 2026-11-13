@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { runInNewContext, Script } from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { SettingsValidator } from '../../src/homebridge-ui/settings-validation';
-import { migrateEarlyNotificationConfig } from '../../src/early-notification-config';
 
 class Element {
   children: Element[] = [];
@@ -28,7 +27,7 @@ const source = (name: string) => readFileSync(join(__dirname, '../../src/homebri
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const cameras = [{ key: 'camera:1', kind: 'camera', id: '1', name: 'Same', networkId: '10', status: 'online', enabled: true, moduleAssociation: { state: 'unique', source: 'network_id', candidateIds: ['100'] } },
   { key: 'owl:1', kind: 'owl', id: '1', name: 'Same', networkId: '10', status: 'offline', enabled: true, moduleAssociation: { state: 'noneReported', source: 'network_id', candidateIds: [] } }];
-function mount(config: Record<string, unknown>, validate?: (payload: unknown) => unknown, initialConfig?: Record<string, unknown>) {
+function mount(config: Record<string, unknown>, validate?: (payload: unknown) => unknown) {
   const elements = new Map(['settingsNavigation', 'sectionFields', 'connectionFlow', 'accountMaintenance', 'sectionTitle', 'draftStatus', 'settingsErrors', 'inventoryStatus', 'retrySettings', 'accountDraftWarning', 'settingsWarnings'].map(id => [id, new Element()]));
   const document = { createElement: (tag: string) => new Element(tag), getElementById: (id: string) => elements.get(id) };
   const context: any = { window: {}, document, structuredClone, setTimeout, clearTimeout };
@@ -41,7 +40,7 @@ function mount(config: Record<string, unknown>, validate?: (payload: unknown) =>
     updatePluginConfig: jest.fn().mockResolvedValue(undefined), enableSaveButton: jest.fn(), disableSaveButton: jest.fn(),
   };
   const schema = JSON.parse(readFileSync(join(__dirname, '../../config.schema.json'), 'utf8'));
-  const editor = context.window.BlinkSettingsUI.mount(homebridge, schema, [{ platform: 'BlinkCameras', name: 'Blink', ...config }], initialConfig);
+  const editor = context.window.BlinkSettingsUI.mount(homebridge, schema, [{ platform: 'BlinkCameras', name: 'Blink', ...config }]);
   return { editor, homebridge, elements, schema };
 }
 function earlyNotificationControl(parent: Element): Element {
@@ -66,25 +65,6 @@ it('opens, discovers cameras and retries validation without notifying Homebridge
   expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(2);
   expect(editor.draft.state.dirty).toBe(false);
   expect(elements.get('draftStatus')!.dataset.state).toBe('clean');
-});
-
-it.each([
-  { disableEarlyNotification: true },
-  { earlyNotificationMode: 'off', disableEarlyNotification: true },
-])('opens and discovers an equivalent legacy configuration without staging a migration-only change: %s', async config => {
-  const original = { platform: 'BlinkCameras', name: 'Blink', ...config };
-  const { editor, homebridge, elements } = mount(config, undefined, migrateEarlyNotificationConfig(original).config);
-  editor.setAccountReady(true); await tick(); await editor.draft.flush();
-  expect(editor.draft.config.earlyNotificationMode).toBe('off');
-  expect(editor.draft.config).not.toHaveProperty('disableEarlyNotification');
-  expect(editor.draft.state.dirty).toBe(false);
-  expect(elements.get('draftStatus')!.dataset.state).toBe('clean');
-  expect(homebridge.updatePluginConfig).not.toHaveBeenCalled();
-  expect(homebridge.enableSaveButton).not.toHaveBeenCalled();
-  editor.draft.set('pollInterval', 120); await editor.draft.flush();
-  expect(editor.draft.state.dirty).toBe(true);
-  expect(homebridge.updatePluginConfig).toHaveBeenCalledWith([expect.objectContaining({ earlyNotificationMode: 'off', pollInterval: 120 })]);
-  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('disableEarlyNotification');
 });
 
 it('identifies every blocking field and stages only after canonical validation succeeds', async () => {

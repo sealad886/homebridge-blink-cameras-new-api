@@ -40,6 +40,7 @@
         "CHANGELOG.md",
         "config.schema.json",
         "scripts/preuninstall.js",
+        "scripts/postinstall.cjs",
         "scripts/migrate-secure-media-config.cjs",
         "native/runtime",
         "native/corresponding-source.tar.gz",
@@ -107,6 +108,7 @@
         "clean": "rm -rf dist",
         "release": "node ./scripts/release.mjs",
         "check": "npm install && npm outdated",
-        "update": "ncu -u && npm update && npm install"
+        "update": "ncu -u && npm update && npm install",
+        "postinstall": "node scripts/postinstall.cjs"
     }
 }

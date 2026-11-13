@@ -1,0 +1,48 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+function run(environment = process.env, packageRoot = path.resolve(__dirname, '..')) {
+  let config;
+  if (environment.UIX_STORAGE_PATH) {
+    if (!path.isAbsolute(environment.UIX_STORAGE_PATH)) return { action: 'Failed', code: 'absolute-storage-path-required' };
+    config = path.join(environment.UIX_STORAGE_PATH, 'config.json');
+  } else {
+    const scope = path.dirname(packageRoot), modules = path.dirname(scope);
+    if (path.basename(packageRoot) !== 'homebridge-blink-cameras-new-api'
+      || path.basename(scope) !== '@sealad886' || path.basename(modules) !== 'node_modules') {
+      return { action: 'Skipped', code: 'storage-path-unavailable' };
+    }
+    config = path.join(path.dirname(modules), 'config.json');
+  }
+  let migration;
+  try {
+    try { fs.lstatSync(config); }
+    catch (error) {
+      if (error.code === 'ENOENT') return { action: 'Skipped', code: 'config-absent' };
+      throw error;
+    }
+    if (process.platform === 'win32') {
+      return { action: 'Skipped', code: 'windows-manual-migration-required',
+        message: 'Automatic configuration migration is unavailable on Windows. Convert legacy choices to canonical JSON before starting Homebridge.' };
+    }
+    // Source dependency installs have no host config or compiled migration helper.
+    migration = require('./migrate-native-recording-config.cjs');
+    return { action: migration.apply(migration.inspect(config)) ? 'Applied' : 'Unchanged' };
+  } catch (error) {
+    return { action: 'Failed', code: migration && error instanceof migration.MigrationError ? error.code : 'file-operation-failed' };
+  }
+}
+
+module.exports = { run };
+if (require.main === module) {
+  const result = run();
+  const failed = result.action === 'Failed';
+  (failed ? process.stderr : process.stdout).write(JSON.stringify(result) + '\n');
+  if (failed) {
+    process.stderr.write('Blink configuration migration failed. Repair the saved configuration, then run scripts/migrate-native-recording-config.cjs with its explicit path and --apply.\n');
+    process.exitCode = 1;
+  }
+}

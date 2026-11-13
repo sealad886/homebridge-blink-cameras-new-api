@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Explicit local migration only. This tool never discovers a host, contacts Blink, or restarts a service.
+// Guarded local migration, also used by installation. Never contacts Blink or restarts a service.
 const fs = require('node:fs');
 const path = require('node:path');
 const process = require('node:process');

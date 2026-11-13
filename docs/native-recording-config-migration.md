@@ -11,17 +11,34 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
 ## Upgrade from 1.1.0-beta.1
 
-The editor presents the equivalent Early Notification conversion in memory when
-it opens. Opening settings or testing the connection does not stage a host config
-update, mark settings changed, or save configuration. A real setting edit stages
-the converted draft; Homebridge Save persists it. Sign-in, verification and other
-immediate account actions may also persist the conversion with their account
-changes, so authentication recovery does not depend on authenticated discovery.
-Actual user edits still block account actions until saved or discarded. The runtime
-also interprets the legacy setting in memory, so upgrading does not require an
-immediate configuration write. The explicit preview/apply commands below perform the same canonical
-conversion in a complete Homebridge file. From a source checkout, run
-`npm run build` first; the installed package already includes the compiled helper.
+On POSIX Homebridge npm installations, the package's postinstall step runs
+this one-time migration against the installer-identified `config.json`. It uses
+`UIX_STORAGE_PATH`, or the config beside the installed scoped `node_modules`
+package prefix. It does not search other hosts, home directories or storage
+roots. The existing guarded converter writes an owner-only backup of the exact
+original bytes before atomic replacement, preserving file ownership and unrelated
+configuration. Already-converted files are left untouched without another backup.
+Invalid choices, unsafe files and detected concurrent changes fail the migration
+without replacing the configuration.
+
+The persisted file contains only canonical values after conversion; the runtime
+and settings editor do not interpret legacy keys. Opening settings, discovering
+cameras and testing the connection do not stage or save a configuration change.
+Only a real edit stages a draft for Homebridge Save. Explicit account operations
+may save their own changes; unrelated drafts must still be saved or discarded.
+
+If lifecycle scripts were disabled or the installer cannot identify this
+Homebridge storage path, run the explicit preview/apply commands below before
+starting the new plugin. Missing migration produces an actionable validation
+error rather than silently choosing a different policy. From a source checkout,
+run `npm run build` first; the installed package includes the compiled helper.
+The migration itself never contacts Blink or restarts Homebridge.
+
+The guarded file converter requires POSIX ownership and file semantics. On Windows,
+the installation step leaves the file untouched and reports manual conversion
+instead of failing an otherwise valid installation. Use Homebridge's backup and
+JSON Config editor to perform the mapping below before starting with legacy keys;
+already-canonical Windows configurations need no conversion.
 
 At global, Sync Module and camera scopes, `disableEarlyNotification: true`
 becomes `earlyNotificationMode: "off"`; explicit `false` becomes `"unmanaged"`.

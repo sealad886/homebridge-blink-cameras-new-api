@@ -11,7 +11,7 @@
     });
   }
   class Draft {
-    constructor(blocks, host, initialConfig) {
+    constructor(blocks, host) {
       this.blocks = copy(blocks);
       this.index = this.blocks.findIndex(block => block.platform === 'BlinkCameras');
       if (this.index < 0) {
@@ -19,10 +19,7 @@
         this.blocks.push({ platform: 'BlinkCameras', name: 'Blink' });
       }
       this.baseline = serialize(this.blocks);
-      if (initialConfig !== undefined) this.blocks[this.index] = copy(initialConfig);
-      // Equivalent migration is display-only until a user edit or account save.
-      this.migrationBaseline = serialize(this.blocks);
-      this.staged = this.migrationBaseline;
+      this.staged = this.baseline;
       this.host = host;
       this.revision = 0;
       this.inventoryRevision = undefined;
@@ -30,7 +27,7 @@
       this.running = null;
     }
     get config() { return this.blocks[this.index]; }
-    hasUserChanges() { return serialize(this.blocks) !== this.migrationBaseline; }
+    hasUserChanges() { return serialize(this.blocks) !== this.baseline; }
     canRunAccountAction() { return !this.hasUserChanges() && !this.state.pending && !this.state.accountAction; }
     beginAccountAction() {
       if (!this.canRunAccountAction()) return null;
@@ -98,8 +95,7 @@
       if (this.hasUserChanges()) throw new Error('Save or discard settings before an account action.');
       this.blocks = copy(blocks);
       this.index = this.blocks.findIndex(block => block.platform === 'BlinkCameras');
-      this.baseline = this.migrationBaseline = serialize(this.blocks);
-      this.staged = this.migrationBaseline;
+      this.baseline = this.staged = serialize(this.blocks);
       this.retry();
     }
   }

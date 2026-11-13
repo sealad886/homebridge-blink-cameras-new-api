@@ -233,16 +233,23 @@ the saved original. Ordinary restarts keep management and its receipt; stopping
 Homebridge does not toggle settings. Already-correct cameras need no change or
 restoration record. Save and restart the child bridge to apply policy changes.
 
-Upgrading automatically interprets old `disableEarlyNotification: true` as
-`off`, explicit `false` as `unmanaged`, and missing overrides as inheritance.
-It never turns an old false into force on. Opening the editor presents that
-equivalent migration without staging or marking settings changed. A real edit
-stages the converted draft for Save; an immediate account action can also persist
-the conversion while recovering sign-in. Other user edits still
-require Save or discard before an account action, and connection tests never
-save configuration. For explicit file
-migration and rollback considerations, see
-[configuration migration](native-recording-config-migration.md).
+A completed preference command may take a short time to appear in Blink's config
+metadata. Confirmation uses at most five reads, 500 ms apart, within the existing
+request deadline. This never repeats the setting POST. A conflict is accepted
+only when a fresh read confirms the desired compatible value. A newly captured
+original is not retained as plugin ownership when another actor supplied that
+value. Existing originals and uncertain command outcomes remain protected.
+Unconfirmed settings retain ordinary clip delay; warnings identify the camera
+and a bounded failure category without including provider payloads or credentials.
+
+Installation migrates old `disableEarlyNotification: true` to `off`, explicit
+`false` to `unmanaged`, and missing overrides to inheritance, then removes the
+legacy keys from the saved file. Explicit canonical choices win. The conversion
+backs up original bytes before replacement and is a no-op once complete; runtime
+and settings code accept canonical values only. Opening the editor or testing
+connections does not migrate, stage or save config. For installation targeting,
+explicit preview/apply commands when lifecycle scripts are unavailable, and
+rollback considerations, see [configuration migration](native-recording-config-migration.md).
 
 Immediate eligibility keeps the same FIFO, missing-clip retries, command admission
 and module catalog cooldown. A notification does not identify a USB clip or prove

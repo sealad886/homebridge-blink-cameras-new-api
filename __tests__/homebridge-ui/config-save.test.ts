@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { migrateEarlyNotificationConfig } from '../../src/early-notification-config';
 import { SettingsValidator } from '../../src/homebridge-ui/settings-validation';
 
 const html = readFileSync(join(__dirname, '../../src/homebridge-ui/public/index.html'), 'utf8');
@@ -119,16 +118,16 @@ it('reserves token-only persistence until host save settles and releases it afte
   expect(homebridge.updatePluginConfig).toHaveBeenCalledWith([expect.objectContaining({ pollInterval: 60 })]);
 });
 
-it.each([false, true])('persists only startup migration with auth recovery and adopts baseline after host save (reserved: %s)', async reserved => {
+it.each([false, true])('preserves canonical settings during auth recovery and adopts baseline after host save (reserved: %s)', async reserved => {
   const stateContext = { module: { exports: {} }, structuredClone, setTimeout, clearTimeout };
   runInNewContext(readFileSync(join(__dirname, '../../src/homebridge-ui/public/settings-state.js'), 'utf8'), stateContext);
   const { Draft } = stateContext.module.exports as any;
   const original = [{ platform: 'Other', extension: { keep: true } }, { platform: 'BlinkCameras', name: 'Blink',
-    disableEarlyNotification: true, syncModuleFeedLimits: [{ syncModuleId: '20', maxFeeds: 1 }],
+    earlyNotificationMode: 'off', syncModuleFeedLimits: [{ syncModuleId: '20', maxFeeds: 1 }],
     extension: { keep: true }, _bridge: { username: 'synthetic' }, trustDevice: false }];
   const validator = new SettingsValidator(() => undefined);
   const host = { validate: async (payload: unknown) => validator.validate(payload), stage: jest.fn(), changed: jest.fn(), saveEnabled: jest.fn() };
-  const draft = new Draft(original, host, migrateEarlyNotificationConfig(original[1]).config);
+  const draft = new Draft(original, host);
   draft.retry(); await draft.flush();
   expect(draft.state.errors).toEqual([expect.objectContaining({ code: 'inventory_unavailable' })]);
   let finishSave: () => void;
@@ -158,7 +157,7 @@ it.each([false, true])('persists only startup migration with auth recovery and a
   expect(draft.state.accountAction).toBe(true);
   expect(draft.set('name', 'Unsaved user edit')).toBe(false);
   expect(draft.beginAccountAction()).toBeNull();
-  const saved = [original[0], { ...migrateEarlyNotificationConfig(original[1]).config,
+  const saved = [original[0], { ...original[1],
     deviceId: 'homebridge-blink', tier: 'prod', persistAuth: true, authLocked: true }];
   expect(homebridge.updatePluginConfig).toHaveBeenCalledWith(saved);
   finishSave!(); await operation; await draft.flush();
@@ -172,5 +171,5 @@ it.each([false, true])('persists only startup migration with auth recovery and a
   draft.set('name', 'User edit'); await draft.flush();
   expect(draft.canRunAccountAction()).toBe(false);
   expect(homebridge.savePluginConfig).toHaveBeenCalledTimes(1);
-  expect(original[1]).toHaveProperty('disableEarlyNotification', true);
+  expect(original[1]).toHaveProperty('earlyNotificationMode', 'off');
 });

@@ -1,4 +1,4 @@
-import { migrateEarlyNotificationConfig } from '../src/early-notification-config';
+import { assertCanonicalEarlyNotificationConfig, migrateEarlyNotificationConfig } from '../src/early-notification-config';
 import { nativeRecordingDevicePolicy } from '../src/native-recording-config';
 
 describe('canonical Early Notification migration', () => {
@@ -38,5 +38,28 @@ describe('canonical Early Notification migration', () => {
     }
     expect(nativeRecordingDevicePolicy({ earlyNotificationMode: 'off', syncModuleSettingOverrides: [{ syncModuleId: '20', earlyNotificationMode: 'on' }] }, device)
       .earlyNotificationMode).toBe('on');
+  });
+});
+
+describe('canonical Early Notification boundary', () => {
+  it.each([
+    { disableEarlyNotification: true },
+    { earlyNotificationMode: 'off', disableEarlyNotification: true },
+    { syncModuleSettingOverrides: [{ syncModuleId: '20', disableEarlyNotification: false }] },
+    { deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: true }] },
+  ])('requires persisted migration instead of interpreting a legacy value: %j', config => {
+    const original = structuredClone(config);
+    expect(() => assertCanonicalEarlyNotificationConfig(config)).toThrow('migrate-native-recording-config.cjs');
+    expect(config).toEqual(original);
+    expect(() => assertCanonicalEarlyNotificationConfig(migrateEarlyNotificationConfig(config).config)).not.toThrow();
+  });
+
+  it('does not rewrite valid canonical settings or inherit absent choices', () => {
+    const config = { earlyNotificationMode: 'off', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1' }] };
+    const original = structuredClone(config);
+    expect(() => assertCanonicalEarlyNotificationConfig(config)).not.toThrow();
+    expect(config).toEqual(original);
+    expect(() => assertCanonicalEarlyNotificationConfig({ earlyNotificationMode: 'invalid' }))
+      .toThrow('Early Notification must be on, off, or unmanaged.');
   });
 });

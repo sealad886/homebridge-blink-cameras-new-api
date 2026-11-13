@@ -1671,7 +1671,6 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/getNetworks',
       '/settings/inventory',
       '/settings/validate',
-      '/settings/migrate',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });
@@ -1691,47 +1690,6 @@ describe('BlinkUiServer hosted authentication routes', () => {
     await expect(mockUiHandlers.get('/settings/validate')!(draft)).resolves.toMatchObject({ revision: 1, valid: true });
     expect(validate).toHaveBeenCalledWith(draft);
     expect(await fs.readFile(path.join(serverStorageRoot, 'config.json'), 'utf8')).toBe(text);
-  });
-
-  it('migrates only the supplied draft without reading or writing saved settings', async () => {
-    const filename = path.join(serverStorageRoot, 'config.json'), saved = '{"saved":"unchanged"}';
-    await fs.writeFile(filename, saved);
-    new BlinkUiServer();
-    const config = { name: 'Blink', disableEarlyNotification: false,
-      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on', disableEarlyNotification: true }], extension: 7 };
-    const before = structuredClone(config);
-    await expect(mockUiHandlers.get('/settings/migrate')!({ config })).resolves.toEqual({ changed: true, config: {
-      name: 'Blink', earlyNotificationMode: 'unmanaged', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on' }], extension: 7,
-    } });
-    expect(config).toEqual(before); expect(await fs.readFile(filename, 'utf8')).toBe(saved);
-    await expect(mockUiHandlers.get('/settings/migrate')!({ config: { disableEarlyNotification: 'false' } })).rejects.toThrow();
-    expect(await fs.readFile(filename, 'utf8')).toBe(saved);
-  });
-
-  it.each([
-    [{ disableEarlyNotification: 'malformed-choice-fixture' }, '/disableEarlyNotification'],
-    [{ deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: false }] }, '/deviceSettingOverrides/0/earlyNotificationMode'],
-  ])('returns a safe actionable migration path without the submitted configuration: %j', async (config, expectedPath) => {
-    const filename = path.join(serverStorageRoot, 'config.json'), saved = '{"saved":"unchanged"}';
-    await fs.writeFile(filename, saved); new BlinkUiServer();
-    const failure = await mockUiHandlers.get('/settings/migrate')!({ config }).catch(error => error);
-    expect(failure).toBeInstanceOf(RequestError);
-    if (!(failure instanceof RequestError)) throw failure;
-    expect(failure.requestError).toMatchObject({ status: 400, category: 'invalid_request', path: expectedPath,
-      message: expect.any(String) });
-    expect(failure.requestError).not.toHaveProperty('config');
-    expect(JSON.stringify(failure.requestError)).not.toContain('malformed-choice-fixture');
-    expect(await fs.readFile(filename, 'utf8')).toBe(saved);
-  });
-
-  it('keeps malformed migration requests generic rather than presenting a configuration field error', async () => {
-    new BlinkUiServer();
-    for (const payload of [null, {}, { config: [] }]) {
-      const failure = await mockUiHandlers.get('/settings/migrate')!(payload).catch(error => error);
-      if (!(failure instanceof RequestError)) throw failure;
-      expect(failure.requestError).toMatchObject({ status: 400, category: 'invalid_request' });
-      expect(failure.requestError).not.toHaveProperty('path');
-    }
   });
 
   it('delegates hosted start, complete, status, verify, and token-only connection requests', async () => {
