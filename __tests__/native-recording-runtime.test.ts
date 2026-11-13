@@ -678,6 +678,30 @@ describe('native recording runtime composition', () => {
     expect(f.settingWrites).toEqual([false]);
   });
 
+  it.each([
+    { interrupted: true, oldMotion: true, delay: 60_000 },
+    { interrupted: true, oldMotion: false, delay: 0 },
+    { interrupted: false, oldMotion: true, delay: 0 },
+  ])('uses only uninterrupted Off confirmation for fast clip lookup: %j', async ({ interrupted, oldMotion, delay }) => {
+    const f = await setup({ earlyNotification: true });
+    const start = Date.now();
+    jest.setSystemTime(start + 10_000);
+    const oldTimestamp = Date.now();
+    if (interrupted) f.earlyProvider.current = true;
+    jest.setSystemTime(start + 20_000);
+    if (interrupted) f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      await options?.beforeChange?.(true);
+      f.earlyProvider.current = false;
+      return { supported: true, compatible: true, current: false, changed: false };
+    });
+    const since = f.events.length; await f.runtime.retryConnection();
+    await until(() => f.events.slice(since).includes('early-notification-confirmed-off'));
+    const occurredAt = oldMotion ? oldTimestamp : Date.now();
+    await f.push(f.notification('after-revalidation', { created_at: new Date(occurredAt).toISOString() }));
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Math.max(Date.now(), occurredAt + delay));
+    expect(f.settingWrites).toEqual([false]);
+  });
+
   it('does not claim or later restore a camera whose Early Notification was already off', async () => {
     const f = await setup({ earlyNotification: true, earlyCurrent: false });
     expect(f.settingWrites).toEqual([]);

@@ -482,7 +482,7 @@ export class NativeRecordingRuntime {
               settingKey(row) === key ? { ...row, ownership: 'owned' } : row));
           }
           checkRequestBudget({ deadline });
-          if (!enabled) this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
+          if (!enabled) this.earlyNotificationOffSince.set(binding, result.changed || beforeChangeCurrent === true ? Date.now() : previouslyOffSince ?? Date.now());
           this.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off', { camera: device.binding.nativeName });
         } else this.report('early-notification-unsupported', { camera: device.binding.nativeName });
       } catch (error) {

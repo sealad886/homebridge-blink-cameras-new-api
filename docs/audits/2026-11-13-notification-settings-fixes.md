@@ -274,3 +274,17 @@ POST-refusal-before-callback case was corrected to a metadata GET failure for it
 unknown-read assertion; realistic callback-value matrices separately cover known
 unsent/refused apply, reapply and restoration outcomes. Historical failed logs and
 reports are preserved. Final exact-source qualification follows the commit.
+
+## Off-confirmation interval correction
+
+Review found one remaining timing regression: observing Early Notification On
+ends an earlier Off interval even if a refused command's fresh readback then
+confirms Off with `changed:false`. The Off-confirmation timestamp now starts
+fresh after that observation; only uninterrupted unchanged Off can reuse the
+prior timestamp. Motion from the intervening interval retains the configured
+clip delay, while newly confirmed and uninterrupted Off retain fast lookup.
+The single-condition correction and three synthetic-clock regressions passed
+with all 488 runtime/SDK boundary tests, TypeScript, runtime source lint and
+diff checks. Frozen hashes/logs are in
+`logs/notification-settings-beta4/off-confirmation-final.json`. No vendor write
+or physical timing acceptance is inferred from these synthetic checks.
