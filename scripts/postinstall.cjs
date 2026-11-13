@@ -27,7 +27,12 @@ function run(environment = process.env, packageRoot = path.resolve(__dirname, '.
         message: 'Automatic configuration migration is unavailable on Windows. Convert legacy choices to canonical JSON before starting Homebridge.' };
     }
     migration = require('./migrate-native-recording-config.cjs');
-    return { action: migration.apply(migration.inspect(config)) ? 'Applied' : 'Unchanged' };
+    const plan = migration.inspect(config);
+    if (plan.conversion.issues.some(issue => issue.code === 'unresolved-camera-aliases')) {
+      return { action: 'Failed', code: 'unresolved-camera-aliases',
+        message: 'Review camera aliases in the explicit migration preview before applying; see docs/native-recording-config-migration.md.' };
+    }
+    return { action: migration.apply(plan) ? 'Applied' : 'Unchanged' };
   } catch (error) {
     return { action: 'Failed', code: migration && error instanceof migration.MigrationError ? error.code : 'file-operation-failed' };
   }

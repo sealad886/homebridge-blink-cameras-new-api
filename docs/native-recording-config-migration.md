@@ -24,6 +24,9 @@ configuration. The replacement retains the config permission bits so service
 group-read access is preserved; the backup stays private at `0600`. Already-converted files are left untouched without another backup.
 Invalid choices, unsafe files and detected concurrent changes fail the migration
 without replacing the configuration.
+Automatic migration also stops on `unresolved-camera-aliases` before changing
+config or creating a backup. Review the explicit preview and resolve ambiguous
+camera overrides before applying the migration; installation cannot infer aliases.
 
 The persisted file contains only canonical values after conversion; the runtime
 and settings editor do not interpret legacy keys. Opening settings, discovering

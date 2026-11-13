@@ -10,6 +10,8 @@ owns subsequent acceptance and finding dispositions.
 ## [1.1.0-beta.4] - 2026-11-13
 
 ### Fixed
+- Require manual review of unresolved camera aliases before automatic migration
+  changes configuration, preserving overrides and recording intent.
 - Discard newly captured Early Notification originals after a definite setting
   refusal, preventing later restoration from overwriting a manual Blink change.
 - Opening settings, connection tests and discovery no longer stage unchanged

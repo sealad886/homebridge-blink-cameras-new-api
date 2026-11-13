@@ -107,6 +107,18 @@ describePosix('one-time installed configuration migration', () => {
     expect(result.action).toBe('Failed'); expect(fs.readFileSync(file(), 'utf8')).toBe(bytes); expect(backups()).toEqual([]);
   });
 
+  it('requires operator review for unresolved camera aliases before changing config or creating backups', () => {
+    const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', hksvCameras: ['camera:12'],
+      deviceSettingOverrides: [{ deviceIdentifier: 'PRIVATE_CAMERA_ALIAS', homeKitSecureVideo: false }] }] });
+    fs.writeFileSync(file(), bytes);
+    const result = installer.run({ UIX_STORAGE_PATH: directory }, installedRoot());
+    expect(result).toMatchObject({ action: 'Failed', code: 'unresolved-camera-aliases',
+      message: expect.stringContaining('explicit migration preview') });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_CAMERA_ALIAS');
+    expect(JSON.stringify(result)).not.toContain('camera:12');
+    expect(fs.readFileSync(file(), 'utf8')).toBe(bytes); expect(backups()).toEqual([]);
+  });
+
   it('refuses a symlinked config without changing the target', () => {
     const target = join(directory, 'private.json'), bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: true }] });
     fs.writeFileSync(target, bytes); fs.symlinkSync(target, file());
