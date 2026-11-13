@@ -374,7 +374,7 @@ describe('Accessory handlers', () => {
     }
   });
 
-  it('reports snapshot failures outside debug logs while leaving routine traces in debug', async () => {
+  it('reports snapshot failures outside debug logs', async () => {
     const trace = jest.fn();
     const error = jest.fn();
     const source = new BlinkCameraSource(
@@ -386,8 +386,8 @@ describe('Accessory handlers', () => {
     await source.handleSnapshotRequest({ width: 640, height: 480 } as SnapshotRequest, callback);
     expect(callback).toHaveBeenCalledWith(expect.any(Error));
     expect(error).toHaveBeenCalledWith(expect.stringContaining('No thumbnail URL available'));
-    expect(trace).toHaveBeenCalledWith(expect.stringContaining('Snapshot requested'));
-    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('Snapshot requested'));
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(trace).not.toHaveBeenCalledWith(expect.stringContaining('No thumbnail URL available'));
   });
 
   const buildPlatform = (streamingConfigOverrides: Partial<ReturnType<typeof resolveStreamingConfig>> = {}) => {

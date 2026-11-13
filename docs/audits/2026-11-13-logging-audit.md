@@ -51,7 +51,7 @@ Real-camera delegate routing is covered by existing runtime/delegate tests.
 ## Verification limits
 
 Initial media tests had five UDP-bind failures under sandbox; independent bind
-probe returned EPERM. Host-access checks are required before final qualification.
+probe returned EPERM. Subsequent host-access media tests passed.
 Physical Home delivery and iCloud retention are not established by source tests.
 
 ## Milestone 2 and independent review
@@ -71,3 +71,20 @@ Independent review confirmed real-camera identity remains bound through each
 recording delegate; observer failures cannot retain media resources. Home stream
 acknowledgement still does not establish iCloud retention. Integrated lint,
 build and full suite are the remaining host qualification gate.
+
+## Integrated qualification and closeout
+
+Host lint and build passed for `6a24d90`. Full Jest run completed with 2,188
+passed, 18 skipped and one failed test (76 passing suites, one failing suite,
+one skipped suite). The sole failure asserted the intentionally removed
+"Snapshot requested" chatter. Production source did not require correction.
+The test now verifies error-level reporting and exactly one Home callback;
+all 91 tests in that suite passed on the corrected test. No full-suite repeat
+was needed for this test-only assertion correction. Existing skips remain.
+
+Evidence is retained under `logs/logging-audit/`: `checks.json`, `lint.log`,
+`build.log`, the original `tests.log`, and `accessories-correction.log`.
+The original failed run is preserved. No unresolved demonstrated logging defect
+remains within the reviewed scope. Live provider/Pi execution and physical
+Home/iCloud acceptance were not performed. All changes remain local on
+`codex/logging-audit`; no version bump, push, PR, release or installation occurred.
