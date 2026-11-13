@@ -100,3 +100,22 @@ The release baseline was freshly verified as beta 1.1.0-beta.1, stable latest
 - Installed plugin-ui-utils 2.1.2 declarations explicitly distinguish staging
   updatePluginConfig from savePluginConfig persistence; Context7 had no exact
   package entry, so the installed primary declarations supplied this contract.
+
+### PR review round 1 corrections
+
+PR #105 at b4036de passed the clean canonical release preflight: 2,157 tests
+passed, 18 existing skipped. Automatic Codex code review and independent exact-
+head review were clean. CodeRabbit CLI completed with two actionable findings:
+
+- Browser timeouts could admit replacement tests while the original server test
+  remained queued/active. Server-owned coalescing now shares identical work; a
+  changed device or intervening auth action rejects busy without adding work or
+  triggering a status-refresh cascade. UI waits remain finite.
+- Malformed saved migration choices led to a reopen loop. Safe field-specific
+  errors now lead to a Homebridge JSON Config repair panel. Invalid migration
+  never mounts a draft, stages values, saves configuration or starts auth tests.
+
+Service/route regressions: 109 passed; UI regressions: 83 passed. Four synthetic
+Chromium malformed-input cases preserved the complete Blink and sibling blocks
+with zero writes, then reopened after explicit synthetic repair. Fresh final
+independent review and the next CodeRabbit round are required before merge.

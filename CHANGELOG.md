@@ -12,6 +12,8 @@ owns subsequent acceptance and finding dispositions.
 ### Changed
 - Test stored Blink sign-in once when settings opens; show a green check or red X,
   retain manual retries, and bound concurrent connection tests without saving config.
+- Coalesce pending connection tests across UI retries and provide a precise JSON
+  Config repair path for malformed saved settings without changing their values.
 - Replace lengthy field descriptions with accessible information help; highlight
   unsaved changes, group temperature with motion sensors, clarify status refresh
   versus saved-clip retries, and display clip-cache limits in MiB while retaining bytes.

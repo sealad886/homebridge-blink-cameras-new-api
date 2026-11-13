@@ -2,6 +2,17 @@
 <div class="blink-ui">
   <div id="flowStatus" class="visually-hidden" role="status" aria-live="polite"></div>
   <div id="bootError" class="alert alert-danger hidden" role="alert"><strong>Settings could not load.</strong> <span id="bootErrorMessage"></span></div>
+  <section id="settingsRepair" class="alert alert-warning" aria-labelledby="settingsRepairTitle" hidden>
+    <h3 id="settingsRepairTitle">Repair saved Blink settings</h3>
+    <p id="settingsRepairField"></p>
+    <p id="settingsRepairGuidance"></p>
+    <ol>
+      <li>Close this plugin settings window. Open the Homebridge menu and choose <strong>JSON Config</strong>.</li>
+      <li>In <code>platforms</code>, find the object with <code>"platform": "BlinkCameras"</code>. Repair the indicated path inside that object. Keep existing entries and unrelated fields.</li>
+      <li>Save in JSON Config, then reopen this plugin’s settings. The editor will migrate valid legacy choices automatically and let you review changes before saving.</li>
+    </ol>
+    <p>Your saved configuration has not been changed by this editor.</p>
+  </section>
   <button type="button" class="btn btn-outline-secondary" id="retryLoad" hidden>Retry loading settings</button>
   <p class="blink-eyebrow">BLINK CAMERAS · HOMEKIT</p>
   <nav id="settingsNavigation" class="blink-navigation" aria-label="Blink settings sections"></nav>
@@ -164,6 +175,15 @@
     document.getElementById('retryLoad').hidden = false;
     window.homebridge?.disableSaveButton?.();
   }
+  function showSettingsRepair(problem) {
+    document.getElementById('settingsRepairField').textContent = `${problem.path || 'BlinkCameras'}: ${problem.message}`;
+    let guidance = 'Correct the indicated saved value in the Homebridge JSON Config editor.';
+    if (problem.path.endsWith('/earlyNotificationMode')) guidance = 'Early Notification must be exactly "on", "off", or "unmanaged", using lowercase text.';
+    else if (problem.path.endsWith('/disableEarlyNotification')) guidance = 'The legacy disableEarlyNotification value must be a JSON boolean: true or false, without quotation marks. Keep your intended choice; the editor converts valid legacy choices automatically.';
+    else if (/^\/(deviceSettingOverrides|syncModuleSettingOverrides)(\/\d+)?$/.test(problem.path)) guidance = 'Override lists must be JSON arrays of objects. Keep existing entries and repair their structure; each camera entry uses deviceIdentifier and each Sync Module entry uses syncModuleId.';
+    document.getElementById('settingsRepairGuidance').textContent = guidance;
+    document.getElementById('settingsRepair').hidden = false;
+  }
   document.getElementById('retryLoad').addEventListener('click', () => window.location.reload());
   async function initialize() {
   const bootError = document.getElementById('bootError');
@@ -254,8 +274,12 @@
     if (!migrated?.config || typeof migrated.config !== 'object' || Array.isArray(migrated.config)) throw new Error('Invalid migration response.');
     settings = window.BlinkSettingsUI.mount(homebridge, schema, pluginConfig, migrated.config);
     homebridge.hideSchemaForm();
-  } catch {
-    showBootError('The configuration definitions or settings migration could not load. Close and reopen settings.');
+  } catch (error) {
+    const problem = error?.error;
+    if (problem?.category === 'invalid_request' && typeof problem.path === 'string' && typeof problem.message === 'string') {
+      showBootError('Saved Blink settings need repair before this editor can open.');
+      showSettingsRepair(problem);
+    } else showBootError('The configuration definitions or settings migration could not load. Retry loading settings.');
     return;
   }
 

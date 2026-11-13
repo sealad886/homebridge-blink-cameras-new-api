@@ -71,15 +71,17 @@ it('coalesces concurrent connection tests, bounds the request, and releases both
   expect(context.homebridge.savePluginConfig).not.toHaveBeenCalled();
 });
 
-it.each(['failed response', 'request rejection'])('marks %s as failed and allows a later retry', async failure => {
+it.each(['failed response', 'request rejection', 'busy response'])('marks %s as failed and allows a later retry', async failure => {
   const { context, test } = connectionFixture();
   if (failure === 'failed response') {
     context.homebridge.request.mockResolvedValue({ success: false });
     context.refreshAuthStatus.mockResolvedValue({ authenticated: true, verified: false });
-  } else context.homebridge.request.mockRejectedValue(new Error('Synthetic timeout'));
+  } else context.homebridge.request.mockRejectedValue(failure === 'busy response'
+    ? { error: { status: 409, category: 'authentication' } } : new Error('Synthetic timeout'));
   await test(context.testConnectionButton);
   expect(context.showConnectionStatus).toHaveBeenCalledWith('failed', expect.anything());
   expect(context.connectionTestInFlight).toBe(false);
+  if (failure !== 'failed response') expect(context.refreshAuthStatus).not.toHaveBeenCalled();
   context.homebridge.request.mockResolvedValue({ success: true });
   context.refreshAuthStatus.mockResolvedValue({ authenticated: true, verified: true });
   await test(context.testConnectionButton);
