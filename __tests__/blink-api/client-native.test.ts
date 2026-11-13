@@ -1375,6 +1375,124 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().liveView).toMatchObject({ commandId: 707 });
   });
 
+  it.each(['account', 'client', 'tier', 'writer', 'fence'] as const)
+  ('blocks a native media GET when %s authority changes during authentication', async changed => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    const state = pending({ operationId: 'clip', kind: 'clip', phase: 'prepared', clip: { manifestId: 303, clip }, commandId: 505 });
+    f.api.setNativeStorageOwner(scope, state);
+    let release!: () => void;
+    (f.auth.ensureValidToken as jest.Mock).mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    (fetch as jest.Mock).mockResolvedValueOnce(new Response(Buffer.from('fixture clip')));
+    const operation = f.api.withNativeStorageAdmission('clip', () => transport.downloadMedia(mediaUrl, request), {}, scope).catch(error => error);
+    while (!(f.auth.ensureValidToken as jest.Mock).mock.calls.length) await new Promise(resolve => setImmediate(resolve));
+    if (changed === 'account') (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    else if (changed === 'client') (f.auth.getClientId as jest.Mock).mockReturnValue(91);
+    else if (changed === 'tier') (f.api as unknown as { config: { tier: string } }).config.tier = 'u002';
+    else if (changed === 'fence') f.api.setNativeStorageOwner(scope, { ...state, operation: { ...state.operation!, operationId: 'successor' } });
+    else {
+      await f.release({ deadline: Date.now() + 1 });
+      f.api.configureRemoteOperationOwnership({ restoredNativeStorage: [{ scope, state }], saveState: jest.fn().mockResolvedValue(undefined) });
+    }
+    release();
+    expect(await operation).toBeInstanceOf(Error);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await fs.readdir(directory)).toEqual([]);
+    expect(f.saveLive).not.toHaveBeenCalled();
+  });
+
+  it.each(['account', 'writer', 'fence'] as const)
+  ('discards native media without promoting an asset when %s authority changes during its response', async changed => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    const state = pending({ operationId: 'clip', kind: 'clip', phase: 'prepared', clip: { manifestId: 303, clip }, commandId: 505 });
+    f.api.setNativeStorageOwner(scope, state);
+    (fetch as jest.Mock).mockImplementationOnce(async () => {
+      if (changed === 'account') (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+      else if (changed === 'fence') f.api.setNativeStorageOwner(scope, { ...state, operation: { ...state.operation!, operationId: 'successor' } });
+      else {
+        await f.release({ deadline: Date.now() + 1 });
+        f.api.configureRemoteOperationOwnership({ restoredNativeStorage: [{ scope, state }], saveState: jest.fn().mockResolvedValue(undefined) });
+      }
+      return new Response(Buffer.from('fixture clip'));
+    });
+    const failure = await f.api.withNativeStorageAdmission('clip', () => transport.downloadMedia(mediaUrl, request), {}, scope).catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect(await fs.readdir(directory)).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(f.saveLive).not.toHaveBeenCalled();
+  });
+
+  it('removes a promoted native asset when account authority changes during local promotion', async () => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    f.api.setNativeStorageOwner(scope, pending({ operationId: 'clip', kind: 'clip', phase: 'prepared', clip: { manifestId: 303, clip }, commandId: 505 }));
+    const link = fs.link.bind(fs);
+    jest.spyOn(fs, 'link').mockImplementationOnce(async (from, target) => {
+      await link(from, target);
+      (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    });
+    (fetch as jest.Mock).mockResolvedValueOnce(new Response(Buffer.from('fixture clip')));
+    const failure = await f.api.withNativeStorageAdmission('clip', () => transport.downloadMedia(mediaUrl, request), {}, scope).catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect(await fs.readdir(directory)).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['client', 'writer'] as const)('preserves native POST acknowledgment proof when %s authority changes during its response', async changed => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    const state = pending({ operationId: 'event', phase: 'intent', commandId: undefined, statusReads: 0 });
+    (fetch as jest.Mock).mockImplementationOnce(async () => {
+      if (changed === 'client') (f.auth.getClientId as jest.Mock).mockReturnValue(91);
+      else {
+        await f.release({ deadline: Date.now() + 1 });
+        f.api.configureRemoteOperationOwnership({ restoredNativeStorage: [{ scope, state }], saveState: jest.fn().mockResolvedValue(undefined) });
+      }
+      return json({ id: 101 });
+    });
+    const operation = f.api.withNativeStorageAdmission('event', async () => {
+      f.api.setNativeStorageOwner(scope, state);
+      return transport.postEmpty({ base: 'api', path: `${modulePath}/manifest/request` }, request);
+    }, {}, scope);
+    await expect(operation).rejects.toMatchObject({ dispatched: true });
+    expect(f.api.getRemoteOperationState().storage).toEqual([expect.objectContaining({ operationId: 'event', phase: 'intent' })]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['client', 'writer'] as const)('blocks a native known-status GET when %s authority changes during authentication', async changed => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory }), state = pending();
+    f.api.setNativeStorageOwner(scope, state);
+    let release!: () => void;
+    (f.auth.ensureValidToken as jest.Mock).mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ complete: true, status: 0 }));
+    const operation = transport.getJson({ base: 'root', path: 'accounts/10/networks/20/commands/101' }, request).catch(error => error);
+    while (!(f.auth.ensureValidToken as jest.Mock).mock.calls.length) await new Promise(resolve => setImmediate(resolve));
+    if (changed === 'client') (f.auth.getClientId as jest.Mock).mockReturnValue(91);
+    else {
+      await f.release();
+      f.api.configureRemoteOperationOwnership({ restoredNativeStorage: [{ scope, state }], saveState: jest.fn().mockResolvedValue(undefined) });
+    }
+    release();
+    await expect(operation).resolves.toMatchObject({ dispatched: false });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps native recovery uncertain when writer authority changes during a known-status response', async () => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    const saved: NativeStorageState[] = [];
+    const owner = new NativeStorageOwner({ transport, restoredState: pending(),
+      admit: (work, options, operationId, context) => f.api.withNativeStorageAdmission(operationId, work, options, context),
+      saveState: async state => { saved.push(copy(state)); f.api.setNativeStorageOwner(scope, state); } });
+    f.api.setNativeStorageOwner(scope, owner.snapshot());
+    (fetch as jest.Mock).mockImplementationOnce(async () => {
+      (f.auth.getClientId as jest.Mock).mockReturnValue(91);
+      return json({ complete: true, status: 0 });
+    });
+    await expect(owner.reconcilePending()).resolves.toBe('unresolved');
+    expect(owner.snapshot().operation).toMatchObject({ phase: 'accepted', commandId: 101 });
+    expect(saved.some(state => state.operation?.phase === 'finished')).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['wrong-clip', 'overflow', 'public-directory'])('rejects unsafe media download %s without promoting any file', async failure => {
     const f = fixture(); const transport = f.api.createNativeStorageTransport({ scope, directory });
     const state = pending({ operationId: 'clip', kind: 'clip', phase: 'prepared',

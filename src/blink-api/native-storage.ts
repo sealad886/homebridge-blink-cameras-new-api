@@ -160,6 +160,7 @@ export class NativeStorageOwner {
       }
     });
     await this.abandonExpired();
+    if (this.persistenceFailed) throw new Error('Native storage persistence failed');
   }
 
   /** Cancel a prior permission period using only existing terminal proof or one bounded known-command read. */

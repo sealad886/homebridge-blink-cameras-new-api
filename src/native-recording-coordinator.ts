@@ -59,7 +59,7 @@ export type NativeRecordingTerminalResult =
 
 /** Local abandonment is distinct from verified provider completion. */
 export type NativeRecordingAcquisitionResult = NativeRecordingTerminalResult | { status: 'unresolved' } | { status: 'abandoned' }
-  /** No provider acquisition was invoked; retain the event and its attempt budget. */
+  /** The unfinished provider stage is proven unsent; retain the event and its attempt budget. */
   | { status: 'deferred' };
 
 export interface NativeRecordingJobResult {

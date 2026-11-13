@@ -781,21 +781,24 @@ export class BlinkApi {
         const expected = fence.kind === 'catalog' ? `${this.nativeModulePath(scope)}/manifest/request` :
           `${this.nativeModulePath(scope)}/manifest/${fence.clip?.manifestId}/clip/request/${fence.clip?.clipId}`;
         if (checked.path.split('?')[0].replace(/\/$/, '') !== expected) throw new BlinkOperationNotStartedError('invalid-native-route');
-        checkRequestBudget(request);
+        const current = this.captureNativeAuthority(scope, request);
+        current();
         reservation.canPost = false;
-        return checked.http.post(checked.path, undefined, [], { ...this.nativeHttpOptions(request, 'command'), beforeDispatch: () => {
-          this.requireNativeAccount(scope);
-          checkRequestBudget(request);
-          if (this.activeNativeAdmission !== reservation || !isRemoteOperationLeaseActive(reservation.expiresAt)) {
-            throw new BlinkOperationNotStartedError('storage-pending');
-          }
+        const response = await checked.http.post(checked.path, undefined, [], { ...this.nativeHttpOptions(request, 'command'), beforeDispatch: () => {
+          current();
           this.assertCommandAdmission({ kind: 'storage', scope, operationId: reservation.operationId });
         } });
+        try { current(); } catch (error) { throw afterWorkFailure(error, true); }
+        return response;
       },
       getJson: async (route, request) => {
         const checked = this.nativeRoute(route, scope, 'GET');
-        return checked.http.get(checked.path, { ...this.nativeHttpOptions(request, route.base === 'api' ? 'native-catalog' : 'command'),
-          beforeDispatch: () => this.requireNativeAccount(scope) });
+        const current = this.captureNativeAuthority(scope, request);
+        current();
+        const response = await checked.http.get(checked.path, { ...this.nativeHttpOptions(request, route.base === 'api' ? 'native-catalog' : 'command'),
+          beforeDispatch: current });
+        try { current(); } catch (error) { throw afterWorkFailure(error, false); }
+        return response;
       },
       downloadMedia: async (location, request) => {
         const reservation = this.activeNativeAdmission;
@@ -806,8 +809,25 @@ export class BlinkApi {
         }
         this.assertCommandAdmission({ kind: 'storage', scope, operationId: reservation.operationId });
         const checked = new URL(this.validateNativeMediaUrl(location, scope, fence.clip));
-        return this.downloadNativeMedia(checked.pathname.slice(1) + checked.search, directory, request);
+        return this.downloadNativeMedia(checked.pathname.slice(1) + checked.search, directory, request,
+          this.captureNativeAuthority(scope, request));
       },
+    };
+  }
+
+  private captureNativeAuthority(scope: NativeStorageScope, options: NativeStorageRequestOptions): () => void {
+    const authority = this.captureOperationAuthority(scope.accountId, this.writerGeneration);
+    const reservation = this.activeNativeAdmission, key = this.nativeScopeKey(scope);
+    const fence = this.nativeStorageFences.get(key);
+    return () => {
+      checkRequestBudget(options);
+      authority();
+      const current = this.nativeStorageFences.get(key);
+      if (this.activeNativeAdmission !== reservation || (reservation && !isRemoteOperationLeaseActive(reservation.expiresAt))
+        || current?.operationId !== fence?.operationId || current?.phase !== fence?.phase
+        || (fence && !isRemoteOperationLeaseActive(fence.expiresAt))) {
+        throw new BlinkOperationNotStartedError('storage-pending');
+      }
     };
   }
 
@@ -871,8 +891,8 @@ export class BlinkApi {
   }
 
   private async downloadNativeMedia(resourcePath: string, directory: string,
-    options: NativeStorageRequestOptions): Promise<{ reference: string; bytes: number; sha256: string }> {
-    checkRequestBudget(options);
+    options: NativeStorageRequestOptions, authority: () => void): Promise<{ reference: string; bytes: number; sha256: string }> {
+    authority();
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const directoryStat = await fs.lstat(directory);
     if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() ||
@@ -884,22 +904,27 @@ export class BlinkApi {
     const temporary = path.join(realDirectory, `.native-${identity}.partial`);
     const target = path.join(realDirectory, `native-${identity}.mp4`);
     const bytes = await this.sharedRootHttp.getBinary(resourcePath, { ...options, retry: false,
-      maxResponseBytes: Math.min(options.maxBytes, 32 * 1024 * 1024) });
+      maxResponseBytes: Math.min(options.maxBytes, 32 * 1024 * 1024), beforeDispatch: authority });
+    const current = () => {
+      try { authority(); } catch (error) { throw afterWorkFailure(error, false); }
+    };
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     let promoted = false;
     try {
-      checkRequestBudget(options);
+      current();
       if (!bytes.byteLength) throw new Error('Native media response is empty.');
       handle = await fs.open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
       await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined;
-      checkRequestBudget(options);
+      current();
       // link is an atomic, no-overwrite promotion on the same filesystem.
       await fs.link(temporary, target); promoted = true;
+      current();
       await removeOwnerOnlyFile(temporary);
       if (process.platform !== 'win32') {
         const parent = await fs.open(realDirectory, fsConstants.O_RDONLY);
         try { await parent.sync(); } finally { await parent.close(); }
       }
+      current();
       return { reference: target, bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex') };
     } catch (error) {
       await handle?.close().catch(() => undefined);

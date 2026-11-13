@@ -1498,6 +1498,49 @@ describe('native recording runtime composition', () => {
     } finally { offer.resolve(); disk.resolve(); flush.resolve(); saving.mockRestore(); offering.mockRestore(); }
   });
 
+  it.each(['intent-save', 'accepted-save', 'permission-revoked'] as const)(
+    'recovers a clip persistence fault using its dispatch proof: %s', async phase => {
+      const f = await setup({ config: { maxRetries: 0 } }), write = secureJson.writeOwnerOnlyJsonFile;
+      let failed = false;
+      const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
+        const operation = (args[1] as NativeRecordingRuntimeState).nativeByModule?.['20:30']?.state.operation;
+        if (!failed && operation?.kind === 'clip' && operation.phase === (phase === 'accepted-save' ? 'accepted' : 'intent')) {
+          failed = true; throw new Error('clip ownership journal failure');
+        }
+        return write(...args);
+      });
+      try {
+        await f.push(f.notification('clip-job-must-survive'));
+        await jest.advanceTimersByTimeAsync(60000);
+        await until(() => failed && f.events.includes('persistence-faulted'));
+        const postCount = f.transport.postEmpty.mock.calls.length;
+        expect(postCount).toBe(phase === 'accepted-save' ? 2 : 1);
+        await f.runtime.retryConnection();
+        if (phase === 'permission-revoked') {
+          f.delegate.updateCameraActive(false);
+          await until(() => f.events.includes('job-cancelled'));
+        }
+        await jest.advanceTimersByTimeAsync(5000);
+        if (phase === 'intent-save') {
+          await until(() => f.events.includes('offered'));
+          expect(f.events).not.toContain('job-cancelled');
+          expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+          expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+        } else {
+          expect(f.transport.postEmpty).toHaveBeenCalledTimes(postCount);
+          expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+          expect(f.events).not.toContain('offered');
+          if (phase === 'accepted-save') {
+            expect((await f.state()).core?.operation?.status).toBe('unresolved');
+            expect((await f.state()).core?.queue[0].attempts).toBe(1);
+          } else expect((await f.state()).core?.queue).toEqual([]);
+        }
+        expect(f.transport.postEmpty.mock.calls.filter(([route]) => route.path.endsWith('/manifest/request'))).toHaveLength(1);
+        expect(f.transport.postEmpty.mock.calls.filter(([route]) => route.path.includes('/clip/request/')))
+          .toHaveLength(phase === 'permission-revoked' ? 0 : 1);
+      } finally { saving.mockRestore(); }
+    });
+
   it.each([false, true])('flushes latest real SDK ownership before recovering its journal (acknowledged: %s)', async acknowledged => {
     const api = new BlinkApi({ email: '', password: '', hardwareId: 'runtime-journal-recovery', tier: scope.tier });
     const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;

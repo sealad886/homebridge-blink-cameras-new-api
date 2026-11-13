@@ -72,6 +72,8 @@ before dispatch and after awaited work before publishing state or success;
 the shared account queue also checks captured account authority before returning
 a result, and terminal owner clears require the original revision. Request budgets
 and request-local transport proof remain separate from operation acknowledgment.
+Native requests carry captured writer, reservation and fence authority through
+authentication to HTTP dispatch; reads and owned file promotion recheck it too.
 A journal fault clears only after the latest required snapshot for the current
 writer is saved, rather than after an older physical write completes.
 

@@ -525,6 +525,10 @@ export class NativeRecordingRuntime {
       && this.core.cameraGeneration(event.moduleId, event.cameraId) === request.cameraGeneration;
     const allowed = () => permitted() && !this.failed && !signal.aborted
       && this.core.isCameraGenerationCurrent(event.moduleId, event.cameraId, request.cameraGeneration);
+    const unresolved = (notDispatched?: true): NativeRecordingAcquisitionResult => {
+      if (!notDispatched) return { status: 'unresolved' };
+      return { status: permitted() ? 'deferred' : 'skipped' };
+    };
     if (!device || !owner || policyEpoch === undefined || !permitted()) return { status: 'skipped' };
     if (this.failed) return { status: 'deferred' };
     if (!allowed()) return { status: 'skipped' };
@@ -543,8 +547,7 @@ export class NativeRecordingRuntime {
       if (!allowed()) return { status: 'skipped' };
       const result = await owner.readCatalog({ ...context, operationId: `${request.operationId}:catalog` }, { signal, deadline: request.expiresAt });
       if (result.status === 'abandoned') return { status: 'abandoned' };
-      if (result.status === 'unresolved') return { status: result.notDispatched
-        ? permitted() ? 'deferred' : 'skipped' : 'unresolved' };
+      if (result.status === 'unresolved') return unresolved(result.notDispatched);
       if (result.status !== 'ready') {
         this.options.report(`catalog-${result.reason}`);
         if (result.reason === 'not-started') {
@@ -572,7 +575,7 @@ export class NativeRecordingRuntime {
     const result = await owner.downloadClip({ ...context, operationId: `${request.operationId}:clip` },
       { manifestId: match.manifestId, clip: match.clip }, { signal, deadline: request.expiresAt });
     if (result.status === 'abandoned') return { status: 'abandoned' };
-    if (result.status === 'unresolved') return { status: 'unresolved' };
+    if (result.status === 'unresolved') return unresolved(result.notDispatched);
     if (result.status !== 'ready') {
       this.options.report(`download-${result.reason}`);
       if (result.reason === 'refused') await this.deferRefusal(event.moduleId);

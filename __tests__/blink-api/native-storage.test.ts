@@ -86,6 +86,35 @@ it('allows explicit retry after a failed abandonment save without renewing the l
   expect(f.transport.postEmpty).not.toHaveBeenCalled();
 });
 
+it.each(['catalog', 'clip'] as const)('rejects %s persistence recovery when its final abandonment save fails', async kind => {
+  const expiresAt = Date.now() - 1;
+  let failAbandonment = true;
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind, phase: 'accepted',
+    commandId: 101, statusReads: 1, expiresAt, ...(kind === 'clip' ? { clip: clipRequest() } : {}) } },
+  saveState: async state => {
+    if (state.operation?.phase === 'abandoned' && failAbandonment) {
+      failAbandonment = false; throw new Error('abandonment write failed');
+    }
+  } });
+
+  await expect(f.owner.retryPersistence()).rejects.toThrow('Native storage persistence failed');
+  expect(f.saved.at(-1)?.operation).toMatchObject({ phase: 'accepted', expiresAt });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned', expiresAt });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'while-recovery-faulted' }))
+    .toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+
+  await f.owner.retryPersistence();
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned', expiresAt });
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  const fresh = { ...context, operationId: 'after-recovery' };
+  expect(await (kind === 'catalog' ? f.owner.readCatalog(fresh) : f.owner.downloadClip(fresh, clipRequest())))
+    .toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it.each(['catalog', 'clip', 'reconcile'] as const)('reports persistence failure when %s cannot save expired ownership', async kind => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
   f.saveState.mockRejectedValueOnce(new Error('abandonment write failed'));
