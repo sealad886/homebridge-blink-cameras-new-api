@@ -20,6 +20,7 @@ import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { BlinkNetwork } from '../types';
 import { withResponseBudget } from '../operation-budget';
 import { toHapError } from '../hap-errors';
+import { BlinkOperationNotStartedError } from '../blink-api/client';
 
 export class NetworkAccessory {
   private readonly service: Service;
@@ -147,7 +148,9 @@ export class NetworkAccessory {
     } catch (error) {
       if (revision === this.intentRevision) { this.operationFault = true; }
       this.updateAvailability();
-      this.platform.log.error(`Failed to ${shouldArm ? 'arm' : 'disarm'} network ${this.device.name}: ${error instanceof Error ? error.name : 'Error'}`);
+      const failure = error instanceof BlinkOperationNotStartedError
+        ? `${error.name} (${error.reason})` : error instanceof Error ? error.name : 'Error';
+      this.platform.log.error(`Failed to ${shouldArm ? 'arm' : 'disarm'} network ${this.device.name}: ${failure}`);
       throw toHapError(this.platform.api.hap, error);
     }
   }

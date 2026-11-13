@@ -8,7 +8,7 @@ import { BlinkCamerasPlatform } from '../src/platform';
 import { BlinkCamera, BlinkDoorbell, BlinkNetwork, BlinkOwl } from '../src/types';
 import { createHap, createLogger, MockAccessory } from './helpers/homebridge';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
-import { BlinkApi } from '../src/blink-api';
+import { BlinkApi, BlinkOperationNotStartedError } from '../src/blink-api';
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
 import { BlinkTokenRefreshError } from '../src/blink-api/auth';
@@ -978,6 +978,23 @@ describe('Accessory handlers', () => {
       ?.getCharacteristic(hap.Characteristic.StatusFault).value).toBe(hap.Characteristic.StatusFault.NO_FAULT);
     expect(device.armed).toBe(true);
     expect(handler).toBeInstanceOf(NetworkAccessory);
+  });
+
+  it.each([
+    [new BlinkOperationNotStartedError('liveview-pending'), 'BlinkOperationNotStartedError (liveview-pending)'],
+    [new Error('provider-value-secret'), 'Error'],
+  ])('reports a safe arm failure reason without exposing provider messages', async (error, diagnostic) => {
+    const { hap, apiClient, platform, log } = buildPlatform();
+    apiClient.armNetwork.mockRejectedValueOnce(error);
+    const accessory = new MockAccessory('Network', 'uuid-network', hap);
+    new NetworkAccessory(platform as unknown as BlinkCamerasPlatform, accessory as unknown as PlatformAccessory,
+      { id: 1, name: 'Network', armed: false });
+    const service = accessory.getService(hap.Service.SecuritySystem)!;
+    await expect(service.getCharacteristic(hap.Characteristic.SecuritySystemTargetState).onSetHandler?.(1))
+      .rejects.toMatchObject({ hapStatus: hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE });
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
+    expect(JSON.stringify(log.error.mock.calls)).not.toContain('provider-value-secret');
+    expect(service.getCharacteristic(hap.Characteristic.SecuritySystemCurrentState).onGetHandler?.()).toBe(3);
   });
 
   it('surfaces a terminal arm failure as a HomeKit security-system fault', async () => {

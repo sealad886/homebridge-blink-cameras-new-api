@@ -53,7 +53,6 @@ type MutableBlinkApi = {
   http: RoutedHttpDouble;
   sharedHttp: RoutedHttpDouble;
   sharedRootHttp: RoutedHttpDouble;
-  accountId: number | null;
 };
 
 type HostedBlinkApi = {
@@ -117,7 +116,7 @@ describe('BlinkApi', () => {
 
   it.each(['startCameraLiveview', 'startOwlLiveview', 'startDoorbellLiveview'] as const)(
     '%s forbids ambiguous server-error POST replay', async method => {
-      const { api, http } = createApi(); api.accountId = 10;
+      const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
       http.post.mockResolvedValue({ command_id: 7, server: 'immis://vendor.example' });
       await (api as unknown as BlinkApi)[method](5, 7);
       expect(http.post).toHaveBeenCalledWith(expect.stringContaining('/liveview'),
@@ -125,7 +124,7 @@ describe('BlinkApi', () => {
     });
 
   it('retires a command using its Unit contract without ambiguous POST replay', async () => {
-    const { api, http } = createApi(); api.accountId = 10;
+    const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
     http.post.mockResolvedValue(undefined);
     await expect((api as unknown as BlinkApi).completeCommand(5, 7)).resolves.toBeUndefined();
     expect(http.post).toHaveBeenCalledWith('accounts/10/networks/5/commands/7/done', undefined, [404],
@@ -137,19 +136,19 @@ describe('BlinkApi', () => {
   describe('camera temperature metadata', () => {
     it.each([{}, { signals: null }, { signals: {} }, { signals: { temp: null } }])(
       'does not fabricate missing temperature from %j', async body => {
-        const { api, http } = createApi(); api.accountId = 10;
+        const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
         http.get.mockResolvedValue(body);
         await expect((api as unknown as BlinkApi).getCameraTemperature(5, 7)).resolves.toBeUndefined();
       },
     );
     it.each([null, [], { signals: [] }, { signals: '68' }, ...['68', false, NaN, Infinity, -Infinity, -455, 213]
       .map(temp => ({ signals: { temp } }))])('rejects invalid temperature metadata %j', async body => {
-      const { api, http } = createApi(); api.accountId = 10;
+      const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
       http.get.mockResolvedValue(body);
       await expect((api as unknown as BlinkApi).getCameraTemperature(5, 7)).rejects.toThrow(/temperature metadata/);
     });
     it('validates identifiers and deadline before metadata transport', async () => {
-      const { api, http } = createApi(); api.accountId = 10;
+      const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
       const client = api as unknown as BlinkApi;
       await expect(client.getCameraTemperature(0, 7)).rejects.toThrow(/identifier/);
       await expect(client.getCameraTemperature(5, -1)).rejects.toThrow(/identifier/);
@@ -158,7 +157,7 @@ describe('BlinkApi', () => {
     });
     it.each([[68, 20], [32, 0], [0, -17.8], [-4, -20], [212, 100]])(
       'converts config temperature %s Fahrenheit to %s Celsius without camera commands', async (raw, expected) => {
-        const { api, http } = createApi(); api.accountId = 10;
+        const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
         // Config signals are top-level; the camera array is unrelated to this decoder.
         http.get.mockResolvedValue({ camera: [], signals: { temp: raw } });
         const options = { deadline: Date.now() + 5000 };
@@ -172,7 +171,7 @@ describe('BlinkApi', () => {
   describe('vendor input quality', () => {
     const createQualityApi = () => {
       const result = createApi();
-      result.api.accountId = 10;
+      result.api.auth.getAccountId.mockReturnValue(10);
       return result;
     };
     it.each([
@@ -308,7 +307,7 @@ describe('BlinkApi', () => {
     });
     const createEarlyApi = () => {
       const result = createApi();
-      result.api.accountId = 10;
+      result.api.auth.getAccountId.mockReturnValue(10);
       return { ...result, client: result.api as unknown as BlinkApi };
     };
 
@@ -716,7 +715,7 @@ describe('BlinkApi', () => {
     await api.login();
 
     expect(auth.ensureValidToken).toHaveBeenCalled();
-    expect((api as unknown as { accountId: number | null }).accountId).toBe(99);
+    expect((api as unknown as BlinkApi).getCachedIdentity().accountId).toBe(99);
   });
 
   it('preserves a legacy session tier when temporary discovery calls fail', async () => {
@@ -1434,7 +1433,7 @@ describe('BlinkApi', () => {
     expect(accountSync).not.toHaveBeenCalled();
   });
 
-  it('fetches homescreen and updates account id from response', async () => {
+  it('fetches homescreen without replacing canonical Auth identity from its payload', async () => {
     const { api, auth, http } = createApi();
     auth.getAccountId.mockReturnValue(7);
     http.get.mockResolvedValue({
@@ -1450,7 +1449,7 @@ describe('BlinkApi', () => {
 
     expect(http.get).toHaveBeenCalledWith('v4/accounts/7/homescreen');
     expect(homescreen.account.account_id).toBe(55);
-    expect((api as unknown as { accountId: number | null }).accountId).toBe(55);
+    expect((api as unknown as BlinkApi).getCachedIdentity().accountId).toBe(7);
   });
 
   it('arms and disarms networks using ensured account id', async () => {
@@ -1462,7 +1461,6 @@ describe('BlinkApi', () => {
     await api.armNetwork(5);
     await api.disarmNetwork(5);
 
-    expect(auth.ensureValidToken).toHaveBeenCalled();
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/arm', undefined, [409], expect.objectContaining({ deadline: expect.any(Number) }));
     expect(http.post).toHaveBeenCalledWith('v1/accounts/3/networks/5/state/disarm', undefined, [409], expect.objectContaining({ deadline: expect.any(Number) }));
   });
@@ -1472,7 +1470,7 @@ describe('BlinkApi', () => {
     try {
       const { api, auth, http } = createApi();
       auth.getAccountId.mockReturnValue(3);
-      api.accountId = 3;
+      api.auth.getAccountId.mockReturnValue(3);
       http.post.mockResolvedValueOnce({ command_id: 71 });
       http.get.mockResolvedValueOnce({ complete: false, status: 0 }).mockResolvedValueOnce({ complete: true, status: 0 });
       const arm = api.armNetwork(5);
@@ -1527,7 +1525,7 @@ describe('BlinkApi', () => {
     const sharedHttp = { get: jest.fn(), post: jest.fn(), setBaseUrl: jest.fn() };
     api.sharedHttp = sharedHttp;
     auth.getAccountId.mockReturnValue(3);
-    api.accountId = 3;
+    api.auth.getAccountId.mockReturnValue(3);
     sharedHttp.post
       .mockRejectedValueOnce(new BlinkHttpError('Conflict', 409, 'Conflict', 'https://example.com', 'POST'))
       .mockResolvedValueOnce({ id: 71 });
@@ -1650,7 +1648,7 @@ describe('BlinkApi', () => {
 
   it('reconciles motion conflicts only for the matching device type, network and target', async () => {
     const { api, http } = createApi();
-    api.accountId = 10;
+    api.auth.getAccountId.mockReturnValue(10);
     const conflict = new BlinkHttpError('Conflict', 409, '', 'https://example.com', 'POST');
     http.post.mockRejectedValue(conflict);
     http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
@@ -1665,7 +1663,7 @@ describe('BlinkApi', () => {
 
   it('waits for returned motion command completion before sending the next mutation', async () => {
     const { api, http } = createApi();
-    api.accountId = 10;
+    api.auth.getAccountId.mockReturnValue(10);
     let complete!: () => void;
     let started!: () => void;
     const sent = new Promise<void>(resolve => { started = resolve; });
@@ -1684,7 +1682,7 @@ describe('BlinkApi', () => {
 
   it('returns current thumbnail and explicitly labels a busy fallback', async () => {
     const { api, http } = createApi();
-    api.accountId = 10;
+    api.auth.getAccountId.mockReturnValue(10);
     http.post.mockRejectedValue(new BlinkHttpError('Busy', 409, '', 'https://example.com', 'POST'));
     http.get.mockResolvedValue({ account: { account_id: 10 }, networks: [],
       cameras: [{ id: 1, network_id: 5, name: 'Camera', thumbnail: '/current.jpg' }], doorbells: [], owls: [] });
@@ -1696,8 +1694,8 @@ describe('BlinkApi', () => {
     jest.useFakeTimers();
     try {
       const { api, http } = createApi();
-      api.accountId = 10;
-    api.accountId = 10;
+      api.auth.getAccountId.mockReturnValue(10);
+    api.auth.getAccountId.mockReturnValue(10);
       let release!: () => void;
       http.post.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ id: 1 }); })).mockResolvedValue({ id: 2 });
       http.get.mockResolvedValue({ complete: true, status: 0 });
@@ -1718,21 +1716,48 @@ describe('BlinkApi', () => {
     } finally { jest.useRealTimers(); }
   });
 
-  it('keeps remote ownership fenced after capture execution budget expires', async () => {
+  it('releases local exclusion after capture execution budget expires without replaying it', async () => {
     jest.useFakeTimers();
     try {
       const { api, http } = createApi();
-      api.accountId = 10;
-    api.accountId = 10;
-      http.post.mockImplementationOnce(() => new Promise(() => {}));
+      api.auth.getAccountId.mockReturnValue(10);
+    api.auth.getAccountId.mockReturnValue(10);
+      http.post.mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue({ id: 2 });
+      http.get.mockResolvedValue({ complete: true, status: 0 });
       const capture = api.requestCameraThumbnail(5, 1);
       const failed = expect(capture).rejects.toBeInstanceOf(OperationTimeoutError);
       const motion = api.enableCameraMotion(5, 1);
-      const blocked = expect(motion).rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+      const completed = expect(motion).resolves.toBeUndefined();
       await jest.advanceTimersByTimeAsync(60_300);
       await failed;
-      await blocked;
-      expect(http.post).toHaveBeenCalledTimes(1);
+      await completed;
+      expect(http.post).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('does not let a late expired live-view allocation replace a newer arm owner', async () => {
+    jest.useFakeTimers();
+    try {
+      const { api, http } = createApi(); api.auth.getAccountId.mockReturnValue(10);
+      const client = api as unknown as BlinkApi;
+      let releaseLive!: (response: { command_id: number; server: string }) => void;
+      let releaseStatus!: (response: { complete: boolean; status: number }) => void;
+      http.post.mockImplementationOnce(() => new Promise(resolve => { releaseLive = resolve; }))
+        .mockResolvedValueOnce({ id: 903 });
+      http.get.mockImplementationOnce(() => new Promise(resolve => { releaseStatus = resolve; }));
+      const live = client.startCameraLiveview(5, 1, 'liveview', undefined, { deadline: Date.now() + 100 });
+      const expired = expect(live).rejects.toBeInstanceOf(OperationTimeoutError);
+      await jest.advanceTimersByTimeAsync(101); await expired;
+      const arm = client.armNetwork(5);
+      await jest.advanceTimersByTimeAsync(301);
+      expect(client.getRemoteOperationState().stateCommand).toMatchObject({ commandId: 903 });
+      releaseLive({ command_id: 707, server: 'immis://fixture.invalid' });
+      await jest.advanceTimersByTimeAsync(1);
+      expect(client.getRemoteOperationState().liveView).toBeUndefined();
+      expect(client.getRemoteOperationState().stateCommand).toMatchObject({ commandId: 903 });
+      releaseStatus({ complete: true, status: 0 }); await jest.advanceTimersByTimeAsync(1); await arm;
+      expect(http.post).toHaveBeenCalledTimes(2);
+      expect(client.getRemoteOperationState().abandoned).toEqual([expect.objectContaining({ kind: 'liveview', reason: 'lease-expired' })]);
     } finally { jest.useRealTimers(); }
   });
 
@@ -1740,8 +1765,8 @@ describe('BlinkApi', () => {
     jest.useFakeTimers();
     try {
       const { api, http } = createApi();
-      api.accountId = 10;
-    api.accountId = 10;
+      api.auth.getAccountId.mockReturnValue(10);
+    api.auth.getAccountId.mockReturnValue(10);
       const failure = new BlinkHttpError('Network', 0, '', 'https://example.com', 'GET', undefined, undefined, 'network',
         { type: 'connect-timeout', code: 'UND_ERR_CONNECT_TIMEOUT', hostname: 'rest-e006.immedia-semi.com', elapsedMs: 10_000 });
       const screen = { account: { account_id: 10 }, networks: [], cameras: [], doorbells: [], owls: [] };
@@ -1763,8 +1788,8 @@ describe('BlinkApi', () => {
     jest.useFakeTimers();
     try {
       const { api, http } = createApi();
-      api.accountId = 10;
-    api.accountId = 10;
+      api.auth.getAccountId.mockReturnValue(10);
+    api.auth.getAccountId.mockReturnValue(10);
       const authFailure = new BlinkHttpError('Forbidden', 403, '', 'https://example.com', 'GET');
       http.get.mockRejectedValueOnce(authFailure);
       await expect(api.getHomescreen({ deadline: Date.now() + 25_000, retryTransient: true })).rejects.toBe(authFailure);

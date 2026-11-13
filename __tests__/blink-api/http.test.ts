@@ -56,6 +56,23 @@ describe('BlinkHttp', () => {
     jest.restoreAllMocks();
   });
 
+  it('resolves routing after authentication and preserves opaque query data', async () => {
+    const auth = mockAuth(); let tier = 'prod';
+    (auth.ensureValidToken as jest.Mock).mockImplementationOnce(async () => { tier = 'prde'; });
+    const prepare = jest.fn(() => { http.setBaseUrl(`https://rest-${tier}.immedia-semi.com/api/`); });
+    const http = new BlinkHttp(auth, mockConfig, undefined, prepare);
+    (fetch as jest.Mock).mockResolvedValueOnce(response(200, {}));
+    await http.get('accounts/1/homescreen?opaque=/clients/999');
+    expect((fetch as jest.Mock).mock.calls[0][0]).toBe('https://rest-prde.immedia-semi.com/api/accounts/1/homescreen?opaque=/clients/999');
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates identifiers before authentication or post-auth routing preparation', async () => {
+    const auth = mockAuth(), prepare = jest.fn(), http = new BlinkHttp(auth, mockConfig, undefined, prepare);
+    await expect(http.get('accounts/0/homescreen')).rejects.toThrow('invalid identifier');
+    expect(auth.ensureValidToken).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('recovers one transient GET 406 without replaying a POST', async () => {
     (fetch as jest.Mock).mockResolvedValueOnce(response(406)).mockResolvedValueOnce(response(200, { complete: false }));
     const http = new BlinkHttp(mockAuth(), mockConfig);
@@ -180,7 +197,123 @@ describe('BlinkHttp', () => {
     await expect(http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false }))
       .rejects.toMatchObject({ dispatched: false });
     expect(fetch).not.toHaveBeenCalled();
-    await expect(http.get('accounts/1/homescreen')).rejects.toBe(failure);
+    const local = await http.get('accounts/1/homescreen').catch(error => error);
+    expect(local).toBeInstanceOf(BlinkHostedReauthenticationRequiredError);
+    expect(local).not.toBe(failure);
+    expect(local).toMatchObject({ dispatched: false, cause: failure });
+    expect(Object.hasOwn(failure, 'dispatched')).toBe(false);
+  });
+
+  it.each(['error', 'frozen-error', 'dom-exception', 'operation-timeout'] as const)
+  ('keeps shared %s abort metadata local to the unsent request', async kind => {
+    const auth = mockAuth(), http = new BlinkHttp(auth, mockConfig), controller = new AbortController();
+    const reason = kind === 'dom-exception' ? new DOMException('operator cancelled', 'AbortError')
+      : kind === 'operation-timeout' ? new OperationTimeoutError() : kind === 'frozen-error' ? Object.freeze(new Error('operator cancelled')) : new Error('operator cancelled');
+    let sent!: () => void;
+    const dispatched = new Promise<void>(resolve => { sent = resolve; });
+    (fetch as jest.Mock).mockImplementationOnce(() => { sent(); return new Promise(() => undefined); });
+    const post = http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false, signal: controller.signal }).catch(error => error);
+    await dispatched;
+    controller.abort(reason);
+    const unsent = await http.get('accounts/1/homescreen', { signal: controller.signal }).catch(error => error);
+    expect(unsent).not.toBe(reason);
+    expect(unsent).toBeInstanceOf(kind === 'dom-exception' ? DOMException
+      : kind === 'operation-timeout' ? OperationTimeoutError : Error);
+    expect(unsent).toMatchObject({ dispatched: false, cause: reason });
+    expect(Object.hasOwn(reason, 'dispatched')).toBe(false);
+    const posted = await post;
+    expect(posted).toBeInstanceOf(kind === 'dom-exception' ? DOMException : Error);
+    expect((posted as Error & { dispatched?: boolean }).dispatched).not.toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['inherited-no-send', 'direct-connect-code', 'caused-connect-code'] as const)
+  ('does not trust %s on an already dispatched request abort reason', async kind => {
+    const auth = mockAuth(), http = new BlinkHttp(auth, mockConfig), controller = new AbortController();
+    const reason = Object.assign(new Error('operator cancelled'), kind === 'inherited-no-send' ? { dispatched: false }
+      : kind === 'direct-connect-code' ? { code: 'UND_ERR_CONNECT_TIMEOUT' }
+        : { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+    let sent!: () => void;
+    const dispatched = new Promise<void>(resolve => { sent = resolve; });
+    (fetch as jest.Mock).mockImplementationOnce(() => { sent(); return new Promise(() => undefined); });
+    const post = http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false, signal: controller.signal }).catch(error => error);
+    await dispatched;
+    controller.abort(reason);
+    const error = await post;
+    expect((error as Error & { dispatched?: boolean }).dispatched).not.toBe(false);
+    expect(Object.hasOwn(reason, 'dispatched')).toBe(kind === 'inherited-no-send');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each((['authentication', 'before-dispatch'] as const).flatMap(phase => [401, 409].map(status => [phase, status] as const)))
+  ('does not mistake a %s error from a prior POST%s for this request refusal', async (phase, status) => {
+    const auth = mockAuth(), http = new BlinkHttp(auth, mockConfig);
+    const prior = new BlinkHttpError('prior request refused', status, '', 'https://example.invalid/prior', 'POST');
+    if (phase === 'authentication') (auth.ensureValidToken as jest.Mock).mockRejectedValueOnce(prior);
+    const error = await http.post('v1/accounts/1/networks/2/state/arm', undefined, [], { retry: false,
+      ...(phase === 'before-dispatch' ? { beforeDispatch: () => { throw prior; } } : {}) }).catch(error => error);
+    expect(error).toMatchObject({ dispatched: false, cause: prior });
+    expect(isBlinkPostRefusal(error)).toBe(false);
+    expect(Object.hasOwn(prior, 'dispatched')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['direct', 'fetch-cause'])('marks a %s connection timeout as not dispatched without replay', async shape => {
+    const connectionError = Object.assign(new Error('fixture connection timeout'), { code: 'UND_ERR_CONNECT_TIMEOUT' });
+    const failure = shape === 'direct' ? connectionError : new TypeError('fetch failed', { cause: connectionError });
+    (fetch as jest.Mock).mockRejectedValueOnce(failure);
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    await expect(http.post('accounts/1/networks/2/state/arm', undefined, [], { retry: false }))
+      .rejects.toMatchObject({ name: 'BlinkHttpError', failure: 'network', dispatched: false,
+        networkDiagnostic: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } }),
+    new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }),
+    new TypeError('fetch failed', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } }),
+    new TypeError('fetch failed', { cause: { code: 'ETIMEDOUT' } }),
+    new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET', cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } } }),
+    new TypeError('fetch failed', { cause: new AggregateError([
+      Object.assign(new Error('connect failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' }),
+      Object.assign(new Error('socket lost'), { code: 'UND_ERR_SOCKET' }),
+    ]) }),
+  ])('does not infer no-send proof from an ambiguous transport error %#', async failure => {
+    (fetch as jest.Mock).mockRejectedValueOnce(failure);
+    const http = new BlinkHttp(mockAuth(), mockConfig);
+    const error = await http.post('accounts/1/networks/2/state/arm', undefined, [], { retry: false }).catch(caught => caught);
+    expect(error).toBeInstanceOf(BlinkHttpError);
+    expect((error as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks an operation that expires after successful authentication as never dispatched', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    const auth = mockAuth(); const http = new BlinkHttp(auth, mockConfig);
+    (auth.ensureValidToken as jest.Mock).mockImplementation(async () => {
+      await Promise.resolve();
+      now.mockReturnValue(2_000);
+    });
+    await expect(http.post('accounts/1/networks/2/state/arm', undefined, [], { deadline: 2_000, retry: false }))
+      .rejects.toMatchObject({ name: 'OperationTimeoutError', dispatched: false });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not infer an unstarted POST when a retry fails to connect after a server error', async () => {
+    jest.useFakeTimers();
+    try {
+      (fetch as jest.Mock).mockResolvedValueOnce(response(500)).mockRejectedValueOnce(new TypeError('fetch failed', {
+        cause: { code: 'UND_ERR_CONNECT_TIMEOUT' },
+      }));
+      const http = new BlinkHttp(mockAuth(), mockConfig);
+      const pending = http.post('accounts/1/networks/2/state/arm').catch(error => error);
+      await jest.advanceTimersByTimeAsync(500);
+      const error = await pending;
+      expect(error).toBeInstanceOf(BlinkHttpError);
+      expect((error as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
   });
 
   it('bounds binary GETs and does not include the downloaded bytes in diagnostic logs', async () => {

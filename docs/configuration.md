@@ -256,8 +256,16 @@ Blink's notification and clip timestamps always describe the same instant.
 Catalog cooldown is a conservative plugin policy, not a measured vendor rate
 limit. A five-second retry can reuse a completed catalog or wait locally; it
 cannot start another catalog preparation every five seconds. An uncertain
-provider operation blocks replacement requests even after a local timeout or
-restart. No polling interval or age limit proves that a remote command ended.
+provider operation temporarily excludes replacement requests within a fixed local
+lease of at most 120 seconds. Expiry abandons that old work locally and permits
+fresh distinct actions; it does not prove the remote command ended or replay
+its POST. Restart and retry do not renew the lease. Legacy owners without an
+expiry retain uncertainty as evidence but cannot block Blink indefinitely.
+
+This state migration runs when the corrected plugin loads existing ownership.
+New native abandonment receipts require the corrected reader; older betas may
+reject that phase during rollback. Keep a private pre-update state backup and
+follow the release rollback procedure rather than deleting the runtime directory.
 
 The receiver identity and command/job state live in Homebridge's private
 `.blink-native-recording` directory. Keep that state with the auth cache across
@@ -266,8 +274,9 @@ report. Logs describe transitions without requesting extra provider evidence.
 The plugin does not upload video, thumbnails or other data files to Blink.
 
 Recording/camera/audio policy changes cancel local work and fence late results.
-Already accepted provider operations remain owned until terminal proof is
-available; cancelling Home delivery does not cancel a remote command by guess.
+Already accepted provider operations retain their uncertainty until terminal
+proof is available, while their local exclusion lease remains finite. Cancelling
+Home delivery does not cancel a remote command by guess.
 Completed local recordings are finite fMP4 streams. The Home hub decides whether
 to request or retain them. Delayed offers cannot establish pre-event recording,
 historic timeline insertion or successful iCloud retention.

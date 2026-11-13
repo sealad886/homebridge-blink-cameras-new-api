@@ -59,7 +59,7 @@ describe('platform native recording and ordinary command ownership', () => {
     for (const result of createRuntime.mock.results) {
       if (result.type === 'return') {
         const runtime = await (result.value as Promise<NativeRecordingRuntime>).catch(() => undefined);
-        await runtime?.stop();
+        await runtime?.stop().catch(() => undefined);
       }
     }
     jest.restoreAllMocks();
@@ -189,6 +189,66 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(createRuntime).toHaveBeenCalledTimes(3);
     expect(source.setDemand).toHaveBeenCalledTimes(2);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('retries inventory replacement after the old runtime releases its writer through a disk failure', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen);
+    const original = await createRuntime.mock.results[0].value as NativeRecordingRuntime;
+    const renamed = structuredClone(homescreen); renamed.cameras[0].name = 'Entry renamed';
+    jest.mocked(client.getHomescreen).mockResolvedValue(renamed);
+    const failedWrite = jest.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('Fixture shutdown disk failure'));
+    try {
+      await expect(retryControl(platform).onSetHandler!(true)).rejects.toMatchObject({ hapStatus: -70402 });
+      expect(original.localWriterReleased).toBe(true);
+      failedWrite.mockRestore();
+      await refresh(platform, renamed);
+      expect(createRuntime).toHaveBeenCalledTimes(2);
+      expect(source.setDemand).toHaveBeenCalledTimes(2);
+      expect(platform.isOperational()).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { failedWrite.mockRestore(); }
+  });
+
+  it('retains the old runtime when a failed shutdown has not released its local writer', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen);
+    const original = await createRuntime.mock.results[0].value as NativeRecordingRuntime;
+    const stop = jest.spyOn(original, 'stop').mockRejectedValue(new Error('Writer still active'));
+    const renamed = structuredClone(homescreen); renamed.cameras[0].name = 'Entry renamed';
+    jest.mocked(client.getHomescreen).mockResolvedValue(renamed);
+    try {
+      await expect(retryControl(platform).onSetHandler!(true)).rejects.toMatchObject({ hapStatus: -70402 });
+      expect(original.localWriterReleased).toBe(false);
+      await expect(retryControl(platform).onSetHandler!(true)).rejects.toMatchObject({ hapStatus: -70402 });
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(createRuntime).toHaveBeenCalledTimes(1);
+    } finally { stop.mockRestore(); }
+  });
+
+  it('retries inventory replacement after a held old shutdown reaches its finite deadline', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen);
+    const original = await createRuntime.mock.results[0].value as NativeRecordingRuntime;
+    const renamed = structuredClone(homescreen); renamed.cameras[0].name = 'Entry renamed';
+    let release!: () => void;
+    source.stop.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    jest.mocked(client.getHomescreen).mockResolvedValue(renamed);
+    jest.useFakeTimers();
+    try {
+      const retry = expect(retryControl(platform).onSetHandler!(true)).rejects.toMatchObject({ hapStatus: -70408 });
+      await jest.advanceTimersByTimeAsync(120001); await retry;
+      expect(original.localWriterReleased).toBe(true);
+      jest.useRealTimers();
+      await refresh(platform, renamed);
+      expect(createRuntime).toHaveBeenCalledTimes(2);
+      expect(source.setDemand).toHaveBeenCalledTimes(2);
+      expect(platform.isOperational()).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { release(); jest.useRealTimers(); }
   });
 
   it.each([false, true])('persists network arm/disarm without eligible cameras (all excluded: %s)', async excluded => {

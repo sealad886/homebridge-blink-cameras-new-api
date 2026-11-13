@@ -1,4 +1,4 @@
-import { budgetedDelay, OperationTimeoutError, withinRequestBudget, withResponseBudget } from '../src/operation-budget';
+import { budgetedDelay, checkRequestBudget, OperationTimeoutError, withinRequestBudget, withResponseBudget } from '../src/operation-budget';
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -46,11 +46,11 @@ describe('operation budgets', () => {
     } finally { jest.useRealTimers(); }
   });
 
-  it('rejects an already aborted request with its abort reason', async () => {
+  it('rejects an already aborted request with its original abort reason as cause', async () => {
     const controller = new AbortController();
     const reason = new Error('cancelled');
     controller.abort(reason);
-    await expect(withinRequestBudget(Promise.resolve('unused'), { signal: controller.signal })).rejects.toBe(reason);
+    await expect(withinRequestBudget(Promise.resolve('unused'), { signal: controller.signal })).rejects.toMatchObject({ cause: reason });
   });
 
   it('observes abort during pending work and removes its listener', async () => {
@@ -61,7 +61,7 @@ describe('operation budgets', () => {
       const remove = jest.spyOn(controller.signal, 'removeEventListener');
       const reason = new Error('cancelled');
       const bounded = withinRequestBudget(work.promise, { signal: controller.signal, deadline: Date.now() + 5_000 });
-      const failure = expect(bounded).rejects.toBe(reason);
+      const failure = expect(bounded).rejects.toMatchObject({ cause: reason });
       controller.abort(reason);
       await failure;
       work.reject(new Error('late transport failure'));
@@ -69,6 +69,33 @@ describe('operation budgets', () => {
       expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
       expect(jest.getTimerCount()).toBe(0);
     } finally { jest.useRealTimers(); }
+  });
+
+  it.each((['check', 'already-aborted', 'pending'] as const).flatMap(phase =>
+    (['error', 'timeout', 'frozen', 'dom-exception', 'refusal'] as const).map(kind => [phase, kind] as const)))
+  ('removes inherited request proof from a %s budget abort carrying %s', async (phase, kind) => {
+    const controller = new AbortController();
+    class ProviderRefusal extends Error { readonly status = 409; readonly method = 'POST'; }
+    const reason = kind === 'refusal' ? new ProviderRefusal('cancelled') : kind === 'timeout' ? Object.assign(new OperationTimeoutError(), { dispatched: false })
+      : kind === 'dom-exception' ? Object.assign(new DOMException('cancelled', 'AbortError'), { dispatched: false })
+        : Object.assign(new Error('cancelled'), { dispatched: kind === 'frozen' ? true : false });
+    if (kind === 'frozen') Object.freeze(reason);
+    const work = deferred<string>();
+    const pending = phase === 'pending' ? withinRequestBudget(work.promise, { signal: controller.signal }).catch(error => error) : undefined;
+    controller.abort(reason);
+    let failure: unknown;
+    if (phase === 'check') {
+      try { checkRequestBudget({ signal: controller.signal }); } catch (error) { failure = error; }
+    } else failure = await (pending ?? withinRequestBudget(work.promise, { signal: controller.signal }).catch(error => error));
+    expect(failure).not.toBe(reason);
+    expect(failure).toBeInstanceOf(kind === 'timeout' ? OperationTimeoutError : kind === 'dom-exception' ? DOMException : Error);
+    expect(failure).toMatchObject({ name: reason.name, message: reason.message, cause: reason });
+    expect((failure as Error & { dispatched?: boolean }).dispatched).toBeUndefined();
+    expect((failure as Error & { status?: number; method?: string }).status).toBeUndefined();
+    expect((failure as Error & { status?: number; method?: string }).method).toBeUndefined();
+    if (kind === 'refusal') expect(failure).not.toBeInstanceOf(ProviderRefusal);
+    expect((reason as Error & { dispatched?: boolean }).dispatched).toBe(kind === 'refusal' ? undefined : kind === 'frozen' ? true : false);
+    work.resolve('late');
   });
 
   it('uses remaining absolute deadline instead of a fresh response window', async () => {

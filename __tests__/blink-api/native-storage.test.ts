@@ -45,9 +45,289 @@ function fixture(overrides: Partial<NativeStorageOwnerOptions> = {}) {
 
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
+it('abandons a legacy unknown command locally without probing or replaying it, then permits a distinct event', async () => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  expect(await f.owner.reconcilePending()).toBe('abandoned');
+  expect(f.owner.snapshot().operation).toMatchObject({ operationId: context.operationId, phase: 'abandoned' });
+  expect(f.owner.snapshot().operation?.result).toBeUndefined();
+  expect(f.transport.postEmpty).not.toHaveBeenCalled(); expect(f.transport.getJson).not.toHaveBeenCalled();
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'fresh-event' })).toMatchObject({ status: 'ready' });
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('shares an abandonment save between concurrent callers before permitting fresh work', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } },
+    saveState: async () => pending });
+  const first = f.owner.abandonExpired(), second = f.owner.abandonExpired();
+  const settled = Promise.allSettled([first, second]);
+  release();
+  expect(await settled).toEqual([{ status: 'fulfilled', value: true }, { status: 'fulfilled', value: true }]);
+  expect(f.saveState).toHaveBeenCalledTimes(1);
+  expect(f.owner.snapshot().abandoned).toHaveLength(1);
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(await f.owner.readCatalog({ ...context, operationId: 'fresh-after-abandonment' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('allows explicit retry after a failed abandonment save without renewing the lease', async () => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  f.saveState.mockRejectedValueOnce(new Error('temporary disk failure'));
+  expect(await Promise.all([f.owner.abandonExpired(), f.owner.abandonExpired()])).toEqual([false, false]);
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  await f.owner.retryPersistence();
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned' });
+  expect(f.owner.snapshot().operation?.expiresAt).toBeUndefined();
+  expect(f.owner.snapshot().abandoned).toHaveLength(1);
+  expect(await f.owner.abandonExpired()).toBe(false);
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+});
+
+it.each(['catalog', 'clip'] as const)('rejects %s persistence recovery when its final abandonment save fails', async kind => {
+  const expiresAt = Date.now() - 1;
+  let failAbandonment = true;
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind, phase: 'accepted',
+    commandId: 101, statusReads: 1, expiresAt, ...(kind === 'clip' ? { clip: clipRequest() } : {}) } },
+  saveState: async state => {
+    if (state.operation?.phase === 'abandoned' && failAbandonment) {
+      failAbandonment = false; throw new Error('abandonment write failed');
+    }
+  } });
+
+  await expect(f.owner.retryPersistence()).rejects.toThrow('Native storage persistence failed');
+  expect(f.saved.at(-1)?.operation).toMatchObject({ phase: 'accepted', expiresAt });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned', expiresAt });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'while-recovery-faulted' }))
+    .toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+
+  await f.owner.retryPersistence();
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'abandoned', expiresAt });
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  const fresh = { ...context, operationId: 'after-recovery' };
+  expect(await (kind === 'catalog' ? f.owner.readCatalog(fresh) : f.owner.downloadClip(fresh, clipRequest())))
+    .toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it.each(['catalog', 'clip', 'reconcile'] as const)('reports persistence failure when %s cannot save expired ownership', async kind => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  f.saveState.mockRejectedValueOnce(new Error('abandonment write failed'));
+  const fresh = { ...context, operationId: 'fresh-after-failed-expiry' };
+  const result = kind === 'reconcile' ? await f.owner.reconcilePending()
+    : kind === 'catalog' ? await f.owner.readCatalog(fresh) : await f.owner.downloadClip(fresh, clipRequest());
+  expect(result).toEqual(kind === 'reconcile' ? 'unresolved' : expect.objectContaining({ status: 'unresolved', reason: 'persistence-failed' }));
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(f.owner.snapshot().abandoned).toHaveLength(1);
+  expect(f.saved).toEqual([]);
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  await f.owner.retryPersistence();
+  expect(await f.owner.readCatalog(fresh)).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('returns persistence failure when saving abandonment after an ambiguous expired POST fails', async () => {
+  jest.useFakeTimers();
+  let failed = false;
+  const f = fixture({ saveState: async state => {
+    if (!failed && state.operation?.phase === 'abandoned') { failed = true; throw new Error('abandonment write failed'); }
+  } });
+  f.transport.postEmpty.mockImplementationOnce(async (_route, request) => {
+    await Promise.resolve(); jest.setSystemTime(request.deadline!); throw new OperationTimeoutError();
+  });
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(f.saved.at(-1)?.operation?.phase).toBe('intent');
+  await f.owner.retryPersistence();
+  expect(await f.restart().readCatalog(context)).toEqual({ status: 'abandoned' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('waits for pending abandonment before retrying its persisted snapshot', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } },
+    saveState: async () => pending });
+  const abandoning = f.owner.abandonExpired(), retrying = f.owner.retryPersistence();
+  release();
+  await Promise.all([abandoning, retrying]);
+  expect(f.saved.at(-1)?.operation?.phase).toBe('abandoned');
+  expect(f.owner.snapshot().operation?.phase).toBe('abandoned');
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+});
+
+it.each(['catalog', 'clip'] as const)('keeps completed %s durable when persistence recovery starts during its terminal save', async kind => {
+  let release!: () => void, entered!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const terminalSave = new Promise<void>(resolve => { entered = resolve; });
+  let writes = Promise.resolve();
+  const f = fixture({ saveState: state => {
+    const write = writes.then(async () => {
+      if (state.operation?.phase === 'finished') { entered(); await pending; }
+    });
+    writes = write.catch(() => undefined);
+    return write;
+  } });
+  const acquire = () => kind === 'catalog' ? f.owner.readCatalog(context) : f.owner.downloadClip(context, clipRequest());
+  const acquisition = acquire();
+  await terminalSave;
+  const recovery = f.owner.retryPersistence();
+  await Promise.resolve(); await Promise.resolve();
+  release();
+  const result = await acquisition;
+  await recovery;
+  expect(result).toMatchObject({ status: 'ready' });
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.saved.at(-1)?.operation?.phase).toBe('finished');
+  const restarted = f.restart();
+  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest()))).toEqual(result);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('captures recovery after a pending accepted save and before later phase saves', async () => {
+  let release!: () => void, entered!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const acceptedSave = new Promise<void>(resolve => { entered = resolve; });
+  let writes = Promise.resolve();
+  const f = fixture({ saveState: state => {
+    const write = writes.then(async () => {
+      if (state.operation?.phase === 'accepted' && state.operation.statusReads === 0) { entered(); await pending; }
+    });
+    writes = write.catch(() => undefined);
+    return write;
+  } });
+  const acquisition = f.owner.readCatalog(context);
+  await acceptedSave;
+  const recovery = f.owner.retryPersistence();
+  await Promise.resolve(); await Promise.resolve();
+  release();
+  expect(await acquisition).toMatchObject({ status: 'ready' });
+  await recovery;
+  const phases = f.saved.map(state => state.operation?.phase);
+  expect(phases.slice(0, 3)).toEqual(['intent', 'accepted', 'accepted']);
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.saved.at(-1)?.operation?.phase).toBe('finished');
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('keeps failed recovery faulted and allows a later explicit retry without replay', async () => {
+  const f = fixture();
+  const result = await f.owner.readCatalog(context);
+  f.saveState.mockRejectedValueOnce(new Error('recovery disk failure'));
+  await expect(f.owner.retryPersistence()).rejects.toThrow();
+  expect(await f.owner.readCatalog({ ...context, operationId: 'after-failed-recovery' }))
+    .toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  await f.owner.retryPersistence();
+  expect(await f.restart().readCatalog(context)).toEqual(result);
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it.each(['catalog', 'clip'] as const)('reports rejected %s admission after abandonment as not started', async kind => {
+  const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  await f.owner.reconcilePending();
+  const predecessor = f.owner.snapshot();
+  const fresh = { ...context, operationId: `fresh-event:${kind}` };
+  const acquire = () => kind === 'catalog' ? f.owner.readCatalog(fresh) : f.owner.downloadClip(fresh, clipRequest());
+  f.admit.mockRejectedValueOnce(new OperationTimeoutError());
+
+  expect(await acquire()).toEqual({ status: 'failed', reason: 'not-started' });
+  expect(f.owner.snapshot()).toEqual(predecessor);
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+  expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+
+  expect(await acquire()).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('retains an exhausted known-command budget until lease expiry, then releases only local ownership', async () => {
+  jest.useFakeTimers();
+  const f = fixture({ maxStatusReads: 1 });
+  f.transport.getJson.mockResolvedValueOnce({ complete: false, status: 0 });
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'status-budget-exhausted' });
+  const expiry = f.owner.snapshot().operation!.expiresAt;
+  expect(await f.restart().reconcilePending()).toBe('unresolved');
+  expect(f.transport.getJson).toHaveBeenCalledTimes(1);
+  await jest.advanceTimersByTimeAsync(120000);
+  const next = f.restart();
+  expect(await next.reconcilePending()).toBe('abandoned');
+  expect(next.snapshot().operation).toMatchObject({ commandId: 101, statusReads: 1, phase: 'abandoned', expiresAt: expiry });
+  expect(await next.readCatalog({ ...context, operationId: 'next-motion' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+});
+
+it('ignores a late old acknowledgement after lease abandonment and a newer completed native operation', async () => {
+  jest.useFakeTimers();
+  let acknowledge!: (value: unknown) => void;
+  const f = fixture();
+  f.transport.postEmpty.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+  const old = f.owner.readCatalog(context);
+  while (!acknowledge) await Promise.resolve();
+  await jest.advanceTimersByTimeAsync(120000);
+  expect(await old).toEqual({ status: 'abandoned' });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'new-event' })).toMatchObject({ status: 'ready' });
+  const current = f.owner.snapshot();
+  acknowledge({ id: 999 }); await Promise.resolve(); await Promise.resolve();
+  expect(f.owner.snapshot()).toEqual(current);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+  expect(f.transport.getJson.mock.calls.some(([route]) => route.path.endsWith('/commands/999'))).toBe(false);
+});
+
+it('rechecks persistence explicitly after a failed intent without sending work while the journal is unavailable', async () => {
+  const f = fixture();
+  f.saveState.mockRejectedValueOnce(new Error('temporary disk failure'));
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(await f.owner.readCatalog({ ...context, operationId: 'blocked' })).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(f.transport.postEmpty).not.toHaveBeenCalled();
+  await f.owner.retryPersistence();
+  expect(await f.owner.readCatalog({ ...context, operationId: 'fresh' })).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ['catalog', false], ['catalog', true], ['clip', false], ['clip', true],
+] as const)('proves only the current %s intent-save failure was not dispatched (finished predecessor: %s)', async (kind, finished) => {
+  const f = fixture();
+  const acquire = (operationId: string, owner = f.owner) => kind === 'catalog'
+    ? owner.readCatalog({ ...context, operationId }) : owner.downloadClip({ ...context, operationId }, clipRequest());
+  if (finished) expect(await acquire('predecessor')).toMatchObject({ status: 'ready' });
+  const previous = f.owner.snapshot(), postCount = f.transport.postEmpty.mock.calls.length;
+  f.saveState.mockRejectedValueOnce(new Error('intent save failed'));
+
+  expect(await acquire('unsent-event')).toMatchObject({ status: 'unresolved', reason: 'persistence-failed', notDispatched: true });
+  expect(f.owner.snapshot()).toEqual(previous);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(postCount);
+  // The same snapshot alone proves nothing about another invocation.
+  expect(await acquire('while-faulted')).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  await f.owner.retryPersistence();
+  expect(await acquire('unsent-event')).toMatchObject({ status: 'ready' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(postCount + 1);
+});
+
+it.each(['catalog', 'clip'] as const)('does not claim no dispatch when saving the %s acknowledgement fails', async kind => {
+  const f = fixture({ saveState: async state => {
+    if (state.operation?.phase === 'accepted') throw new Error('accepted save failed');
+  } });
+  const acquire = (owner = f.owner) => kind === 'catalog' ? owner.readCatalog(context) : owner.downloadClip(context, clipRequest());
+  const result = await acquire();
+  expect(result).toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  expect(result).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  expect(f.owner.snapshot().operation?.phase).toBe('intent');
+  await f.owner.retryPersistence();
+  expect(await acquire()).toMatchObject({ status: 'unresolved', reason: 'acknowledgement-unknown' });
+  expect(await acquire(f.restart())).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it('discards a revoked prepared operation locally without catalog or media retrieval', async () => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'prepared',
-    commandId: 101, resultCommandId: 202, statusReads: 1 } } });
+    commandId: 101, resultCommandId: 202, statusReads: 1, expiresAt: Date.now() + 120000 } } });
   expect(await f.owner.reconcilePending()).toBe('terminal');
   expect(f.owner.snapshot().operation?.result).toEqual({ status: 'failed', reason: 'discarded' });
   expect(await f.owner.reconcilePending()).toBe('none');
@@ -58,7 +338,7 @@ it('discards a revoked prepared operation locally without catalog or media retri
 
 it.each([0, 7])('discards a revoked accepted operation only after one verified terminal status %s', async status => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'clip', phase: 'accepted',
-    commandId: 101, statusReads: 1, clip: clipRequest() } } });
+    commandId: 101, statusReads: 1, clip: clipRequest(), expiresAt: Date.now() + 120000 } } });
   f.transport.getJson.mockResolvedValue({ complete: true, status });
   expect(await f.owner.reconcilePending()).toBe('terminal');
   expect(f.owner.snapshot().operation?.result).toEqual({ status: 'failed', reason: 'discarded', remoteStatus: status });
@@ -71,12 +351,13 @@ it.each([0, 7])('discards a revoked accepted operation only after one verified t
 
 it('keeps revoked pending and lost-ack operations fenced without replacing commands or renewing budgets', async () => {
   const f = fixture({ maxStatusReads: 2, restoredState: { version: 1, operation: { ...context, kind: 'catalog',
-    phase: 'accepted', commandId: 101, statusReads: 1 } } });
+    phase: 'accepted', commandId: 101, statusReads: 1, expiresAt: Date.now() + 120000 } } });
   f.transport.getJson.mockResolvedValue({ complete: false, status: 0 });
   expect(await f.owner.reconcilePending()).toBe('unresolved');
   expect(await f.restart().reconcilePending()).toBe('unresolved');
   expect(f.transport.getJson).toHaveBeenCalledTimes(1);
-  const lost = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
+  const lost = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0,
+    expiresAt: Date.now() + 120000 } } });
   expect(await lost.owner.reconcilePending()).toBe('unresolved');
   expect(lost.transport.getJson).not.toHaveBeenCalled(); expect(lost.transport.postEmpty).not.toHaveBeenCalled();
 });
@@ -89,6 +370,49 @@ it('records a definite SDK no-send refusal as not-started so it can be retried a
   f.transport.postEmpty.mockResolvedValue({ id: 101 });
   expect(await f.owner.readCatalog({ ...context, operationId: 'next-job' })).toMatchObject({ status: 'ready' });
   expect(f.transport.getJson).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  ['catalog', 'no-send'], ['clip', 'no-send'], ['catalog', 'refused'], ['clip', 'refused'],
+] as const)('preserves %s %s proof returned at the request deadline', async (kind, failure) => {
+  jest.useFakeTimers();
+  const f = fixture();
+  f.transport.postEmpty.mockImplementationOnce(async (_route, request) => {
+    await Promise.resolve();
+    jest.setSystemTime(request.deadline!);
+    throw failure === 'no-send' ? Object.assign(new OperationTimeoutError(), { dispatched: false })
+      : new BlinkHttpError('Busy', 409, '', location, 'POST');
+  });
+  const result = kind === 'catalog' ? await f.owner.readCatalog(context) : await f.owner.downloadClip(context, clipRequest());
+  expect(result).toEqual(failure === 'no-send' ? { status: 'failed', reason: 'not-started' }
+    : { status: 'failed', reason: 'refused', httpStatus: 409 });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', statusReads: 0, result });
+  expect(f.owner.snapshot().abandoned).toBeUndefined();
+  const restarted = f.restart();
+  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest()))).toEqual(result);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+});
+
+it.each(['catalog', 'clip'] as const)('settles prepared %s retrieval failure at the deadline without abandonment', async kind => {
+  jest.useFakeTimers();
+  const f = fixture();
+  const expiredResult = async (_route: unknown, request: RequestOptions) => {
+    await Promise.resolve();
+    jest.setSystemTime(request.deadline!);
+    throw new OperationTimeoutError();
+  };
+  if (kind === 'catalog') f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0, commands: [{ id: 202 }] })
+    .mockImplementationOnce(expiredResult);
+  else {
+    f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 0 });
+    f.transport.downloadMedia.mockImplementationOnce(expiredResult);
+  }
+  const result = kind === 'catalog' ? await f.owner.readCatalog(context) : await f.owner.downloadClip(context, clipRequest());
+  expect(result).toEqual({ status: 'failed', reason: kind === 'catalog' ? 'invalid-result' : 'invalid-media' });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', commandId: 101, result });
+  expect(f.owner.snapshot().abandoned).toBeUndefined();
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
 it.each(['catalog', 'clip'] as const)('records an explicit refused %s POST without owning a nonexistent command', async kind => {
@@ -337,6 +661,34 @@ it('does not confuse a cancelled queue wait with a dispatched remote command', a
   expect(f.saveState).not.toHaveBeenCalled();
 });
 
+it.each([
+  ['catalog', 'no-send'], ['clip', 'no-send'], ['catalog', 'refused'], ['clip', 'refused'],
+] as const)('does not reuse caller %s abort %s proof after preparation was invoked', async (kind, proof) => {
+  const f = fixture(), controller = new AbortController();
+  const unrelatedProof = proof === 'no-send'
+    ? Object.assign(new Error('another request was not sent'), { dispatched: false })
+    : new BlinkHttpError('another request was refused', 409, '', location, 'POST');
+  let acknowledge!: (value: unknown) => void;
+  f.transport.postEmpty.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+  const request = kind === 'catalog' ? f.owner.readCatalog(context, { signal: controller.signal })
+    : f.owner.downloadClip(context, clipRequest(), { signal: controller.signal });
+  for (let i = 0; i < 20 && !acknowledge; i++) await Promise.resolve();
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  controller.abort(unrelatedProof);
+
+  const result = await request;
+  expect(result).toMatchObject({ status: 'unresolved', reason: 'request-outcome-unknown' });
+  expect(result).toEqual(expect.not.objectContaining({ notDispatched: true }));
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'intent', statusReads: 0 });
+  if (proof === 'no-send') expect(Reflect.get(unrelatedProof, 'dispatched')).toBe(false);
+  const restarted = f.restart();
+  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest())))
+    .toMatchObject({ status: 'unresolved', reason: 'acknowledgement-unknown' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  expect(f.transport.getJson).not.toHaveBeenCalled();
+  acknowledge({ id: 101 });
+});
+
 it('does not dispatch when cancellation arrives while the intent is being saved', async () => {
   let release!: () => void;
   const pendingSave = new Promise<void>(resolve => { release = resolve; });
@@ -346,7 +698,9 @@ it('does not dispatch when cancellation arrives while the intent is being saved'
   const pending = f.owner.readCatalog(context, { signal: controller.signal });
   for (let i = 0; i < 20 && saveState.mock.calls.length === 0; i += 1) await Promise.resolve();
   controller.abort(); release();
-  expect(await pending).toMatchObject({ status: 'unresolved' });
+  const result = await pending;
+  expect(result).toMatchObject({ status: 'unresolved' });
+  expect(result).toEqual(expect.not.objectContaining({ notDispatched: true }));
   expect(f.transport.postEmpty).not.toHaveBeenCalled();
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
   expect(await f.owner.readCatalog(context)).toEqual({ status: 'failed', reason: 'not-started' });

@@ -4,11 +4,34 @@ export interface RequestOptions {
   queueDeadline?: number;
 }
 
+/** Local availability limit, never evidence that a provider operation completed. */
+export const REMOTE_OPERATION_LEASE_MS = 120_000;
+
+/** Legacy owners without a deadline cannot veto fresh work indefinitely. */
+export function isRemoteOperationLeaseActive(expiresAt: number | undefined, now = Date.now()): boolean {
+  return expiresAt !== undefined && Number.isSafeInteger(expiresAt) && expiresAt > now
+    && expiresAt <= now + REMOTE_OPERATION_LEASE_MS;
+}
+
 export class OperationTimeoutError extends Error {
   constructor() {
     super('Blink operation exceeded its response deadline.');
     this.name = 'OperationTimeoutError';
   }
+}
+
+/** A caller's abort reason carries no dispatch or provider-refusal proof for this operation. */
+function budgetAbortReason(signal: globalThis.AbortSignal): unknown {
+  const reason = signal.reason ?? new OperationTimeoutError();
+  if (!(reason instanceof Error) && !(reason instanceof globalThis.DOMException)) return reason;
+  const local = reason instanceof OperationTimeoutError ? new OperationTimeoutError()
+    : reason instanceof globalThis.DOMException ? new globalThis.DOMException(reason.message, reason.name)
+      : new Error(reason.message);
+  Object.defineProperties(local, {
+    name: { value: reason.name, configurable: true },
+    cause: { value: reason, configurable: true },
+  });
+  return local;
 }
 
 /** Limit the caller's wait without replaying or cancelling shared remote work. */
@@ -20,7 +43,7 @@ export function withResponseBudget<T>(promise: Promise<T>, ms = 12_000): Promise
 }
 
 export function checkRequestBudget(options: RequestOptions = {}): void {
-  options.signal?.throwIfAborted();
+  if (options.signal?.aborted) throw budgetAbortReason(options.signal);
   if (options.deadline !== undefined && options.deadline <= Date.now()) throw new OperationTimeoutError();
 }
 
@@ -31,7 +54,7 @@ export async function withinRequestBudget<T>(promise: Promise<T>, options: Reque
   let abortListener: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     if (options.signal) {
-      abortListener = () => reject(options.signal?.reason ?? new OperationTimeoutError());
+      abortListener = () => reject(budgetAbortReason(options.signal!));
       options.signal.addEventListener('abort', abortListener, { once: true });
     }
   });

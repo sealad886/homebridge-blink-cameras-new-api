@@ -45,6 +45,37 @@ it('reuses a valid cached identity despite metadata key order and performs only 
   expect(fetch).toHaveBeenCalledWith('https://android.clients.google.com/checkin', expect.objectContaining({ method: 'POST' }));
 });
 
+it.each([1, 31])('restores a valid %i-byte private scalar without replacing its identity', async privateBytes => {
+  const cached = credentials();
+  const key = createECDH('prime256v1'); key.setPrivateKey(Buffer.alloc(privateBytes, 1));
+  cached.keys = { privateKey: key.getPrivateKey('base64url'), publicKey: key.getPublicKey('base64url'),
+    authSecret: Buffer.alloc(16, 1).toString('base64url') };
+  expect(validCredentials(cached, firebase)).toBe(true);
+  const response = checkin_proto.AndroidCheckinResponse.fromObject({ androidId: 12345, securityToken: 67890 });
+  const bytes = checkin_proto.AndroidCheckinResponse.encode(response).finish();
+  const fetch = jest.fn(async () => new globalThis.Response(Buffer.from(bytes)));
+  globalThis.fetch = fetch;
+  const restored = await registerGoogleIdentity(firebase, cached, []);
+  expect(restored.keys).toEqual(cached.keys);
+  expect(restored.fcm.token).toBe(cached.fcm.token);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledWith('https://android.clients.google.com/checkin', expect.objectContaining({ method: 'POST' }));
+});
+
+it.each([
+  ['zero', Buffer.alloc(32)],
+  ['out-of-range', Buffer.alloc(32, 255)],
+  ['oversize', Buffer.alloc(33, 1)],
+  ['truncated/mismatched', Buffer.alloc(31, 1)],
+] as const)('rejects a %s private scalar before making a request', async (_reason, privateKey) => {
+  const cached = credentials();
+  cached.keys.privateKey = privateKey.toString('base64url');
+  const fetch = jest.fn(); globalThis.fetch = fetch;
+  expect(validCredentials(cached, firebase)).toBe(false);
+  await expect(registerGoogleIdentity(firebase, cached, [])).rejects.toThrow('Invalid Google receiver identity');
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 it('rejects a cache for another project or bundle before calling Google', async () => {
   const fetch = jest.fn(); globalThis.fetch = fetch;
   const cached = credentials();

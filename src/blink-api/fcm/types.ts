@@ -101,7 +101,8 @@ function validKeys(privateKey: string, publicKey: string, authSecret: string): b
       if (bytes.toString(encoding) !== value) throw new Error('Invalid key encoding');
       return bytes;
     });
-    if (material[0].length !== 32 || material[1].length !== 65 || material[2].length !== 16) return false;
+    // Node serializes a private scalar without fixed-width leading-zero padding.
+    if (material[0].length < 1 || material[0].length > 32 || material[1].length !== 65 || material[2].length !== 16) return false;
     const ecdh = createECDH('prime256v1');
     ecdh.setPrivateKey(material[0]);
     return ecdh.getPublicKey().equals(material[1]);

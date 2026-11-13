@@ -60,6 +60,46 @@ describe('finite native recording delegate', () => {
     expect(await f.delegate.offerDownloaded(source, f.metadata('clip-3'))).toEqual({ status: 'not-offered', reason: 'busy' });
   });
 
+  it.each(['preparing', 'ready', 'streaming'] as const)('rejects an invalid or throwing delivery authority while %s', async phase => {
+    for (const throws of [false, true]) {
+      const pending = deferred<PreparedNativeRecording>();
+      const f = setup(phase === 'preparing' ? { prepare: jest.fn().mockReturnValue(pending.promise) } : {}); f.enable();
+      let current = true;
+      const authority = () => { if (!current && throws) throw new Error('Authority unavailable'); return current; };
+      const offered = f.delegate.offerDownloaded(source, f.metadata(), authority);
+      let value: PreparedNativeRecording;
+      if (phase === 'preparing') {
+        current = false; value = bundle(); pending.resolve(value);
+        expect(await offered).toEqual({ status: 'not-offered', reason: 'policy-changed' });
+        expect(f.readyMotion).not.toHaveBeenCalledWith(true);
+      } else {
+        expect(await offered).toEqual({ status: 'ready' }); value = f.prepared[0];
+        const stream = f.delegate.handleRecordingStreamRequest(50);
+        if (phase === 'streaming') expect((await stream.next()).value?.data.toString()).toBe('initialization');
+        current = false;
+        await expect(stream.next()).rejects.toThrow();
+        expect(f.readyMotion).toHaveBeenLastCalledWith(false);
+      }
+      expect(value.disposed).toBe(true);
+      expect(f.delegate.snapshot().bytes).toBe(0);
+    }
+  });
+
+  it('keeps delivery available when tokens refresh within the same owning identity', async () => {
+    const f = setup(); f.enable();
+    const identity = { account: 10, client: 11, token: 'old-fixture-token' };
+    const current = () => identity.account === 10 && identity.client === 11;
+    expect(await f.delegate.offerDownloaded(source, f.metadata(), current)).toEqual({ status: 'ready' });
+    identity.token = 'new-fixture-token';
+    const stream = f.delegate.handleRecordingStreamRequest(51);
+    expect((await stream.next()).value?.data.toString()).toBe('initialization');
+    expect((await stream.next()).value?.data.toString()).toBe('fragment-1');
+    const final = stream.next(); await jest.advanceTimersByTimeAsync(1000);
+    expect((await final).value?.isLast).toBe(true);
+    await stream.next(); f.delegate.acknowledgeStream(51);
+    expect(f.prepared[0].disposed).toBe(true);
+  });
+
   it('streams initialization then paced finite fragments with exactly one final marker; ACK means transport acknowledgement', async () => {
     const f = setup(); f.enable(); await f.delegate.offerDownloaded(source, f.metadata());
     const stream = f.delegate.handleRecordingStreamRequest(7);

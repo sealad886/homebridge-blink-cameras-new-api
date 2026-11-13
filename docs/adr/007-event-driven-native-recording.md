@@ -207,8 +207,9 @@ to camera identities, native names, networks or Sync Module associations replace
 the runtime after its pending local work drains. The handoff discards old media
 and preserves the accessory's HomeKit configuration and privacy choices.
 Ordering and ordinary status changes reuse the runtime. Unresolved remote
-obligations remain fenced across handoff and restart; neither declares an
-operation complete. New HomeKit accessories still follow the platform's existing
+obligations retain their original finite local lease across handoff and restart.
+Expiry records local abandonment, preserves uncertainty, and permits later
+distinct work without declaring remote completion. New HomeKit accessories still follow the platform's existing
 registration lifecycle and may require a child-bridge restart.
 
 ## Delayed jobs, fairness and bounded reuse
@@ -252,8 +253,13 @@ Storage, explicit settings/capture commands and manual Live View use the
 canonical account admission. Persist intent before a new operation POST and
 persist the accepted command identity before status reads. A local deadline,
 cancellation, network error, malformed acknowledgement, restart, exhausted status
-budget or failed GET cannot free an uncertain operation or authorize a new POST.
-Per-module receipts survive every shared account-state write.
+budget or failed GET cannot establish remote completion. Local exclusion is
+bounded to 120 seconds or the earlier action/job deadline and is never renewed
+by retries or restart. At expiry the uncertain job is abandoned, not retried;
+new distinct work may proceed through normal provider conflict handling.
+Per-module receipts survive shared account-state writes. Legacy receipts without
+a lease are advisory rather than a permanent veto. Late results cannot revive
+abandoned work or replace a newer owner.
 
 A typed HTTP refusal of a new POST is different: a 4xx response other than 408,
 before an accepted identity exists, does not create a new command owner. Retain
@@ -267,7 +273,7 @@ A refused status GET is never proof that the preceding POST was refused.
 | New/rotated owned push token | One current-client metadata POST; none for unchanged tokens |
 | Catalog preparation | One empty POST, at most 30 total known-parent status GETs at two-second spacing, then one first-child catalog GET on success |
 | Selected clip | One empty POST, at most 30 total known-command status GETs, then one validated provider-returned file GET on success |
-| Ordinary accepted command | Its existing workflow, with a durable total status-read ceiling of 60; deadline expiry retains ownership |
+| Ordinary accepted command | Its existing workflow, with a durable total status-read ceiling of 60; deadline expiry retains uncertainty without an indefinite local veto |
 | Known-command recovery | At most one remaining-budget GET per known pending command; no replacement POST, catalog/file retrieval or guessed `/done` |
 | Opt-in Early Notification reconciliation | Fresh supported-device config GET; only a needed change adds its owned settings POST/status workflow and readback. Default policy with no saved originals adds no settings requests. |
 | Local conversion, HAP callbacks and cache expiry | No new acquisition requests |
@@ -314,8 +320,31 @@ Blink settings; explicit Early Notification management follows the separate
 opt-in policy above.
 
 Scoped state and receiver credentials use one serialized durable writer under an
-owned private directory with 0600 files. Dispatch/transition diagnostics are
-local; generating a diagnostic report must not issue verification requests.
+owned private directory with 0600 files. Composite state changes, including
+recovery snapshots, are constructed inside the runtime's logical commit queue.
+The physical file queue prevents overlapping replacements; it cannot make an
+older payload current. Each native owner also serializes phase saves and retry
+snapshots through its own write queue, capturing retry state at execution. The
+coordinator uses one queue for ordinary saves and recovery, with every snapshot
+captured when its queued write executes; a retry cannot overtake an older save.
+
+Recovery keeps acquisition unready until SDK, native-owner and coordinator
+persistence is current. Temporary storage unavailability before provider
+invocation defers the accepted job without consuming an attempt; permission
+revocation still cancels it. Camera permission is independent of storage health.
+A rejected new catalog or clip intent save supplies call-local no-dispatch
+proof; missing owner state does not. A verified terminal catalog does not make
+a subsequent unsent clip stage uncertain. Deferred work waits the existing retry
+interval, including when no readiness callback is present. This proof cannot
+refund an unfinished dispatched or restored uncertain stage. Recovery reports
+success only after every participant is saved.
+Local delivery carries an ephemeral scope, permission-epoch and camera-generation
+guard through preparation, a ready offer and every recording fragment. Revoked
+scope or permission stops publication and disposes owned media. A same-scope
+token refresh or unrelated journal fault does not revoke local media permission.
+The existing readiness gate still prevents starting new delivery while faulted.
+Dispatch/transition diagnostics are local; generating a diagnostic report must
+not issue verification requests.
 Push diagnostics retain only fixed event/reason/disposition labels and bounded
 retry delay. Binding/readiness is informational, faults and required recovery
 are warnings, and other transitions are debug detail.

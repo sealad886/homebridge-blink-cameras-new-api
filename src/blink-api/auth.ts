@@ -70,6 +70,8 @@ interface CapturedTokenState {
   email: string;
 }
 
+type AccountMetadata = Pick<CapturedTokenState, 'accountId' | 'clientId' | 'region' | 'tier' | 'email'>;
+
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 60 * 1000; // 1 hour
 const REFRESH_MAX_RETRIES = 2;
 const REFRESH_RETRY_DELAYS_MS = [2000, 5000];
@@ -346,6 +348,8 @@ export class BlinkAuth {
   private stateLoaded = false;
   private stateLoadPromise: Promise<void> | null = null;
   private tokenTransitionTail: Promise<void> = Promise.resolve();
+  private pendingCaptureMetadata?: Partial<AccountMetadata>;
+  private tokenRevision = 0;
   private refreshInFlight: Promise<void> | null = null;
   private loginInFlight: Promise<void> | null = null;
   private twoFactorInFlight: Promise<void> | null = null;
@@ -552,6 +556,7 @@ export class BlinkAuth {
   }
 
   private applyState(state: BlinkAuthState): void {
+    this.tokenRevision++;
     this.accessToken = state.accessToken ?? this.accessToken;
     this.refreshToken = state.refreshToken ?? this.refreshToken;
     this.tokenAuth = state.tokenAuth ?? this.tokenAuth;
@@ -582,19 +587,19 @@ export class BlinkAuth {
     await this.enqueueTokenTransition(() => this.persistCurrentStateUnlocked());
   }
 
-  private async persistCurrentStateUnlocked(replace = false): Promise<void> {
-    if (!this.storage || !this.accessToken) return;
+  private async persistCurrentStateUnlocked(replace = false, captured = this.snapshotTokenState()): Promise<void> {
+    if (!this.storage || !captured.accessToken) return;
     const state: BlinkAuthState = {
-      accessToken: this.accessToken,
-      refreshToken: this.refreshToken,
-      tokenAuth: this.tokenAuth,
-      tokenExpiry: this.tokenExpiry?.toISOString() ?? null,
-      accountId: this.accountId,
-      clientId: this.clientId,
-      oauthClientId: this.oauthClientId,
-      region: this.region,
-      tier: this.tier,
-      email: this.config.email || null,
+      accessToken: captured.accessToken,
+      refreshToken: captured.refreshToken,
+      tokenAuth: captured.tokenAuth,
+      tokenExpiry: captured.tokenExpiry?.toISOString() ?? null,
+      accountId: captured.accountId,
+      clientId: captured.clientId,
+      oauthClientId: captured.oauthClientId,
+      region: captured.region,
+      tier: captured.tier,
+      email: captured.email || null,
       hardwareId: this.config.hardwareId ?? null,
       updatedAt: new Date().toISOString(),
     };
@@ -1673,6 +1678,15 @@ export class BlinkAuth {
     tier?: string | null;
     email?: string | null;
   }): void {
+    if (this.pendingCaptureMetadata) {
+      Object.assign(this.pendingCaptureMetadata, {
+        ...(metadata.accountId !== undefined ? { accountId: metadata.accountId } : {}),
+        ...(metadata.clientId !== undefined ? { clientId: metadata.clientId } : {}),
+        ...(metadata.region !== undefined ? { region: metadata.region } : {}),
+        ...(metadata.tier !== undefined ? { tier: metadata.tier } : {}),
+        ...(metadata.email !== undefined ? { email: metadata.email ?? '' } : {}),
+      });
+    }
     if (metadata.accountId !== undefined) this.accountId = metadata.accountId;
     if (metadata.clientId !== undefined) this.clientId = metadata.clientId;
     if (metadata.region !== undefined) this.region = metadata.region;
@@ -1687,9 +1701,10 @@ export class BlinkAuth {
     return this.oauthSession;
   }
 
-  /**
-   * Get the current access token
-   */
+  /** Version of committed credentials, independent of ordinary metadata setters. */
+  getTokenRevision(): number { return this.tokenRevision; }
+
+  /** Get the current access token. */
   getAccessToken(): string | null {
     return this.accessToken;
   }
@@ -1754,7 +1769,7 @@ export class BlinkAuth {
     };
   }
 
-  private restoreTokenState(snapshot: CapturedTokenState): void {
+  private publishTokenState(snapshot: CapturedTokenState): void {
     this.accessToken = snapshot.accessToken;
     this.refreshToken = snapshot.refreshToken;
     this.tokenExpiry = snapshot.tokenExpiry;
@@ -1765,6 +1780,7 @@ export class BlinkAuth {
     this.region = snapshot.region;
     this.tier = snapshot.tier;
     this.config.email = snapshot.email;
+    this.tokenRevision++;
   }
 
   private async captureTokensUnlocked(
@@ -1774,33 +1790,40 @@ export class BlinkAuth {
     options: { newAccountBoundary?: boolean; replacePersistedState?: boolean } = {},
   ): Promise<void> {
     const previous = this.snapshotTokenState();
-    this.accessToken = body.access_token;
-    this.refreshToken = body.refresh_token ?? this.refreshToken;
-    this.tokenExpiry = new Date(Date.now() + body.expires_in * 1000);
-    this.tokenAuth = tokenAuthHeader;
-    this.oauthClientId = oauthClientId ?? this.oauthClientId ?? 'ios';
-    if (options.newAccountBoundary) {
-      this.accountId = null;
-      this.clientId = null;
-      this.region = null;
-      this.tier = null;
-      this.config.email = '';
-    } else {
-      this.accountId = body.account_id ?? this.accountId;
-      this.clientId = body.client_id ?? this.clientId;
-      this.region = body.region ?? this.region;
-      this.tier = body.tier ?? this.tier;
-    }
-
+    const candidate: CapturedTokenState = {
+      ...previous,
+      accessToken: body.access_token,
+      refreshToken: body.refresh_token ?? previous.refreshToken,
+      tokenExpiry: new Date(Date.now() + body.expires_in * 1000),
+      tokenAuth: tokenAuthHeader,
+      oauthClientId: oauthClientId ?? previous.oauthClientId ?? 'ios',
+      accountId: options.newAccountBoundary ? null : body.account_id ?? previous.accountId,
+      clientId: options.newAccountBoundary ? null : body.client_id ?? previous.clientId,
+      region: options.newAccountBoundary ? null : body.region ?? previous.region,
+      tier: options.newAccountBoundary ? null : body.tier ?? previous.tier,
+      email: options.newAccountBoundary ? '' : previous.email,
+    };
+    const metadata: Partial<AccountMetadata> = {};
+    this.pendingCaptureMetadata = metadata;
     try {
-      await this.persistCurrentStateUnlocked(options.newAccountBoundary || options.replacePersistedState);
-    } catch (error) {
-      this.restoreTokenState(previous);
-      throw error;
+      await this.persistCurrentStateUnlocked(options.newAccountBoundary || options.replacePersistedState, candidate);
+      const published = { ...candidate };
+      // Setters during the save describe the committed session. They cannot replace
+      // metadata supplied by the new token response or cross a hosted account boundary.
+      if (!options.newAccountBoundary) {
+        if (body.account_id === undefined && metadata.accountId !== undefined) published.accountId = metadata.accountId;
+        if (body.client_id === undefined && metadata.clientId !== undefined) published.clientId = metadata.clientId;
+        if (body.region === undefined && metadata.region !== undefined) published.region = metadata.region;
+        if (body.tier === undefined && metadata.tier !== undefined) published.tier = metadata.tier;
+        if (metadata.email !== undefined) published.email = metadata.email;
+      }
+      this.publishTokenState(published);
+    } finally {
+      this.pendingCaptureMetadata = undefined;
     }
 
     this.logDebug('Tokens captured successfully');
-    this.logDebug(`  Expiry: ${this.tokenExpiry.toISOString()}`);
+    this.logDebug(`  Expiry: ${this.tokenExpiry?.toISOString()}`);
     if (this.accountId) {
       this.logDebug('  Account metadata: present');
     }
