@@ -194,3 +194,37 @@ parallel Jest workers. Preflight now uses the same serial Jest execution already
 required by CI and contributor validation. Every assertion and deadline remains
 unchanged; the three release-script contract tests pass. Failed full-run evidence
 is retained separately from final qualification.
+
+## Durable ownership lifecycle completion
+
+Later review demonstrated that retaining an original after failed cleanup cannot
+serve as proof of a plugin-owned setting. The completed journal v3 repair makes
+that distinction durable. A pending intent is saved before new writes and before
+owned revalidation or restoration; only a confirmed compatible change may become
+owned. An unchanged read may reconfirm the same previously owned record only when
+no change callback was entered and authority remains current. New, migrated and
+reloaded pending records cannot acquire ownership from a matching vendor value.
+Restoration always follows pending intent to cleanup, never continuity promotion.
+
+Known-discard obligations retry before preference work and remove only pending
+records. If filesystem failure or restart loses the cleanup acknowledgement, the
+durable pending entry cannot authorize automatic restoration over a manual change.
+Unknown evidence remains available for review. Pending cameras do not disable
+other camera operations, public motion, recording or ordinary Blink control.
+
+Validated v1/v2 journals are actually converted once at the first safe scoped
+startup. Exact bytes are retained in an exclusive private, synced backup named
+`JOURNAL.vVERSION-backup-SHA256.json`; migration preparation and canonical write
+share the existing physical-write tail and finite operation lease. All legacy
+values become unverified pending entries because old formats cannot prove
+ownership. This intentionally requires manual review of old restoration evidence;
+the migration and rollback guide describes that procedure. No production journal
+was migrated by this source task.
+
+Frozen runtime and SDK boundary checks passed 467/467 tests, with TypeScript,
+source lint and diff checks passing. Earlier fixture-path and incomplete-core
+results remain preserved separately; they are not substituted for this final
+result. Exact source hashes and logs are recorded in
+`logs/notification-settings-beta4/journal-implementation-final.json`. Canonical
+exact-head preflight, final independent source review, bot review, fresh source CI
+and installed-package/registry release evidence remain required after this milestone.

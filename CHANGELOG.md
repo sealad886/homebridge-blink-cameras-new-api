@@ -12,8 +12,8 @@ owns subsequent acceptance and finding dispositions.
 ### Fixed
 - Require manual review of unresolved camera aliases before automatic migration
   changes configuration, preserving overrides and recording intent.
-- Discard newly captured Early Notification originals after a definite setting
-  refusal, preventing later restoration from overwriting a manual Blink change.
+- Keep refused and unconfirmed Early Notification writes out of automatic
+  restoration, including after failed cleanup and restart.
 - Opening settings, connection tests and discovery no longer stage unchanged
   configuration or show a false unsaved-changes alert. Real edits, reverts and
   authentication recovery retain their existing save behavior.
@@ -25,6 +25,8 @@ owns subsequent acceptance and finding dispositions.
   keeping exact-byte backups private, including group-readable Homebridge configs.
 
 ### Changed
+- Persist pending versus confirmed-owned Early Notification changes explicitly.
+  Only a confirmed-owned change can authorize automatic restoration.
 - Migrate legacy settings once during supported POSIX installation: convert and
   remove legacy keys in the saved config using the guarded, atomic converter.
   Already-canonical files remain unchanged without another backup.
@@ -32,6 +34,11 @@ owns subsequent acceptance and finding dispositions.
   Runtime and settings now accept canonical values only. Opening settings is read-only.
 
 ### Upgrade notes
+- The private Early Notification journal upgrades once to version 3 at the first
+  account-scoped startup, retaining a private backup. Legacy originals are kept
+  as unverified pending entries and require manual review before that camera's
+  preference is managed again. Other Blink work remains available; see the
+  journal review and recovery procedure in the migration guide.
 - Close settings editors before installation. Install this exact registry version,
   restart the Blink child bridge, then reopen settings. The installer uses the
   explicit `UIX_STORAGE_PATH` supplied by the installer; without it, migration

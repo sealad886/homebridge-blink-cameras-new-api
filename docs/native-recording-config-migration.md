@@ -55,20 +55,48 @@ without modifying the supplied file. Unknown fields and other plugins survive.
 Choosing `"on"` is a new explicit action; the migration never infers it from an
 old false value. See [Early Notification](configuration.md#early-notification-and-clip-scheduling).
 
-The private `.early-notification-ACCOUNT-TIER.json` companion journal accepts
-validated version 1 originals. A subsequent journal change writes version 2,
-which can retain an original Off value for the new Force on behavior. Opening
-the editor does not rewrite this operational journal.
+The private `.early-notification-ACCOUNT-TIER.json` companion journal distinguishes
+an unverified `pending` intent from a confirmed `owned` setting change. The plugin
+saves a pending original before a new setting POST and promotes it only after the
+command confirms the requested change. Pending entries never authorize automatic
+restoration. A refused write whose cleanup cannot persist therefore cannot become
+an owned change merely because someone later supplies the same value manually.
+An unchanged read may reconfirm continuity only for a previously confirmed-owned
+entry when no intervening change was observed; it cannot establish ownership of a
+new, migrated or otherwise unverified pending entry.
 
-An older beta cannot read version 2 or interpret the new mode key. Before a
-downgrade, use this beta to select Leave unchanged for every managed camera,
-Save and restart, and verify restoration completes. Keep owner-only backups of
-configuration and the companion journal. Stop the child bridge before restoring
-the pre-upgrade configuration/journal and installing the older exact registry
-version. Do not replace a journal containing unresolved originals with an empty
-file: that would lose restoration ownership. If originals cannot reconcile,
-retain the new runtime and diagnose that failure before downgrading. Package
-rollback alone does not convert configuration or operational state.
+At the first safe account-scoped startup, journal versions 1 and 2 are migrated
+once to version 3, with an exact-byte private backup beside the journal named
+`JOURNAL.vVERSION-backup-SHA256.json`. This is separate from
+the installer's configuration conversion: the installer cannot identify and
+validate the active account journal safely. Every legacy original is preserved as
+pending because those formats do not prove whether its setting write succeeded.
+Opening settings does not perform this migration. Already-current journals are
+not rewritten just to load them.
+
+An unresolved pending entry requires manual review before that camera's preference
+can be managed again. Other cameras, push reception, recording and arm/disarm work
+remain available. Do not infer ownership from a matching current Blink value.
+To resolve an entry:
+
+1. Stop the Blink child bridge and retain a private copy of the current journal
+   and its migration backup.
+2. Identify the entry's camera confidently and choose its intended Early
+   Notification value in the Blink app. The retained `original` value is evidence
+   for that review, not proof that the plugin changed the setting.
+3. Remove only the reviewed pending entry from the current journal, preserving
+   all other entries and its private file ownership and permissions. Leave any
+   entry you cannot identify pending; never clear the journal wholesale.
+4. Restart the child bridge. An explicitly configured Force on/off policy can
+   then make a new, recorded change. Use Leave unchanged if no forcing is wanted.
+
+An older beta cannot read version 3 or interpret the new mode key. Before a
+downgrade, resolve pending entries manually, select Leave unchanged for managed
+cameras and verify confirmed-owned restoration completes. Retain the current
+journal as well as the pre-upgrade backups. Stop the child bridge before restoring
+reviewed configuration/journal backups and installing the older exact registry
+version. Package rollback alone does not convert configuration or operational
+state; do not discard unresolved originals to make a downgrade start.
 
 ## Upgrade from 0.10.0
 

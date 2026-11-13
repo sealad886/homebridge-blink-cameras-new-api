@@ -163,8 +163,9 @@ describe('native recording runtime composition', () => {
       });
       const since = events.length;
       await value.start();
+      if (events.includes('early-notification-state-faulted')) return;
       if (originals || devices.some(device => device.settings.earlyNotificationMode !== 'unmanaged')) {
-        await until(() => events.slice(since).some(event => /^early-notification-(?:confirmed-(?:on|off)|unsupported|.*faulted|restored)$/.test(event)));
+        await until(() => events.slice(since).some(event => /^early-notification-(?:confirmed-(?:on|off)|unsupported|.*faulted|restored|pending-recovery-required)$/.test(event)));
       }
     };
     runtime = await NativeRecordingRuntime.create(options); runtimes.push(runtime);
@@ -179,7 +180,7 @@ describe('native recording runtime composition', () => {
       runtime = await NativeRecordingRuntime.create({ ...options, ...next }); runtimes.push(runtime);
       await startAndSettlePreferences(runtime, next.devices ?? options.devices); return runtime;
     };
-    return { reports, runtime, delegate, prepare, transport, client, source, setDemand, reconnectSource, stopSource, events, publicMotion, readyMotion,
+    return { runtimeOptions: options, reports, runtime, delegate, prepare, transport, client, source, setDemand, reconnectSource, stopSource, events, publicMotion, readyMotion,
       media, notification, push, state, remoteSave, cornerReady, releaseOwnership, rebind, devices, earlyProvider, settingWrites, settingReceipts,
       originalsPath };
   }
@@ -689,7 +690,7 @@ describe('native recording runtime composition', () => {
     const f = await setup({ earlyNotificationMode: 'on', earlyCurrent: false });
     expect(f.settingWrites).toEqual([true]);
     expect(f.settingReceipts[0].devices).toEqual([expect.objectContaining({ original: false })]);
-    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).version).toBe(2);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).version).toBe(3);
     await f.push();
     expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
     await f.runtime.stop();
@@ -711,14 +712,52 @@ describe('native recording runtime composition', () => {
     expect(f.settingWrites).toEqual([false, true]);
   });
 
-  it('reads the version-one enabled original and migrates its journal when restoration completes', async () => {
-    const f = await setup({ earlyNotification: true });
-    await f.runtime.stop();
-    const prior = JSON.parse(await fs.readFile(f.originalsPath, 'utf8'));
-    await fs.writeFile(f.originalsPath, JSON.stringify({ ...prior, version: 1 }), { mode: 0o600 });
+  it.each([[1, true], [2, true], [2, false]] as const)('persists an exact backed-up v%i original as unverified without restoration: original=%s', async (version, original) => {
+    const f = await setup(); await f.runtime.stop();
+    const legacy = JSON.stringify({ version, scope: { accountId: 10, tier: 'u000' },
+      devices: [{ kind: 'camera', networkId: 20, deviceId: 40, rawType: 'catalina', original }] }, null, 4) + '\n';
+    await fs.writeFile(f.originalsPath, legacy, { mode: 0o600 });
     await f.rebind({ devices: [] });
-    expect(f.settingWrites).toEqual([false, true]);
-    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8'))).toMatchObject({ version: 2, devices: [] });
+    const journal = await fs.readFile(f.originalsPath, 'utf8');
+    expect(JSON.parse(journal)).toMatchObject({ version: 3, devices: [{ original, ownership: 'pending' }] });
+    expect(f.client.setDeviceEarlyNotification).not.toHaveBeenCalled();
+    expect(f.events).toContain('early-notification-pending-recovery-required');
+    const backups = (await fs.readdir(path.dirname(f.originalsPath))).filter(name => name.startsWith(path.basename(f.originalsPath) + '.v'));
+    expect(backups).toHaveLength(1);
+    expect(await fs.readFile(path.join(path.dirname(f.originalsPath), backups[0]), 'utf8')).toBe(legacy);
+    if (process.platform !== 'win32') expect((await fs.stat(path.join(path.dirname(f.originalsPath), backups[0]))).mode & 0o777).toBe(0o600);
+    const writes = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile');
+    try {
+      await f.runtime.stop(); await f.rebind({ devices: [] });
+      expect(await fs.readFile(f.originalsPath, 'utf8')).toBe(journal);
+      expect(writes).not.toHaveBeenCalledWith(f.originalsPath, expect.anything());
+      expect((await fs.readdir(path.dirname(f.originalsPath))).filter(name => name.startsWith(path.basename(f.originalsPath) + '.v'))).toEqual(backups);
+    } finally { writes.mockRestore(); }
+  });
+
+  it('bounds a held migration and fences its late backup before a replacement migrates', async () => {
+    const f = await setup(); await f.runtime.stop();
+    const legacy = JSON.stringify({ version: 2, scope: { accountId: 10, tier: 'u000' }, devices: [] });
+    await fs.writeFile(f.originalsPath, legacy, { mode: 0o600 });
+    const gate = deferred<void>(), copy = fs.copyFile.bind(fs);
+    let held = false;
+    const copying = jest.spyOn(fs, 'copyFile').mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
+      if (!held) { held = true; await gate.promise; }
+      return copy(...args);
+    });
+    const writing = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile');
+    try {
+      const first = f.rebind({ devices: [] }); await until(() => held);
+      await jest.advanceTimersByTimeAsync(120_000);
+      const retiring = await first;
+      expect(f.events).toContain('early-notification-state-faulted');
+      expect(await fs.readFile(f.originalsPath, 'utf8')).toBe(legacy);
+      await retiring.stop();
+      gate.resolve(); await f.rebind({ devices: [] });
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).version).toBe(3);
+      const canonicalPath = await fs.realpath(f.originalsPath);
+      expect(writing.mock.calls.filter(([filename]) => filename === canonicalPath)).toHaveLength(1);
+    } finally { gate.resolve(); copying.mockRestore(); writing.mockRestore(); }
   });
 
   it('keeps a version-one journal intact and refuses force On when its required new original cannot persist', async () => {
@@ -734,7 +773,7 @@ describe('native recording runtime composition', () => {
     try {
       const f = await setup({ earlyNotificationMode: 'on', earlyCurrent: false });
       expect(f.settingWrites).toEqual([]); expect(f.earlyProvider.current).toBe(false);
-      expect(f.events).toContain('early-notification-unexpected-faulted');
+      expect(f.events).toContain('early-notification-state-faulted');
       expect(await fs.readFile(filename, 'utf8')).toBe(legacy);
     } finally { failedJournal.mockRestore(); }
   });
@@ -889,11 +928,11 @@ describe('native recording runtime composition', () => {
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])('does not adopt an external desired state after refusal; existing original=%p', async existingOriginal => {
+  it.each([false, true])('does not retain ownership after an observed original and reconciled refusal; prior owned=%p', async existingOriginal => {
     const f = await setup({ earlyNotification: true, start: false });
     if (existingOriginal) {
-      await fs.writeFile(f.originalsPath, JSON.stringify({ version: 2, scope: { accountId: 10, tier: 'u000' },
-        devices: [{ kind: 'camera', networkId: 20, deviceId: 40, rawType: 'catalina', original: true }] }), { mode: 0o600 });
+      await fs.writeFile(f.originalsPath, JSON.stringify({ version: 3, scope: { accountId: 10, tier: 'u000' },
+        devices: [{ kind: 'camera', networkId: 20, deviceId: 40, rawType: 'catalina', original: true, ownership: 'owned' }] }), { mode: 0o600 });
       await f.runtime.stop();
       await f.rebind();
       await f.runtime.stop();
@@ -905,7 +944,7 @@ describe('native recording runtime composition', () => {
     });
     if (existingOriginal) await f.rebind();
     else { await f.runtime.start(); await until(() => f.events.includes('early-notification-confirmed-off')); }
-    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(existingOriginal ? 1 : 0);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(0);
     expect(f.events).not.toContain('early-notification-unexpected-faulted');
   });
 
@@ -955,16 +994,166 @@ describe('native recording runtime composition', () => {
     } finally { failure.mockRestore(); }
   });
 
-  it('preserves a pre-existing original after a later definite refusal', async () => {
-    const f = await setup({ earlyNotification: true });
-    const original = await fs.readFile(f.originalsPath, 'utf8');
-    f.earlyProvider.current = true;
+  it('retries known discard before unchanged-state readback and never restores its unowned intent', async () => {
+    const f = await setup({ earlyNotification: true, start: false });
+    const rename = fs.rename.bind(fs); let writes = 0;
+    const failed = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (path.basename(String(args[1])) === path.basename(f.originalsPath) && ++writes === 2) throw new Error('Cleanup disk failure');
+      return rename(...args);
+    });
     f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
       await options?.beforeChange?.(true);
       throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
     });
+    try {
+      await f.runtime.start(); await until(() => f.events.includes('early-notification-http-409-faulted'));
+    } finally { failed.mockRestore(); }
+    f.earlyProvider.current = false;
+    await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-confirmed-off'));
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
+    await f.runtime.stop(); await f.rebind({ devices: [] });
+    expect(f.earlyProvider.current).toBe(false); expect(f.settingWrites).toEqual([]);
+  });
+
+  it('preserves an unowned intent across a fresh process module after refused cleanup fails', async () => {
+    const f = await setup({ earlyNotification: true, start: false });
+    const rename = fs.rename.bind(fs); let writes = 0;
+    const failed = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (path.basename(String(args[1])) === path.basename(f.originalsPath) && ++writes === 2) throw new Error('Cleanup disk failure');
+      return rename(...args);
+    });
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      await options?.beforeChange?.(true);
+      throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+    });
+    try {
+      await f.runtime.start(); await until(() => f.events.includes('early-notification-http-409-faulted'));
+    } finally { failed.mockRestore(); }
+    await f.runtime.stop(); f.earlyProvider.current = false;
+    let FreshRuntime!: typeof NativeRecordingRuntime;
+    await jest.isolateModulesAsync(async () => { FreshRuntime = (await import('../src/native-recording-runtime')).NativeRecordingRuntime; });
+    const restarted = await FreshRuntime.create({ ...f.runtimeOptions, devices: [] }); runtimes.push(restarted);
+    const since = f.events.length;
+    await restarted.start(); await until(() => f.events.slice(since).includes('early-notification-pending-recovery-required'));
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+    expect(f.earlyProvider.current).toBe(false);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);
+  });
+
+  it.each([false, true])('never claims owned restoration when promotion cannot persist: prior owned=%s', async priorOwned => {
+    const f = await setup({ earlyNotification: true, start: priorOwned });
+    const write = secureJson.writeOwnerOnlyJsonFile;
+    const failed = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (filename, state) => {
+      if (path.basename(filename) === path.basename(f.originalsPath)
+        && (state as { devices?: { ownership?: string }[] }).devices?.some(row => row.ownership === 'owned')) throw new Error('Promotion disk failure');
+      await write(filename, state);
+    });
+    try {
+      if (priorOwned) await f.runtime.retryConnection(); else await f.runtime.start();
+      await until(() => f.events.includes('early-notification-unexpected-faulted'));
+    } finally { failed.mockRestore(); }
+    expect(f.settingReceipts[0].devices).toMatchObject([{ ownership: 'pending' }]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ ownership: 'pending' }]);
+    await f.runtime.stop(); await f.rebind({ devices: [] });
+    expect(f.earlyProvider.current).toBe(false); expect(f.settingWrites).toEqual([false]);
+  });
+
+  it('reconfirms only existing-owned continuity after an unchanged request with no change callback', async () => {
+    const f = await setup({ earlyNotification: true }); await f.runtime.stop();
+    const original = f.client.setDeviceEarlyNotification.getMockImplementation()!;
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (...args) => {
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('pending');
+      return original(...args);
+    });
+    const continued = await f.rebind();
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('owned');
+    expect(f.settingWrites).toEqual([false]);
+    await continued.stop(); await f.rebind({ devices: [] });
+    expect(f.settingWrites).toEqual([false, true]);
+  });
+
+  it('leaves a refused reapply unowned after prior ownership ended and a fresh process starts', async () => {
+    const f = await setup({ earlyNotification: true }); f.earlyProvider.current = true;
+    const rename = fs.rename.bind(fs); let writes = 0;
+    const failed = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (path.basename(String(args[1])) === path.basename(f.originalsPath) && ++writes === 2) throw new Error('Cleanup disk failure');
+      return rename(...args);
+    });
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('pending');
+      await options?.beforeChange?.(true);
+      throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+    });
+    try {
+      await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-http-409-faulted'));
+    } finally { failed.mockRestore(); }
+    await f.runtime.stop(); f.earlyProvider.current = false;
+    let FreshRuntime!: typeof NativeRecordingRuntime;
+    await jest.isolateModulesAsync(async () => { FreshRuntime = (await import('../src/native-recording-runtime')).NativeRecordingRuntime; });
+    const restarted = await FreshRuntime.create({ ...f.runtimeOptions, devices: [] }); runtimes.push(restarted);
+    const since = f.events.length;
+    await restarted.start(); await until(() => f.events.slice(since).includes('early-notification-pending-recovery-required'));
+    expect(f.earlyProvider.current).toBe(false); expect(f.settingWrites).toEqual([false]);
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists an unowned restoration intent before a successful restore whose cleanup fails', async () => {
+    const f = await setup({ earlyNotification: true }); await f.runtime.stop();
+    const rename = fs.rename.bind(fs); let writes = 0;
+    const failed = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (path.basename(String(args[1])) === path.basename(f.originalsPath) && ++writes === 2) throw new Error('Cleanup disk failure');
+      return rename(...args);
+    });
+    let replacement!: NativeRecordingRuntime;
+    try { replacement = await f.rebind({ devices: [] }); } finally { failed.mockRestore(); }
+    expect(f.settingReceipts[1].devices).toMatchObject([{ ownership: 'pending' }]);
+    expect(f.settingWrites).toEqual([false, true]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);
+    await replacement.stop(); f.earlyProvider.current = false;
+    let FreshRuntime!: typeof NativeRecordingRuntime;
+    await jest.isolateModulesAsync(async () => { FreshRuntime = (await import('../src/native-recording-runtime')).NativeRecordingRuntime; });
+    const restarted = await FreshRuntime.create({ ...f.runtimeOptions, devices: [] }); runtimes.push(restarted);
+    const since = f.events.length;
+    await restarted.start(); await until(() => f.events.slice(since).includes('early-notification-pending-recovery-required'));
+    expect(f.earlyProvider.current).toBe(false); expect(f.settingWrites).toEqual([false, true]);
+  });
+
+  it('does not enter a preference request when its owned-intent demotion cannot persist', async () => {
+    const f = await setup({ earlyNotification: true });
+    const rename = fs.rename.bind(fs);
+    const failed = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (path.basename(String(args[1])) === path.basename(f.originalsPath)) throw new Error('Demotion disk failure');
+      return rename(...args);
+    });
+    try {
+      await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-unexpected-faulted'));
+      expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+      await f.push(); expect(f.publicMotion).toHaveBeenCalledTimes(1);
+    } finally { failed.mockRestore(); }
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('owned');
+  });
+
+  it('keeps another camera preference and public motion available while an intent needs review', async () => {
+    const f = await setup({ earlyNotification: true, earlyFailure: 'after-write', secondCamera: true, start: false });
+    f.devices[1].rawType = 'catalina'; f.devices[1].settings.earlyNotificationMode = 'off';
+    await f.runtime.start(); await until(() => f.events.includes('early-notification-confirmed-off'));
+    expect(f.reports).toContainEqual({ event: 'early-notification-confirmed-off', context: { camera: 'Corner native name' } });
+    await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-pending-recovery-required'));
+    expect(f.client.setDeviceEarlyNotification.mock.calls.filter(call => call[2] === 40)).toHaveLength(1);
+    expect(f.client.setDeviceEarlyNotification.mock.calls.filter(call => call[2] === 41).length).toBeGreaterThanOrEqual(1);
+    await f.push(); expect(f.publicMotion).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a pre-existing original as unverified after failed revalidation', async () => {
+    const f = await setup({ earlyNotification: true });
+    const original = await fs.readFile(f.originalsPath, 'utf8');
+    f.earlyProvider.current = true;
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+    });
     await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-http-409-faulted'));
-    expect(await fs.readFile(f.originalsPath, 'utf8')).toBe(original);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);
+    expect(JSON.parse(original).devices[0].original).toBe(true);
     expect(f.settingWrites).toEqual([false]);
   });
 
@@ -991,23 +1180,20 @@ describe('native recording runtime composition', () => {
     expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toEqual([]);
   });
 
-  it('retains a lost readback original, reconfirms without another write, and delays events from before confirmation', async () => {
+  it('retains unknown original evidence without promotion or restoration after unchanged readback', async () => {
     const f = await setup({ earlyNotification: true, earlyFailure: 'after-write' });
     expect(f.settingWrites).toEqual([false]);
-    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
-    const earlier = Date.now();
-    await jest.advanceTimersByTimeAsync(10_000);
-    const since = f.events.length;
-    f.earlyProvider.failure = undefined; await f.runtime.retryConnection();
-    await until(() => f.events.slice(since).includes('early-notification-confirmed-off'));
-    await f.push(f.notification('old-early-event', { created_at: new Date(earlier).toISOString() }));
-    await f.push(f.notification('confirmed-off-event'));
-    const queue = (await f.state()).core!.queue;
-    expect(queue.map(job => [job.observation.eventId, job.observation.occurredAt, job.eligibleAt])).toEqual([
-      [expect.any(String), earlier, earlier + 60_000], [expect.any(String), Date.now(), Date.now()],
-    ]);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);
+    f.earlyProvider.failure = undefined;
+    await f.runtime.retryConnection();
+    await until(() => f.events.includes('early-notification-pending-recovery-required'));
+    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+    await f.push();
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+    await f.runtime.stop(); await f.rebind({ devices: [] });
+    expect(f.earlyProvider.current).toBe(false);
     expect(f.settingWrites).toEqual([false]);
-    expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);
   });
 
   it('retains the original and delayed event path while a setting command remains unresolved without replaying it', async () => {
@@ -1898,7 +2084,7 @@ describe('native recording runtime composition', () => {
     } finally { failAll = false; failLatest = false; saving.mockRestore(); globalThis.fetch = originalFetch; }
   });
 
-  it('drains a late preference journal before a replacement loads its preserved original', async () => {
+  it('drains a late preference intent before a replacement loads it as unverified', async () => {
     const f = await setup({ earlyNotification: true, earlyCurrent: false }), gate = deferred<void>();
     const write = secureJson.writeOwnerOnlyJsonFile, realpath = fs.realpath.bind(fs), lstat = fs.lstat.bind(fs);
     let held = false, replacementResolvingRoot = false;
@@ -1927,7 +2113,8 @@ describe('native recording runtime composition', () => {
       gate.resolve(); await f.rebind();
       expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices)
         .toEqual([expect.objectContaining({ deviceId: 40, original: true })]);
-      expect(f.settingWrites).toEqual([false]);
+      expect(f.settingWrites).toEqual([]);
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('pending');
     } finally {
       gate.resolve(); saving.mockRestore(); resolving.mockRestore(); loading.mockRestore();
     }
