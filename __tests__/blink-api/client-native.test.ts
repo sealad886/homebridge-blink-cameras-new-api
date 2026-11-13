@@ -1375,6 +1375,57 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().liveView).toMatchObject({ commandId: 707 });
   });
 
+  it.each((['catalog', 'clip'] as const).flatMap(kind =>
+    (['authentication', 'response', 'ready-save'] as const).map(stage => [kind, stage] as const)))
+  ('keeps prepared %s acquisition on committed auth while candidate persistence fails at %s', async (kind, stage) => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    (f.auth.getClientId as jest.Mock).mockRestore();
+    const auth = f.auth as unknown as { clientId: number; persistCurrentStateUnlocked(): Promise<void>;
+      captureTokensUnlocked(body: unknown, header: null): Promise<void> };
+    auth.clientId = 90;
+    let restore!: () => void, rollback = Promise.resolve(), candidate = false;
+    const gate = new Promise<void>(resolve => { restore = resolve; });
+    jest.spyOn(auth, 'persistCurrentStateUnlocked').mockImplementation(async () => { await gate; throw new Error('candidate auth persist failed'); });
+    const rotate = () => {
+      if (candidate) return;
+      candidate = true;
+      rollback = auth.captureTokensUnlocked({ access_token: 'fixture-candidate', refresh_token: 'fixture-refresh', expires_in: 3600,
+        client_id: 91 }, null).catch(() => undefined);
+    };
+    const state = pending({ operationId: `same-result-${kind}`, kind, phase: 'prepared', statusReads: 1,
+      ...(kind === 'catalog' ? { resultCommandId: 202 } : { clip: { manifestId: 303, clip } }) });
+    const saved: NativeStorageState[] = [];
+    const owner = new NativeStorageOwner({ transport, restoredState: state,
+      admit: (work, options, id, context) => f.api.withNativeStorageAdmission(id, work, options, context),
+      saveState: async next => {
+        saved.push(copy(next)); f.api.setNativeStorageOwner(scope, next);
+        if (stage === 'ready-save' && next.operation?.phase === 'finished' && next.operation.result?.status === 'ready') rotate();
+      } });
+    f.api.setNativeStorageOwner(scope, state);
+    if (stage === 'authentication') (f.auth.ensureValidToken as jest.Mock).mockImplementationOnce(async () => { rotate(); });
+    (fetch as jest.Mock).mockImplementation(async () => {
+      if (stage === 'response') rotate();
+      return kind === 'clip' ? new Response(Buffer.from('fixture clip')) : json({ manifest_id: 303,
+        media: [{ id: 404, network_id: 20, device_name: 'Entry_ABC', media: mediaUrl }], page_size: 1000, pagination_key: null });
+    });
+    const context = { ...scope, operationId: state.operation!.operationId };
+    const acquire = () => kind === 'catalog' ? owner.readCatalog(context) : owner.downloadClip(context, { manifestId: 303, clip });
+    try {
+      await expect(acquire()).resolves.toMatchObject({ status: 'ready' });
+      expect(f.api.getCachedIdentity().clientId).toBe(90);
+      expect(owner.snapshot().operation).toMatchObject({ operationId: context.operationId, phase: 'finished',
+        statusReads: 1, expiresAt: state.operation!.expiresAt });
+      expect(saved.some(next => next.operation?.phase === 'finished' && next.operation.result?.status === 'failed')).toBe(false);
+      restore(); await rollback;
+      expect(f.api.getCachedIdentity().clientId).toBe(90);
+      await expect(acquire()).resolves.toMatchObject({ status: 'ready' });
+      expect((fetch as jest.Mock).mock.calls.every(([url, request]) => request.method === 'GET' && (kind === 'catalog'
+        ? url.endsWith('/media/202') : url === mediaUrl))).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(owner.snapshot().operation).toMatchObject({ operationId: context.operationId, expiresAt: state.operation!.expiresAt, statusReads: 1 });
+    } finally { restore(); await rollback; }
+  });
+
   it.each(['account', 'client', 'tier', 'writer', 'fence'] as const)
   ('blocks a native media GET when %s authority changes during authentication', async changed => {
     const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
@@ -1476,7 +1527,7 @@ describe('owned native storage SDK', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('keeps native recovery uncertain when writer authority changes during a known-status response', async () => {
+  it('keeps native recovery uncertain when client authority changes during a known-status response', async () => {
     const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
     const saved: NativeStorageState[] = [];
     const owner = new NativeStorageOwner({ transport, restoredState: pending(),

@@ -77,6 +77,13 @@ authentication to HTTP dispatch; reads and owned file promotion recheck it too.
 A journal fault clears only after the latest required snapshot for the current
 writer is saved, rather than after an older physical write completes.
 
+Auth token capture builds and persists a candidate before publishing live tokens
+and identity together. Failed saves never expose the candidate or roll back later
+SDK metadata updates. On successful refresh, token-supplied identity fields win;
+later metadata updates fill only token-omitted fields. A hosted new-account
+boundary clears old-session metadata. Metadata setters retain their existing
+immediate behavior and explicit queued persistence contract.
+
 The existing stable contact sensor and Retry switch own connection presentation.
 The contact monitor stays active during a cloud outage, but reports disconnected
 and faulted state after confirmation. Recovery preserves all accessory identities.

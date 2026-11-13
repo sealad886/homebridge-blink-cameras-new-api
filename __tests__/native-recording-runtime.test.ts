@@ -1541,6 +1541,75 @@ describe('native recording runtime composition', () => {
       } finally { saving.mockRestore(); }
     });
 
+  it.each(['failed-save', 'committed-new-scope', 'permission-revoked', 'stopped'] as const)(
+    'uses committed auth authority while a real candidate save is pending: %s', async phase => {
+      const f = await setup({ start: false, config: { maxRetries: 0 } }); await f.runtime.stop();
+      const persist = deferred<void>(), response = deferred<void>();
+      let saving = false, settled = false, candidate: Promise<void> = Promise.resolve();
+      const api = new BlinkApi({ email: '', password: '', hardwareId: 'committed-auth-runtime', tier: scope.tier, sharedTier: scope.tier,
+        authStorage: { load: async () => null, clear: async () => undefined, save: async () => {
+          saving = true; await persist.promise;
+          if (phase !== 'committed-new-scope') throw new Error('candidate auth save failed');
+        } } });
+      const auth = (api as unknown as { auth: BlinkAuth }).auth;
+      auth.setAccountMetadata({ accountId: 10, clientId: 11, tier: scope.tier });
+      const tokens = auth as unknown as { accessToken: string; refreshToken: string; tokenExpiry: Date;
+        captureTokensUnlocked(body: { access_token: string; refresh_token: string; expires_in: number; client_id: number }, header: null): Promise<void> };
+      tokens.accessToken = 'fixture-committed-token'; tokens.refreshToken = 'fixture-committed-refresh';
+      tokens.tokenExpiry = new Date(Date.now() + 3600000);
+      jest.spyOn(auth, 'ensureValidToken').mockResolvedValue(undefined);
+      const admissions = jest.spyOn(api, 'withNativeStorageAdmission');
+      const originalFetch = globalThis.fetch;
+      let runtime: NativeRecordingRuntime | undefined;
+      globalThis.fetch = jest.fn().mockImplementation(async (url: string, request: RequestInit) => {
+        if (request.method === 'POST') return new Response(JSON.stringify({ id: url.endsWith('/manifest/request') ? 101 : 303 }));
+        if (url.endsWith('/commands/101')) return new Response(JSON.stringify({ complete: true, status: 0, commands: [{ id: 202 }] }));
+        if (url.endsWith('/commands/303')) return new Response(JSON.stringify({ complete: true, status: 0 }));
+        if (url.endsWith('/media/202')) {
+          candidate = tokens.captureTokensUnlocked({ access_token: 'fixture-candidate-token', refresh_token: 'fixture-candidate-refresh',
+            expires_in: 3600, client_id: 12 }, null).then(() => { settled = true; }, () => { settled = true; });
+          await response.promise;
+          return new Response(JSON.stringify({ manifest_id: 91, media: f.media, page_size: 1000, pagination_key: null }));
+        }
+        if (url.endsWith('/clip/request/101/')) return new Response(Buffer.from('offline native video bytes'));
+        throw new Error('Unexpected offline auth-authority fixture route');
+      });
+      try {
+        runtime = await f.rebind({ client: api });
+        await f.push(f.notification('job-during-uncommitted-auth'));
+        await jest.advanceTimersByTimeAsync(60000); await until(() => saving);
+        expect(api.getCachedIdentity()).toMatchObject(scope);
+        expect(auth.getAuthHeaders().Authorization).toBe('Bearer fixture-committed-token');
+        expect(settled).toBe(false);
+        if (phase === 'failed-save') {
+          response.resolve();
+          await until(() => admissions.mock.calls.length === 2);
+          await jest.advanceTimersByTimeAsync(300);
+          await until(() => f.events.includes('offered'));
+          await until(async () => (await f.state()).core?.queue.length === 0);
+          expect(settled).toBe(false);
+          persist.resolve(); await candidate;
+          expect(api.getCachedIdentity()).toMatchObject(scope);
+          expect(f.events).not.toContain('job-cancelled');
+          expect((await f.state()).core?.queue).toEqual([]);
+        } else {
+          const stopping = phase === 'stopped' ? runtime.stop() : undefined;
+          if (phase === 'permission-revoked') f.delegate.updateCameraActive(false);
+          persist.resolve(); await candidate;
+          if (phase === 'committed-new-scope') expect(api.getCachedIdentity().clientId).toBe(12);
+          response.resolve(); await stopping;
+          if (phase !== 'stopped') await runtime.retryConnection();
+          await until(async () => phase === 'stopped' || f.events.includes('job-cancelled') || (await f.state()).core?.queue.length === 0);
+          expect(f.events).not.toContain('offered');
+          expect((await f.state()).downloads).toEqual([]);
+          if (stopping) expect(runtime.localWriterReleased).toBe(true);
+        }
+        const posts = jest.mocked(globalThis.fetch).mock.calls.filter(([, request]) => request?.method === 'POST');
+        expect(posts.filter(([url]) => String(url).endsWith('/manifest/request'))).toHaveLength(1);
+        expect(posts.filter(([url]) => !String(url).endsWith('/manifest/request'))).toHaveLength(phase === 'failed-save' ? 1 : 0);
+      } finally { persist.resolve(); response.resolve(); await candidate; await runtime?.stop().catch(() => undefined); globalThis.fetch = originalFetch; }
+    });
+
   it.each([false, true])('flushes latest real SDK ownership before recovering its journal (acknowledged: %s)', async acknowledged => {
     const api = new BlinkApi({ email: '', password: '', hardwareId: 'runtime-journal-recovery', tier: scope.tier });
     const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;

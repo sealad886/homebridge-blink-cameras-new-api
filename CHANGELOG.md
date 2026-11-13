@@ -21,6 +21,8 @@ owns subsequent acceptance and finding dispositions.
 - Keep arm/disarm and other controls available with warned in-memory ownership
   during recording-journal faults. Classify proven connection-establishment
   failures as unstarted rather than leaving a permanent Live View reservation.
+- Publish refreshed tokens and account identity only after their save succeeds,
+  preventing failed auth persistence from cancelling valid recording work.
 - Restore valid push-receiver identities whose P-256 private key omits leading
   zero padding, avoiding intermittent rejection of generated cached credentials.
 - Show canonical validation paths and blocking status in the settings editor.

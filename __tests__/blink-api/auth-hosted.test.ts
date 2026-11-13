@@ -541,6 +541,110 @@ describe('BlinkAuth hosted OAuth', () => {
     },
   );
 
+  it.each([true, false])('publishes refreshed tokens and identity only after persistence succeeds (%s)', async succeeds => {
+    const prior: BlinkAuthState = { accessToken: 'prior-access', refreshToken: 'prior-refresh', tokenAuth: 'prior-header',
+      tokenExpiry: '2026-12-31T00:00:00.000Z', oauthClientId: 'ios', accountId: 12, clientId: 23, region: 'us', tier: 'prod' };
+    let release!: () => void, reject!: (error: Error) => void, started!: () => void;
+    const saving = new Promise<void>(resolve => { started = resolve; });
+    const pending = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+    const storage = createStorage(prior, async () => { started(); await pending; });
+    const { logger } = createLogger();
+    const auth = new BlinkAuth(makeConfig(storage, logger));
+    await auth.getPersistedTier();
+    const previous = tokenState(auth), headers = auth.getAuthHeaders();
+    fetchMock.mockResolvedValueOnce(successfulTokenResponse());
+    const refresh = auth.refreshTokens().catch(error => error);
+    try {
+      await saving;
+      expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({ accessToken: ACCESS_TOKEN, clientId: 100 }));
+      expect(tokenState(auth)).toEqual(previous);
+      expect(auth.getAuthHeaders()).toEqual(headers);
+      expect(auth.getAccessToken()).toBe(prior.accessToken);
+      expect(auth.getRefreshToken()).toBe(prior.refreshToken);
+      expect(auth.getAccountId()).toBe(12); expect(auth.getClientId()).toBe(23);
+      expect(auth.getRegion()).toBe('us'); expect(auth.getTier()).toBe('prod');
+      if (succeeds) release(); else reject(new Error('fixture persistence rejected'));
+      const result = await refresh;
+      if (succeeds) {
+        expect(result).toBeUndefined();
+        expect(auth.getAuthHeaders()).toEqual({ Authorization: `Bearer ${ACCESS_TOKEN}`, 'TOKEN-AUTH': TOKEN_AUTH });
+        expect(tokenState(auth)).toMatchObject({ accessToken: ACCESS_TOKEN, refreshToken: REFRESH_TOKEN,
+          accountId: 42, clientId: 100, region: 'eu', tier: 'prde' });
+      } else {
+        expect(result).toBeInstanceOf(Error);
+        expect(tokenState(auth)).toEqual(previous); expect(auth.getAuthHeaders()).toEqual(headers);
+      }
+    } finally { release(); await refresh; }
+  });
+
+  it.each(([true, false] as const).flatMap(succeeds =>
+    (['explicit-token-fields', 'omitted-token-fields', 'null-metadata', 'undefined-metadata'] as const).map(update => [succeeds, update] as const)))
+  ('preserves metadata ordering after pending token save success=%s (%s)', async (succeeds, update) => {
+    const prior: BlinkAuthState = { accessToken: 'prior-access', refreshToken: 'prior-refresh', tokenAuth: 'prior-header',
+      tokenExpiry: '2026-12-31T00:00:00.000Z', oauthClientId: 'ios', accountId: 12, clientId: 23, region: 'us', tier: 'prod', email: 'prior@example.com' };
+    let release!: () => void, reject!: (error: Error) => void, started!: () => void;
+    const saving = new Promise<void>(resolve => { started = resolve; });
+    const pending = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+    let saves = 0;
+    const storage = createStorage(prior, async () => { if (++saves === 1) { started(); await pending; } });
+    const { logger } = createLogger(), config = makeConfig(storage, logger);
+    const auth = new BlinkAuth(config); await auth.getPersistedTier();
+    fetchMock.mockResolvedValueOnce(successfulTokenResponse(update === 'explicit-token-fields' ? {} : {
+      account_id: undefined, client_id: undefined, region: undefined, tier: undefined }));
+    const refresh = auth.refreshTokens().catch(error => error);
+    let persistence: Promise<void> | undefined;
+    try {
+      await saving;
+      const metadata = update === 'null-metadata' ? { accountId: null, clientId: null, region: null, tier: null, email: null }
+        : update === 'undefined-metadata' ? { accountId: undefined, clientId: undefined, region: undefined, tier: undefined, email: undefined }
+          : update === 'explicit-token-fields' ? { accountId: 12, clientId: 23, region: 'us', tier: 'prod', email: 'later@example.com' }
+            : { accountId: 13, clientId: 24, region: 'ca', tier: 'u002', email: 'later@example.com' };
+      auth.setAccountMetadata(metadata);
+      const immediate = { accountId: auth.getAccountId(), clientId: auth.getClientId(), region: auth.getRegion(), tier: auth.getTier(), email: config.email || null };
+      persistence = auth.persistCurrentState();
+      if (succeeds) release(); else reject(new Error('fixture persistence rejected'));
+      await refresh; await persistence;
+      const expected = succeeds && update === 'explicit-token-fields'
+        ? { accountId: 42, clientId: 100, region: 'eu', tier: 'prde', email: 'later@example.com' } : immediate;
+      expect({ accountId: auth.getAccountId(), clientId: auth.getClientId(), region: auth.getRegion(), tier: auth.getTier(), email: config.email || null }).toEqual(expected);
+      expect(auth.getAccessToken()).toBe(succeeds ? ACCESS_TOKEN : prior.accessToken);
+      expect(storage.save).toHaveBeenCalledTimes(2);
+      expect(storage.save.mock.calls[1][0]).toMatchObject({ ...expected, accessToken: succeeds ? ACCESS_TOKEN : prior.accessToken });
+      expect(auth.getAuthHeaders()).toEqual({ Authorization: `Bearer ${succeeds ? ACCESS_TOKEN : prior.accessToken}`,
+        'TOKEN-AUTH': succeeds ? TOKEN_AUTH : prior.tokenAuth });
+    } finally { release(); await refresh; await persistence; }
+  });
+
+  it.each([true, false])('isolates hosted new-account publication from old-session metadata setters (%s)', async succeeds => {
+    const prior: BlinkAuthState = { accessToken: 'prior-access', refreshToken: 'prior-refresh', tokenAuth: 'prior-header',
+      tokenExpiry: '2026-12-31T00:00:00.000Z', oauthClientId: 'ios', accountId: 12, clientId: 23, region: 'us', tier: 'prod', email: 'prior@example.com' };
+    let release!: () => void, reject!: (error: Error) => void, started!: () => void;
+    const saving = new Promise<void>(resolve => { started = resolve; });
+    const pending = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+    let saves = 0;
+    const storage = createStorage(prior, async () => { if (++saves === 1) { started(); await pending; } });
+    const { logger } = createLogger(), config = makeConfig(storage, logger);
+    const auth = new BlinkAuth(config), { pending: hosted, callbackUrl } = await startHostedLogin(auth);
+    fetchMock.mockResolvedValueOnce(exactHostedTokenResponse());
+    const capture = auth.completeHostedLogin(hosted.flowId, callbackUrl).catch(error => error);
+    let persistence: Promise<void> | undefined;
+    try {
+      await saving;
+      expect(auth.getAuthHeaders()).toEqual({ Authorization: 'Bearer prior-access', 'TOKEN-AUTH': 'prior-header' });
+      expect(auth.getAccountId()).toBe(12); expect(auth.getClientId()).toBe(23);
+      auth.setAccountMetadata({ accountId: 12, clientId: 23, region: 'us', tier: 'prod', email: 'old-session@example.com' });
+      persistence = auth.persistCurrentState();
+      if (succeeds) release(); else reject(new Error('fixture persistence rejected'));
+      await capture; await persistence;
+      const expected = succeeds ? { accountId: null, clientId: null, region: null, tier: null, email: null }
+        : { accountId: 12, clientId: 23, region: 'us', tier: 'prod', email: 'old-session@example.com' };
+      expect(storage.save.mock.calls[1][0]).toMatchObject({ ...expected, accessToken: succeeds ? ACCESS_TOKEN : prior.accessToken });
+      expect(auth.getAuthHeaders()).toEqual(succeeds ? { Authorization: `Bearer ${ACCESS_TOKEN}` }
+        : { Authorization: 'Bearer prior-access', 'TOKEN-AUTH': 'prior-header' });
+      expect(auth.getAccountId()).toBe(expected.accountId); expect(config.email || null).toBe(expected.email);
+    } finally { release(); await capture; await persistence; }
+  });
+
   it('clears explicitly null account metadata while preserving omitted properties', async () => {
     const currentEmail = 'current-account@example.com';
     const storage = createStorage({
