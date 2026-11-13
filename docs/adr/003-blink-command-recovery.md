@@ -84,6 +84,14 @@ later metadata updates fill only token-omitted fields. A hosted new-account
 boundary clears old-session metadata. Metadata setters retain their existing
 immediate behavior and explicit queued persistence contract.
 
+Auth is the sole owner of account and client identity; SDK requests do not keep
+separate ID caches or write cached IDs back into auth. After authentication,
+requests derive routing from committed auth and validate embedded account/client
+IDs before dispatch. Metadata reads retain a committed credential revision from
+their actual dispatch; delayed success or failure cannot overwrite a newer
+session through metadata publication or fallback.
+Production-bootstrap probes keep an explicit request-scoped tier override.
+
 The existing stable contact sensor and Retry switch own connection presentation.
 The contact monitor stays active during a cloud outage, but reports disconnected
 and faulted state after confirmation. Recovery preserves all accessory identities.

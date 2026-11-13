@@ -551,13 +551,14 @@ describe('BlinkAuth hosted OAuth', () => {
     const { logger } = createLogger();
     const auth = new BlinkAuth(makeConfig(storage, logger));
     await auth.getPersistedTier();
-    const previous = tokenState(auth), headers = auth.getAuthHeaders();
+    const previous = tokenState(auth), headers = auth.getAuthHeaders(), revision = auth.getTokenRevision();
     fetchMock.mockResolvedValueOnce(successfulTokenResponse());
     const refresh = auth.refreshTokens().catch(error => error);
     try {
       await saving;
       expect(storage.save).toHaveBeenCalledWith(expect.objectContaining({ accessToken: ACCESS_TOKEN, clientId: 100 }));
       expect(tokenState(auth)).toEqual(previous);
+      expect(auth.getTokenRevision()).toBe(revision);
       expect(auth.getAuthHeaders()).toEqual(headers);
       expect(auth.getAccessToken()).toBe(prior.accessToken);
       expect(auth.getRefreshToken()).toBe(prior.refreshToken);
@@ -565,6 +566,7 @@ describe('BlinkAuth hosted OAuth', () => {
       expect(auth.getRegion()).toBe('us'); expect(auth.getTier()).toBe('prod');
       if (succeeds) release(); else reject(new Error('fixture persistence rejected'));
       const result = await refresh;
+      expect(auth.getTokenRevision()).toBe(revision + (succeeds ? 1 : 0));
       if (succeeds) {
         expect(result).toBeUndefined();
         expect(auth.getAuthHeaders()).toEqual({ Authorization: `Bearer ${ACCESS_TOKEN}`, 'TOKEN-AUTH': TOKEN_AUTH });

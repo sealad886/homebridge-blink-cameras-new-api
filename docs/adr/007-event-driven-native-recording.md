@@ -338,6 +338,11 @@ a subsequent unsent clip stage uncertain. Deferred work waits the existing retry
 interval, including when no readiness callback is present. This proof cannot
 refund an unfinished dispatched or restored uncertain stage. Recovery reports
 success only after every participant is saved.
+Local delivery carries an ephemeral scope, permission-epoch and camera-generation
+guard through preparation, a ready offer and every recording fragment. Revoked
+scope or permission stops publication and disposes owned media. A same-scope
+token refresh or unrelated journal fault does not revoke local media permission.
+The existing readiness gate still prevents starting new delivery while faulted.
 Dispatch/transition diagnostics are local; generating a diagnostic report must
 not issue verification requests.
 Push diagnostics retain only fixed event/reason/disposition labels and bounded

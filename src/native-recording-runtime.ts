@@ -604,11 +604,13 @@ export class NativeRecordingRuntime {
       for (const asset of [...this.state.downloads]) {
         const device = [...this.devices.values()].find(item => item.binding.cameraId === asset.cameraId && item.nativeStorage?.moduleId === asset.moduleId);
         const recording = device?.recording();
-        if (!recording?.policy.allowed || recording.policy.epoch !== asset.policyEpoch
-          || !this.core.isCameraGenerationCurrent(asset.moduleId, asset.cameraId, asset.cameraGeneration)) { await this.removeOwnedAsset(asset); continue; }
+        const current = () => this.active && !this.stopped && this.currentScope() && !!recording?.policy.allowed
+          && recording.policy.epoch === asset.policyEpoch
+          && this.core.cameraGeneration(asset.moduleId, asset.cameraId) === asset.cameraGeneration;
+        if (!recording || !current()) { await this.removeOwnedAsset(asset); continue; }
         if (!recording.available) continue;
         const result = await recording.offerDownloaded({ filePath: asset.reference, expectedBytes: asset.bytes, expectedSha256: asset.sha256 },
-          { jobId: asset.jobId, clipIdentity: asset.identity, capturedAt: asset.capturedAt, policyEpoch: asset.policyEpoch });
+          { jobId: asset.jobId, clipIdentity: asset.identity, capturedAt: asset.capturedAt, policyEpoch: asset.policyEpoch }, current);
         if (result.status === 'ready' || result.status === 'uncertain') this.options.report('prepared');
         this.options.report(result.status === 'ready' ? 'offered' : `delivery-${result.status}-${result.reason}`);
         await this.removeOwnedAsset(asset);

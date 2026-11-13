@@ -83,6 +83,12 @@ export interface BlinkEarlyNotificationOptions extends RequestOptions {
 
 interface ConflictResolution<T> { resolved: boolean; value?: T }
 
+interface AuthMetadataReceipt<T> { value: T; current(): void }
+class AuthMetadataChangedError extends Error {
+  constructor() { super('Blink authentication changed while reading account metadata.'); this.name = 'AuthMetadataChangedError'; }
+}
+
+
 export class BlinkOperationNotStartedError extends Error {
   readonly dispatched = false;
   constructor(public readonly reason: 'storage-pending' | 'liveview-pending' | 'ownership-unavailable' | 'invalid-native-route') {
@@ -178,8 +184,6 @@ export class BlinkApi {
   private readonly regionalRootHttp: BlinkHttp;
   private readonly log: BlinkLogger;
   private readonly debug: boolean;
-  private accountId: number | null = null;
-  private clientId: number | null = null;
   private readonly nativeStorageFences = new Map<string, NativeStorageFence>();
   private activeNativeAdmission?: { operationId: string; scope: NativeStorageScope; canPost: boolean; expiresAt: number };
   private liveViewOwner?: BlinkLiveViewOwnership;
@@ -201,10 +205,11 @@ export class BlinkApi {
 
   constructor(private readonly config: BlinkConfig) {
     this.auth = new BlinkAuth(config);
-    this.http = new BlinkHttp(this.auth, config);
-    this.sharedHttp = new BlinkHttp(this.auth, config, getSharedRestBaseUrl(config));
-    this.sharedRootHttp = new BlinkHttp(this.auth, config, getSharedRestRootUrl(config));
-    this.regionalRootHttp = new BlinkHttp(this.auth, config, getRestRootUrl(config));
+    const prepareRequest = (resource: string, options: BlinkHttpRequestOptions) => this.prepareAuthenticatedRequest(resource, options.tierOverride);
+    this.http = new BlinkHttp(this.auth, config, undefined, prepareRequest);
+    this.sharedHttp = new BlinkHttp(this.auth, config, getSharedRestBaseUrl(config), prepareRequest);
+    this.sharedRootHttp = new BlinkHttp(this.auth, config, getSharedRestRootUrl(config), prepareRequest);
+    this.regionalRootHttp = new BlinkHttp(this.auth, config, getRestRootUrl(config), prepareRequest);
     this.log = config.logger ?? { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
     this.debug = config.debugAuth ?? false;
   }
@@ -256,7 +261,7 @@ export class BlinkApi {
         if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
         if (!accountAuthority) {
           // Bind once to the routing account; an initial login may populate an empty cache.
-          const accountId = admission.scope?.accountId ?? this.accountId ?? this.auth.getAccountId();
+          const accountId = admission.scope?.accountId ?? this.auth.getAccountId();
           if (accountId !== null) accountAuthority = this.captureOperationAuthority(accountId, generation);
         }
         accountAuthority?.();
@@ -731,9 +736,27 @@ export class BlinkApi {
 
   /** Cached authenticated metadata only; this method never verifies against Blink. */
   getCachedIdentity(): { accountId: number | null; clientId: number | null; tier: string; sharedTier: string } {
+    this.syncCommittedAuthRouting();
     const tier = normalizeBlinkTier(this.config.tier) ?? 'prod';
-    return { accountId: this.auth.getAccountId() ?? this.accountId, clientId: this.auth.getClientId() ?? this.clientId,
+    return { accountId: this.auth.getAccountId(), clientId: this.auth.getClientId(),
       tier, sharedTier: normalizeBlinkTier(this.config.sharedTier) ?? tier };
+  }
+
+  private syncCommittedAuthRouting(): void {
+    const tier = normalizeBlinkTier(this.auth.getTier());
+    if (tier && tier !== normalizeBlinkTier(this.config.tier)) this.applyTier(tier);
+  }
+
+  private prepareAuthenticatedRequest(resource: string, tierOverride?: string): void {
+    this.syncCommittedAuthRouting();
+    if (tierOverride !== undefined) this.applyTier(normalizeBlinkTier(tierOverride) ?? 'prod');
+    const pathname = resource.split('?')[0];
+    const account = pathname.match(/(?:^|\/)accounts\/([1-9][0-9]*)(?:\/|$)/);
+    const client = pathname.match(/(?:^|\/)clients\/([1-9][0-9]*)(?:\/|$)/);
+    if ((account && Number(account[1]) !== this.auth.getAccountId())
+      || (client && Number(client[1]) !== this.auth.getClientId())) {
+      throw new BlinkOperationNotStartedError('ownership-unavailable');
+    }
   }
 
   async registerMotionNotificationKey(token: string | null, metadata: BlinkMotionClientMetadata,
@@ -977,8 +1000,6 @@ export class BlinkApi {
     callbackUrl: string,
   ): Promise<BlinkHostedLoginResult> {
     await this.auth.completeHostedLogin(flowId, callbackUrl);
-    this.accountId = this.auth.getAccountId();
-    this.clientId = this.auth.getClientId();
 
     try {
       await this.syncAccountInfoAndVerify({
@@ -1013,8 +1034,9 @@ export class BlinkApi {
       BlinkHostedLoginResult,
       'accountId' | 'clientId' | 'email' | 'tier'
     >> = {};
-    if (this.accountId !== null) metadata.accountId = this.accountId;
-    if (this.clientId !== null) metadata.clientId = this.clientId;
+    const identity = this.getCachedIdentity();
+    if (identity.accountId !== null) metadata.accountId = identity.accountId;
+    if (identity.clientId !== null) metadata.clientId = identity.clientId;
     if (this.config.email) metadata.email = this.config.email;
     const tier = this.auth.getTier();
     if (tier) metadata.tier = tier;
@@ -1057,8 +1079,6 @@ export class BlinkApi {
       this.logDebug('login → ensuring valid token');
       await this.auth.ensureValidToken();
     }
-    this.accountId = this.auth.getAccountId();
-    this.clientId = this.auth.getClientId();
     this.logDebug('login → authenticated; account/client metadata loaded');
     await this.syncAccountInfoAndVerify();
   }
@@ -1089,8 +1109,6 @@ export class BlinkApi {
    */
   async complete2FA(pin: string): Promise<void> {
     await this.auth.complete2FA(pin);
-    this.accountId = this.auth.getAccountId();
-    this.clientId = this.auth.getClientId();
     await this.syncAccountInfoAndVerify();
   }
 
@@ -1103,19 +1121,24 @@ export class BlinkApi {
     persistMetadata?: boolean;
   } = {}): Promise<void> {
     this.logDebug('syncAccountInfoAndVerify → syncing tier info');
-    const tierInfo = await this.syncTierInfo(options.useProductionBootstrap ?? false);
+    const tierReceipt = await this.syncTierInfo(options.useProductionBootstrap ?? false);
+    tierReceipt?.current();
+    const tierInfo = tierReceipt?.value;
     let discoveredTier = tierInfo?.tier ? normalizeBlinkTier(tierInfo.tier) : null;
     if (tierInfo?.account_id) {
-      this.accountId = requireRemoteId(tierInfo.account_id);
+      this.auth.setAccountId(requireRemoteId(tierInfo.account_id));
     }
 
     this.logDebug('syncAccountInfoAndVerify → fetching account info');
     let accountInfo: BlinkAccountInfo | null = null;
+    let accountReceipt: AuthMetadataReceipt<BlinkAccountInfo> | undefined;
     try {
-      accountInfo = await this.getAccountInfo();
+      accountReceipt = await this.readAccountInfo();
+      accountReceipt.current();
+      accountInfo = accountReceipt.value;
       this.logDebug('syncAccountInfoAndVerify → account info received');
     } catch (error) {
-      if (options.strictAccountInfo) {
+      if (options.strictAccountInfo || error instanceof AuthMetadataChangedError) {
         throw error;
       }
       this.logDebug('syncAccountInfoAndVerify → account info fetch failed');
@@ -1124,9 +1147,10 @@ export class BlinkApi {
       );
     }
 
+    tierReceipt?.current();
+    accountReceipt?.current();
     if (accountInfo) {
-      this.accountId = accountInfo.account_id ?? this.accountId;
-      this.clientId = accountInfo.client_id ?? this.clientId;
+      this.auth.setAccountMetadata({ accountId: accountInfo.account_id, clientId: accountInfo.client_id });
       if (!discoveredTier && accountInfo.tier) {
         try {
           discoveredTier = normalizeBlinkTier(accountInfo.tier);
@@ -1144,8 +1168,8 @@ export class BlinkApi {
     }
 
     this.auth.setAccountMetadata({
-      accountId: this.accountId,
-      clientId: this.clientId,
+      accountId: this.auth.getAccountId(),
+      clientId: this.auth.getClientId(),
       region: accountInfo?.region,
       tier: discoveredTier
         ?? (options.useProductionBootstrap ? undefined : this.config.tier ?? 'prod'),
@@ -1254,7 +1278,7 @@ export class BlinkApi {
     }
   }
 
-  private async syncTierInfo(useProductionBootstrap: boolean): Promise<BlinkTierInfo | null> {
+  private async syncTierInfo(useProductionBootstrap: boolean): Promise<AuthMetadataReceipt<BlinkTierInfo> | null> {
     const log = this.config.logger;
     const configuredTier = normalizeBlinkTier(this.config.tier) ?? 'prod';
     const usesOrdinaryProductionTier = BLINK_PRODUCTION_BOOTSTRAP_TIERS.some(
@@ -1271,22 +1295,26 @@ export class BlinkApi {
         this.applyTier(bootstrapTier);
       }
       try {
-        const tierInfo = await this.getTierInfo();
+        const receipt = await this.readAuthMetadata<BlinkTierInfo>('v1/users/tier_info', useProductionBootstrap ? bootstrapTier : undefined);
+        receipt.current();
+        const tierInfo = receipt.value;
+        if (tierInfo?.account_id !== undefined) requireRemoteId(tierInfo.account_id);
         this.logDebug('syncTierInfo → received tier info');
         if (!tierInfo?.tier) {
-          return tierInfo ?? null;
+          return tierInfo ? receipt : null;
         }
         const normalizedTier = normalizeBlinkTier(tierInfo.tier);
         if (!normalizedTier) {
-          return tierInfo ?? null;
+          return tierInfo ? receipt : null;
         }
         this.applyTier(normalizedTier);
         this.auth.setAccountMetadata({
           accountId: tierInfo.account_id,
           tier: normalizedTier,
         });
-        return tierInfo;
+        return receipt;
       } catch (error) {
+        if (error instanceof AuthMetadataChangedError) throw error;
         const hasAnotherProductionRegion = useProductionBootstrap
           && index < bootstrapTiers.length - 1;
         if (
@@ -1310,18 +1338,36 @@ export class BlinkApi {
    * Source: API Dossier Section 3.9 - GET v2/users/info
    */
   async getAccountInfo(): Promise<BlinkAccountInfo> {
+    const receipt = await this.readAccountInfo();
+    receipt.current();
+    return receipt.value;
+  }
+
+  private async readAuthMetadata<T>(resource: string, tierOverride?: string): Promise<AuthMetadataReceipt<T>> {
     await this.auth.ensureValidToken();
-    const info = await this.http.get<BlinkAccountInfo>('v2/users/info');
+    let revision = this.auth.getTokenRevision(), token = this.auth.getAccessToken();
+    const current = () => {
+      if (revision !== this.auth.getTokenRevision() || token !== this.auth.getAccessToken()) throw new AuthMetadataChangedError();
+    };
+    try {
+      const value = await this.http.get<T>(resource, { ...(tierOverride !== undefined ? { tierOverride } : {}), beforeDispatch: () => {
+        revision = this.auth.getTokenRevision(); token = this.auth.getAccessToken();
+      } });
+      return { value, current };
+    } finally {
+      current();
+    }
+  }
+
+  private async readAccountInfo(): Promise<AuthMetadataReceipt<BlinkAccountInfo>> {
+    const receipt = await this.readAuthMetadata<BlinkAccountInfo>('v2/users/info');
+    receipt.current();
+    const info = receipt.value;
     if (!info || typeof info !== 'object') throw new Error('Blink returned invalid account metadata.');
     if (info.account_id !== undefined) requireRemoteId(info.account_id);
     if (info.client_id !== undefined) requireRemoteId(info.client_id);
-    if (info?.account_id) {
-      this.accountId = info.account_id;
-    }
-    if (info?.client_id) {
-      this.clientId = info.client_id;
-    }
-    return info;
+    this.auth.setAccountMetadata({ accountId: info.account_id, clientId: info.client_id });
+    return receipt;
   }
 
   /**
@@ -1329,8 +1375,9 @@ export class BlinkApi {
    * Source: API Dossier Section 3.9 - GET v1/users/tier_info
    */
   async getTierInfo(): Promise<BlinkTierInfo> {
-    await this.auth.ensureValidToken();
-    return this.http.get<BlinkTierInfo>('v1/users/tier_info');
+    const receipt = await this.readAuthMetadata<BlinkTierInfo>('v1/users/tier_info');
+    receipt.current();
+    return receipt.value;
   }
 
   /**
@@ -1393,7 +1440,6 @@ export class BlinkApi {
     checkRequestBudget(options);
     await withinRequestBudget(this.auth.ensureValidToken(), options);
     checkRequestBudget(options);
-    this.accountId = this.accountId ?? this.auth.getAccountId();
     const accountId = await withinRequestBudget(this.ensureAccountId(), options);
     for (let attempt = 0; ; attempt++) {
       checkRequestBudget(options);
@@ -1403,7 +1449,6 @@ export class BlinkApi {
           ? this.sharedHttp.get<BlinkHomescreen>(path, options)
           : this.sharedHttp.get<BlinkHomescreen>(path), options);
         validateHomescreen(homescreen);
-        this.accountId = homescreen.account?.account_id ?? accountId;
         return homescreen;
       } catch (error) {
         const transientCodes = ['UND_ERR_CONNECT_TIMEOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_SOCKET'];
@@ -1963,32 +2008,24 @@ export class BlinkApi {
   }
 
   private async ensureAccountId(): Promise<number> {
-    if (!this.accountId) {
-      await this.login();
-    }
-
-    const accountId = this.accountId ?? this.auth.getAccountId();
+    if (!this.auth.getAccountId()) await this.login();
+    const accountId = this.auth.getAccountId();
     if (!accountId) {
       throw new Error('Blink account id is not set');
     }
 
     requireRemoteId(accountId);
-    this.auth.setAccountId(accountId);
     return accountId;
   }
 
   private async ensureClientId(): Promise<number> {
-    if (!this.clientId) {
-      await this.getAccountInfo();
-    }
-
-    const clientId = this.clientId ?? this.auth.getClientId();
+    if (!this.auth.getClientId()) await this.getAccountInfo();
+    const clientId = this.auth.getClientId();
     if (!clientId) {
       throw new Error('Blink client id is not set');
     }
 
     requireRemoteId(clientId);
-    this.auth.setClientId(clientId);
     return clientId;
   }
 }

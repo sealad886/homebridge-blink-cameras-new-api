@@ -23,6 +23,10 @@ owns subsequent acceptance and finding dispositions.
   failures as unstarted rather than leaving a permanent Live View reservation.
 - Publish refreshed tokens and account identity only after their save succeeds,
   preventing failed auth persistence from cancelling valid recording work.
+  Keep request IDs and regional routing consistent with committed auth, and
+  reject outdated account-discovery responses.
+- Fence local recording offers and streams against account-scope changes during
+  preparation or playback, preserving permission through unrelated storage faults.
 - Restore valid push-receiver identities whose P-256 private key omits leading
   zero padding, avoiding intermittent rejection of generated cached credentials.
 - Show canonical validation paths and blocking status in the settings editor.

@@ -38,13 +38,12 @@ function fixture(restoredLive?: BlinkLiveViewOwnership, restoredCommand?: BlinkS
   const log = (...args: unknown[]) => { messages.push(args); };
   const api = new BlinkApi({ email: '', password: '', hardwareId: 'owned-plugin', tier: 'u001', sharedTier: 'e001',
     debugAuth: true, logger: { info: log, debug: log, warn: log, error: log } });
-  const internals = api as unknown as { auth: BlinkAuth; accountId: number | null };
+  const internals = api as unknown as { auth: BlinkAuth };
   jest.spyOn(internals.auth, 'ensureValidToken').mockResolvedValue(undefined);
   jest.spyOn(internals.auth, 'getPersistedTier').mockResolvedValue('u001');
   jest.spyOn(internals.auth, 'getAccountId').mockReturnValue(10);
   jest.spyOn(internals.auth, 'getClientId').mockReturnValue(90);
   jest.spyOn(internals.auth, 'getAuthHeaders').mockReturnValue({ Authorization: 'Bearer fixture-auth' });
-  internals.accountId = 10;
   const savedLive: Array<BlinkLiveViewOwnership | undefined> = [];
   const savedRemote: BlinkRemoteOperationOwnership[] = [];
   const saveLive = jest.fn(async (state: BlinkRemoteOperationOwnership) => {
@@ -66,6 +65,204 @@ describe('owned native storage SDK', () => {
   afterEach(async () => {
     jest.useRealTimers(); jest.restoreAllMocks(); globalThis.fetch = originalFetch;
     await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it.each(['homescreen', 'arm', 'client-pin', 'tier'] as const)
+  ('routes %s from committed Auth after a held capture wins over old SDK metadata', async action => {
+    let release!: () => void, started!: () => void, saves = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const saving = new Promise<void>(resolve => { started = resolve; });
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-fixture', tier: 'prod', sharedTier: 'prod',
+      authStorage: { load: async () => ({ accessToken: 'prior-access', refreshToken: 'prior-refresh', tokenExpiry: '2099-01-01T00:00:00.000Z',
+        accountId: 12, clientId: 23, tier: 'prod', oauthClientId: 'ios' }),
+      save: async () => { if (++saves === 1) { started(); await gate; } }, clear: async () => undefined } });
+    const internals = api as unknown as { auth: BlinkAuth };
+    await internals.auth.getPersistedTier();
+    const capture = (internals.auth as unknown as { captureTokensUnlocked(body: unknown, header: string): Promise<void> })
+      .captureTokensUnlocked({ access_token: 'committed-access', refresh_token: 'committed-refresh', expires_in: 14400,
+        account_id: action === 'tier' ? 12 : 42, client_id: action === 'tier' ? 23 : 100, tier: action === 'tier' ? 'prde' : 'prod' }, 'new-header');
+    (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
+      ? json({ id: 901 }) : json({ account: { account_id: internals.auth.getAccountId() }, networks: [], cameras: [], owls: [], doorbells: [], complete: true, status: 0 }));
+    try {
+      await saving;
+      await api.getHomescreen(); // The old session's delayed metadata leaves its SDK cache at account 12.
+      release(); await capture;
+      expect(internals.auth.getAccountId()).toBe(action === 'tier' ? 12 : 42);
+      (fetch as jest.Mock).mockClear();
+      if (action === 'arm') {
+        api.configureRemoteOperationOwnership({ scope: { accountId: 42, clientId: 100, tier: 'prod' }, saveState: async () => undefined });
+        await expect(api.armNetwork(20)).resolves.toMatchObject({ id: 901 });
+      } else if (action === 'client-pin') await api.requestClientVerificationPin();
+      else await api.getHomescreen();
+      const first = (fetch as jest.Mock).mock.calls[0];
+      expect(first[1].headers.Authorization).toBe('Bearer committed-access');
+      expect(first[0]).toBe(action === 'client-pin' ? 'https://rest-prod.immedia-semi.com/api/v5/clients/100/client_verification/pin/resend'
+        : action === 'arm' ? 'https://rest-prod.immedia-semi.com/api/v1/accounts/42/networks/20/state/arm'
+          : action === 'tier' ? 'https://rest-prde.immedia-semi.com/api/v4/accounts/12/homescreen'
+            : 'https://rest-prod.immedia-semi.com/api/v4/accounts/42/homescreen');
+      expect(internals.auth.getAccountId()).toBe(action === 'tier' ? 12 : 42);
+      expect(internals.auth.getClientId()).toBe(action === 'tier' ? 23 : 100);
+    } finally { release(); await capture; }
+  });
+
+  it('synchronizes routing when Auth commits a new tier inside HTTP authentication', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-preflight', tier: 'prod', sharedTier: 'prod' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    const capture = (tier: string) => (auth as unknown as { captureTokensUnlocked(body: unknown, header: string): Promise<void> })
+      .captureTokensUnlocked({ access_token: `access-${tier}`, refresh_token: 'refresh-fixture', expires_in: 14400,
+        account_id: 12, client_id: 23, tier }, 'header-fixture');
+    await capture('prod');
+    jest.spyOn(auth, 'ensureValidToken').mockResolvedValueOnce(undefined).mockImplementationOnce(async () => { await capture('prde'); });
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ account_id: 12, client_id: 23, tier: 'prde' }));
+    await api.getAccountInfo();
+    expect((fetch as jest.Mock).mock.calls[0][0]).toBe('https://rest-prde.immedia-semi.com/api/v2/users/info');
+  });
+
+  it('does not publish delayed old SDK discovery metadata over a newer committed Auth session', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-discovery', tier: 'prod', sharedTier: 'prod' });
+    const internals = api as unknown as { auth: BlinkAuth };
+    const capture = (accountId: number, clientId: number, tier: string) =>
+      (internals.auth as unknown as { captureTokensUnlocked(body: unknown, header: string): Promise<void> })
+        .captureTokensUnlocked({ access_token: `access-${accountId}`, refresh_token: 'refresh-fixture', expires_in: 14400,
+          account_id: accountId, client_id: clientId, tier }, 'header-fixture');
+    await capture(12, 23, 'prod');
+    (fetch as jest.Mock).mockImplementation(async (url: string) => {
+      if (url.endsWith('/tier_info')) {
+        await capture(42, 100, 'prde');
+        return json({ account_id: 12, tier: 'prod' });
+      }
+      return json({ account_id: 12, client_id: 23, tier: 'prod' });
+    });
+    await api.login().catch(() => undefined);
+    expect(internals.auth.getAccountId()).toBe(42);
+    expect(internals.auth.getClientId()).toBe(100);
+    expect(internals.auth.getTier()).toBe('prde');
+    expect(api.getCachedIdentity()).toMatchObject({ accountId: 42, clientId: 100, tier: 'prde' });
+  });
+
+  it.each(['committed', 'pending', 'rejected'] as const)
+  ('keeps failed discovery fallback scoped to its Auth session when a candidate is %s', async transition => {
+    let saving!: () => void, releaseSave!: () => void, rejectSave!: (error: Error) => void;
+    let requested!: () => void, rejectRead!: (error: Error) => void;
+    const saveStarted = new Promise<void>(resolve => { saving = resolve; });
+    const saveGate = new Promise<void>((resolve, reject) => { releaseSave = resolve; rejectSave = reject; });
+    const readStarted = new Promise<void>(resolve => { requested = resolve; });
+    const readGate = new Promise<Response>((_resolve, reject) => { rejectRead = reject; });
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-failed-discovery', tier: 'prod', sharedTier: 'prod',
+      authStorage: { load: async () => ({ accessToken: 'prior-access', refreshToken: 'prior-refresh', tokenExpiry: '2099-01-01T00:00:00.000Z',
+        accountId: 12, clientId: 23, tier: 'prod', oauthClientId: 'ios' }),
+      save: async state => { if (state.accessToken === 'candidate-access') { saving(); await saveGate; } }, clear: async () => undefined } });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    await auth.getPersistedTier();
+    (fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.endsWith('/tier_info')) return Promise.reject(new Error('fixture tier read failed'));
+      requested(); return readGate;
+    });
+    const login = api.login().catch(error => error);
+    await readStarted;
+    const capture = (auth as unknown as { captureTokensUnlocked(body: unknown, header: null): Promise<void> })
+      .captureTokensUnlocked({ access_token: 'candidate-access', refresh_token: 'candidate-refresh', expires_in: 14400,
+        account_id: 42, client_id: 100, tier: 'prde' }, null).catch(error => error);
+    try {
+      await saveStarted;
+      if (transition === 'committed') { releaseSave(); await capture; }
+      else if (transition === 'rejected') { rejectSave(new Error('fixture candidate save failed')); await capture; }
+      rejectRead(new Error('fixture old account read failed'));
+      const result = await login;
+      // Read Auth directly: getCachedIdentity would synchronize config and conceal a stale fallback tier.
+      expect(auth.getTier()).toBe(transition === 'committed' ? 'prde' : 'prod');
+      expect(auth.getAccountId()).toBe(transition === 'committed' ? 42 : 12);
+      expect(auth.getClientId()).toBe(transition === 'committed' ? 100 : 23);
+      if (transition === 'committed') expect(result).toMatchObject({ name: 'AuthMetadataChangedError' });
+      else expect(result).toBeUndefined();
+      expect((fetch as jest.Mock).mock.calls).toHaveLength(2);
+    } finally { rejectSave(new Error('fixture cleanup')); await capture; }
+  });
+
+  it('does not resurrect SDK account/client IDs after a committed hosted account reset', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-reset', tier: 'prod' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    const capture = (options = {}) => (auth as unknown as { captureTokensUnlocked(body: unknown, header: null, profile: string, options: unknown): Promise<void> })
+      .captureTokensUnlocked({ access_token: 'reset-token', refresh_token: 'refresh-fixture', expires_in: 14400,
+        account_id: 12, client_id: 23, tier: 'prod' }, null, 'android', options);
+    await capture(); expect(api.getCachedIdentity()).toMatchObject({ accountId: 12, clientId: 23 });
+    await capture({ newAccountBoundary: true });
+    expect(api.getCachedIdentity()).toMatchObject({ accountId: null, clientId: null });
+  });
+
+  it.each(['account', 'client'] as const)('blocks an old %s ID path if HTTP authentication commits another scope', async changed => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-scope', tier: 'prod' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    const capture = (accountId: number, clientId: number) =>
+      (auth as unknown as { captureTokensUnlocked(body: unknown, header: null): Promise<void> }).captureTokensUnlocked({
+        access_token: `scope-${accountId}-${clientId}`, refresh_token: 'fixture-refresh', expires_in: 14400, account_id: accountId, client_id: clientId }, null);
+    await capture(12, 23);
+    jest.spyOn(auth, 'ensureValidToken').mockImplementationOnce(async () => { await capture(42, 100); });
+    await expect(changed === 'account' ? api.getCameraTemperature(20, 40) : api.requestClientVerificationPin())
+      .rejects.toMatchObject({ dispatched: false, reason: 'ownership-unavailable' });
+    expect(fetch).not.toHaveBeenCalled();
+    (fetch as jest.Mock).mockResolvedValueOnce(json(changed === 'account' ? { signals: { temp: 68 } } : {}));
+    await (changed === 'account' ? api.getCameraTemperature(20, 40) : api.requestClientVerificationPin());
+    expect((fetch as jest.Mock).mock.calls[0][0]).toContain(changed === 'account' ? '/accounts/42/' : '/clients/100/');
+  });
+
+  it.each([false, true])('rejects superseded metadata publication even with unchanged bearer text (reset=%s)', async reset => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-revision', tier: 'prod' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    const capture = (accountId: number, options = {}) =>
+      (auth as unknown as { captureTokensUnlocked(body: unknown, header: null, profile: string, options: unknown): Promise<void> }).captureTokensUnlocked({
+        access_token: 'unchanged-token', refresh_token: 'fixture-refresh', expires_in: 14400, account_id: accountId, client_id: 100 }, null, 'android', options);
+    await capture(12);
+    (fetch as jest.Mock).mockImplementationOnce(async () => { await capture(42, reset ? { newAccountBoundary: true } : {}); return json({ account_id: 12, client_id: 23 }); });
+    await expect(api.getAccountInfo()).rejects.toThrow('authentication changed');
+    expect(auth.getAccountId()).toBe(reset ? null : 42);
+    expect(auth.getClientId()).toBe(reset ? null : 100);
+  });
+
+  it('keeps production bootstrap probes explicit when committed Auth has another tier hint', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-bootstrap', tier: 'prod', sharedTier: 'prod' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    await (auth as unknown as { captureTokensUnlocked(body: unknown, header: null): Promise<void> }).captureTokensUnlocked({
+      access_token: 'bootstrap-token', refresh_token: 'fixture-refresh', expires_in: 14400, account_id: 12, client_id: 23, tier: 'prde' }, null);
+    jest.spyOn(auth, 'completeHostedLogin').mockResolvedValue(undefined);
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 406)).mockResolvedValueOnce(json({}, 406)).mockResolvedValueOnce(json({ account_id: 12, tier: 'prde' }))
+      .mockResolvedValueOnce(json({ account_id: 12, client_id: 23, tier: 'prde' }))
+      .mockResolvedValueOnce(json({ account: { account_id: 12 }, networks: [], cameras: [], owls: [], doorbells: [] }));
+    await expect(api.completeHostedLogin('fixture-flow', 'fixture-callback')).resolves.toMatchObject({ verified: true });
+    expect((fetch as jest.Mock).mock.calls.slice(0, 3).map(([url]) => url)).toEqual([
+      'https://rest-prod.immedia-semi.com/api/v1/users/tier_info', 'https://rest-prod.immedia-semi.com/api/v1/users/tier_info',
+      'https://rest-prde.immedia-semi.com/api/v1/users/tier_info']);
+  });
+
+  it('retains an explicit shared-tier override while syncing committed regional routing', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-shared', tier: 'prod', sharedTier: 'e001' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    await (auth as unknown as { captureTokensUnlocked(body: unknown, header: null): Promise<void> }).captureTokensUnlocked({
+      access_token: 'shared-token', refresh_token: 'fixture-refresh', expires_in: 14400, account_id: 12, client_id: 23, tier: 'prde' }, null);
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ account: { account_id: 12 }, networks: [], cameras: [], owls: [], doorbells: [] }));
+    await api.getHomescreen();
+    expect((fetch as jest.Mock).mock.calls[0][0]).toBe('https://rest-e001.immedia-semi.com/api/v4/accounts/12/homescreen');
+    expect(api.getCachedIdentity()).toMatchObject({ tier: 'prde', sharedTier: 'e001' });
+  });
+
+  it('does not publish a malformed tier-info account ID into canonical Auth', async () => {
+    const api = new BlinkApi({ email: '', password: '', hardwareId: 'routing-malformed', tier: 'prod' });
+    const auth = (api as unknown as { auth: BlinkAuth }).auth;
+    await (auth as unknown as { captureTokensUnlocked(body: unknown, header: null): Promise<void> }).captureTokensUnlocked({
+      access_token: 'valid-account-token', refresh_token: 'fixture-refresh', expires_in: 14400, account_id: 12, client_id: 23, tier: 'prod' }, null);
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ account_id: 0, tier: 'prde' })).mockResolvedValueOnce(json({}));
+    await api.login();
+    expect(api.getCachedIdentity()).toMatchObject({ accountId: 12, clientId: 23, tier: 'prod' });
+  });
+
+  it('treats native signed URL query data as opaque during request identity validation', async () => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    f.api.setNativeStorageOwner(scope, pending({ operationId: 'clip', kind: 'clip', phase: 'prepared', clip: { manifestId: 303, clip }, commandId: 505 }));
+    const opaque = `${mediaUrl}&opaque=/clients/999/accounts/999/`;
+    (fetch as jest.Mock).mockResolvedValueOnce(new Response(Buffer.from('query fixture')));
+    const result = await f.api.withNativeStorageAdmission('clip', () => transport.downloadMedia(opaque, request), {}, scope);
+    expect((fetch as jest.Mock).mock.calls[0][0]).toBe(opaque);
+    expect(await fs.readFile(result.reference)).toEqual(Buffer.from('query fixture'));
   });
 
   it('admits a fresh arm after a legacy unknown live view without replaying or confirming it', async () => {
@@ -127,7 +324,7 @@ describe('owned native storage SDK', () => {
     const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
     const beforeChange = jest.fn(async () => oldGate);
     if (kind === 'liveview') {
-      (f.api as unknown as { accountId: number | null }).accountId = null;
+      (f.auth.getAccountId as jest.Mock).mockReturnValue(null);
       jest.spyOn(f.api, 'login').mockImplementationOnce(async () => oldGate);
     }
     (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
@@ -141,7 +338,7 @@ describe('owned native storage SDK', () => {
       : f.api.startCameraLiveview(20, 40)).catch(error => error);
     await jest.advanceTimersByTimeAsync(0);
     if (kind === 'early-notification') expect(beforeChange).toHaveBeenCalledTimes(1);
-    (f.api as unknown as { accountId: number | null }).accountId = 10;
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(10);
     f.api.configureRemoteOperationOwnership({ saveState: jest.fn().mockResolvedValue(undefined) });
     const arm = f.api.armNetwork(20);
     try {
@@ -336,10 +533,8 @@ describe('owned native storage SDK', () => {
 
   it.each(['stable', 'authentication', 'response'] as const)('keeps a newly resolved account bound through its first resource %s', async phase => {
     const f = fixture();
-    (f.api as unknown as { accountId: number | null }).accountId = null;
     (f.auth.getAccountId as jest.Mock).mockReturnValue(null);
     const login = jest.spyOn(f.api, 'login').mockImplementation(async () => {
-      (f.api as unknown as { accountId: number | null }).accountId = 10;
       (f.auth.getAccountId as jest.Mock).mockReturnValue(10);
     });
     (f.auth.ensureValidToken as jest.Mock).mockImplementationOnce(async () => {
@@ -692,7 +887,6 @@ describe('owned native storage SDK', () => {
   ('rejects a stale %s-scoped writer before arm admission and resumes after a matching writer handoff', async changed => {
     const f = fixture();
     if (changed === 'account') {
-      (f.api as unknown as { accountId: number | null }).accountId = 11;
       (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
     } else if (changed === 'client') (f.auth.getClientId as jest.Mock).mockReturnValue(91);
     else (f.api as unknown as { config: { tier: string } }).config.tier = 'u002';
@@ -719,7 +913,6 @@ describe('owned native storage SDK', () => {
     const save = jest.fn().mockRejectedValue(new Error('fixture journal unavailable'));
     f.api.configureRemoteOperationOwnership({ saveState: save });
     (f.auth.getClientId as jest.Mock).mockReturnValue(91);
-    (f.api as unknown as { accountId: number | null }).accountId = 11;
     (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
     (fetch as jest.Mock).mockImplementation(async (_url: string, request: RequestInit) => request.method === 'POST'
       ? json({ id: 902 }) : json({ complete: true, status: 0 }));

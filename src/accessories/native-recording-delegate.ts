@@ -40,6 +40,7 @@ interface Offer {
   prepared: PreparedNativeRecording;
   epoch: number;
   revision: number;
+  current?: () => boolean;
 }
 interface RecordingStream extends Offer {
   streamId: number;
@@ -131,8 +132,10 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
     this.notifyPolicy();
   }
 
-  async offerDownloaded(source: NativeRecordingSource, metadata: NativeRecordingDeliveryMetadata): Promise<NativeRecordingOfferResult> {
+  async offerDownloaded(source: NativeRecordingSource, metadata: NativeRecordingDeliveryMetadata,
+    current?: () => boolean): Promise<NativeRecordingOfferResult> {
     if (!this.policy.allowed) return { status: 'not-offered', reason: 'disabled' };
+    if (!this.isCurrent(current)) return { status: 'not-offered', reason: 'policy-changed' };
     if (!metadata || !metadata.jobId || metadata.jobId.length > 256 || !metadata.clipIdentity || metadata.clipIdentity.length > 1024 ||
         !Number.isFinite(Date.parse(metadata.capturedAt)) || metadata.policyEpoch !== this.epoch) return { status: 'not-offered', reason: 'policy-changed' };
     if (this.offered.has(metadata.clipIdentity)) return { status: 'not-offered', reason: 'duplicate' };
@@ -144,10 +147,11 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
       let prepared: PreparedNativeRecording | undefined;
       try {
         prepared = await (this.options.prepare ?? prepareNativeRecording)(source, selected, audioActive, owner.signal, this.options.preparation);
-        if (owner.signal.aborted || !this.policy.allowed || epoch !== this.epoch || revision !== this.configurationRevision || prepared.disposed) {
+        if (owner.signal.aborted || !this.policy.allowed || epoch !== this.epoch || revision !== this.configurationRevision
+          || prepared.disposed || !this.isCurrent(current)) {
           prepared.dispose(); return { status: 'not-offered', reason: 'policy-changed' };
         }
-        const offered: Offer = { metadata: detached, prepared, epoch, revision };
+        const offered: Offer = { metadata: detached, prepared, epoch, revision, current };
         this.ready = offered;
         this.offered.add(detached.clipIdentity);
         while (this.offered.size > 128) this.offered.delete(this.offered.values().next().value!);
@@ -157,6 +161,10 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
           if (offer) { offer.prepared.dispose(); this.report(offer, 'uncertain'); }
           this.setMotionSafely(false);
           return { status: 'uncertain', reason: 'motion-publication-failed' };
+        }
+        if (!this.isCurrent(current)) {
+          this.cancelPending(); this.cancelStream();
+          return { status: 'uncertain', reason: 'policy-changed-after-offer' };
         }
         if (this.ready !== offered && this.stream?.prepared !== prepared) return { status: 'uncertain', reason: 'policy-changed-after-offer' };
         if (this.ready === offered) {
@@ -180,7 +188,10 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
 
   async *handleRecordingStreamRequest(streamId: number): AsyncGenerator<RecordingPacket> {
     const offer = this.ready;
-    if (!this.policy.allowed || !offer || this.stream || offer.epoch !== this.epoch || offer.revision !== this.configurationRevision || offer.prepared.disposed) {
+    const current = offer && this.isCurrent(offer.current);
+    if (!this.policy.allowed || !offer || !current || this.stream || offer.epoch !== this.epoch
+      || offer.revision !== this.configurationRevision || offer.prepared.disposed) {
+      if (offer && !current) this.cancelPending();
       throw new Error('No permitted prepared native recording is available');
     }
     this.ready = undefined;
@@ -189,7 +200,8 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
     const stream: RecordingStream = { ...offer, streamId, owner: new globalThis.AbortController(), closed: false, finalSent: false, generatorFinished: false };
     this.stream = stream;
     const startedAt = Date.now();
-    const allowed = () => !this.stopped && this.recordingActive && this.cameraActive && (!stream.prepared.audioActive || this.audioActive);
+    const allowed = () => !this.stopped && this.recordingActive && this.cameraActive && (!stream.prepared.audioActive || this.audioActive)
+      && this.isCurrent(stream.current);
     try {
       yield { data: Buffer.from(stream.prepared.initialization), isLast: false };
       for (let index = 0; index < stream.prepared.fragments.length; index++) {
@@ -245,6 +257,10 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
     this.offerTimer = undefined;
     const offer = this.ready; this.ready = undefined;
     if (offer) { offer.prepared.dispose(); this.setMotionSafely(false); this.report(offer, 'cancelled'); }
+  }
+  private isCurrent(current?: () => boolean): boolean {
+    try { return current?.() ?? true; }
+    catch { return false; }
   }
   private cancelStream(): void {
     const stream = this.stream;

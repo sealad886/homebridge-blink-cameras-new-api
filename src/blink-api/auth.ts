@@ -349,6 +349,7 @@ export class BlinkAuth {
   private stateLoadPromise: Promise<void> | null = null;
   private tokenTransitionTail: Promise<void> = Promise.resolve();
   private pendingCaptureMetadata?: Partial<AccountMetadata>;
+  private tokenRevision = 0;
   private refreshInFlight: Promise<void> | null = null;
   private loginInFlight: Promise<void> | null = null;
   private twoFactorInFlight: Promise<void> | null = null;
@@ -555,6 +556,7 @@ export class BlinkAuth {
   }
 
   private applyState(state: BlinkAuthState): void {
+    this.tokenRevision++;
     this.accessToken = state.accessToken ?? this.accessToken;
     this.refreshToken = state.refreshToken ?? this.refreshToken;
     this.tokenAuth = state.tokenAuth ?? this.tokenAuth;
@@ -1699,9 +1701,10 @@ export class BlinkAuth {
     return this.oauthSession;
   }
 
-  /**
-   * Get the current access token
-   */
+  /** Version of committed credentials, independent of ordinary metadata setters. */
+  getTokenRevision(): number { return this.tokenRevision; }
+
+  /** Get the current access token. */
   getAccessToken(): string | null {
     return this.accessToken;
   }
@@ -1777,6 +1780,7 @@ export class BlinkAuth {
     this.region = snapshot.region;
     this.tier = snapshot.tier;
     this.config.email = snapshot.email;
+    this.tokenRevision++;
   }
 
   private async captureTokensUnlocked(

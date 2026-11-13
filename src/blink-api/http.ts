@@ -30,6 +30,8 @@ export interface BlinkHttpRequestOptions extends RequestOptions {
   responseType?: 'void' | 'binary';
   /** Recheck a captured client scope after async authentication and immediately before dispatch. */
   beforeDispatch?: () => void;
+  /** An explicit bootstrap probe; ordinary SDK requests follow committed auth routing. */
+  tierOverride?: string;
 }
 
 /**
@@ -165,6 +167,7 @@ export class BlinkHttp {
     private readonly auth: BlinkAuth,
     config: BlinkConfig,
     baseUrlOverride?: string,
+    private readonly prepareRequest?: (path: string, options: BlinkHttpRequestOptions) => void,
   ) {
     this.baseUrl = baseUrlOverride ?? getRestBaseUrl(config);
     this.log = config.logger ?? nullLogger;
@@ -230,12 +233,14 @@ export class BlinkHttp {
       if (options.maxResponseBytes !== undefined && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes < 1)) {
         throw new Error('Blink response byte limit is invalid.');
       }
-      const url = this.buildUrl(path);
+      let url = this.buildUrl(path);
       if (runPreflight) {
         await withinRequestBudget(this.auth.ensureValidToken(), options);
         checkRequestBudget(options);
       }
 
+      this.prepareRequest?.(path, options);
+      url = this.buildUrl(path);
       const safeUrl = redactUrlForLogging(url);
       const safePath = safeUrl.startsWith(this.baseUrl)
         ? safeUrl.slice(this.baseUrl.length)

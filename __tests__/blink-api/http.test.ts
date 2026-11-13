@@ -56,6 +56,23 @@ describe('BlinkHttp', () => {
     jest.restoreAllMocks();
   });
 
+  it('resolves routing after authentication and preserves opaque query data', async () => {
+    const auth = mockAuth(); let tier = 'prod';
+    (auth.ensureValidToken as jest.Mock).mockImplementationOnce(async () => { tier = 'prde'; });
+    const prepare = jest.fn(() => { http.setBaseUrl(`https://rest-${tier}.immedia-semi.com/api/`); });
+    const http = new BlinkHttp(auth, mockConfig, undefined, prepare);
+    (fetch as jest.Mock).mockResolvedValueOnce(response(200, {}));
+    await http.get('accounts/1/homescreen?opaque=/clients/999');
+    expect((fetch as jest.Mock).mock.calls[0][0]).toBe('https://rest-prde.immedia-semi.com/api/accounts/1/homescreen?opaque=/clients/999');
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates identifiers before authentication or post-auth routing preparation', async () => {
+    const auth = mockAuth(), prepare = jest.fn(), http = new BlinkHttp(auth, mockConfig, undefined, prepare);
+    await expect(http.get('accounts/0/homescreen')).rejects.toThrow('invalid identifier');
+    expect(auth.ensureValidToken).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('recovers one transient GET 406 without replaying a POST', async () => {
     (fetch as jest.Mock).mockResolvedValueOnce(response(406)).mockResolvedValueOnce(response(200, { complete: false }));
     const http = new BlinkHttp(mockAuth(), mockConfig);
