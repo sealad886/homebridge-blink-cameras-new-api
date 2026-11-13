@@ -14,7 +14,8 @@ category, so the exact historical cause is unproved. Cached-token metadata GETs,
 run as the Homebridge file owner at 11:36:32 UTC, confirmed Early Notification
 false and compatible true for Corner, Entry, My Bedroom and Front Kitchen.
 No sign-in, refresh, vendor mutation, restart or full-state capture was performed.
-The fault did not leave a camera on at that subsequent readback.
+Early Notification was disabled on all four cameras at that subsequent readback;
+this did not establish whether the cameras themselves were enabled or armed.
 
 The saved platform has `earlyNotificationMode: off` plus the equivalent legacy
 `disableEarlyNotification: true`. Both initial normalization and unconditional
@@ -127,8 +128,9 @@ installation or restart was performed for these new fixes. Prior beta.3 publicat
 is separately complete; its package bytes must remain immutable. A subsequent
 beta needs its own reviewed source and all normal release qualifications.
 
-Historical fault cause remains unproved; live readback established all four
-cameras off at the observed time. Source/host qualification is not installed Pi,
+Historical fault cause remains unproved; live readback established Early
+Notification false on all four cameras at the observed time, not camera status.
+Source/host qualification is not installed Pi,
 physical Home delivery or iCloud-retention acceptance. Automatic converter scope
 remains POSIX; Windows legacy values require manual canonical JSON conversion.
 
