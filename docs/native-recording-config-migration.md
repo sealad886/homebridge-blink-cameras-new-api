@@ -17,7 +17,8 @@ this one-time migration against the installer-identified `config.json`. It uses
 package prefix. It does not search other hosts, home directories or storage
 roots. The existing guarded converter writes an owner-only backup of the exact
 original bytes before atomic replacement, preserving file ownership and unrelated
-configuration. Already-converted files are left untouched without another backup.
+configuration. The replacement retains the config permission bits so service
+group-read access is preserved; the backup stays private at `0600`. Already-converted files are left untouched without another backup.
 Invalid choices, unsafe files and detected concurrent changes fail the migration
 without replacing the configuration.
 

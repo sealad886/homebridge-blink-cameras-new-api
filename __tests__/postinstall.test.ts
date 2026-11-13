@@ -17,14 +17,14 @@ describePosix('one-time installed configuration migration', () => {
   beforeEach(() => { directory = fs.mkdtempSync(join(tmpdir(), 'blink-postinstall-')); });
   afterEach(() => { jest.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
-  it('persists canonical choices at every scope, preserves exact private backup and is idempotent', () => {
+  it.each([0o600, 0o640])('persists canonical choices and config access mode %o with an exact private backup, idempotently', mode => {
     const input = { bridge: { keep: 'PRIVATE_CONFIG_VALUE' }, platforms: [
       { platform: 'Other', disableEarlyNotification: 'keep' },
       { platform: 'BlinkCameras', disableEarlyNotification: true, extension: { keep: 1 },
         syncModuleSettingOverrides: [{ syncModuleId: '20', disableEarlyNotification: false }],
         deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on', disableEarlyNotification: true }] },
     ] };
-    const bytes = JSON.stringify(input); fs.writeFileSync(file(), bytes, { mode: 0o640 });
+    const bytes = JSON.stringify(input); fs.writeFileSync(file(), bytes, { mode }); fs.chmodSync(file(), mode);
     const result = installer.run({ UIX_STORAGE_PATH: directory });
     expect(result).toEqual({ action: 'Applied' });
     expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).toEqual({ bridge: input.bridge, platforms: [input.platforms[0],
@@ -33,7 +33,7 @@ describePosix('one-time installed configuration migration', () => {
         deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on' }] }] });
     expect(backups()).toHaveLength(1);
     const backup = join(directory, backups()[0]); expect(fs.readFileSync(backup, 'utf8')).toBe(bytes);
-    expect(fs.statSync(backup).mode & 0o777).toBe(0o600); expect(fs.statSync(file()).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(backup).mode & 0o777).toBe(0o600); expect(fs.statSync(file()).mode & 0o777).toBe(mode);
     expect(fs.statSync(backup).uid).toBe(fs.statSync(file()).uid);
     expect(installer.run({ UIX_STORAGE_PATH: directory })).toEqual({ action: 'Unchanged' });
     expect(backups()).toHaveLength(1);

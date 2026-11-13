@@ -81,3 +81,25 @@ installation skips unsupported automatic file replacement with manual conversion
 guidance, preserving valid canonical installs and config bytes; legacy keys must
 be converted explicitly before runtime starts. Isolated platform tests prove the
 skip does not import or run the POSIX writer. No real Windows install was run.
+
+## Integrated host qualification
+
+At local source `e598c545cf4d9eeb6fc30a0c709159f39de5bb4b`, canonical
+`npm run release` completed successfully: lint, build, 2,235 passing tests,
+18 existing skips, and package preview/cleanup. Separate release-contract tests
+passed 86/86. Evidence is retained in `logs/notification-settings-fixes/checks.json`,
+`preflight.log` and `release-contracts.log`. These host checks do not publish the
+package and do not qualify a new installed native artifact or production upgrade.
+The package version is still the published baseline beta.3; it must not be
+republished for these different bytes. New review/publication requires a new
+version and the normal release gates. Independent review is pending.
+
+## Independent availability finding
+
+Independent review at `e598c54` found one required correction: the existing writer
+forced the replacement config to `0600`, which could revoke Homebridge access to
+a root-owned/group-readable `0640` config when invoked automatically. The backup
+remains private at `0600`; replacement config now preserves the original access
+permission bits and UID/GID. Regression coverage includes private and group-readable
+configs, exact backup bytes and repeat no-op behavior. Independent refresh and
+integrated verification of this correction are pending.
