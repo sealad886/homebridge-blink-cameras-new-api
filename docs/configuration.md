@@ -235,9 +235,10 @@ restoration record. Save and restart the child bridge to apply policy changes.
 
 Upgrading automatically interprets old `disableEarlyNotification: true` as
 `off`, explicit `false` as `unmanaged`, and missing overrides as inheritance.
-It never turns an old false into force on. Opening the editor stages the same
-migration for your review. Save persists it; an immediate account action can also
-persist migration-only changes while recovering sign-in. Other user edits still
+It never turns an old false into force on. Opening the editor presents that
+equivalent migration without staging or marking settings changed. A real edit
+stages the converted draft for Save; an immediate account action can also persist
+the conversion while recovering sign-in. Other user edits still
 require Save or discard before an account action, and connection tests never
 save configuration. For explicit file
 migration and rollback considerations, see

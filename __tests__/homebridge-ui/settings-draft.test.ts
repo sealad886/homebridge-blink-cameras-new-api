@@ -13,19 +13,85 @@ function load() {
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const valid = (revision: number) => ({ revision, valid: true, errors: [], warnings: [] });
 
-it('stages canonical startup migration as an unsaved change while preserving original baseline and sibling blocks', async () => {
+it('presents canonical startup migration without staging or marking an unchanged draft dirty', async () => {
   const { Draft } = load();
   const original = [{ platform: 'Other', keep: true }, { platform: 'BlinkCameras', disableEarlyNotification: true, extension: { keep: 1 } }];
   const migrated = migrateEarlyNotificationConfig(original[1]);
   const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)), stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
   const draft = new Draft(original, host, migrated.config);
   draft.retry(); await draft.flush();
-  expect(draft.state.dirty).toBe(true);
+  expect(draft.state.dirty).toBe(false);
   expect(JSON.parse(draft.baseline)).toEqual(original);
   expect(draft.blocks[0]).toEqual(original[0]);
   expect(draft.config).toEqual({ platform: 'BlinkCameras', earlyNotificationMode: 'off', extension: { keep: 1 } });
-  expect(host.stage).toHaveBeenCalledWith([original[0], draft.config]);
+  expect(host.stage).not.toHaveBeenCalled();
+  expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
   expect(original[1]).toHaveProperty('disableEarlyNotification', true);
+});
+
+it.each([
+  { platform: 'BlinkCameras', name: 'Blink', pollInterval: 60 },
+  { platform: 'BlinkCameras', name: 'Blink', disableEarlyNotification: true },
+  { platform: 'BlinkCameras', name: 'Blink', earlyNotificationMode: 'off', disableEarlyNotification: true },
+])('stages only a real edit and its revert, preserving normalized startup values: %s', async config => {
+  const { Draft } = load();
+  const original = [{ platform: 'Other', keep: true }, config];
+  const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)), stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
+  const draft = new Draft(original, host, migrateEarlyNotificationConfig(config).config);
+  draft.retry(); await draft.flush();
+  draft.inventoryRevision = 'discovery'; draft.retry(); await draft.flush();
+  const action = draft.beginAccountAction(); action.finish(); await draft.flush();
+  draft.set('name', 'Blink'); await draft.flush();
+  expect(draft.state.dirty).toBe(false); expect(host.stage).not.toHaveBeenCalled();
+  expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
+  draft.set('name', 'Updated Blink'); await draft.flush();
+  expect(draft.state.dirty).toBe(true); expect(host.stage).toHaveBeenCalledTimes(1);
+  expect(host.stage).toHaveBeenLastCalledWith([original[0], expect.objectContaining({ name: 'Updated Blink' })]);
+  draft.retry(); await draft.flush(); expect(host.stage).toHaveBeenCalledTimes(1);
+  draft.set('name', undefined); await draft.flush();
+  draft.set('name', 'Blink'); await draft.flush();
+  expect(draft.state.dirty).toBe(false);
+  expect(host.stage).toHaveBeenLastCalledWith([original[0], migrateEarlyNotificationConfig(config).config]);
+  expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
+  expect(JSON.parse(draft.baseline)).toEqual(original);
+});
+
+it('restores the effective baseline when a user reverts while an earlier host stage is pending', async () => {
+  const { Draft } = load();
+  let finishStage: () => void;
+  const original = [{ platform: 'BlinkCameras', name: 'Blink', pollInterval: 60 }];
+  const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)),
+    stage: jest.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finishStage = resolve; })).mockResolvedValue(undefined),
+    saveEnabled: jest.fn(), changed: jest.fn() };
+  const draft = new Draft(original, host);
+  draft.set('name', 'Updated'); await tick();
+  draft.set('name', 'Blink'); finishStage!(); await draft.flush();
+  expect(host.stage).toHaveBeenCalledTimes(2);
+  expect(host.stage).toHaveBeenLastCalledWith(original);
+  expect(draft.state.dirty).toBe(false); expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
+});
+
+it('restages the baseline after reverting a failed host update with an uncertain outcome', async () => {
+  const { Draft } = load();
+  const original = [{ platform: 'BlinkCameras', name: 'Blink' }];
+  const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)),
+    stage: jest.fn().mockRejectedValueOnce(new Error('Host acknowledgement failed')).mockResolvedValue(undefined),
+    saveEnabled: jest.fn(), changed: jest.fn() };
+  const draft = new Draft(original, host);
+  draft.set('name', 'Updated'); await draft.flush();
+  expect(draft.state.error).not.toBe('');
+  draft.set('name', 'Blink'); await draft.flush();
+  expect(host.stage).toHaveBeenCalledTimes(2); expect(host.stage).toHaveBeenLastCalledWith(original);
+  expect(draft.state).toMatchObject({ dirty: false, error: '' });
+  expect(host.saveEnabled).toHaveBeenLastCalledWith(false);
+});
+
+it('adopts an externally saved baseline without a second host change notification', async () => {
+  const { Draft } = load();
+  const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)), stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
+  const draft = new Draft([{ platform: 'BlinkCameras', name: 'Blink' }], host);
+  draft.replaceBaseline([{ platform: 'BlinkCameras', name: 'Blink', authLocked: true }]); await draft.flush();
+  expect(host.stage).not.toHaveBeenCalled(); expect(draft.state.dirty).toBe(false);
 });
 
 it('allows migration-only auth recovery without discovery while blocking pending validation, user edits and overlapping actions', async () => {
@@ -39,7 +105,7 @@ it('allows migration-only auth recovery without discovery while blocking pending
   draft.retry();
   expect(draft.beginAccountAction()).toBeNull();
   await draft.flush();
-  expect(draft.state).toMatchObject({ dirty: true, pending: false,
+  expect(draft.state).toMatchObject({ dirty: false, pending: false,
     errors: [expect.objectContaining({ code: 'inventory_unavailable' })] });
   expect(host.stage).not.toHaveBeenCalled();
   expect(host.saveEnabled).not.toHaveBeenCalledWith(true);

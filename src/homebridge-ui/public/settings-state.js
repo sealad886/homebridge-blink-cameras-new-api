@@ -2,6 +2,8 @@
 (function (root) {
   'use strict';
   const copy = value => value === undefined ? undefined : structuredClone(value);
+  const serialize = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
   function deadline(promise, milliseconds = 12000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Settings request timed out.')), milliseconds);
@@ -16,9 +18,11 @@
         this.index = this.blocks.length;
         this.blocks.push({ platform: 'BlinkCameras', name: 'Blink' });
       }
-      this.baseline = JSON.stringify(this.blocks);
+      this.baseline = serialize(this.blocks);
       if (initialConfig !== undefined) this.blocks[this.index] = copy(initialConfig);
-      this.migrationBaseline = JSON.stringify(this.blocks);
+      // Equivalent migration is display-only until a user edit or account save.
+      this.migrationBaseline = serialize(this.blocks);
+      this.staged = this.migrationBaseline;
       this.host = host;
       this.revision = 0;
       this.inventoryRevision = undefined;
@@ -26,7 +30,7 @@
       this.running = null;
     }
     get config() { return this.blocks[this.index]; }
-    hasUserChanges() { return JSON.stringify(this.blocks) !== this.migrationBaseline; }
+    hasUserChanges() { return serialize(this.blocks) !== this.migrationBaseline; }
     canRunAccountAction() { return !this.hasUserChanges() && !this.state.pending && !this.state.accountAction; }
     beginAccountAction() {
       if (!this.canRunAccountAction()) return null;
@@ -53,7 +57,7 @@
       if (this.state.accountAction) return;
       this.revision += 1;
       this.state.pending = true;
-      this.state.dirty = JSON.stringify(this.blocks) !== this.baseline;
+      this.state.dirty = this.hasUserChanges();
       this.state.error = '';
       this.host.saveEnabled(false);
       this.host.changed(this.state);
@@ -70,9 +74,14 @@
           this.state.errors = result.errors || [];
           this.state.warnings = result.warnings || [];
           if (result.valid) {
-            await this.host.stage(blocks);
+            const serialized = serialize(blocks);
+            if (serialized !== this.staged) {
+              this.staged = undefined;
+              await this.host.stage(blocks);
+              this.staged = serialized;
+            }
             if (revision !== this.revision) continue;
-            this.host.saveEnabled(true);
+            this.host.saveEnabled(this.state.dirty);
           }
         } catch {
           if (revision !== this.revision) continue;
@@ -89,7 +98,8 @@
       if (this.hasUserChanges()) throw new Error('Save or discard settings before an account action.');
       this.blocks = copy(blocks);
       this.index = this.blocks.findIndex(block => block.platform === 'BlinkCameras');
-      this.baseline = this.migrationBaseline = JSON.stringify(this.blocks);
+      this.baseline = this.migrationBaseline = serialize(this.blocks);
+      this.staged = this.migrationBaseline;
       this.retry();
     }
   }

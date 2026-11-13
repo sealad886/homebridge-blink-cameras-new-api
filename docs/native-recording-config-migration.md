@@ -11,14 +11,15 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
 ## Upgrade from 1.1.0-beta.1
 
-The editor stages the Early Notification conversion for review when it opens.
-Homebridge Save persists that draft. Sign-in, verification and other immediate
-account actions may also persist a migration-only draft with their account
+The editor presents the equivalent Early Notification conversion in memory when
+it opens. Opening settings or testing the connection does not stage a host config
+update, mark settings changed, or save configuration. A real setting edit stages
+the converted draft; Homebridge Save persists it. Sign-in, verification and other
+immediate account actions may also persist the conversion with their account
 changes, so authentication recovery does not depend on authenticated discovery.
-Actual user edits still block account actions until saved or discarded. Opening
-the editor and testing the connection never save configuration. The runtime also interprets the legacy
-setting in memory, so upgrading does not require an immediate configuration
-write. The explicit preview/apply commands below perform the same canonical
+Actual user edits still block account actions until saved or discarded. The runtime
+also interprets the legacy setting in memory, so upgrading does not require an
+immediate configuration write. The explicit preview/apply commands below perform the same canonical
 conversion in a complete Homebridge file. From a source checkout, run
 `npm run build` first; the installed package already includes the compiled helper.
 
