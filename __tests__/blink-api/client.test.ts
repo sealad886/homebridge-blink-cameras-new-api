@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { URL } from 'node:url';
 
-import { BlinkApi } from '../../src/blink-api/client';
+import { BlinkApi, BlinkEarlyNotificationNotConfirmedError } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
 import { OperationTimeoutError } from '../../src/operation-budget';
 import { BlinkHttpError } from '../../src/blink-api/http';
@@ -428,14 +428,75 @@ describe('BlinkApi', () => {
       expect(http.post).not.toHaveBeenCalled();
     });
 
-    it('requires readback after successful command completion before confirming off', async () => {
+    it.each([1, 4])('confirms a completed command after %i stale readbacks without replaying its POST', async staleReads => {
+      jest.useFakeTimers();
+      try {
+        const { client, http } = createEarlyApi();
+        http.get.mockResolvedValueOnce(metadata()).mockResolvedValueOnce({ complete: true, status: 0 });
+        for (let index = 0; index < staleReads; index++) http.get.mockResolvedValueOnce(metadata());
+        http.get.mockResolvedValue(metadata(false)); http.post.mockResolvedValue({ id: 42 });
+        const outcome = client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false);
+        await jest.advanceTimersByTimeAsync(2000);
+        await expect(outcome).resolves.toMatchObject({ current: false, changed: true });
+        expect(http.post).toHaveBeenCalledTimes(1);
+        expect(http.get).toHaveBeenCalledTimes(staleReads + 3);
+      } finally { jest.useRealTimers(); }
+    });
+
+    it('fails after five unchanged readbacks without replaying the completed command', async () => {
+      jest.useFakeTimers();
+      try {
+        const { client, http } = createEarlyApi();
+        http.get.mockResolvedValueOnce(metadata()).mockResolvedValueOnce({ complete: true, status: 0 }).mockResolvedValue(metadata());
+        http.post.mockResolvedValue({ id: 42 });
+        const outcome = client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false).catch(error => error);
+        await jest.advanceTimersByTimeAsync(2000);
+        expect(await outcome).toBeInstanceOf(BlinkEarlyNotificationNotConfirmedError);
+        expect(http.post).toHaveBeenCalledTimes(1); expect(http.get).toHaveBeenCalledTimes(7);
+        expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+      } finally { jest.useRealTimers(); }
+    });
+
+    it.each(['deadline', 'cancel'] as const)('bounds stale readback by the caller %s without more writes', async limit => {
+      jest.useFakeTimers();
+      try {
+        const { client, http } = createEarlyApi();
+        http.get.mockResolvedValueOnce(metadata()).mockResolvedValueOnce({ complete: true, status: 0 }).mockResolvedValue(metadata());
+        http.post.mockResolvedValue({ id: 42 });
+        const controller = new globalThis.AbortController();
+        const outcome = client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false,
+          limit === 'deadline' ? { deadline: Date.now() + 750 } : { signal: controller.signal }).catch(error => error);
+        await jest.advanceTimersByTimeAsync(750);
+        if (limit === 'cancel') controller.abort(new Error('Caller cancelled'));
+        const failure = await outcome;
+        if (limit === 'deadline') expect(failure).toBeInstanceOf(OperationTimeoutError);
+        else expect(failure).toEqual(expect.objectContaining({ message: 'Caller cancelled' }));
+        expect(http.post).toHaveBeenCalledTimes(1);
+        const reads = http.get.mock.calls.length;
+        await jest.advanceTimersByTimeAsync(10_000);
+        expect(http.get).toHaveBeenCalledTimes(reads);
+        expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+      } finally { jest.useRealTimers(); }
+    });
+
+    it('stops readback when the server reports the capability unsupported', async () => {
       const { client, http } = createEarlyApi();
       http.get.mockResolvedValueOnce(metadata()).mockResolvedValueOnce({ complete: true, status: 0 })
-        .mockResolvedValueOnce(metadata());
-      http.post.mockResolvedValue({ id: 42 });
-      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false)).rejects.toThrow('not confirmed');
-      expect(http.post).toHaveBeenCalledTimes(1);
-      expect(http.get).toHaveBeenCalledTimes(3);
+        .mockResolvedValue(metadata(false, false)); http.post.mockResolvedValue({ id: 42 });
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false))
+        .rejects.toBeInstanceOf(BlinkEarlyNotificationNotConfirmedError);
+      expect(http.get).toHaveBeenCalledTimes(3); expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([[false, true], [true, true], [false, false]])('reconciles a refused setting only with compatible desired state: current=%s compatible=%s', async (current, compatible) => {
+      const { client, http } = createEarlyApi();
+      const refusal = new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+      http.get.mockResolvedValueOnce(metadata()).mockResolvedValue(metadata(current, compatible)); http.post.mockRejectedValue(refusal);
+      const outcome = client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false);
+      if (current || !compatible) await expect(outcome).rejects.toBe(refusal);
+      else await expect(outcome).resolves.toMatchObject({ current: false, changed: false });
+      expect(http.get).toHaveBeenCalledTimes(2); expect(http.post).toHaveBeenCalledTimes(1);
+      expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
     });
 
     it.each(['transport', 'status'] as const)('fences an unknown %s outcome without replaying the POST', async failure => {

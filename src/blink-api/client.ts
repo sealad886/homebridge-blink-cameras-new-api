@@ -74,6 +74,10 @@ export interface BlinkEarlyNotificationState {
   changed: boolean;
 }
 
+export class BlinkEarlyNotificationNotConfirmedError extends Error {
+  constructor() { super('Blink Early Notification was not confirmed after the command.'); this.name = 'BlinkEarlyNotificationNotConfirmedError'; }
+}
+
 export interface BlinkEarlyNotificationOptions extends RequestOptions {
   /** Persist the original value before the owned mutation can be dispatched. */
   beforeChange?: (current: boolean) => Promise<void>;
@@ -1551,12 +1555,17 @@ export class BlinkApi {
       await this.ownedStateCommand('early-notification', accountId, networkId, deviceId,
         beforeDispatch => this.sharedHttp.post<BlinkCommandResponse>(this.deviceConfigPath(type, accountId, networkId, deviceId),
           { early_notification: enabled }, [409], { ...execution, retry: false, beforeDispatch }), execution);
-      const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
-      if (!observed.supported || observed.current !== enabled) {
-        throw new Error('Blink Early Notification was not confirmed after the command.');
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
+        if (!observed.supported) throw new BlinkEarlyNotificationNotConfirmedError();
+        if (observed.current === enabled) return { ...observed, changed: true };
+        if (attempt < 4) await budgetedDelay(500, execution);
       }
-      return { ...observed, changed: true };
-    }, [], undefined, requestOptions);
+      throw new BlinkEarlyNotificationNotConfirmedError();
+    }, [], async execution => {
+      const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
+      return { resolved: observed.supported && observed.current === enabled, value: observed };
+    }, requestOptions);
   }
 
   /** Auto preserves vendor state. Explicit capture quality changes also affect Blink recordings. */

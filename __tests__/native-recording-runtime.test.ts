@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import process from 'node:process';
 import { setImmediate as realImmediate } from 'node:timers/promises';
 import type { CameraRecordingConfiguration } from 'homebridge';
-import { BlinkApi, type BlinkEarlyNotificationState, type BlinkRemoteOperationOwnership } from '../src/blink-api/client';
+import { BlinkApi, BlinkEarlyNotificationNotConfirmedError, BlinkOperationNotStartedError, type BlinkEarlyNotificationState, type BlinkRemoteOperationOwnership } from '../src/blink-api/client';
 import type { BlinkAuth } from '../src/blink-api/auth';
 import { BLINK_FIREBASE_CLIENT } from '../src/blink-api/fcm-config';
 import { BlinkHttpError } from '../src/blink-api/http';
@@ -734,7 +734,7 @@ describe('native recording runtime composition', () => {
     try {
       const f = await setup({ earlyNotificationMode: 'on', earlyCurrent: false });
       expect(f.settingWrites).toEqual([]); expect(f.earlyProvider.current).toBe(false);
-      expect(f.events).toContain('early-notification-faulted');
+      expect(f.events).toContain('early-notification-unexpected-faulted');
       expect(await fs.readFile(filename, 'utf8')).toBe(legacy);
     } finally { failedJournal.mockRestore(); }
   });
@@ -855,6 +855,26 @@ describe('native recording runtime composition', () => {
     expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(scenario.calls);
   });
 
+  it.each([
+    [new BlinkOperationNotStartedError('storage-pending'), 'not-started-storage-pending'],
+    [Object.assign(new BlinkOperationNotStartedError('storage-pending'), { reason: 'PRIVATE_PROVIDER_TEXT' }), 'not-started'],
+    [new BlinkHttpError('password=PRIVATE_PROVIDER_TEXT', 409, '', 'https://private.invalid/token', 'POST'), 'http-409'],
+    [new BlinkHttpError('PRIVATE_PROVIDER_TEXT', 0, '', 'https://private.invalid/token', 'GET', undefined, undefined, 'network'), 'network'],
+    [new OperationTimeoutError(), 'timeout'],
+    [new BlinkEarlyNotificationNotConfirmedError(), 'readback-unconfirmed'],
+    [new Error('password=PRIVATE_PROVIDER_TEXT'), 'unexpected'],
+  ])('reports the camera and bounded preference failure category: %s', async (failure, category) => {
+    const f = await setup({ earlyNotification: true, start: false });
+    f.client.setDeviceEarlyNotification.mockRejectedValueOnce(failure);
+    await f.runtime.start();
+    await until(() => f.events.includes(`early-notification-${category}-faulted`));
+    expect(f.reports).toContainEqual({ event: `early-notification-${category}-faulted`, context: { camera: 'Entry native name' } });
+    const output = JSON.stringify(f.reports);
+    expect(output).not.toContain('PRIVATE_PROVIDER_TEXT'); expect(output).not.toContain('private.invalid');
+    await f.push();
+    expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+  });
+
   it('refuses the setting POST after original persistence fails while keeping delayed recording available', async () => {
     const rename = fs.rename.bind(fs);
     const failedJournal = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
@@ -864,9 +884,29 @@ describe('native recording runtime composition', () => {
     const f = await setup({ earlyNotification: true });
     failedJournal.mockRestore();
     expect(f.settingWrites).toEqual([]); expect(f.earlyProvider.current).toBe(true);
-    expect(f.events).toContain('early-notification-faulted');
+    expect(f.events).toContain('early-notification-unexpected-faulted');
     await f.push(); await jest.advanceTimersByTimeAsync(60_000); await until(() => f.events.includes('offered'));
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('does not adopt an external desired state after refusal; existing original=%p', async existingOriginal => {
+    const f = await setup({ earlyNotification: true, start: false });
+    if (existingOriginal) {
+      await fs.writeFile(f.originalsPath, JSON.stringify({ version: 2, scope: { accountId: 10, tier: 'u000' },
+        devices: [{ kind: 'camera', networkId: 20, deviceId: 40, rawType: 'catalina', original: true }] }), { mode: 0o600 });
+      await f.runtime.stop();
+      await f.rebind();
+      await f.runtime.stop();
+    }
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      await options?.beforeChange?.(true);
+      f.earlyProvider.current = false;
+      return { supported: true, compatible: true, current: false, changed: false };
+    });
+    if (existingOriginal) await f.rebind();
+    else { await f.runtime.start(); await until(() => f.events.includes('early-notification-confirmed-off')); }
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(existingOriginal ? 1 : 0);
+    expect(f.events).not.toContain('early-notification-unexpected-faulted');
   });
 
   it.each([false, true])('restores only a still-owned off value when management ends, preserving manual changes: external=%p', async externallyEnabled => {

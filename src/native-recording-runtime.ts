@@ -3,7 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
-import type { BlinkApi, BlinkRemoteOperationOwnership } from './blink-api/client';
+import { BlinkEarlyNotificationNotConfirmedError, BlinkOperationNotStartedError, type BlinkApi, type BlinkRemoteOperationOwnership } from './blink-api/client';
+import { BlinkHttpError } from './blink-api/http';
 import { supportsEarlyNotificationControl } from './blink-api/domain-validation';
 import { FcmEventSource, type FcmEventSourceOptions } from './blink-api/fcm/source';
 import type { FcmNotification, FcmReceiverState, FcmScope, FirebaseConfig } from './blink-api/fcm/types';
@@ -15,7 +16,7 @@ import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type Nativ
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
 import type { NativeRecordingConfig, NativeRecordingDevicePolicy } from './native-recording-config';
 import type { NativeRecordingDelegate, NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
-import { isRemoteOperationLeaseActive, REMOTE_OPERATION_LEASE_MS, withinRequestBudget, type RequestOptions } from './operation-budget';
+import { isRemoteOperationLeaseActive, OperationTimeoutError, REMOTE_OPERATION_LEASE_MS, withinRequestBudget, type RequestOptions } from './operation-budget';
 import type { BlinkCameraKind } from './types';
 
 export interface NativeRuntimeDevice {
@@ -43,6 +44,21 @@ interface EarlyNotificationOriginals {
   devices: EarlyNotificationOriginal[];
 }
 export interface NativeRecordingLogContext { camera?: string; flow?: string; attempt?: number; }
+const preferenceFailure = (error: unknown): string => {
+  if (error instanceof BlinkEarlyNotificationNotConfirmedError) return 'readback-unconfirmed';
+  if (error instanceof OperationTimeoutError) return 'timeout';
+  if (error instanceof BlinkOperationNotStartedError) {
+    return ['storage-pending', 'liveview-pending', 'ownership-unavailable', 'invalid-native-route'].includes(error.reason)
+      ? `not-started-${error.reason}` : 'not-started';
+  }
+  if (error instanceof BlinkHttpError) {
+    if (error.failure === 'network') return 'network';
+    if (error.failure === 'response') return 'invalid-response';
+    return Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? `http-${error.status}` : 'http';
+  }
+  return 'unexpected';
+};
+
 interface DownloadedAsset {
   logFlow?: string;
   reference: string; bytes: number; sha256: string; identity: string; capturedAt: string;
@@ -291,7 +307,7 @@ export class NativeRecordingRuntime {
 
   private startPreferenceReconciliation(): void {
     if (!this.preferenceWorkAllowed()) return;
-    this.preferences ??= this.reconcileEarlyNotification().catch(() => this.report('early-notification-faulted'))
+    this.preferences ??= this.reconcileEarlyNotification().catch(error => this.report(`early-notification-${preferenceFailure(error)}-faulted`))
       .finally(() => { this.preferences = undefined; });
   }
 
@@ -333,7 +349,7 @@ export class NativeRecordingRuntime {
       if (device.settings.earlyNotificationMode !== 'on' && device.settings.earlyNotificationMode !== 'off') continue;
       const kind = device.binding.target;
       if (!['camera', 'owl', 'doorbell'].includes(kind) || !supportsEarlyNotificationControl(device.rawType)) {
-        this.report('early-notification-unsupported'); continue;
+        this.report('early-notification-unsupported', { camera: device.binding.nativeName }); continue;
       }
       const identity = { kind: kind as BlinkCameraKind, networkId: device.binding.networkId, deviceId: device.binding.providerId, rawType: device.rawType! };
       desired.set(settingKey(identity), { device, identity });
@@ -341,6 +357,8 @@ export class NativeRecordingRuntime {
     // Removed/excluded consumers still leave a durable original to restore.
     for (const original of [...this.earlyNotificationOriginals.devices]) {
       const selected = desired.get(settingKey(original));
+      const camera = [...this.devices.values()].find(device => device.binding.target === original.kind
+        && device.binding.providerId === original.deviceId && device.binding.networkId === original.networkId)?.binding.nativeName;
       if (selected && (selected.device.settings.earlyNotificationMode === 'on') !== original.original) continue;
       if (!this.preferenceWorkAllowed()) return;
       try {
@@ -348,30 +366,36 @@ export class NativeRecordingRuntime {
           original.rawType, original.original, { expectedCurrent: !original.original });
         if (result.supported && result.current === original.original) {
           await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals.devices.filter(row => settingKey(row) !== settingKey(original)));
-          this.report('early-notification-restored');
+          this.report('early-notification-restored', { camera });
         }
-      } catch { this.report('early-notification-restore-faulted'); }
+      } catch (error) { this.report(`early-notification-restore-${preferenceFailure(error)}-faulted`, { camera }); }
     }
     for (const [key, { device, identity }] of desired) {
       if (!this.preferenceWorkAllowed()) return;
       const enabled = device.settings.earlyNotificationMode === 'on';
       const binding = bindingKey(device.binding), previouslyOffSince = this.earlyNotificationOffSince.get(binding);
       this.earlyNotificationOffSince.delete(binding);
+      let savedOriginal = false;
       try {
         const result = await this.options.client.setDeviceEarlyNotification(identity.kind, identity.networkId, identity.deviceId, identity.rawType, enabled, {
           beforeChange: async current => {
             if (!this.preferenceWorkAllowed() || current === enabled) throw new Error('Early Notification ownership changed');
             if (!this.earlyNotificationOriginals!.devices.some(row => settingKey(row) === key)) {
               await this.saveEarlyNotificationOriginals([...this.earlyNotificationOriginals!.devices, { ...identity, original: current }]);
+              savedOriginal = true;
             }
             if (!this.preferenceWorkAllowed()) throw new Error('Early Notification ownership changed');
           },
         });
+        // A refused POST reconciled by GET does not own another actor's change.
+        if (savedOriginal && !result.changed) {
+          await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals!.devices.filter(row => settingKey(row) !== key));
+        }
         if (result.supported && result.compatible && result.current === enabled && this.preferenceWorkAllowed()) {
           if (!enabled) this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
-          this.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off');
-        } else this.report('early-notification-unsupported');
-      } catch { this.report('early-notification-faulted'); }
+          this.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off', { camera: device.binding.nativeName });
+        } else this.report('early-notification-unsupported', { camera: device.binding.nativeName });
+      } catch (error) { this.report(`early-notification-${preferenceFailure(error)}-faulted`, { camera: device.binding.nativeName }); }
     }
   }
 
