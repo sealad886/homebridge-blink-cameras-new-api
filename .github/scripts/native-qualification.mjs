@@ -210,13 +210,15 @@ export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
       assert.deepEqual(persisted.scope, scope); assert.deepEqual(persisted.push.persistentIds, [marker]); assert.deepEqual(persisted.remoteOperations, {});
     }
     const { BlinkApi } = requireInstalled(join(packageRoot, 'dist/blink-api/client.js'));
+    const { REMOTE_OPERATION_LEASE_MS } = requireInstalled(join(packageRoot, 'dist/operation-budget.js'));
     const api = new BlinkApi({ email: '', password: '', hardwareId: 'qualification', tier: 'u001', sharedTier: 'e001' });
     Object.assign(api.auth, { ensureValidToken: async () => {}, getPersistedTier: async () => 'u001', getPersistedSharedTier: async () => 'e001', getAccountId: () => 10,
       getClientId: () => 90, getAuthHeaders: () => ({ Authorization: 'Bearer qualification-only' }) });
     api.configureRemoteOperationOwnership({ restoredState: {}, saveState: async () => {} });
     const storageScope = { accountId: 10, networkId: 20, syncModuleId: 30 };
     api.setNativeStorageOwner(storageScope, { version: 1, operation: { ...storageScope, operationId: 'clip', kind: 'clip', phase: 'prepared',
-      commandId: 505, statusReads: 1, clip: { manifestId: 303, clip: { clipId: 404, networkId: 20, deviceName: 'qualification',
+      commandId: 505, statusReads: 1, expiresAt: Date.now() + REMOTE_OPERATION_LEASE_MS,
+      clip: { manifestId: 303, clip: { clipId: 404, networkId: 20, deviceName: 'qualification',
         capturedAt: new Date().toISOString(), mediaUrl } } } });
     const directory = join(scratch, 'sdk-download'); mkdirSync(directory, { mode: 0o700 });
     const transport = api.createNativeStorageTransport({ scope: storageScope, directory });

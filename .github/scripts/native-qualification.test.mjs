@@ -5,10 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { QUALIFICATION_SELECTIONS, FINITE_RECORDING_SELECTIONS, RUNTIME_BOOTSTRAP_EXPECTATION,
-  prepareValidation, verifyValidation, validateQualificationReceipts } from './native-qualification.mjs';
+  prepareValidation, verifyValidation, validateQualificationReceipts, exerciseInstalledRuntimeBootstrap } from './native-qualification.mjs';
 import { TARGETS, sha256 } from './native-package.mjs';
 const source = 'a'.repeat(40);
+test('built package runtime qualification completes its owned synthetic download without external capabilities', { timeout: 20000 }, async () => {
+  const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
+  assert.deepEqual(await exerciseInstalledRuntimeBootstrap(packageRoot), RUNTIME_BOOTSTRAP_EXPECTATION);
+});
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'blink-validation-test-')); const build = join(root, 'build'); mkdirSync(build);
   const target = process.platform + '-' + process.arch; const suffix = target === 'win32-x64' ? '.exe' : '';
