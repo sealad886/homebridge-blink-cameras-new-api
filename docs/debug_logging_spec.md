@@ -37,7 +37,7 @@ serialize camera, system, characteristic, or controller state.
 
 - Log OAuth step, method, redacted URL, redirect policy, status, and elapsed time.
 - Never log OAuth request headers or form bodies.
-- Log token expiry timing and refresh attempts.
+- Log token expiry transitions and refresh attempts; omit valid-token preflight chatter.
 - On failure, emit bounded status, allowlisted error category, and update/2FA
   hints. Raw server messages and response bodies are not error diagnostics.
 - Refresh transport/429/5xx failures are temporary; malformed responses and
@@ -115,7 +115,7 @@ Operator settings, recording locations and codec behavior are owned by the
 - Camera delegate diagnostics: `src/accessories/camera-source.ts`.
 - Canonical sensitive-key and URL/text redaction: `src/blink-api/redaction.ts`.
 - HTTP outcomes and errors: `src/blink-api/http.ts`.
-- Auth outcomes and URL redaction: `src/blink-api/auth.ts` (`redactUrlForLogging`).
+- Auth outcomes and URL redaction: `src/blink-api/auth.ts`, using shared `redactDiagnosticUrl`.
 - Error formatting: `BlinkHttpError.toLogString`, `BlinkAuthenticationError.toLogString`.
 
 ## Push and HomeKit Secure Video lifecycle

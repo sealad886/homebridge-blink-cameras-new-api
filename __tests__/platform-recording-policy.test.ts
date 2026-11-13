@@ -94,15 +94,18 @@ describe('platform native recording and ordinary command ownership', () => {
     const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
     const report = createRuntime.mock.calls[0][0].report;
     log.info.mockClear(); log.debug.mockClear(); log.warn.mockClear();
-    report('motion-suppressed-home-policy-inactive', { camera: 'Entry\nG8T1234567890123 https://private.invalid/token',
+    report('motion-suppressed-home-policy-inactive', { camera: 'Entry\nG8T1234567890123 (G8T1-K001-1234-5678) https://private.invalid/token',
       flow: 'flow-0123456789', attempt: 1 });
     report('push-received'); report('home-transport-acknowledged');
+    report('public-motion-failed'); report('delivery-uncertain-motion-publication-failed');
     report('push-credentials-saved'); report('delivery-not-offered-preparation-failed');
     expect(log.info).toHaveBeenCalledTimes(3);
     expect(log.debug).toHaveBeenCalledWith('[NativeRecording] push-credentials-saved');
     expect(log.warn).toHaveBeenCalledWith('[NativeRecording] delivery-not-offered-preparation-failed');
     const output = JSON.stringify(log.info.mock.calls);
     expect(output).toContain('Entry'); expect(output).toContain('flow-0123456789');
+    expect(log.warn).toHaveBeenCalledTimes(3);
+    expect(output).not.toContain('G8T1-K001-1234-5678');
     expect(output).not.toContain('G8T1234567890123'); expect(output).not.toContain('private.invalid');
     expect(output).not.toContain('Entry\\n');
   });

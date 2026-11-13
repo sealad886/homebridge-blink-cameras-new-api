@@ -24,49 +24,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
-const calculateEtaMs = (
-  startedAt: number,
-  processed: number,
-  total: number,
-  nowMs: () => number,
-): number => {
-  if (processed <= 0 || processed >= total) {
-    return 0;
-  }
-  const elapsed = Math.max(0, nowMs() - startedAt);
-  return Math.max(0, Math.round((elapsed / processed) * (total - processed)));
-};
-
 export async function loadPersistedAuthStateFromFiles(
   filePaths: string[],
   logDebug: (message: string) => void,
   nowMs = Date.now,
 ): Promise<PersistedAuthStateLoadResult> {
   let ignoredMessage: string | undefined;
-  const total = filePaths.length;
-  const startedAt = nowMs();
-  let processed = 0;
-
-  const logProgress = (filePath: string, index: number): void => {
-    const percent = total === 0 ? 100 : Math.round((index / total) * 100);
-    const etaMs = calculateEtaMs(startedAt, index, total, nowMs);
-    logDebug(
-      `Persisted Blink auth scan progress: ${index}/${total} (${percent}%) `
-      + `file=${describeUiFilePath(filePath)} ETA ${etaMs}ms`,
-    );
-  };
-
-  const complete = (): void => {
-    logDebug(
-      `Persisted Blink auth scan complete: ${processed}/${total} (100%) ETA 0ms`,
-    );
-  };
-
   // Only an absent primary permits legacy lookup. Invalid or unreadable
   // primary state remains authoritative; do not silently select another account.
-  for (const [index, filePath] of filePaths.entries()) {
-    processed = index + 1;
-    logProgress(filePath, processed);
+  for (const filePath of filePaths) {
     const uiFilePath = describeUiFilePath(filePath);
     try {
       const value = await readOwnerOnlyJsonFile<unknown>(filePath);
@@ -94,7 +60,6 @@ export async function loadPersistedAuthStateFromFiles(
         if (expiryMs <= nowMs()) {
           if (typeof state.refreshToken === 'string' && state.refreshToken.trim().length > 0) {
             logDebug(`Persisted Blink authentication in ${uiFilePath} requires token refresh`);
-            complete();
             return { state, requiresRefresh: true };
           }
           ignoredMessage = `Persisted Blink authentication was ignored: saved token in ${uiFilePath} is expired`;
@@ -105,7 +70,6 @@ export async function loadPersistedAuthStateFromFiles(
         }
       }
       logDebug(`Loaded valid persisted auth state from ${uiFilePath}`);
-      complete();
       return { state };
     } catch (error) {
       if (isNodeError(error, 'ENOENT')) {
@@ -118,7 +82,6 @@ export async function loadPersistedAuthStateFromFiles(
           : 'unsafe auth state file';
         const message = `Persisted Blink authentication was ignored: ${issue}: ${uiFilePath}`;
         logDebug(message);
-        complete();
         return { state: null, message };
       }
 
@@ -127,6 +90,5 @@ export async function loadPersistedAuthStateFromFiles(
       break;
     }
   }
-  complete();
   return { state: null, message: ignoredMessage };
 }

@@ -75,31 +75,22 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
     jest.restoreAllMocks();
   });
 
-  it('fully redacts OAuth and stable identity parameters while preserving safe query values', () => {
-    const auth = new BlinkAuth(baseConfig);
-    const hardwareId = 'hardwareIdentifierSecret_4Wd7Kp';
-    const email = 'privateAddressSecret_8Fm2Qv@example.com';
-    const sanitized = (
-      auth as unknown as { redactUrlForLogging(value: string): string }
-    ).redactUrlForLogging(
-      `https://example.com/callback?code=code-secret&state=state-secret&error=error-secret&error_description=description-secret&hardware_id=${hardwareId}&email=${encodeURIComponent(email)}&code_challenge_method=S256&safe=value`,
-    );
-    const parsed = new URL(sanitized);
+  it.each([false, true])('keeps credential values out of failed OAuth diagnostics with debug=%s', async debugAuth => {
+    const fetchMock = mockFetch();
+    fetchMock.mockRejectedValueOnce(new Error('password=provider-secret'));
+    const { logger, entries } = createCapturingLogger();
+    const auth = new BlinkAuth({
+      ...baseConfig, debugAuth, logger,
+      hardwareId: 'hardware-secret', email: 'email-secret@example.com', password: 'password-secret',
+    });
 
-    expect(parsed.searchParams.get('code')).toBe('<redacted>');
-    expect(parsed.searchParams.get('state')).toBe('<redacted>');
-    expect(parsed.searchParams.get('error')).toBe('<redacted>');
-    expect(parsed.searchParams.get('error_description')).toBe('<redacted>');
-    expect(parsed.searchParams.get('hardware_id')).toBe('<redacted>');
-    expect(parsed.searchParams.get('email')).toBe('<redacted>');
-    expect(parsed.searchParams.get('code_challenge_method')).toBe('S256');
-    expect(parsed.searchParams.get('safe')).toBe('value');
-    expect(sanitized).not.toContain('code-secret');
-    expect(sanitized).not.toContain('state-secret');
-    expect(sanitized).not.toContain('error-secret');
-    expect(sanitized).not.toContain('description-secret');
-    expect(sanitized).not.toContain(hardwareId);
-    expect(sanitized).not.toContain(email);
+    await expect(auth.login()).rejects.toThrow('Network error during');
+    const log = entries.join('\n');
+    for (const secret of ['hardware-secret', 'email-secret', 'password-secret', 'provider-secret']) {
+      expect(log).not.toContain(secret);
+    }
+    expect(log).toContain('Network error during');
+    expect(log.includes('GET https://api.oauth.blink.com')).toBe(debugAuth);
   });
 
   describe('successful login flow', () => {

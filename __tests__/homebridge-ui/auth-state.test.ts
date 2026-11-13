@@ -38,12 +38,8 @@ describe('homebridge UI persisted auth state loading', () => {
     const result = await loadPersistedAuthStateFromFiles([primaryPath, legacyPath], logDebug, now);
 
     expect(result).toEqual({ state });
-    expect(logDebug).toHaveBeenCalledWith(
-      'Persisted Blink auth scan progress: 1/2 (50%) file=.blink-auth.json ETA 0ms',
-    );
-    expect(logDebug).toHaveBeenCalledWith(
-      'Persisted Blink auth scan complete: 1/2 (100%) ETA 0ms',
-    );
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining('Loaded valid persisted auth state'));
+    expect(logDebug.mock.calls.flat().join('\n')).not.toContain(state.accessToken);
   });
 
   it('returns expired auth state with a usable refresh token for server-side refresh', async () => {
@@ -169,7 +165,7 @@ describe('homebridge UI persisted auth state loading', () => {
     expect(logDebug.mock.calls.flat().join('\n')).not.toContain(tmpDir);
   });
 
-  it('reports progress with ETA for every candidate and a completion record', async () => {
+  it('loads the legacy candidate when the primary is absent', async () => {
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(legacyPath, JSON.stringify(state), { mode: 0o600 });
     await fs.chmod(legacyPath, 0o600);
@@ -177,15 +173,8 @@ describe('homebridge UI persisted auth state loading', () => {
     const result = await loadPersistedAuthStateFromFiles([primaryPath, legacyPath], logDebug, now);
 
     expect(result).toEqual({ state });
-    expect(logDebug).toHaveBeenCalledWith(
-      'Persisted Blink auth scan progress: 1/2 (50%) file=.blink-auth.json ETA 0ms',
-    );
-    expect(logDebug).toHaveBeenCalledWith(
-      'Persisted Blink auth scan progress: 2/2 (100%) file=auth-state.json ETA 0ms',
-    );
-    expect(logDebug).toHaveBeenCalledWith(
-      'Persisted Blink auth scan complete: 2/2 (100%) ETA 0ms',
-    );
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining('auth-state.json'));
+    expect(logDebug.mock.calls.flat().join('\n')).not.toContain(tmpDir);
   });
 
   it.each([

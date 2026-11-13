@@ -53,3 +53,21 @@ Real-camera delegate routing is covered by existing runtime/delegate tests.
 Initial media tests had five UDP-bind failures under sandbox; independent bind
 probe returned EPERM. Host-access checks are required before final qualification.
 Physical Home delivery and iCloud retention are not established by source tests.
+
+## Milestone 2 and independent review
+
+Milestone 1 is local commit `d1a332c`. Independent lifecycle review found two
+corrections: hyphenated serial tokens escaped camera-name sanitization, and
+public/recording motion publication failures needed warning severity. Both are
+corrected, with the platform regression suite passing all 19 tests.
+
+Transport review: 193 tests passed across seven suites. Media/UI remediation:
+138 focused tests plus 46 host UDP-dependent tests passed. TypeScript, focused
+ESLint and diff checks passed. Maintained OAuth scripts were syntax-checked,
+not executed against Blink. Cleanup removes the ledger's confirmed chatter and
+uses canonical URL redaction. No raw payload tracing was restored.
+
+Independent review confirmed real-camera identity remains bound through each
+recording delegate; observer failures cannot retain media resources. Home stream
+acknowledgement still does not establish iCloud retention. Integrated lint,
+build and full suite are the remaining host qualification gate.

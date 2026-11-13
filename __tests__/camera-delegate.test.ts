@@ -67,6 +67,33 @@ describe('camera delegate callbacks', () => {
     }
   });
 
+  it.each([false, true])('completes snapshot callbacks when the logger throws (capture fails=%s)', async fails => {
+    const { source, api, log } = fixture();
+    log.mockImplementation(() => { throw new Error('Logger unavailable'); });
+    if (fails) api.requestCameraThumbnail.mockRejectedValue(new Error('PRIVATE_PROVIDER_FAILURE'));
+    const callback = jest.fn();
+
+    await source.handleSnapshotRequest(request, callback);
+
+    expect(log).toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledTimes(1);
+    if (fails) expect(callback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
+    else expect(callback).toHaveBeenCalledWith(undefined, image);
+  });
+
+  it('serves repeated cached snapshots without routine diagnostic chatter', async () => {
+    const { source, api, log } = fixture();
+    await source.handleSnapshotRequest(request, jest.fn());
+    log.mockClear();
+    for (let index = 0; index < 50; index++) {
+      const callback = jest.fn();
+      await source.handleSnapshotRequest(request, callback);
+      expect(callback).toHaveBeenCalledWith(undefined, image);
+    }
+    expect(api.requestCameraThumbnail).toHaveBeenCalledTimes(1);
+    expect(log).not.toHaveBeenCalled();
+  });
+
   it('returns unavailable and failed snapshot callback errors once', async () => {
     const offline = fixture({}, () => false);
     const unavailable = jest.fn();

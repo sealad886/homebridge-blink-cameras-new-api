@@ -554,12 +554,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       config: resolveNativeRecordingConfig(this.config.nativeRecording), firebase: BLINK_FIREBASE_CLIENT, appVersion: BLINK_NOTIFICATION_APP_VERSION,
       report: (event, context) => {
         const camera = context?.camera?.replace(/[\p{C}\u2028\u2029]/gu, ' ')
-          .replace(/https?:\/\/\S+|\b(?=[a-z0-9]{12,}\b)(?=[a-z0-9]*\d)[a-z0-9]+\b/gi, '[redacted]').slice(0, 80);
+          .replace(/https?:\/\/\S+|\b(?=[a-z0-9-]{12,}\b)(?=[a-z0-9-]*\d)[a-z0-9-]+\b/gi, '<redacted>').slice(0, 80);
         const flow = context?.flow && /^flow-[a-f0-9]{10}$/.test(context.flow) ? context.flow : undefined;
         const details = [camera && `camera=${JSON.stringify(camera)}`, flow,
           Number.isSafeInteger(context?.attempt) && `attempt=${context!.attempt}`].filter(Boolean).join(' ');
         const message = `[NativeRecording] ${event}${details ? ` ${details}` : ''}`;
-        if (event.includes('faulted') || event.endsWith('recovery-required') || /^(?:delivery-not-offered-preparation-failed|cache-capacity-exceeded|job-(?:exhausted|abandoned))$/.test(event)) this.log.warn(message);
+        if (event.includes('faulted') || event.endsWith('recovery-required') || /^(?:public-motion-failed|delivery-uncertain-motion-publication-failed|delivery-not-offered-preparation-failed|cache-capacity-exceeded|job-(?:exhausted|abandoned))$/.test(event)) this.log.warn(message);
         else if (/^(?:push-(?:ready|client-bound|received|message-accepted|message-ignored|retrying)|motion-|acquisition-|job-|catalog-|clip-|download|preparation-|prepared$|offered$|delivery-|home-)/.test(event)) this.log.info(message);
         else this.log.debug(message);
       } });
