@@ -7,6 +7,33 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.3] - 2026-11-13
+
+### Changed
+- Log push receipts, decoded motion and explicit HomeKit Secure Video suppression
+  reasons by default, followed by camera-scoped acquisition and delivery handoffs.
+- Distinguish prepared clip offers, Home requests, finite transfer completion and
+  transport acknowledgement. Clips use each real camera's recording delegate;
+  these receipts do not prove iCloud retention or convert saved footage to live video.
+- Remove repetitive snapshot/cache messages, valid-token preflight chatter,
+  duplicate OAuth receipts and small authentication-file scan progress reports.
+
+### Fixed
+- Redact contiguous and hyphenated camera serial tokens from new lifecycle logs,
+  remove control characters and bound camera labels without logging push payloads.
+- Keep snapshot callbacks and recording ownership unaffected by logging failures;
+  report motion-publication failures as warnings.
+- Reuse canonical OAuth URL redaction and preserve actionable authentication,
+  media and persistence errors without restoring full Blink state dumps.
+
+### Upgrade notes
+- Install this exact beta through Homebridge package management and restart the
+  Blink child bridge. No configuration migration is required for these changes.
+- A retained standalone "Blink Clip Replay Test" accessory is outside the plugin;
+  remove its old pairing in Home. The plugin exposes recordings on real cameras.
+- Registry publication does not establish physical Home delivery or iCloud
+  retention. The maintainer performs Pi installation and acceptance separately.
+
 ## [1.1.0-beta.2] - 2026-11-13
 
 ### Changed
