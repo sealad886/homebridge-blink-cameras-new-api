@@ -317,6 +317,47 @@ describe('owned native storage SDK', () => {
     expect((fetch as jest.Mock).mock.calls[0][1].method).toBe('GET');
   });
 
+  it.each((['deadline', 'cancel'] as const).flatMap(limit =>
+    (['error-cleanup', 'success-response'] as const).map(stage => [limit, stage] as const)))
+  ('releases conflict readback and the command queue on %s during held %s', async (limit, stage) => {
+    jest.useFakeTimers();
+    const f = fixture(), controller = new globalThis.AbortController();
+    let release!: () => void, entered!: () => void, reads = 0, settled = false;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const holding = new Promise<void>(resolve => { entered = resolve; });
+    (fetch as jest.Mock).mockImplementation(async (url: string, request: RequestInit) => {
+      if (url.endsWith('/config') && request.method === 'GET') {
+        if (++reads === 1) return json({ camera: [{ early_notification: true, early_notification_compatible: true }] });
+        if (stage === 'success-response') {
+          entered(); await held;
+          return json({ camera: [{ early_notification: false, early_notification_compatible: true }] });
+        }
+        const response = json({}, 503);
+        jest.spyOn(response.body!, 'cancel').mockImplementation(async () => { entered(); await held; });
+        return response;
+      }
+      if (url.endsWith('/config') && request.method === 'POST') return json({}, 409);
+      if (request.method === 'POST') return json({ id: 991 });
+      return json({ complete: true, status: 0 });
+    });
+    const operation = f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false,
+      { deadline: Date.now() + 500, signal: controller.signal }).catch(error => error).finally(() => { settled = true; });
+    try {
+      await holding;
+      if (limit === 'cancel') controller.abort(new Error('Operator cancelled'));
+      await jest.advanceTimersByTimeAsync(limit === 'deadline' ? 501 : 0);
+      expect(settled).toBe(true);
+      expect(await operation).toBeInstanceOf(BlinkHttpError);
+      expect(await operation).toMatchObject({ status: 409, method: 'POST' });
+      expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+      expect((fetch as jest.Mock).mock.calls.filter(([url, request]) => url.endsWith('/config') && request.method === 'POST')).toHaveLength(1);
+      const next = f.api.armNetwork(20);
+      await jest.advanceTimersByTimeAsync(301);
+      await expect(next).resolves.toEqual({ id: 991 });
+      expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    } finally { release(); await operation; await jest.advanceTimersByTimeAsync(0); }
+  });
+
   it.each(['early-notification', 'liveview'] as const)('rejects a superseded %s generation before allocating ownership', async kind => {
     jest.useFakeTimers();
     const f = fixture(); await f.release();

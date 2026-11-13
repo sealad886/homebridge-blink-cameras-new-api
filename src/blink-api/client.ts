@@ -295,7 +295,7 @@ export class BlinkApi {
           if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
           let reconciled: ConflictResolution<T> | undefined;
           try {
-            reconciled = await conflictResolution?.(execution);
+            reconciled = conflictResolution ? await withinRequestBudget(conflictResolution(execution), execution) : undefined;
             checkCompletion();
           } catch {
             // A known refusal survives readback failure only while this continuation still owns its scope.

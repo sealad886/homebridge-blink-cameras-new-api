@@ -288,3 +288,31 @@ with all 488 runtime/SDK boundary tests, TypeScript, runtime source lint and
 diff checks. Frozen hashes/logs are in
 `logs/notification-settings-beta4/off-confirmation-final.json`. No vendor write
 or physical timing acceptance is inferred from these synthetic checks.
+
+## Whole conflict-readback budget
+
+Review traced a real queue-liveness gap: authentication, fetch and successful body
+reads had budgets, but HTTP error-body cleanup could remain pending while the
+conflict callback was awaited outside the queue's outer budget. The shared queue
+now bounds the complete conflict resolver with its existing deadline and signal.
+Real-HTTP synthetic regressions hold cleanup or a successful response, then prove
+deadline/cancellation settles the operation, preserves the original POST refusal,
+sends no second preference POST and admits a following arm command before held
+work is released. All 492 SDK/runtime tests, TypeScript, SDK lint and diff checks
+passed; frozen hashes/logs are in
+`logs/notification-settings-beta4/conflict-budget-final.json`. Late read-only
+cleanup may still finish physically later, but it no longer owns the command queue.
+
+A separate auth-refusal concern was refuted: canonical BlinkAuth constructs its
+own auth/token-refresh/hosted or generic errors, never BlinkHttpError. HTTP
+preflight preserves that prototype, so later OAuth POST failures cannot satisfy
+the preference POST-refusal predicate. No runtime classification change was made.
+
+Pinned Homebridge UI 5.30 installation was also inspected for migration writes.
+Its npm operation completes before subsequent fresh config reads; no stale
+configuration snapshot writeback was found. The UI's process-local JSON mutex
+does not coordinate external postinstall. The existing final-check/rename race
+against an uncooperative concurrent writer remains a documented operating limit.
+Closing editors and stopping configuration writes was already an upgrade
+requirement; the automatic-migration and release guides now state it explicitly.
+No installer-only lock or unsupported atomic-comparison guarantee was added.
