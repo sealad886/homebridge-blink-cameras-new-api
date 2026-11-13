@@ -1,3 +1,4 @@
+import { isEarlyNotificationMode, type EarlyNotificationMode } from './early-notification-config';
 import { matchesDeviceIdentifier, SettingsConstraintError, type SettingsCamera } from './settings-inventory';
 
 export interface NativeRecordingConfigInput {
@@ -26,22 +27,22 @@ export interface NativeRecordingDeviceOverride {
   deviceIdentifier: string;
   exposeMotionDetected?: boolean;
   homeKitSecureVideo?: boolean;
-  disableEarlyNotification?: boolean;
+  earlyNotificationMode?: EarlyNotificationMode;
 }
 export interface NativeRecordingSyncModuleOverride {
   syncModuleId: string;
-  disableEarlyNotification?: boolean;
+  earlyNotificationMode?: EarlyNotificationMode;
 }
 export interface NativeRecordingPolicyConfig {
   exposeMotionDetected?: boolean;
-  disableEarlyNotification?: boolean;
+  earlyNotificationMode?: EarlyNotificationMode;
   deviceSettingOverrides?: readonly NativeRecordingDeviceOverride[];
   syncModuleSettingOverrides?: readonly NativeRecordingSyncModuleOverride[];
 }
 export interface NativeRecordingDevicePolicy {
   exposeMotionDetected: boolean;
   homeKitSecureVideo: boolean;
-  disableEarlyNotification: boolean;
+  earlyNotificationMode: EarlyNotificationMode;
 }
 
 export const NATIVE_RECORDING_CONFIG_FIELDS = Object.freeze({
@@ -90,12 +91,12 @@ export function validateSyncModuleSettingOverrides(value: unknown): NativeRecord
     const row = entry as Record<string, unknown>;
     if (typeof row.syncModuleId !== 'string' || !row.syncModuleId.trim()) throw new SettingsConstraintError(`${path}/syncModuleId`, 'Choose a Sync Module.');
     if (seen.has(row.syncModuleId)) throw new SettingsConstraintError(`${path}/syncModuleId`, 'A Sync Module can have only one settings row.');
-    if (row.disableEarlyNotification !== undefined && typeof row.disableEarlyNotification !== 'boolean') {
-      throw new SettingsConstraintError(`${path}/disableEarlyNotification`, 'Disable Early Notification must be on, off, or unset.');
+    if (row.earlyNotificationMode !== undefined && !isEarlyNotificationMode(row.earlyNotificationMode)) {
+      throw new SettingsConstraintError(`${path}/earlyNotificationMode`, 'Early Notification must be on, off, or unmanaged.');
     }
     seen.add(row.syncModuleId);
     return { syncModuleId: row.syncModuleId,
-      ...(row.disableEarlyNotification === undefined ? {} : { disableEarlyNotification: row.disableEarlyNotification }) };
+      ...(row.earlyNotificationMode === undefined ? {} : { earlyNotificationMode: row.earlyNotificationMode }) };
   });
 }
 
@@ -103,21 +104,22 @@ export function validateSyncModuleSettingOverrides(value: unknown): NativeRecord
 export function nativeRecordingDevicePolicy(config: NativeRecordingPolicyConfig | undefined,
   device: { id: number; name?: string; serial?: string; kind?: 'camera' | 'owl' | 'doorbell';
     moduleAssociation?: SettingsCamera['moduleAssociation'] }): NativeRecordingDevicePolicy {
-  const { deviceSettingOverrides: overrides, exposeMotionDetected = true, disableEarlyNotification = false } = config ?? {};
+  const { deviceSettingOverrides: overrides, exposeMotionDetected = true, earlyNotificationMode = 'unmanaged' } = config ?? {};
   if (typeof exposeMotionDetected !== 'boolean') throw new Error('Invalid exposeMotionDetected');
-  if (typeof disableEarlyNotification !== 'boolean') throw new Error('Invalid disableEarlyNotification');
+  if (!isEarlyNotificationMode(earlyNotificationMode)) throw new Error('Invalid earlyNotificationMode');
   if (overrides !== undefined && !Array.isArray(overrides)) throw new Error('Invalid per-camera settings list');
   for (const row of overrides ?? []) {
     if (!row || typeof row.deviceIdentifier !== 'string' || !row.deviceIdentifier.trim()) throw new Error('Invalid per-camera deviceIdentifier');
-    for (const key of ['exposeMotionDetected', 'homeKitSecureVideo', 'disableEarlyNotification'] as const) {
+    for (const key of ['exposeMotionDetected', 'homeKitSecureVideo'] as const) {
       if (row[key] !== undefined && typeof row[key] !== 'boolean') throw new Error(`Invalid per-camera ${key}`);
     }
   }
+  for (const row of overrides ?? []) if (row.earlyNotificationMode !== undefined && !isEarlyNotificationMode(row.earlyNotificationMode)) throw new Error('Invalid per-camera earlyNotificationMode');
   const modules = validateSyncModuleSettingOverrides(config?.syncModuleSettingOverrides);
   const association = device.moduleAssociation;
   const module = association?.state === 'unique' && association.candidateIds.length === 1
     ? modules.find(entry => entry.syncModuleId === association.candidateIds[0]) : undefined;
   const row = overrides?.find(entry => matchesDeviceIdentifier(device, entry.deviceIdentifier, device.kind));
   return { exposeMotionDetected: row?.exposeMotionDetected ?? exposeMotionDetected, homeKitSecureVideo: row?.homeKitSecureVideo ?? false,
-    disableEarlyNotification: row?.disableEarlyNotification ?? module?.disableEarlyNotification ?? disableEarlyNotification };
+    earlyNotificationMode: row?.earlyNotificationMode ?? module?.earlyNotificationMode ?? earlyNotificationMode };
 }

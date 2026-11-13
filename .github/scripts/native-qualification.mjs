@@ -185,7 +185,7 @@ export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
       matchingDevices: [{ accountId: 10, networkId: 20, syncModuleId: 30, moduleId: '20:30', providerId: 40,
         target: 'camera', cameraId: 'camera:40', nativeName: 'Qualification camera' }],
       devices: [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Qualification camera' },
-        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: false },
+        nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'unmanaged' },
         motion() { publicMotionEvents++; }, recording: () => undefined }],
       eventSourceFactory: input => { sources.push(input); return {
         async setDemand(demand) { sourceStarts++; assert.deepEqual(demand, { motionAccessory: true, hsv: false }); },

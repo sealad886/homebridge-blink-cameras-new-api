@@ -14,14 +14,13 @@ function fixture(config: BlinkCameraStreamingConfigInput = {}, available = () =>
       thumbnail: 'https://rest-e006.immedia-semi.com/private?token=PRIVATE_MEDIA_TOKEN' }),
     getAuthHeaders: jest.fn().mockReturnValue({ Authorization: 'Bearer PRIVATE_ACCESS_TOKEN' }),
   };
-  const audit = jest.fn();
+  const log = jest.fn();
   const source = new BlinkCameraSource(api as unknown as BlinkApi, createHap() as unknown as HAP,
-    100, 200, 'camera', 'PRIVATE_SERIAL', () => undefined, available, jest.fn(), config,
-    jest.fn(), undefined, undefined, audit);
-  return { source, api, audit };
+    100, 200, 'camera', 'PRIVATE_SERIAL', () => undefined, available, log, config, log);
+  return { source, api, log };
 }
 
-describe('camera delegate audit', () => {
+describe('camera delegate callbacks', () => {
   const originalFetch = globalThis.fetch;
   beforeEach(() => {
     globalThis.fetch = jest.fn().mockImplementation(async () => testResponse({
@@ -53,8 +52,8 @@ describe('camera delegate audit', () => {
     expect(fresh).toHaveBeenCalledWith(undefined, image); expect(api.requestCameraThumbnail).toHaveBeenCalledTimes(2);
   });
 
-  it.each([false, true])('records fresh and cached snapshot responses without image or credential content (persistent=%s)', async persistSnapshotCache => {
-    const { source, api, audit } = fixture({ persistSnapshotCache });
+  it.each([false, true])('returns fresh and cached snapshots without logging image or credential content (persistent=%s)', async persistSnapshotCache => {
+    const { source, api, log } = fixture({ persistSnapshotCache });
     const first = jest.fn(); const second = jest.fn();
     await source.handleSnapshotRequest(request, first);
     await source.handleSnapshotRequest(request, second);
@@ -63,24 +62,17 @@ describe('camera delegate audit', () => {
     expect(first.mock.calls[0][1]).toEqual(image);
     expect(second.mock.calls[0][1]).toBe(first.mock.calls[0][1]);
     expect(api.requestCameraThumbnail).toHaveBeenCalledTimes(1);
-    const events = audit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event.direction === 'HomeKit -> bridge')).toHaveLength(2);
-    expect(events.filter(event => event.direction === 'bridge -> HomeKit')).toEqual([
-      expect.objectContaining({ event: 'Snapshot', outcome: 'fresh', bytes: image.length }),
-      expect.objectContaining({ event: 'Snapshot', outcome: persistSnapshotCache ? 'persistent cache' : 'cache', bytes: image.length }),
-    ]);
     for (const secret of ['PRIVATE_IMAGE_BYTES', 'PRIVATE_MEDIA_TOKEN', 'PRIVATE_ACCESS_TOKEN', 'PRIVATE_SERIAL', image.toString('base64')]) {
-      expect(JSON.stringify(events)).not.toContain(secret);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
     }
   });
 
-  it('records unavailable and failed snapshot results without exposing failure text', async () => {
+  it('returns unavailable and failed snapshot callback errors once', async () => {
     const offline = fixture({}, () => false);
     const unavailable = jest.fn();
     await offline.source.handleSnapshotRequest(request, unavailable);
     expect(unavailable).toHaveBeenCalledTimes(1);
     expect(offline.api.requestCameraThumbnail).not.toHaveBeenCalled();
-    expect(offline.audit).toHaveBeenCalledWith(expect.objectContaining({ event: 'Snapshot', outcome: 'unavailable' }));
 
     const failed = fixture();
     failed.api.requestCameraThumbnail.mockRejectedValue(new Error('PRIVATE_PROVIDER_FAILURE'));
@@ -88,31 +80,18 @@ describe('camera delegate audit', () => {
     await failed.source.handleSnapshotRequest(request, callback);
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback).toHaveBeenCalledWith(expect.objectContaining({ hapStatus: -70402 }));
-    expect(failed.audit).toHaveBeenCalledWith(expect.objectContaining({ event: 'Snapshot', outcome: 'failed' }));
-    expect(JSON.stringify(failed.audit.mock.calls)).not.toContain('PRIVATE_PROVIDER_FAILURE');
   });
 
   it('does not reclassify a caller callback exception as a failed snapshot or call it again', async () => {
-    const { source, audit } = fixture();
+    const { source } = fixture();
     const failure = new Error('Synthetic caller exception');
     const callback = jest.fn(() => { throw failure; });
     await expect(source.handleSnapshotRequest(request, callback)).rejects.toBe(failure);
     expect(callback).toHaveBeenCalledTimes(1);
-    expect(audit.mock.calls.map(([event]) => event).filter(event => event.direction === 'bridge -> HomeKit'))
-      .toEqual([expect.objectContaining({ event: 'Snapshot', outcome: 'fresh' })]);
   });
 
-  it('preserves snapshot results when the audit callback throws', async () => {
-    const { source, audit } = fixture();
-    audit.mockImplementation(() => { throw new Error('Synthetic audit failure'); });
-    const callback = jest.fn();
-    await source.handleSnapshotRequest(request, callback);
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(callback).toHaveBeenCalledWith(undefined, image);
-  });
-
-  it('records disabled prepare and stream requests while preserving existing callback arguments', () => {
-    const { source, audit } = fixture({ enabled: false });
+  it('returns disabled prepare and stream callback arguments once', () => {
+    const { source } = fixture({ enabled: false });
     const prepare = jest.fn();
     source.prepareStream({ sessionID: 'PRIVATE_SESSION' } as PrepareStreamRequest, prepare);
     expect(prepare).toHaveBeenCalledTimes(1);
@@ -123,9 +102,5 @@ describe('camera delegate audit', () => {
       expect(callback).toHaveBeenCalledTimes(1);
       expect(callback).toHaveBeenCalledWith();
     }
-    const events = audit.mock.calls.map(([event]) => event);
-    expect(events.filter(event => event.outcome === 'disabled')).toHaveLength(3);
-    expect(events.filter(event => event.event === 'Prepare stream' && event.outcome === 'failed')).toHaveLength(1);
-    expect(JSON.stringify(events)).not.toContain('PRIVATE_SESSION');
   });
 });

@@ -12,6 +12,7 @@
   <button type="button" class="btn btn-outline-secondary" id="retrySettings" hidden>Retry checking changes</button>
   <p id="inventoryStatus" class="blink-help"></p>
   <div id="connectionFlow">
+  <div id="successStatusBadge" role="status" aria-live="polite" hidden><span id="connectionStatusIcon" aria-hidden="true"></span> <span id="successStatusLabel">Connection not checked</span></div>
   <div class="auth-step active" id="step-login">
     <div class="card">
       <div class="card-body">
@@ -111,7 +112,6 @@
 
   <div class="auth-step" id="step-success">
     <div class="blink-connection-card">
-      <div id="successStatusBadge"><span id="successStatusLabel">Sign-in stored</span></div>
       <h3 id="successTitle">Blink connection</h3>
       <p id="successSummary"></p>
       <details class="blink-details"><summary>Account details</summary>
@@ -196,6 +196,7 @@
   let deviceIdValue = '';
   let completionInFlight = false;
   let pendingAuthConfig = null;
+  let connectionTestInFlight = false;
 
   const steps = {
     login: document.getElementById('step-login'),
@@ -222,6 +223,7 @@
   const toggleDeviceId = document.getElementById('toggleDeviceId');
   const deviceIdSection = document.getElementById('deviceIdSection');
   const successStatusBadge = document.getElementById('successStatusBadge');
+  const connectionStatusIcon = document.getElementById('connectionStatusIcon');
   const successStatusLabel = document.getElementById('successStatusLabel');
   const successTitle = document.getElementById('successTitle');
   const successSummary = document.getElementById('successSummary');
@@ -247,10 +249,13 @@
   let settings;
   try {
     const schema = await window.BlinkSettings.deadline(homebridge.getPluginConfigSchema());
-    settings = window.BlinkSettingsUI.mount(homebridge, schema, pluginConfig);
+    const existing = pluginConfig.find(block => block.platform === 'BlinkCameras') || { platform: 'BlinkCameras', name: 'Blink' };
+    const migrated = await window.BlinkSettings.deadline(homebridge.request('/settings/migrate', { config: existing }));
+    if (!migrated?.config || typeof migrated.config !== 'object' || Array.isArray(migrated.config)) throw new Error('Invalid migration response.');
+    settings = window.BlinkSettingsUI.mount(homebridge, schema, pluginConfig, migrated.config);
     homebridge.hideSchemaForm();
   } catch {
-    showBootError('The configuration definitions could not load. Close and reopen settings.');
+    showBootError('The configuration definitions or settings migration could not load. Close and reopen settings.');
     return;
   }
 
@@ -260,6 +265,11 @@
   document.getElementById('deviceId').value = deviceIdValue;
 
   function showStep(step) {
+    if (step !== 'success') {
+      successStatusBadge.hidden = true;
+      successStatusBadge.dataset.state = 'unchecked';
+      connectionStatusIcon.textContent = '';
+    }
     Object.values(steps).forEach(element => element.classList.remove('active'));
     steps[step].classList.add('active');
     const heading = steps[step].querySelector('h5');
@@ -304,15 +314,18 @@
   }
 
   function showConnectionStatus(state, data) {
+    data = data || {};
     const verified = state === 'verified';
     const failed = state === 'failed';
+    successStatusBadge.hidden = false;
+    successStatusBadge.dataset.state = state;
+    connectionStatusIcon.textContent = verified ? '✓' : failed ? '✕' : '';
     successEmail.textContent = data.email || 'Blink account';
     successTier.textContent = data.tier || pluginConfig[settings.draft.index]?.tier || '-';
     successStatusBadge.classList.toggle('success', verified);
-    successStatusBadge.classList.toggle('warning', failed);
+    successStatusBadge.classList.toggle('failure', failed);
     authStatusBadge.classList.toggle('bg-success', verified);
-    authStatusBadge.classList.toggle('bg-warning', failed);
-    authStatusBadge.classList.toggle('text-dark', failed);
+    authStatusBadge.classList.toggle('bg-danger', failed);
     authStatusBadge.classList.remove('bg-secondary');
 
     if (verified) {
@@ -322,11 +335,24 @@
       authStatusBadge.textContent = 'Authenticated';
       hideStatusError();
     } else if (failed) {
-      successStatusLabel.textContent = 'Connection Check Needed';
+      successStatusLabel.textContent = 'Connection test failed';
       successTitle.textContent = 'Blink sign-in completed';
       successSummary.textContent = 'Blink tokens are stored, but the connection could not yet be verified.';
       authStatusBadge.textContent = 'Connection check failed';
       showStatusError('Use Test Connection to retry the Blink connection check.');
+    } else if (state === 'checking') {
+      authStatusBadge.classList.add('bg-secondary');
+      successStatusLabel.textContent = 'Checking connection…';
+      successTitle.textContent = 'Testing Blink connection';
+      successSummary.textContent = 'Checking stored sign-in with Blink.';
+      authStatusBadge.textContent = 'Checking';
+      hideStatusError();
+    } else if (state === 'unavailable') {
+      authStatusBadge.classList.add('bg-secondary');
+      successStatusLabel.textContent = 'Connection status unavailable';
+      successTitle.textContent = 'Check Blink connection';
+      successSummary.textContent = 'Stored sign-in could not be checked. Retry status before changing the account.';
+      authStatusBadge.textContent = 'Unknown';
     } else {
       authStatusBadge.classList.add('bg-secondary');
       successStatusLabel.textContent = 'Sign-in stored';
@@ -421,12 +447,7 @@
       setAuthLockVisibility(false);
       settings.setAccountReady(false);
       showStep('success');
-      successStatusLabel.textContent = 'Connection status unavailable';
-      successTitle.textContent = 'Check Blink connection';
-      successSummary.textContent = 'Stored sign-in could not be checked. Retry status before changing the account.';
-      successEmail.textContent = 'Not checked';
-      successTier.textContent = '-';
-      authStatusBadge.textContent = 'Unknown';
+      showConnectionStatus('unavailable');
       showStatusError('Unable to check stored Blink authentication. Retry the status check.');
       return null;
     }
@@ -731,16 +752,19 @@
   });
 
   async function testStoredConnection(button) {
-    if (settings.draft.state.accountAction) return;
+    if (settings.draft.state.accountAction || connectionTestInFlight) return;
+    connectionTestInFlight = true;
     hideError();
-    setButtonBusy(button, true, 'Testing…', 'Test Connection');
+    for (const control of [testConnectionButton, verifyTestConnectionButton]) setButtonBusy(control, true, 'Testing…', 'Test Connection');
+    showConnectionStatus('checking', { email: successEmail.textContent, tier: successTier.textContent });
     homebridge.showSpinner();
     try {
-      const response = await homebridge.request('/test-connection', {
+      const response = await window.BlinkSettings.deadline(homebridge.request('/test-connection', {
         deviceId: deviceIdValue || pluginConfig[settings.draft.index]?.deviceId || 'homebridge-blink'
-      });
+      }));
       if (!response?.success) {
         const status = await refreshAuthStatus();
+        showConnectionStatus('failed', status || { email: successEmail.textContent, tier: successTier.textContent });
         if (status?.authenticated && status.verified === false
           && !status.requiresClientVerification && !status.requiresAccountVerification) {
           showStatusError('Stored Blink tokens could not connect. Try again or sign in securely if this persists.');
@@ -749,9 +773,11 @@
       }
       await refreshAuthStatus();
     } catch {
+      showConnectionStatus('failed', { email: successEmail.textContent, tier: successTier.textContent });
       showError('The Blink connection test failed. Check Homebridge logs and try again.');
     } finally {
-      setButtonBusy(button, false, 'Testing…', 'Test Connection');
+      connectionTestInFlight = false;
+      for (const control of [testConnectionButton, verifyTestConnectionButton]) setButtonBusy(control, false, 'Testing…', 'Test Connection');
       homebridge.hideSpinner();
     }
   }
@@ -846,7 +872,10 @@
   });
 
   updateLockUI(pluginConfig[settings.draft.index]?.authLocked === true);
-  await refreshAuthStatus();
+  const initialStatus = await refreshAuthStatus();
+  if (initialStatus?.authenticated && !initialStatus.requiresClientVerification && !initialStatus.requiresAccountVerification) {
+    await testStoredConnection(testConnectionButton);
+  }
   }
   if (!window.homebridge) {
     fatal('Homebridge UI API is unavailable. Retry loading or reopen settings.');

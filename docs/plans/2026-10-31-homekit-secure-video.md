@@ -1,5 +1,10 @@
 # HomeKit Secure Video and continuous prebuffer
 
+Historical plan: ongoing HomeKit characteristic/event audit tracing is removed in
+1.1.0-beta.2 at the maintainer’s request. The checkpoints below describe the
+original implementation, not current logging behavior. See
+[the cleanup plan](2026-11-13-config-ui-beta2.md).
+
 Status: the user has authorized publication of the exact beta version
 `1.0.0-beta1` and will install it manually. Local implementation and review
 corrections are verified; release gates, publication and physical Apple acceptance

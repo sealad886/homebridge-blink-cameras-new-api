@@ -7,6 +7,7 @@ import type { BlinkHostedOAuthStart, BlinkLogger } from '../types';
 import { isBlinkHostedOAuthSupportCode } from '../blink-api/auth';
 import { redactDiagnosticText } from '../blink-api/redaction';
 import { PLATFORM_NAME } from '../settings';
+import { migrateEarlyNotificationConfig } from '../early-notification-config';
 import {
   type AuthStatus,
   type HostedAuthCompleteRequest,
@@ -84,6 +85,7 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
     this.registerRequest('/getNetworks', this.handleGetNetworks.bind(this));
     this.registerRequest('/settings/inventory', this.handleSettingsInventory.bind(this));
     this.registerRequest('/settings/validate', this.handleSettingsValidate.bind(this));
+    this.registerRequest('/settings/migrate', this.handleSettingsMigrate.bind(this));
     this.ready();
     this.logDebug('Custom UI server ready.');
   }
@@ -167,6 +169,13 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
 
   async handleSettingsValidate(payload: unknown) {
     return this.hostedAuthService.validateSettings(payload);
+  }
+
+  async handleSettingsMigrate(payload: unknown) {
+    try {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error();
+      return migrateEarlyNotificationConfig((payload as Record<string, unknown>).config);
+    } catch { throw new HostedAuthServiceError('Invalid Early Notification migration choices.', 'invalid_request', 400); }
   }
 
   private requireEmptyPayload(payload: unknown): void {

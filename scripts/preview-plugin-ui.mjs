@@ -11,6 +11,7 @@ const project = new URL('../', import.meta.url);
 const validatorPath = fileURLToPath(new URL('dist/homebridge-ui/settings-validation.js', project));
 if (!existsSync(validatorPath)) throw new Error('Run npm run build before starting or checking the settings preview.');
 const { SettingsValidator } = require(validatorPath);
+const { migrateEarlyNotificationConfig } = require(fileURLToPath(new URL('dist/early-notification-config.js', project)));
 const publicPath = new URL('src/homebridge-ui/public/', project);
 const schema = JSON.parse(await readFile(new URL('config.schema.json', project), 'utf8'));
 const cameras = Array.from({ length: 6 }, (_, index) => ({ key: `${index === 5 ? 'owl' : 'camera'}:${index + 1}`, id: String(index + 1), kind: index === 5 ? 'owl' : 'camera', name: ['Front door', 'Garden', 'Hall', 'Driveway', 'Kitchen', 'Office'][index], networkId: index < 3 ? '10' : '20', enabled: true, status: index === 4 ? 'offline' : 'online', excluded: false, moduleAssociation: { state: index === 5 ? 'noneReported' : 'unique', candidateIds: index === 5 ? [] : [index < 3 ? '101' : '202'], source: 'network_id' } }));
@@ -21,19 +22,21 @@ const adapter = `<style>:root{--bs-primary:#b76a00;--bs-border-color:#a5a5a5}bod
 <div id="previewHost"><strong>Local preview · synthetic cameras</strong><p>Production UI source, simulated Homebridge API. No Blink or Homebridge connection. Save keeps data in this page only.</p><button type="button" id="previewTheme">Light / dark</button> <button type="button" id="previewSave" disabled>Save (memory only)</button> <button type="button" id="previewDiscovery">Simulate discovery failure</button><p id="previewResult" role="status"></p></div>
 <script>
 (function(){
- let blocks=[${JSON.stringify(initialConfig).replace(/</g, '\\u003c')}];let failDiscovery=false;
+ let blocks=structuredClone(window.__previewInitialBlocks||[${JSON.stringify(initialConfig).replace(/</g, '\\u003c')}]);let failDiscovery=false;
+ const proof=window.__preview={testCalls:0,configWrites:0,configSaves:0,result:'success',verified:undefined};
  const api=new EventTarget();window.homebridge=api;
  api.getPluginConfig=async()=>structuredClone(blocks);
  api.getPluginConfigSchema=async()=>(${JSON.stringify(schema).replace(/</g, '\\u003c')});
- api.updatePluginConfig=async next=>{blocks=structuredClone(next);return structuredClone(blocks)};
- api.savePluginConfig=async()=>{document.getElementById('previewResult').textContent='Account settings stored in preview memory only.'};
+ api.updatePluginConfig=async next=>{proof.configWrites++;blocks=structuredClone(next);return structuredClone(blocks)};
+ api.savePluginConfig=async()=>{proof.configSaves++;document.getElementById('previewResult').textContent='Account settings stored in preview memory only.'};
  api.disableSaveButton=()=>{document.getElementById('previewSave').disabled=true};
  api.enableSaveButton=()=>{document.getElementById('previewSave').disabled=false};
  api.hideSchemaForm=()=>{};api.showSpinner=()=>{};api.hideSpinner=()=>{};
  api.toast={success:()=>{},warning:()=>{},info:()=>{},error:()=>{}};
  api.request=async(path,payload)=>{
-  if(path==='/status')return {authenticated:true,email:'Synthetic preview account',tier:'prod'};
-  if(path==='/test-connection')return {success:true,message:'Synthetic connection only'};
+  if(path==='/status'){if(proof.statusUnavailable)throw new Error('Synthetic status unavailable');return proof.statusOverride||{authenticated:true,email:'Synthetic preview account',tier:'prod',verified:proof.verified}};
+  if(path==='/test-connection'){proof.testCalls++;if(proof.result==='throw')throw new Error('Synthetic connection failure');proof.verified=proof.result!=='failure';return {success:proof.verified,message:'Synthetic connection only'}};
+  if(path==='/settings/migrate'){const response=await fetch('/__preview/migrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return response.json()};
   if(path==='/settings/inventory'){if(failDiscovery)throw new Error('Synthetic discovery failure');return ${JSON.stringify(inventory)}};
   if(path==='/settings/validate'){const response=await fetch('/__preview/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return response.json()};
   throw new Error('Account mutations are disabled in this local preview');
@@ -50,9 +53,10 @@ const rendered = adapter + await readFile(new URL('index.html', publicPath), 'ut
 for (const [, code] of rendered.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) if (code.trim()) new Script(code);
 const server = http.createServer(async (request, response) => {
   try {
-    if (request.method === 'POST' && request.url === '/__preview/validate') {
+    if (request.method === 'POST' && ['/__preview/validate', '/__preview/migrate'].includes(request.url)) {
       let body = ''; for await (const chunk of request) { body += chunk; if (body.length > 128 * 1024) throw new Error('Preview request too large'); }
-      const result = validator.validate(JSON.parse(body));
+      const payload = JSON.parse(body);
+      const result = request.url === '/__preview/migrate' ? migrateEarlyNotificationConfig(payload.config) : validator.validate(payload);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(result)); return;
     }

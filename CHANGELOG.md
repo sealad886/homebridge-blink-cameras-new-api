@@ -7,6 +7,32 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.2] - 2026-11-13
+
+### Changed
+- Test stored Blink sign-in once when settings opens; show a green check or red X,
+  retain manual retries, and bound concurrent connection tests without saving config.
+- Replace lengthy field descriptions with accessible information help; highlight
+  unsaved changes, group temperature with motion sensors, clarify status refresh
+  versus saved-clip retries, and display clip-cache limits in MiB while retaining bytes.
+- Replace the negative Early Notification control with Force on, Force off and
+  Leave unchanged, including inherited module/camera choices. Migrate old values
+  without changing their meaning; preserve original preferences in a versioned
+  private journal and respect manual Blink changes during restoration.
+
+### Removed
+- Ongoing HomeKit characteristic/event audit tracing and HTTP/OAuth header,
+  body and provider-response dumps. Actionable errors and bounded diagnostics remain.
+
+### Upgrade notes
+- Review and Save the migrated settings, then restart the Blink child bridge.
+  Snapshot expiry remains disabled while persistent snapshot caching is enabled.
+- Before downgrading, reconcile managed camera preferences and preserve private
+  backups; older betas cannot interpret the new mode key or version 2 originals.
+  See [migration and rollback](docs/native-recording-config-migration.md).
+- Registry publication does not establish Pi installation or physical HomeKit
+  acceptance; the maintainer performs those checks separately.
+
 ## [1.1.0-beta.1] - 2026-11-12
 
 ### Changed

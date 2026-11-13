@@ -9,7 +9,7 @@
     });
   }
   class Draft {
-    constructor(blocks, host) {
+    constructor(blocks, host, initialConfig) {
       this.blocks = copy(blocks);
       this.index = this.blocks.findIndex(block => block.platform === 'BlinkCameras');
       if (this.index < 0) {
@@ -17,6 +17,7 @@
         this.blocks.push({ platform: 'BlinkCameras', name: 'Blink' });
       }
       this.baseline = JSON.stringify(this.blocks);
+      if (initialConfig !== undefined) this.blocks[this.index] = copy(initialConfig);
       this.host = host;
       this.revision = 0;
       this.inventoryRevision = undefined;

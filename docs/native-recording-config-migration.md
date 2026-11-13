@@ -9,6 +9,38 @@ Use the plugin's existing five-section settings editor. Motion exposure belongs
 to the camera settings; HomeKit recording selects the new per-camera policy.
 Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
+## Upgrade from 1.1.0-beta.1
+
+The editor stages the Early Notification conversion for review when it opens;
+only Homebridge Save persists that draft. The runtime also interprets the legacy
+setting in memory, so upgrading does not require an immediate configuration
+write. The explicit preview/apply commands below perform the same canonical
+conversion in a complete Homebridge file. From a source checkout, run
+`npm run build` first; the installed package already includes the compiled helper.
+
+At global, Sync Module and camera scopes, `disableEarlyNotification: true`
+becomes `earlyNotificationMode: "off"`; explicit `false` becomes `"unmanaged"`.
+An absent override continues to inherit. A valid explicit new mode wins if both
+keys exist, and the legacy key is removed. Malformed values fail conversion
+without modifying the supplied file. Unknown fields and other plugins survive.
+Choosing `"on"` is a new explicit action; the migration never infers it from an
+old false value. See [Early Notification](configuration.md#early-notification-and-clip-scheduling).
+
+The private `.early-notification-ACCOUNT-TIER.json` companion journal accepts
+validated version 1 originals. A subsequent journal change writes version 2,
+which can retain an original Off value for the new Force on behavior. Opening
+the editor does not rewrite this operational journal.
+
+An older beta cannot read version 2 or interpret the new mode key. Before a
+downgrade, use this beta to select Leave unchanged for every managed camera,
+Save and restart, and verify restoration completes. Keep owner-only backups of
+configuration and the companion journal. Stop the child bridge before restoring
+the pre-upgrade configuration/journal and installing the older exact registry
+version. Do not replace a journal containing unresolved originals with an empty
+file: that would lose restoration ownership. If originals cannot reconcile,
+retain the new runtime and diagnose that failure before downgrading. Package
+rollback alone does not convert configuration or operational state.
+
 ## Upgrade from 0.10.0
 
 First review the [secure media upgrade](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#upgrade-configuration).

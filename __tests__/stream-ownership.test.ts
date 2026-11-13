@@ -70,7 +70,7 @@ function fixture(config: BlinkCameraStreamingConfigInput = {}, acquireFeed?: () 
   getCommandStatus: jest.fn().mockResolvedValue({ complete: false, status: 'running' }) };
   const source = new BlinkCameraSource(api as unknown as BlinkApi, createHap() as unknown as HAP,
     identity.networkId, identity.deviceId, 'camera', 'serial', () => undefined, () => true, log,
-    { audio: { enabled: false }, ...config }, errorLog, undefined, observed, undefined, acquireFeed);
+    { audio: { enabled: false }, ...config }, errorLog, undefined, observed, acquireFeed);
   const selected = (id = 's') => ({ type: 'start', sessionID: id,
     video: { fps: 15, width: 640, height: 480, max_bit_rate: 300, profile: 0, level: 0, pt: 99, mtu: 1378 },
     ...(config.audio?.enabled ? { audio: { codec: 'OPUS', sample_rate: 16, channel: 1, max_bit_rate: 32, pt: 110, packet_time: 20 } } : {})

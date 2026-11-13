@@ -14,7 +14,7 @@ import { buildDefaultHeaders } from './headers';
 import { getRestBaseUrl } from './urls';
 import { BlinkConfig, BlinkLogger, HttpMethod, nullLogger } from '../types';
 import { randomUUID } from 'node:crypto';
-import { isSensitiveDiagnosticKey, redactDiagnosticText as redactText, redactDiagnosticUrl as redactUrlForLogging } from './redaction';
+import { redactDiagnosticUrl as redactUrlForLogging } from './redaction';
 import {
   describeNetworkFailure,
   formatNetworkFailureDiagnostic,
@@ -42,44 +42,6 @@ export interface BlinkHttpRequestOptions extends RequestOptions {
  * - LOCALE: Device locale
  */
 
-
-/**
- * Redact authorization headers for logging
- */
-function redactHeaders(headers: Record<string, string>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (isSensitiveDiagnosticKey(key)) {
-      result[key] = '<redacted>';
-    } else {
-      result[key] = redactText(value);
-    }
-  }
-  return result;
-}
-
-function redactBody(body: unknown): unknown {
-  if (typeof body === 'string') {
-    return redactText(body);
-  }
-
-  if (Array.isArray(body)) {
-    return body.map((item) => redactBody(item));
-  }
-
-  if (!body || typeof body !== 'object') {
-    return body;
-  }
-
-  return Object.fromEntries(
-    Object.entries(body as Record<string, unknown>).map(([key, value]) => {
-      if (isSensitiveDiagnosticKey(key)) {
-        return [key, '<redacted>'];
-      }
-      return [key, redactBody(value)];
-    }),
-  );
-}
 
 /**
  * Custom error for HTTP failures with diagnostics
@@ -182,9 +144,9 @@ export class BlinkHttp {
   /**
    * Log diagnostic message if debug is enabled
    */
-  private logDebug(message: string, ...args: unknown[]): void {
+  private logDebug(message: string): void {
     if (this.debug) {
-      this.log.info(`[HTTP Debug] ${message}`, ...args);
+      this.log.info(`[HTTP Debug] ${message}`);
     }
   }
 
@@ -254,10 +216,6 @@ export class BlinkHttp {
 
       if (this.debug && attempt === 0) {
         this.logDebug(`[${requestId}] ${method} ${safeUrl}`);
-        this.logDebug(`[${requestId}] Request headers:`, redactHeaders(headers));
-        if (body) {
-          this.logDebug(`[${requestId}] Request body:`, JSON.stringify(redactBody(body), null, 2));
-        }
       } else if (this.debug) {
         this.logDebug(`[${requestId}] ${method} ${safeUrl} (retry attempt ${attempt})`);
       }
@@ -365,11 +323,6 @@ export class BlinkHttp {
           undefined, undefined, 'response');
         this.log.error(error.toLogString());
         throw error;
-      }
-
-      if (this.debug) {
-        // Only log response body in debug mode (can be verbose)
-        this.logDebug(`[${requestId}] Response body:`, JSON.stringify(redactBody(responseData), null, 2).slice(0, 500) + '...');
       }
 
       return responseData;

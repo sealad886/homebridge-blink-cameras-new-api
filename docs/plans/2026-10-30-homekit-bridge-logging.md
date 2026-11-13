@@ -1,5 +1,10 @@
 # HomeKit bridge event logging
 
+Historical plan: ongoing HomeKit characteristic/event audit tracing is removed in
+1.1.0-beta.2 at the maintainer’s request. The checkpoints below describe the
+original implementation, not current logging behavior. See
+[the cleanup plan](2026-11-13-config-ui-beta2.md).
+
 Status: audit and controller-origin extension verified locally, unpublished,
 30 October 2026.
 Owner: Agents Orchestrator implementation team; primary agent owns acceptance.

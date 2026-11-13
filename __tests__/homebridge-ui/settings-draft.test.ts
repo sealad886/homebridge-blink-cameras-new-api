@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import Ajv from 'ajv';
+import { migrateEarlyNotificationConfig } from '../../src/early-notification-config';
 
 function load() {
   const context = { module: { exports: {} }, structuredClone, setTimeout, clearTimeout };
@@ -10,6 +11,21 @@ function load() {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const valid = (revision: number) => ({ revision, valid: true, errors: [], warnings: [] });
+
+it('stages canonical startup migration as an unsaved change while preserving original baseline and sibling blocks', async () => {
+  const { Draft } = load();
+  const original = [{ platform: 'Other', keep: true }, { platform: 'BlinkCameras', disableEarlyNotification: true, extension: { keep: 1 } }];
+  const migrated = migrateEarlyNotificationConfig(original[1]);
+  const host = { validate: jest.fn(async ({ revision }: any) => valid(revision)), stage: jest.fn(), saveEnabled: jest.fn(), changed: jest.fn() };
+  const draft = new Draft(original, host, migrated.config);
+  draft.retry(); await draft.flush();
+  expect(draft.state.dirty).toBe(true);
+  expect(JSON.parse(draft.baseline)).toEqual(original);
+  expect(draft.blocks[0]).toEqual(original[0]);
+  expect(draft.config).toEqual({ platform: 'BlinkCameras', earlyNotificationMode: 'off', extension: { keep: 1 } });
+  expect(host.stage).toHaveBeenCalledWith([original[0], draft.config]);
+  expect(original[1]).toHaveProperty('disableEarlyNotification', true);
+});
 
 it('preserves the final raw edit, unknown fields and other blocks, gating Save until staging acknowledges', async () => {
   const { Draft } = load();

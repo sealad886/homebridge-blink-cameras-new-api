@@ -14,7 +14,6 @@ import { CameraController, Characteristic, CharacteristicChange, CharacteristicV
 import { withResponseBudget, RequestOptions } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkCamerasPlatform } from '../platform';
-import { logHomeKitEvent } from '../homekit-audit';
 import { deviceServiceName, setHapServiceName } from '../hap-name';
 import { setTimeout, clearTimeout, setImmediate } from 'timers';
 import { BlinkCameraSource, createCameraControllerOptions, refreshCameraAudioCapabilities, DeviceType } from './camera-source';
@@ -177,7 +176,6 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
           this.platform.log.info(`[${device.name}] Initial input video: ${observation.width}x${observation.height}${observation.fps ? ` at ${observation.fps} fps` : ''}`);
         }
       },
-      event => logHomeKitEvent(this.platform.log, this.accessory, event),
       () => this.platform.acquireCameraFeed(this.cameraSourceType, this.device.id),
     );
 
@@ -371,14 +369,6 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       ?.getCharacteristic(this.platform.Characteristic.MotionDetected)
       .updateValue(true);
 
-    logHomeKitEvent(this.platform.log, this.accessory, {
-      direction: 'Blink -> bridge',
-      event: 'Motion detected',
-      service: 'Motion Sensor',
-      characteristic: 'MotionDetected',
-      value: true,
-      outcome: 'observed',
-    });
 
     this.motionTimeout = setTimeout(() => this.clearMotion(), timeoutMs);
   }
@@ -388,10 +378,6 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
     if (!this.motionDetected) return;
     this.motionDetected = false;
     this.motionService?.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(false);
-    logHomeKitEvent(this.platform.log, this.accessory, {
-      direction: 'bridge -> HAP', event: 'Motion cleared', service: 'Motion Sensor',
-      characteristic: 'MotionDetected', value: false, outcome: 'submitted',
-    });
   }
 
   public async shutdown(): Promise<void> {

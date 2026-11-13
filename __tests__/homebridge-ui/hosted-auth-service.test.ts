@@ -1601,6 +1601,7 @@ describe('BlinkUiServer hosted authentication routes', () => {
       '/getNetworks',
       '/settings/inventory',
       '/settings/validate',
+      '/settings/migrate',
     ]);
     expect(mockUiHandlers.has('/login')).toBe(false);
   });
@@ -1620,6 +1621,21 @@ describe('BlinkUiServer hosted authentication routes', () => {
     await expect(mockUiHandlers.get('/settings/validate')!(draft)).resolves.toMatchObject({ revision: 1, valid: true });
     expect(validate).toHaveBeenCalledWith(draft);
     expect(await fs.readFile(path.join(serverStorageRoot, 'config.json'), 'utf8')).toBe(text);
+  });
+
+  it('migrates only the supplied draft without reading or writing saved settings', async () => {
+    const filename = path.join(serverStorageRoot, 'config.json'), saved = '{"saved":"unchanged"}';
+    await fs.writeFile(filename, saved);
+    new BlinkUiServer();
+    const config = { name: 'Blink', disableEarlyNotification: false,
+      deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on', disableEarlyNotification: true }], extension: 7 };
+    const before = structuredClone(config);
+    await expect(mockUiHandlers.get('/settings/migrate')!({ config })).resolves.toEqual({ changed: true, config: {
+      name: 'Blink', earlyNotificationMode: 'unmanaged', deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'on' }], extension: 7,
+    } });
+    expect(config).toEqual(before); expect(await fs.readFile(filename, 'utf8')).toBe(saved);
+    await expect(mockUiHandlers.get('/settings/migrate')!({ config: { disableEarlyNotification: 'false' } })).rejects.toThrow();
+    expect(await fs.readFile(filename, 'utf8')).toBe(saved);
   });
 
   it('delegates hosted start, complete, status, verify, and token-only connection requests', async () => {

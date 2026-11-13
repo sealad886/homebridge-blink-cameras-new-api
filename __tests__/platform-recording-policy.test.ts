@@ -93,21 +93,21 @@ describe('platform native recording and ordinary command ownership', () => {
     const homescreen = emptyHomescreen();
     homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true, type: 'catalina' });
     const setting = jest.spyOn(client, 'setDeviceEarlyNotification').mockResolvedValue({ supported: true, compatible: true, current: false, changed: false });
-    const deviceSettingOverrides: Array<{ deviceIdentifier: string; disableEarlyNotification?: boolean }> = [
-      { deviceIdentifier: 'camera:40', disableEarlyNotification: false },
+    const deviceSettingOverrides: Array<{ deviceIdentifier: string; earlyNotificationMode?: 'on' | 'off' | 'unmanaged' }> = [
+      { deviceIdentifier: 'camera:40', earlyNotificationMode: 'unmanaged' },
     ];
-    const platform = await launch(homescreen, { platform: 'BlinkCameras', disableEarlyNotification: false,
-      syncModuleSettingOverrides: [{ syncModuleId: '30', disableEarlyNotification: true }], deviceSettingOverrides });
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', earlyNotificationMode: 'unmanaged',
+      syncModuleSettingOverrides: [{ syncModuleId: '30', earlyNotificationMode: 'off' }], deviceSettingOverrides });
     expect(createRuntime.mock.calls[0][0].devices[0]).toEqual(expect.objectContaining({ rawType: 'catalina',
-      settings: expect.objectContaining({ disableEarlyNotification: false }) }));
+      settings: expect.objectContaining({ earlyNotificationMode: 'unmanaged' }) }));
     expect(setting).not.toHaveBeenCalled();
-    delete deviceSettingOverrides[0].disableEarlyNotification;
+    delete platform.config.deviceSettingOverrides![0].earlyNotificationMode;
     await refresh(platform, homescreen);
     expect(createRuntime).toHaveBeenCalledTimes(2);
-    expect(createRuntime.mock.calls[1][0].devices[0].settings.disableEarlyNotification).toBe(true);
+    expect(createRuntime.mock.calls[1][0].devices[0].settings.earlyNotificationMode).toBe('off');
     expect(setting).toHaveBeenCalledWith('camera', 20, 40, 'catalina', false, expect.any(Object));
     // Removing the now-empty override keeps the same inherited ownership.
-    deviceSettingOverrides.length = 0; await refresh(platform, homescreen);
+    platform.config.deviceSettingOverrides!.length = 0; await refresh(platform, homescreen);
     expect(createRuntime).toHaveBeenCalledTimes(2);
     const changedModel = globalThis.structuredClone(homescreen); changedModel.cameras[0].type = 'unsupported-model';
     await refresh(platform, changedModel);

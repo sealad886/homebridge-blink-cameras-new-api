@@ -8,6 +8,29 @@
 .blink-ui h2 { font-size: 1.4rem; margin: 1rem 0; }
 .blink-ui h3 { font-size: 1.05rem; margin-top: .9rem; }
 .blink-draft-status { padding: .7rem .85rem; border-inline-start: 3px solid currentColor; font-size: .875rem; margin: .6rem 0; }
+.blink-draft-status[data-state="dirty"] { color: #664000; background: #fff0c2; border-color: #a66b00; border-radius: .25rem; }
+.blink-draft-status[data-state="error"] { color: #8b1d27; background: #ffe7e9; border-color: #b42334; border-radius: .25rem; }
+.blink-field-heading { position: relative; display: flex; gap: .5rem; align-items: center; margin-bottom: .4rem; }
+.blink-field-heading > label { font-weight: 600; margin: 0; }
+.blink-field-heading .blink-check { margin: 0; }
+.blink-info { display: inline-flex; flex-shrink: 0; }
+.blink-info-button { display: inline-flex; align-items: center; justify-content: center; width: 1.65rem; height: 1.65rem; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: inherit; font: italic 600 1rem Georgia,serif; cursor: pointer; }
+.blink-info-text { position: absolute; z-index: 10; top: 100%; inset-inline-start: 0; box-sizing: border-box; width: max-content; max-width: min(24rem, 100%); max-height: 70vh; overflow: auto; padding: .7rem .85rem; background: #222; color: #fff; border: 1px solid #777; border-radius: .35rem; box-shadow: 0 .2rem .5rem #0004; font-size: .85rem; font-weight: 400; line-height: 1.5; }
+.blink-info-text[data-placement="above"] { top: auto; bottom: 100%; }
+#successStatusBadge { display: flex; align-items: center; gap: .35rem; font-weight: 600; padding: .45rem .6rem; border-radius: .3rem; }
+#connectionStatusIcon { font-size: 1.5rem; line-height: 1; }
+#successStatusBadge[data-state="verified"] { color: #17713b; background: #e6f6eb; }
+#successStatusBadge[data-state="failed"] { color: #b42334; background: #ffe7e9; }
+@media (prefers-color-scheme: dark) {
+  .blink-draft-status[data-state="dirty"] { color: #ffe2a0; background: #493400; border-color: #e1ac45; }
+  .blink-draft-status[data-state="error"] { color: #ffbdc4; background: #4a1e27; border-color: #ed8391; }
+  #successStatusBadge[data-state="verified"] { color: #82dda0; background: #163823; }
+  #successStatusBadge[data-state="failed"] { color: #ff9da9; background: #4a1e27; }
+}
+body.dark .blink-draft-status[data-state="dirty"], [data-bs-theme="dark"] .blink-draft-status[data-state="dirty"] { color: #ffe2a0; background: #493400; border-color: #e1ac45; }
+body.dark .blink-draft-status[data-state="error"], [data-bs-theme="dark"] .blink-draft-status[data-state="error"] { color: #ffbdc4; background: #4a1e27; border-color: #ed8391; }
+body.dark #successStatusBadge[data-state="verified"], [data-bs-theme="dark"] #successStatusBadge[data-state="verified"] { color: #82dda0; background: #163823; }
+body.dark #successStatusBadge[data-state="failed"], [data-bs-theme="dark"] #successStatusBadge[data-state="failed"] { color: #ff9da9; background: #4a1e27; }
 .blink-help { font-size: .85rem; line-height: 1.5; margin: .4rem 0 .7rem; }
 .blink-field { margin: 1rem 0 1.25rem; }
 .blink-field > label { display: block; font-weight: 600; margin-bottom: .4rem; }

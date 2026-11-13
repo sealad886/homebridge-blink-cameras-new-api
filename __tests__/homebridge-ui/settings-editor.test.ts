@@ -44,7 +44,7 @@ function mount(config: Record<string, unknown>, validate?: (payload: unknown) =>
   return { editor, homebridge, elements, schema };
 }
 function earlyNotificationControl(parent: Element): Element {
-  const label = parent.querySelectorAll('label').find(item => item.textContent === 'Disable Early Notification')!;
+  const label = parent.querySelectorAll('label').find(item => item.textContent === 'Early Notification')!;
   return parent.querySelectorAll('select').find(input => input.id === label.htmlFor)!;
 }
 
@@ -90,28 +90,28 @@ it('renders a valid zero-selection recording picker without adding a blank selec
   expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('deviceSettingOverrides');
 });
 
-it('allows plugin Early Notification management to be on, off, or physically unset', async () => {
+it('offers positive plugin Early Notification choices without writing an absent default', async () => {
   const { editor, homebridge, elements } = mount({ extension: true });
   editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
   const control = earlyNotificationControl(elements.get('sectionFields')!);
-  expect(control.value).toBe('inherit');
-  expect(editor.draft.config).not.toHaveProperty('disableEarlyNotification');
-  for (const [choice, value] of [['yes', true], ['no', false]] as const) {
+  expect(control.value).toBe('unmanaged');
+  expect(editor.draft.config).not.toHaveProperty('earlyNotificationMode');
+  for (const [choice, value] of [['on', 'on'], ['off', 'off'], ['unmanaged', 'unmanaged']] as const) {
     control.value = choice; control.handlers.change(); await editor.draft.flush();
-    expect(editor.draft.config.disableEarlyNotification).toBe(value);
+    expect(editor.draft.config.earlyNotificationMode).toBe(value);
   }
-  control.value = 'inherit'; control.handlers.change(); await editor.draft.flush();
-  expect(editor.draft.config).not.toHaveProperty('disableEarlyNotification');
-  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0]).not.toHaveProperty('disableEarlyNotification');
+  control.value = 'unmanaged'; control.handlers.change(); await editor.draft.flush();
+  expect(editor.draft.config.earlyNotificationMode).toBe('unmanaged');
+  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0].earlyNotificationMode).toBe('unmanaged');
   expect(editor.draft.config.extension).toBe(true);
   expect(editor.draft.config).not.toHaveProperty('syncModuleSettingOverrides');
   expect(editor.draft.config).not.toHaveProperty('deviceSettingOverrides');
 });
 
 it.each(['camera', 'module'])('edits and unsets %s Early Notification without losing other settings or parent choices', async level => {
-  const { editor, elements } = mount({ disableEarlyNotification: true,
+  const { editor, elements } = mount({ earlyNotificationMode: 'off',
     syncModuleFeedLimits: [{ syncModuleId: '100', maxFeeds: 1 }],
-    syncModuleSettingOverrides: [{ syncModuleId: '100', vendorExtension: 8 }, { syncModuleId: 'missing', disableEarlyNotification: false }],
+    syncModuleSettingOverrides: [{ syncModuleId: '100', vendorExtension: 8 }, { syncModuleId: 'missing', earlyNotificationMode: 'unmanaged' }],
     deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', homeKitSecureVideo: true, vendorExtension: 7 }, { deviceIdentifier: 'missing', homeKitSecureVideo: true }] });
   editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
   const fields = elements.get('sectionFields')!;
@@ -122,23 +122,23 @@ it.each(['camera', 'module'])('edits and unsets %s Early Notification without lo
   const selector = level === 'camera' ? 'deviceIdentifier' : 'syncModuleId';
   const id = level === 'camera' ? 'camera:1' : '100';
   expect(control.value).toBe('inherit');
-  for (const [choice, value] of [['yes', true], ['no', false]] as const) {
+  for (const [choice, value] of [['on', 'on'], ['off', 'off'], ['unmanaged', 'unmanaged']] as const) {
     control.value = choice; control.handlers.change(); await editor.draft.flush();
-    expect(editor.draft.config[key].find((row: Record<string, unknown>) => row[selector] === id).disableEarlyNotification).toBe(value);
-    expect(editor.draft.config.disableEarlyNotification).toBe(true);
+    expect(editor.draft.config[key].find((row: Record<string, unknown>) => row[selector] === id).earlyNotificationMode).toBe(value);
+    expect(editor.draft.config.earlyNotificationMode).toBe('off');
   }
   control.value = 'inherit'; control.handlers.change(); await editor.draft.flush();
-  expect(editor.draft.config[key].find((row: Record<string, unknown>) => row[selector] === id)).not.toHaveProperty('disableEarlyNotification');
+  expect(editor.draft.config[key].find((row: Record<string, unknown>) => row[selector] === id)).not.toHaveProperty('earlyNotificationMode');
   expect(editor.draft.config.deviceSettingOverrides).toHaveLength(2);
   expect(editor.draft.config.deviceSettingOverrides).toEqual(expect.arrayContaining([{ deviceIdentifier: 'missing', homeKitSecureVideo: true }, { deviceIdentifier: 'camera:1', homeKitSecureVideo: true, vendorExtension: 7 }]));
   expect(editor.draft.config.syncModuleFeedLimits).toEqual([{ syncModuleId: '100', maxFeeds: 1 }]);
-  expect(editor.draft.config.syncModuleSettingOverrides).toEqual(expect.arrayContaining([{ syncModuleId: '100', vendorExtension: 8 }, { syncModuleId: 'missing', disableEarlyNotification: false }]));
+  expect(editor.draft.config.syncModuleSettingOverrides).toEqual(expect.arrayContaining([{ syncModuleId: '100', vendorExtension: 8 }, { syncModuleId: 'missing', earlyNotificationMode: 'unmanaged' }]));
 });
 
 it.each(['camera', 'module'])('removes a selector-only %s override when its Early Notification choice is unset', async level => {
-  const { editor, elements } = mount({ disableEarlyNotification: true,
-    deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', disableEarlyNotification: false }],
-    syncModuleSettingOverrides: [{ syncModuleId: '100', disableEarlyNotification: false }] });
+  const { editor, elements } = mount({ earlyNotificationMode: 'off',
+    deviceSettingOverrides: [{ deviceIdentifier: 'camera:1', earlyNotificationMode: 'unmanaged' }],
+    syncModuleSettingOverrides: [{ syncModuleId: '100', earlyNotificationMode: 'unmanaged' }] });
   editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
   const fields = elements.get('sectionFields')!;
   const card = fields.querySelectorAll('details').find(item => item.querySelectorAll('p').some(text => text.textContent === 'camera:1'))!;
@@ -146,11 +146,11 @@ it.each(['camera', 'module'])('removes a selector-only %s override when its Earl
     : fields.querySelectorAll('select').find(input => input.dataset.setting === 'syncModuleSettingOverrides')!;
   control.value = 'inherit'; control.handlers.change(); await editor.draft.flush();
   expect(editor.draft.config[level === 'camera' ? 'deviceSettingOverrides' : 'syncModuleSettingOverrides']).toEqual([]);
-  expect(editor.draft.config.disableEarlyNotification).toBe(true);
+  expect(editor.draft.config.earlyNotificationMode).toBe('off');
 });
 
 it('preserves and allows removal of unavailable module settings when discovery fails', async () => {
-  const { editor, homebridge, elements } = mount({ syncModuleSettingOverrides: [{ syncModuleId: 'missing', disableEarlyNotification: false }],
+  const { editor, homebridge, elements } = mount({ syncModuleSettingOverrides: [{ syncModuleId: 'missing', earlyNotificationMode: 'unmanaged' }],
     syncModuleFeedLimits: [{ syncModuleId: 'missing', maxFeeds: 2 }] });
   await editor.draft.flush();
   homebridge.request.mockImplementation(async (path, payload?: any) => {
@@ -285,6 +285,67 @@ it('makes snapshot expiry inactive while manual-refresh persistence is enabled w
   persistent.checked = false; persistent.handlers.change(); await editor.draft.flush();
   const next = elements.get('sectionFields')!.querySelectorAll('[data-setting]').find(input => input.dataset.setting === 'snapshotCacheTTL')!;
   expect(next.disabled).toBe(false); expect(next.value).toBe('300'); expect(editor.draft.config.snapshotCacheTTL).toBe(300);
+  const persistenceAgain = elements.get('sectionFields')!.querySelectorAll('[data-setting]').find(input => input.dataset.setting === 'persistSnapshotCache')!;
+  persistenceAgain.checked = true; persistenceAgain.handlers.change(); await editor.draft.flush();
+  const inactive = elements.get('sectionFields')!.querySelectorAll('[data-setting]').find(input => input.dataset.setting === 'snapshotCacheTTL')!;
+  expect(inactive.disabled).toBe(true); expect(inactive.value).toBe('300'); expect(editor.draft.config.snapshotCacheTTL).toBe(300);
+});
+
+it('offers compact help beside controls without making the help button toggle a checkbox', async () => {
+  const { editor, elements } = mount({});
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
+  const fields = elements.get('sectionFields')!;
+  const input = fields.querySelectorAll('[data-setting]').find(item => item.dataset.setting === 'exposeTemperature')!;
+  const button = fields.querySelectorAll('button').find(item => item.attributes['aria-describedby'] === input.attributes['aria-describedby'])!;
+  const tip = fields.querySelectorAll('span').find(item => item.id === input.attributes['aria-describedby'])!;
+  expect(button.attributes['aria-label']).toMatch(/help/i);
+  expect(fields.querySelectorAll('label').some(label => label.querySelectorAll('button').includes(button))).toBe(false);
+  expect(tip.hidden).toBe(true); button.handlers.focus(); expect(tip.hidden).toBe(false);
+  button.handlers.blur(); expect(tip.hidden).toBe(true);
+  button.handlers.click(); expect(tip.hidden).toBe(false);
+  button.handlers.click(); expect(tip.hidden).toBe(true);
+  expect(input.checked).toBe(false); expect(editor.draft.config).not.toHaveProperty('exposeTemperature');
+});
+
+it('keeps motion and temperature exposure together and marks unsaved changes as a warning state', async () => {
+  const { editor, elements } = mount({});
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(1);
+  const keys = elements.get('sectionFields')!.querySelectorAll('[data-setting]').map(input => input.dataset.setting);
+  expect(keys).toEqual(expect.arrayContaining(['exposeMotionDetected', 'exposeTemperature']));
+  editor.draft.set('name', 'Changed'); await editor.draft.flush();
+  expect(elements.get('draftStatus')!.dataset.state).toBe('dirty');
+  editor.showSection(4);
+  expect(elements.get('sectionFields')!.querySelectorAll('[data-setting]').some(input => input.dataset.setting === 'exposeTemperature')).toBe(false);
+});
+
+it('presents cache bytes as exact MiB and preserves existing bytes and unknown settings until edited', async () => {
+  const originalBytes = 134217729;
+  const { editor, homebridge, elements } = mount({ nativeRecording: { maxCachedBytes: originalBytes, extension: 'kept' } });
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  const cache = elements.get('sectionFields')!.querySelectorAll('[data-setting]').find(input => input.dataset.setting === 'nativeRecording/maxCachedBytes')!;
+  expect(Number(cache.value) * 1048576).toBe(originalBytes);
+  cache.handlers.input(); await editor.draft.flush();
+  expect(editor.draft.config.nativeRecording.maxCachedBytes).toBe(originalBytes);
+  editor.draft.set('name', 'Changed'); await editor.draft.flush();
+  expect(homebridge.updatePluginConfig.mock.calls.at(-1)![0][0].nativeRecording).toEqual({ maxCachedBytes: originalBytes, extension: 'kept' });
+  for (const [text, bytes] of [['32', 33554432], ['128.5', 134742016], ['1024', 1073741824]] as const) {
+    cache.value = text; cache.handlers.input(); await editor.draft.flush();
+    expect(editor.draft.config.nativeRecording).toEqual({ maxCachedBytes: bytes, extension: 'kept' });
+  }
+  cache.value = ''; cache.handlers.input(); await editor.draft.flush();
+  expect(editor.draft.config.nativeRecording).toEqual({ extension: 'kept' });
+});
+
+it.each(['31', '1025', '32.0000001', '32.000000000000000001', '-32', 'NaN', '1e2'])('keeps invalid MiB input %s visible and blocks staging', async text => {
+  const validator = new SettingsValidator(() => undefined);
+  const { editor, homebridge, elements } = mount({}, payload => validator.validate(payload));
+  editor.setAccountReady(true); await tick(); await editor.draft.flush(); editor.showSection(2);
+  const cache = elements.get('sectionFields')!.querySelectorAll('[data-setting]').find(input => input.dataset.setting === 'nativeRecording/maxCachedBytes')!;
+  const staged = homebridge.updatePluginConfig.mock.calls.length;
+  cache.value = text; cache.handlers.input(); await editor.draft.flush();
+  expect(cache.value).toBe(text); expect(editor.draft.config.nativeRecording.maxCachedBytes).toBe(text);
+  expect(editor.draft.state.errors.length).toBeGreaterThan(0);
+  expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(staged);
 });
 
 it('allows removing an explicit module limit even when initial discovery is unavailable', async () => {

@@ -95,13 +95,13 @@
       },
       "debugAuth": {
         "title": "Debug Authentication",
-        "description": "Enable verbose authentication diagnostics. Sensitive fields are redacted; review logs before sharing.",
+        "description": "Enable bounded authentication and HTTP diagnostics without request headers, bodies or provider-state dumps. Review logs before sharing.",
         "type": "boolean",
         "default": false
       },
       "pollInterval": {
-        "title": "Poll Interval (seconds)",
-        "description": "How often to refresh Blink status and camera settings. Motion detection uses push notifications independently of this interval. Minimum 15 seconds.",
+        "title": "Blink Status Refresh Interval (seconds)",
+        "description": "How often to refresh Blink status and camera settings. This does not poll for saved clips; motion notifications start clip discovery independently.",
         "type": "integer",
         "default": 60,
         "minimum": 15,
@@ -213,9 +213,9 @@
         ],
         "enumNames": [
           "Current quality (Home chooses)",
-          "1280 \u00d7 720 at 15 fps",
-          "640 \u00d7 360 at 15 fps",
-          "1920 \u00d7 1080 at 30 fps"
+          "1280 × 720 at 15 fps",
+          "640 × 360 at 15 fps",
+          "1920 × 1080 at 30 fps"
         ],
         "description": "Picture preset for live viewing only. Apple Home chooses the HomeKit recording format."
       },
@@ -340,16 +340,26 @@
               "description": "Override the global motion sensor choice for this camera. Leave unset to inherit it.",
               "type": "boolean"
             },
-            "disableEarlyNotification": {
-              "title": "Disable Early Notification",
-              "description": "Override the Sync Module or plugin choice for this camera. On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
-              "type": "boolean"
-            },
             "homeKitSecureVideo": {
               "title": "Enable HomeKit Secure Video",
-              "description": "Offer saved Blink USB motion clips to HomeKit Secure Video for this camera. Requires native Blink motion recording, one associated Sync Module, USB local storage, and recording permission in Apple Home. Save and restart the Blink child bridge after changing this setting.",
+              "description": "Offer saved Blink USB motion clips to HomeKit Secure Video for this camera. Requires native Blink motion recording, one associated Sync Module, USB local storage, and recording permission in Apple Home. Save and restart the Blink child bridge after changing this setting. Apple Home controls recording permission. This does not arm Blink or enable native camera motion.",
               "type": "boolean",
               "default": false
+            },
+            "earlyNotificationMode": {
+              "title": "Early Notification",
+              "description": "Override the inherited choice for these cameras. Force on sends Blink motion notifications while recording is in progress. Force off sends them after recording and allows one immediate saved-clip lookup once confirmed. Leave unchanged stops management and conditionally restores the original setting; manual changes in Blink are preserved. Save and restart the child bridge to apply.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "unmanaged"
+              ],
+              "enumNames": [
+                "Force on",
+                "Force off",
+                "Leave unchanged"
+              ]
             }
           }
         }
@@ -370,10 +380,20 @@
               "minLength": 1,
               "pattern": "\\S"
             },
-            "disableEarlyNotification": {
-              "title": "Disable Early Notification",
-              "description": "Override the plugin choice for this Sync Module's cameras. On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off uses the normal delay. Leave unset to inherit. Sync Module cooldown and FIFO order still apply.",
-              "type": "boolean"
+            "earlyNotificationMode": {
+              "title": "Early Notification",
+              "description": "Override the inherited choice for these cameras. Force on sends Blink motion notifications while recording is in progress. Force off sends them after recording and allows one immediate saved-clip lookup once confirmed. Leave unchanged stops management and conditionally restores the original setting; manual changes in Blink are preserved. Save and restart the child bridge to apply.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "unmanaged"
+              ],
+              "enumNames": [
+                "Force on",
+                "Force off",
+                "Leave unchanged"
+              ]
             }
           }
         }
@@ -407,14 +427,9 @@
       },
       "exposeMotionDetected": {
         "title": "Expose Motion Detected Sensors",
-        "description": "Expose each camera's Blink motion notifications as a HomeKit Motion Detected sensor. Per-device settings can override this choice. Cameras selected for HomeKit Secure Video still receive motion notifications when their sensor is hidden.",
+        "description": "Expose each camera's Blink motion notifications as a HomeKit Motion Detected sensor. Per-device settings can override this choice. Cameras selected for HomeKit Secure Video still receive motion notifications when their sensor is hidden. Hiding the sensor does not disable HomeKit Secure Video recording.",
         "type": "boolean",
         "default": true
-      },
-      "disableEarlyNotification": {
-        "title": "Disable Early Notification",
-        "description": "On lets the plugin turn Blink Early Notification off on supported cameras. Motion after that setting is confirmed gets one immediate check for an exact-timestamp clip; if absent, the normal configured-delay workflow applies. Off or unset uses the normal delay. Sync Module and camera settings can override this choice. Sync Module cooldown and FIFO order still apply.",
-        "type": "boolean"
       },
       "nativeRecording": {
         "title": "Saved USB Clip Recording",
@@ -430,7 +445,7 @@
             "maximum": 3600
           },
           "retryIntervalSeconds": {
-            "title": "Missing Clip Retry Interval (seconds)",
+            "title": "Missing Clip Retry Delay (seconds)",
             "description": "Wait before retrying when a completed catalog has no matching clip. Catalog refreshes also obey the minimum refresh interval.",
             "type": "integer",
             "default": 5,
@@ -439,7 +454,7 @@
           },
           "maxRetries": {
             "title": "Missing Clip Retry Limit",
-            "description": "Maximum retries after the first discovery attempt. An operation with an unknown outcome remains blocked instead of starting a replacement command.",
+            "description": "Maximum retries after the first clip discovery attempt. Command ownership and the recording job deadline still apply.",
             "type": "integer",
             "default": 10,
             "minimum": 0,
@@ -486,6 +501,21 @@
             "maximum": 1073741824
           }
         }
+      },
+      "earlyNotificationMode": {
+        "title": "Early Notification",
+        "description": "Force on sends Blink motion notifications while recording is in progress. Force off sends them after recording and allows one immediate saved-clip lookup once confirmed. Leave unchanged stops management and conditionally restores the original setting; manual changes in Blink are preserved. Save and restart the child bridge to apply.",
+        "type": "string",
+        "enum": [
+          "on",
+          "off",
+          "unmanaged"
+        ],
+        "enumNames": [
+          "Force on",
+          "Force off",
+          "Leave unchanged"
+        ]
       }
     }
   },
@@ -502,6 +532,7 @@
       "title": "Cameras in Home",
       "items": [
         "exposeMotionDetected",
+        "exposeTemperature",
         "excludedNetworks",
         "excludeDevices",
         "deviceNameOverrides",
@@ -514,7 +545,7 @@
       "type": "fieldset",
       "title": "HomeKit recording",
       "items": [
-        "disableEarlyNotification",
+        "earlyNotificationMode",
         "nativeRecording"
       ]
     },
@@ -540,7 +571,6 @@
         "motionTimeout",
         "snapshotCacheTTL",
         "persistSnapshotCache",
-        "exposeTemperature",
         "deviceId",
         "deviceName",
         "trustDevice",
