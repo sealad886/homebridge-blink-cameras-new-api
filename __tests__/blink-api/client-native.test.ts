@@ -210,6 +210,79 @@ describe('owned native storage SDK', () => {
     }
   });
 
+  it('keeps the journal fault set while a newer coalesced snapshot remains unsaved after caller budgets expire', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    const gates: Array<() => void> = [], started: BlinkRemoteOperationOwnership[] = [];
+    let active = 0, maxActive = 0;
+    f.saveLive.mockImplementation(async state => {
+      active++; maxActive = Math.max(maxActive, active); started.push(copy(state));
+      await new Promise<void>(resolve => { gates.push(resolve); });
+      active--; f.savedRemote.push(copy(state));
+    });
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ command_id: 707, server: 'immis://fixture.invalid' }));
+    const older = f.api.retryRemoteOperationPersistence().catch(error => error);
+    await jest.advanceTimersByTimeAsync(0);
+    const liveView = f.api.startCameraLiveview(20, 40);
+    try {
+      await jest.advanceTimersByTimeAsync(2001);
+      expect(await older).toBeInstanceOf(Error);
+      await expect(liveView).resolves.toMatchObject({ command_id: 707 });
+      expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+      expect(started).toEqual([{}]);
+      gates[0](); await jest.advanceTimersByTimeAsync(0);
+      expect(started).toHaveLength(2);
+      expect(started[1]).toEqual({ liveView: f.api.getRemoteOperationState().liveView });
+      expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(f.api.getRemoteOperationState().persistenceFailed).toBe(true);
+      expect(maxActive).toBe(1);
+      gates[1](); await jest.advanceTimersByTimeAsync(0);
+      expect(f.api.getRemoteOperationState().persistenceFailed).toBe(false);
+      expect(f.savedRemote.at(-1)).toEqual(started[1]);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const release of gates) release();
+      await jest.advanceTimersByTimeAsync(1); await liveView.catch(() => undefined);
+    }
+  });
+
+  it.each(['owned-retirement', 'unowned-retirement', 'command-update'] as const)
+  ('rejects %s before dispatch if authentication changes its captured account', async action => {
+    const f = fixture(action === 'owned-retirement' ? live() : undefined);
+    let releaseAuthentication!: () => void;
+    const authentication = new Promise<void>(resolve => { releaseAuthentication = resolve; });
+    (f.auth.ensureValidToken as jest.Mock).mockReturnValueOnce(authentication);
+    (fetch as jest.Mock).mockResolvedValueOnce(action === 'command-update' ? json({ complete: false }) : new Response(null, { status: 204 }))
+      .mockResolvedValue(json({ complete: true, status: 0 }));
+    const operation = action === 'command-update' ? f.api.updateCommand(20, 707) : f.api.completeCommand(20, 707);
+    const rejected = expect(operation).rejects.toMatchObject({ reason: 'ownership-unavailable', dispatched: false });
+    while (!(f.auth.ensureValidToken as jest.Mock).mock.calls.length) await new Promise(resolve => setImmediate(resolve));
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    releaseAuthentication();
+    await rejected;
+    expect(fetch).not.toHaveBeenCalled();
+    if (action === 'owned-retirement') expect(f.api.getRemoteOperationState().liveView)
+      .toMatchObject({ commandId: 707, phase: 'unresolved', retirementAcknowledged: false });
+  });
+
+  it('keeps the native command account guard after authentication yields', async () => {
+    const f = fixture(), transport = f.api.createNativeStorageTransport({ scope, directory });
+    let releaseAuthentication!: () => void;
+    const authentication = new Promise<void>(resolve => { releaseAuthentication = resolve; });
+    (f.auth.ensureValidToken as jest.Mock).mockReturnValueOnce(authentication);
+    const operation = f.api.withNativeStorageAdmission('pending-a', async () => {
+      f.api.setNativeStorageOwner(scope, pending({ phase: 'intent', commandId: undefined, statusReads: 0 }));
+      return transport.postEmpty({ base: 'api', path: `${modulePath}/manifest/request` }, request);
+    }, {}, scope);
+    const rejected = expect(operation).rejects.toMatchObject({ reason: 'ownership-unavailable', dispatched: false });
+    while (!(f.auth.ensureValidToken as jest.Mock).mock.calls.length) await new Promise(resolve => setImmediate(resolve));
+    (f.auth.getAccountId as jest.Mock).mockReturnValue(11);
+    releaseAuthentication();
+    await rejected;
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it.each(['retire', 'reconcile', 'queued-reconcile'] as const)('releases queued %s at the existing live-view lease deadline', async action => {
     jest.useFakeTimers();
     const f = fixture(live({ expiresAt: Date.now() + 1000, retirementAcknowledged: action !== 'retire' }));

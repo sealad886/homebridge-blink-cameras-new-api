@@ -320,7 +320,18 @@ Blink settings; explicit Early Notification management follows the separate
 opt-in policy above.
 
 Scoped state and receiver credentials use one serialized durable writer under an
-owned private directory with 0600 files. Dispatch/transition diagnostics are
+owned private directory with 0600 files. Composite state changes, including
+recovery snapshots, are constructed inside the runtime's logical commit queue.
+The physical file queue prevents overlapping replacements; it cannot make an
+older payload current. Each native owner also serializes phase saves and retry
+snapshots through its own write queue, capturing retry state at execution.
+
+Recovery keeps acquisition unready until SDK, native-owner and coordinator
+persistence is current. Temporary storage unavailability before provider
+invocation defers the accepted job without consuming an attempt; permission
+revocation still cancels it. This proof cannot refund dispatched or restored
+uncertain work. Recovery reports success only after every participant is saved.
+Dispatch/transition diagnostics are
 local; generating a diagnostic report must not issue verification requests.
 Push diagnostics retain only fixed event/reason/disposition labels and bounded
 retry delay. Binding/readiness is informational, faults and required recovery

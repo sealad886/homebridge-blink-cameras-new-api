@@ -1341,6 +1341,95 @@ describe('native recording runtime composition', () => {
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['queued', 'persisting-intent', 'permission-revoked'] as const)(
+    'retains accepted motion through held persistence recovery: %s', async phase => {
+      const f = await setup({ config: { maxRetries: 0 } }), intent = deferred<void>(), recovery = deferred<void>();
+      const write = secureJson.writeOwnerOnlyJsonFile;
+      let heldIntent = false, recovering = false;
+      const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
+        if (phase === 'persisting-intent' && !heldIntent && (args[1] as NativeRecordingRuntimeState).core?.operation?.status === 'active') {
+          heldIntent = true; await intent.promise;
+        }
+        return write(...args);
+      });
+      f.client.retryRemoteOperationPersistence.mockImplementationOnce(async () => { recovering = true; await recovery.promise; });
+      try {
+        await f.push(f.notification('accepted-before-fault'));
+        if (phase === 'persisting-intent') {
+          await jest.advanceTimersByTimeAsync(60000); await until(() => heldIntent);
+        }
+        saving.mockRejectedValueOnce(new Error('temporary unrelated journal failure'));
+        const failed = expect(f.remoteSave({})).rejects.toThrow('temporary unrelated journal failure');
+        intent.resolve(); await failed;
+        const retry = f.runtime.retryConnection();
+        await until(() => recovering);
+        if (phase === 'permission-revoked') f.delegate.updateCameraActive(false);
+        await jest.advanceTimersByTimeAsync(60000);
+        expect(f.transport.postEmpty).not.toHaveBeenCalled();
+        expect(f.events).not.toContain('persistence-recovered');
+        recovery.resolve(); await retry;
+        if (phase === 'permission-revoked') {
+          await jest.advanceTimersByTimeAsync(60000);
+          expect(f.transport.postEmpty).not.toHaveBeenCalled();
+          expect(f.events).toContain('job-cancelled');
+          expect((await f.state()).core?.queue).toEqual([]);
+        } else {
+          await jest.advanceTimersByTimeAsync(1000);
+          await until(() => f.events.includes('offered'));
+          expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+          expect(f.events).not.toContain('job-cancelled');
+          expect((await f.state()).core?.rememberedEvents).toContain(JSON.stringify(['20:30', 'camera:40', 'accepted-before-fault']));
+        }
+      } finally { intent.resolve(); recovery.resolve(); saving.mockRestore(); }
+    });
+
+  it.each(['success', 'recovery-write-failed', 'stop-during-flush'] as const)(
+    'serializes recovery composite state with concurrent ownership saves: %s', async mode => {
+      const f = await setup(), disk = deferred<void>(), flush = deferred<void>();
+      const write = secureJson.writeOwnerOnlyJsonFile;
+      let holdRecovery = false, held = false, flushing = false;
+      const eventId = 'newer-than-last-committed-state';
+      const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (...args) => {
+        if (holdRecovery && !held && (args[1] as NativeRecordingRuntimeState).core?.queue.some(job => job.observation.eventId === eventId)) {
+          held = true; await disk.promise;
+        }
+        return write(...args);
+      });
+      f.client.retryRemoteOperationPersistence.mockImplementationOnce(async () => { flushing = true; await flush.promise; });
+      try {
+        await f.source.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['old-checkpoint'] });
+        saving.mockRejectedValueOnce(new Error('new motion was not committed'));
+        await expect(f.push(f.notification(eventId))).rejects.toThrow('new motion was not committed');
+        if (mode === 'recovery-write-failed') {
+          saving.mockRejectedValueOnce(new Error('recovery disk write failed'));
+          await expect(f.runtime.retryConnection()).rejects.toThrow('recovery disk write failed');
+          expect(f.events).not.toContain('persistence-recovered');
+        }
+        holdRecovery = true;
+        const retry = f.runtime.retryConnection(); await until(() => held);
+        const owner: BlinkRemoteOperationOwnership = { stateCommand: { reservationId: 'concurrent-sdk-owner', accountId: 10,
+          networkId: 20, kind: 'arm', phase: 'unresolved', statusReads: 0, expiresAt: Date.now() + 120000 } };
+        const concurrent = f.remoteSave(owner);
+        disk.resolve(); await until(() => flushing); await concurrent;
+        const recovered = await f.state();
+        expect(recovered.core?.queue.map(job => job.observation.eventId)).toEqual([eventId]);
+        expect(recovered.remoteOperations).toEqual(owner);
+        await f.source.saveState({ version: 1, scope, firebase: BLINK_FIREBASE_CLIENT, persistentIds: ['new-checkpoint'] });
+        expect((await f.state()).core?.queue.map(job => job.observation.eventId)).toEqual([eventId]);
+        expect((await f.state()).remoteOperations).toEqual(owner);
+        expect(f.events).not.toContain('persistence-recovered');
+        let stopping: Promise<void> | undefined;
+        if (mode === 'stop-during-flush') {
+          stopping = f.runtime.stop();
+          expect(f.runtime.localWriterReleased).toBe(false);
+        }
+        flush.resolve(); await retry; await stopping;
+        expect((await f.state()).push?.persistentIds).toEqual(['new-checkpoint']);
+        expect(f.transport.postEmpty).not.toHaveBeenCalled();
+        if (stopping) expect(f.runtime.localWriterReleased).toBe(true);
+      } finally { disk.resolve(); flush.resolve(); saving.mockRestore(); }
+    });
+
   it.each([false, true])('flushes latest real SDK ownership before recovering its journal (acknowledged: %s)', async acknowledged => {
     const api = new BlinkApi({ email: '', password: '', hardwareId: 'runtime-journal-recovery', tier: scope.tier });
     const internals = api as unknown as { accountId: number; auth: BlinkAuth }; internals.accountId = scope.accountId;

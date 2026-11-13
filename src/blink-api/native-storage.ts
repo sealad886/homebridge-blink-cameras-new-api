@@ -102,6 +102,7 @@ export class NativeStorageOwner {
   private persistenceFailed = false;
   private generation = 0;
   private abandonment?: Promise<boolean>;
+  private writes: Promise<void> = Promise.resolve();
   private readonly maxStatusReads: number;
   private readonly maxJsonBytes: number;
   private readonly maxMediaBytes: number;
@@ -147,8 +148,15 @@ export class NativeStorageOwner {
   /** Explicit retry rechecks durable storage; it does not replay an uncertain preparation. */
   async retryPersistence(): Promise<void> {
     await this.abandonment;
-    await this.options.saveState(this.snapshot());
-    this.persistenceFailed = false;
+    await this.queueWrite(async () => {
+      try {
+        await this.options.saveState(this.snapshot());
+        this.persistenceFailed = false;
+      } catch {
+        this.persistenceFailed = true;
+        throw new Error('Native storage persistence failed');
+      }
+    });
     await this.abandonExpired();
   }
 
@@ -465,20 +473,28 @@ export class NativeStorageOwner {
     return { status: 'unresolved', reason, ...(this.state.operation ? { operation: clone(this.state.operation) } : {}) };
   }
 
-  private async persist(operation: NativeStorageOperation, generation = this.generation): Promise<void> {
-    if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
-    const next: NativeStorageState = { version: 1, operation: clone(operation),
-      ...(this.state.abandoned ? { abandoned: clone(this.state.abandoned) } : {}) };
-    try {
-      this.boundedJson(next, this.maxJsonBytes + 32768);
-      await this.options.saveState(clone(next));
+  private queueWrite(save: () => Promise<void>): Promise<void> {
+    const write = this.writes.then(save);
+    this.writes = write.catch(() => undefined);
+    return write;
+  }
+
+  private persist(operation: NativeStorageOperation, generation = this.generation): Promise<void> {
+    return this.queueWrite(async () => {
       if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
-      this.state = next;
-    }
-    catch {
-      if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
-      this.persistenceFailed = true; throw new Error('Native storage persistence failed');
-    }
+      const next: NativeStorageState = { version: 1, operation: clone(operation),
+        ...(this.state.abandoned ? { abandoned: clone(this.state.abandoned) } : {}) };
+      try {
+        this.boundedJson(next, this.maxJsonBytes + 32768);
+        await this.options.saveState(clone(next));
+        if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
+        this.state = next;
+      }
+      catch {
+        if (generation !== this.generation) throw new Error('Native operation was locally abandoned');
+        this.persistenceFailed = true; throw new Error('Native storage persistence failed');
+      }
+    });
   }
 
   private async finish(result: NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia>, generation = this.generation):

@@ -382,14 +382,12 @@ export class NativeRecordingRuntime {
 
   private async recoverPersistence(): Promise<void> {
     try {
-      await this.writes;
-      const next = clone(this.state);
-      next.core = this.core.snapshot();
-      for (const [moduleId, owner] of this.owners) {
-        if (next.nativeByModule[moduleId]) next.nativeByModule[moduleId].state = owner.snapshot();
-      }
-      await withinRequestBudget(this.writeStateFile(next), { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });
-      this.state = next;
+      await this.commit(next => {
+        next.core = this.core.snapshot();
+        for (const [moduleId, owner] of this.owners) {
+          if (next.nativeByModule[moduleId]) next.nativeByModule[moduleId].state = owner.snapshot();
+        }
+      });
       await this.options.client.retryRemoteOperationPersistence();
       for (const owner of this.owners.values()) await owner.retryPersistence();
       await this.core.retryPersistence();
@@ -504,7 +502,7 @@ export class NativeRecordingRuntime {
   }
 
   private earliest(event: NativeRecordingObservation, fallbackAt?: number): number {
-    if (!this.active) return Date.now() + 1000;
+    if (!this.active || this.failed) return Date.now() + 1000;
     const remote = this.options.client.getRemoteOperationState();
     if ((remote.liveView && isRemoteOperationLeaseActive(remote.liveView.expiresAt))
       || (remote.stateCommand && isRemoteOperationLeaseActive(remote.stateCommand.expiresAt))
@@ -521,16 +519,24 @@ export class NativeRecordingRuntime {
     const event = request.observation;
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
     const owner = this.owners.get(event.moduleId), policyEpoch = this.epochs.get(observationKey(event));
-    const allowed = () => this.active && !this.stopped && !this.failed && !signal.aborted && this.currentScope()
+    const permitted = () => this.active && !this.stopped && !signal.aborted && this.currentScope()
       && !!device?.recording()?.policy.allowed && device.recording()!.policy.epoch === policyEpoch
       && this.core.isCameraGenerationCurrent(event.moduleId, event.cameraId, request.cameraGeneration);
-    if (!device || !owner || policyEpoch === undefined || !allowed()) return { status: 'skipped' };
+    const allowed = () => permitted() && !this.failed;
+    if (!device || !owner || policyEpoch === undefined || !permitted()) return { status: 'skipped' };
+    if (this.failed) return { status: 'deferred' };
     const context = { accountId: device.binding.accountId, networkId: device.binding.networkId, syncModuleId: device.nativeStorage!.syncModuleId };
     let match = this.matching(event, request.fallbackAt);
     if (match.status !== 'matched') {
       const priorCatalogStart = this.state.catalogStartedAt[event.moduleId];
       const startedAt = Date.now();
-      await this.commit(next => { next.catalogStartedAt[event.moduleId] = startedAt; });
+      try { await this.commit(next => { next.catalogStartedAt[event.moduleId] = startedAt; }); }
+      catch (error) {
+        if (this.failed && permitted()) return { status: 'deferred' };
+        throw error;
+      }
+      if (!permitted()) return { status: 'skipped' };
+      if (this.failed) return { status: 'deferred' };
       const result = await owner.readCatalog({ ...context, operationId: `${request.operationId}:catalog` }, { signal, deadline: request.expiresAt });
       if (result.status === 'abandoned') return { status: 'abandoned' };
       if (result.status === 'unresolved') return { status: 'unresolved' };

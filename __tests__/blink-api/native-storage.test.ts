@@ -132,6 +132,73 @@ it('waits for pending abandonment before retrying its persisted snapshot', async
   expect(f.transport.postEmpty).not.toHaveBeenCalled();
 });
 
+it.each(['catalog', 'clip'] as const)('keeps completed %s durable when persistence recovery starts during its terminal save', async kind => {
+  let release!: () => void, entered!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const terminalSave = new Promise<void>(resolve => { entered = resolve; });
+  let writes = Promise.resolve();
+  const f = fixture({ saveState: state => {
+    const write = writes.then(async () => {
+      if (state.operation?.phase === 'finished') { entered(); await pending; }
+    });
+    writes = write.catch(() => undefined);
+    return write;
+  } });
+  const acquire = () => kind === 'catalog' ? f.owner.readCatalog(context) : f.owner.downloadClip(context, clipRequest());
+  const acquisition = acquire();
+  await terminalSave;
+  const recovery = f.owner.retryPersistence();
+  await Promise.resolve(); await Promise.resolve();
+  release();
+  const result = await acquisition;
+  await recovery;
+  expect(result).toMatchObject({ status: 'ready' });
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.saved.at(-1)?.operation?.phase).toBe('finished');
+  const restarted = f.restart();
+  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest()))).toEqual(result);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('captures recovery after a pending accepted save and before later phase saves', async () => {
+  let release!: () => void, entered!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const acceptedSave = new Promise<void>(resolve => { entered = resolve; });
+  let writes = Promise.resolve();
+  const f = fixture({ saveState: state => {
+    const write = writes.then(async () => {
+      if (state.operation?.phase === 'accepted' && state.operation.statusReads === 0) { entered(); await pending; }
+    });
+    writes = write.catch(() => undefined);
+    return write;
+  } });
+  const acquisition = f.owner.readCatalog(context);
+  await acceptedSave;
+  const recovery = f.owner.retryPersistence();
+  await Promise.resolve(); await Promise.resolve();
+  release();
+  expect(await acquisition).toMatchObject({ status: 'ready' });
+  await recovery;
+  const phases = f.saved.map(state => state.operation?.phase);
+  expect(phases.slice(0, 3)).toEqual(['intent', 'accepted', 'accepted']);
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.saved.at(-1)?.operation?.phase).toBe('finished');
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
+it('keeps failed recovery faulted and allows a later explicit retry without replay', async () => {
+  const f = fixture();
+  const result = await f.owner.readCatalog(context);
+  f.saveState.mockRejectedValueOnce(new Error('recovery disk failure'));
+  await expect(f.owner.retryPersistence()).rejects.toThrow();
+  expect(await f.owner.readCatalog({ ...context, operationId: 'after-failed-recovery' }))
+    .toMatchObject({ status: 'unresolved', reason: 'persistence-failed' });
+  await f.owner.retryPersistence();
+  expect(await f.restart().readCatalog(context)).toEqual(result);
+  expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+});
+
 it.each(['catalog', 'clip'] as const)('reports rejected %s admission after abandonment as not started', async kind => {
   const f = fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'intent', statusReads: 0 } } });
   await f.owner.reconcilePending();

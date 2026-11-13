@@ -58,7 +58,9 @@ export type NativeRecordingTerminalResult =
   };
 
 /** Local abandonment is distinct from verified provider completion. */
-export type NativeRecordingAcquisitionResult = NativeRecordingTerminalResult | { status: 'unresolved' } | { status: 'abandoned' };
+export type NativeRecordingAcquisitionResult = NativeRecordingTerminalResult | { status: 'unresolved' } | { status: 'abandoned' }
+  /** No provider acquisition was invoked; retain the event and its attempt budget. */
+  | { status: 'deferred' };
 
 export interface NativeRecordingJobResult {
   observation: NativeRecordingObservation;
@@ -352,11 +354,16 @@ export class NativeRecordingCoordinator {
         ...(job.fallbackAt === undefined ? {} : { fallbackAt: job.fallbackAt }),
       }, controller.signal);
       if (!this.stopped && !this.storageError && this.operation === operation) {
-        if (result.status === 'unresolved') {
+        if (result.status === 'deferred' && !job.cancelled) {
+          this.operation = undefined;
+          this.operationDispatched = false;
+          job.attempts--;
+          await this.persist();
+        } else if (result.status === 'unresolved') {
           operation.status = 'unresolved';
           await this.persist();
         } else {
-          await this.finishAttempt(result);
+          await this.finishAttempt(result.status === 'deferred' ? { status: 'skipped' } : result);
         }
       }
     } catch (error) {

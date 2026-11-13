@@ -579,6 +579,32 @@ describe('native recording FIFO', () => {
       .toEqual([['disabled', 'cancelled'], ['allowed', 'retrieved']]);
   });
 
+  it.each([false, true])('defers proven unsent work without spending an attempt, preserving permission cancellation=%s', async cancelled => {
+    const held = deferred<NativeRecordingAcquisitionResult>();
+    const acquire = jest.fn<Promise<NativeRecordingAcquisitionResult>, [NativeRecordingAcquisition, AbortSignal]>()
+      .mockReturnValueOnce(held.promise).mockResolvedValue({ status: 'retrieved' });
+    let readyAt = Date.now();
+    const f = setup({ acquire, maxRetries: 0, earliestAcquisitionAt: () => readyAt });
+    const observation = event('unsent-before-recovery');
+    await f.coordinator.observe(observation);
+    await jest.advanceTimersByTimeAsync(60000);
+    readyAt = Date.now() + 1000;
+    if (cancelled) await f.coordinator.cancelCamera('module-1', 'entry');
+    held.resolve({ status: 'deferred' });
+    await jest.advanceTimersByTimeAsync(0);
+    if (!cancelled) {
+      expect(f.coordinator.snapshot().queue).toEqual([expect.objectContaining({ observation, attempts: 0 })]);
+      expect(f.onJobFinished).not.toHaveBeenCalled();
+    }
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(acquire).toHaveBeenCalledTimes(cancelled ? 1 : 2);
+    expect(acquire.mock.calls.map(([request]) => request.attempt)).toEqual(cancelled ? [1] : [1, 1]);
+    expect(f.coordinator.snapshot().queue).toEqual([]);
+    expect(f.coordinator.snapshot().operation).toBeUndefined();
+    expect(f.onJobFinished).toHaveBeenCalledTimes(1);
+    expect(f.onJobFinished).toHaveBeenCalledWith(expect.objectContaining({ outcome: cancelled ? 'cancelled' : 'retrieved' }));
+  });
+
   it('cancels only the selected camera queued jobs and never replays them after new jobs are allowed', async () => {
     const { coordinator, acquire, onJobFinished } = setup();
     await coordinator.observe(event('entry-one'));

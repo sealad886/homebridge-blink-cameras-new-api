@@ -64,6 +64,14 @@ loss during that fault may lose the unpersisted command history. Successful
 persistence resumes the canonical journal. Arm/disarm failure logs include the safe local reason
 without printing provider error messages.
 
+SDK operations capture account and writer generation through one authority guard,
+with a reservation when the workflow owns one. Check that captured authority
+before dispatch and after awaited work before publishing state or success;
+terminal owner clears also require the original revision. Request budgets and
+request-local transport proof remain separate from operation acknowledgment.
+A journal fault clears only after the latest required snapshot for the current
+writer is saved, rather than after an older physical write completes.
+
 The existing stable contact sensor and Retry switch own connection presentation.
 The contact monitor stays active during a cloud outage, but reports disconnected
 and faulted state after confirmation. Recovery preserves all accessory identities.

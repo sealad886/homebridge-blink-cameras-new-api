@@ -517,7 +517,7 @@ export class BlinkApi {
           try {
             // A caller timeout cannot cancel a file replacement; overlapping a newer save could let this stale write win later.
             await next.save(next.state);
-            if (next.generation === this.writerGeneration) this.ownershipPersistenceFailed = false;
+            if (next.generation === this.writerGeneration && !this.queuedOwnershipWrite) this.ownershipPersistenceFailed = false;
           } catch { degraded(next.generation); }
         }
       } finally { this.pendingOwnershipWrite = undefined; }
@@ -544,13 +544,16 @@ export class BlinkApi {
     if (this.ownershipPersistenceFailed) throw new Error('Blink ownership journal unavailable.');
   }
 
-  private assertOperationAuthority(kind: 'liveView' | 'stateCommand', reservationId: string, generation: number,
-    accountId: number, cleared = false): void {
-    const owner = kind === 'liveView' ? this.liveViewOwner : this.stateCommandOwner;
-    if (generation !== this.writerGeneration || this.getCachedIdentity().accountId !== accountId
-      || (cleared ? owner !== undefined : owner?.reservationId !== reservationId)) {
-      throw new BlinkOperationNotStartedError('ownership-unavailable');
-    }
+  private captureOperationAuthority(accountId: number, generation: number,
+    owner?: readonly [kind: 'liveView' | 'stateCommand', reservationId: string]): (cleared?: boolean) => void {
+    const kind = owner?.[0], reservationId = owner?.[1];
+    return (cleared = false) => {
+      const current = kind === 'liveView' ? this.liveViewOwner : this.stateCommandOwner;
+      if (generation !== this.writerGeneration || this.getCachedIdentity().accountId !== accountId
+        || (kind !== undefined && (cleared ? current !== undefined : current?.reservationId !== reservationId))) {
+        throw new BlinkOperationNotStartedError('ownership-unavailable');
+      }
+    };
   }
 
   private validateLiveViewOwner(owner: BlinkLiveViewOwnership): void {
@@ -604,10 +607,10 @@ export class BlinkApi {
       phase: 'starting', statusReads: 0, expiresAt: Math.min(options.deadline ?? Infinity, Date.now() + REMOTE_OPERATION_LEASE_MS),
       ...(deviceId ? { deviceId } : {}) };
     const generation = options.generation;
+    const authority = this.captureOperationAuthority(accountId, generation, ['stateCommand', intent.reservationId]);
     const current = () => {
       checkRequestBudget(options);
-      if (generation !== this.writerGeneration || this.stateCommandOwner?.reservationId !== intent.reservationId
-        || this.getCachedIdentity().accountId !== accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
+      authority();
     };
     this.stateCommandRunning = intent.reservationId;
     let dispatched = false;
@@ -648,15 +651,15 @@ export class BlinkApi {
     const owner = this.stateCommandOwner;
     const generation = this.writerGeneration;
     if (!owner?.commandId || owner.statusReads >= 60) throw new Error('No remaining owned command status budget.');
+    const authority = this.captureOperationAuthority(owner.accountId, generation, ['stateCommand', owner.reservationId]);
     checkRequestBudget(options);
-    if (this.getCachedIdentity().accountId !== owner.accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
+    authority();
     await this.persistStateCommandOwner({ ...owner, statusReads: owner.statusReads + 1 }, owner.reservationId, generation);
     checkRequestBudget(options);
     const status = await withinRequestBudget(this.sharedRootHttp.get<{ complete?: unknown; status?: unknown }>(
       `accounts/${owner.accountId}/networks/${owner.networkId}/commands/${owner.commandId}`,
-      { ...options, retry: false, responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: () =>
-        this.assertOperationAuthority('stateCommand', owner.reservationId, generation, owner.accountId) }), options);
-    this.assertOperationAuthority('stateCommand', owner.reservationId, generation, owner.accountId);
+      { ...options, retry: false, responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: authority }), options);
+    authority();
     if (typeof status?.complete !== 'boolean' || typeof status.status !== 'number' || !Number.isSafeInteger(status.status)) {
       throw new Error('Blink command returned invalid terminal evidence.');
     }
@@ -665,7 +668,7 @@ export class BlinkApi {
       throw new BlinkOperationNotStartedError('ownership-unavailable');
     }
     checkRequestBudget(options);
-    this.assertOperationAuthority('stateCommand', owner.reservationId, generation, owner.accountId, true);
+    authority(true);
     return status.status;
   }
 
@@ -1715,10 +1718,10 @@ export class BlinkApi {
         phase: 'starting', retirementAcknowledged: false,
         expiresAt: Math.min(execution.deadline ?? Infinity, Date.now() + REMOTE_OPERATION_LEASE_MS) };
       const generation = execution.generation;
+      const authority = this.captureOperationAuthority(accountId, generation, ['liveView', owner.reservationId]);
       const current = () => {
         checkRequestBudget(execution);
-        if (generation !== this.writerGeneration || this.liveViewOwner?.reservationId !== owner.reservationId
-          || this.getCachedIdentity().accountId !== accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
+        authority();
       };
       await this.persistLiveViewOwner(owner, undefined, generation);
       let dispatched = false;
@@ -1806,10 +1809,15 @@ export class BlinkApi {
     requireRemoteId(commandId);
     return this.queueStateCommand('CommandUpdate', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
+      const authority = this.captureOperationAuthority(accountId, execution.generation);
+      const current = () => {
+        execution.beforeDispatch();
+        authority();
+      };
       try {
         return await this.sharedRootHttp.post<BlinkCommandStatus>(
           `accounts/${accountId}/networks/${networkId}/commands/${commandId}/update`, undefined, [404],
-          { ...execution, retry: false });
+          { ...execution, retry: false, beforeDispatch: current });
       } catch (error) {
         if (error instanceof BlinkHttpError && error.status === 404) return null;
         throw error;
@@ -1835,11 +1843,10 @@ export class BlinkApi {
       const owned = this.liveViewOwner?.networkId === networkId && this.liveViewOwner.commandId === commandId
         ? this.liveViewOwner : undefined;
       const generation = execution.generation;
+      const authority = this.captureOperationAuthority(accountId, generation, owned ? ['liveView', owned.reservationId] : undefined);
       const current = () => {
         checkRequestBudget(execution);
-        if (generation !== this.writerGeneration || (owned && this.liveViewOwner?.reservationId !== owned.reservationId)) {
-          throw new BlinkOperationNotStartedError('ownership-unavailable');
-        }
+        authority();
       };
       if (owned && owned.accountId !== accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
       if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'retiring' }, owned.reservationId, generation);
@@ -1871,18 +1878,18 @@ export class BlinkApi {
     const generation = options.generation;
     options.beforeDispatch();
     if (!current || current.reservationId !== owner.reservationId) return false;
-    if (this.getCachedIdentity().accountId !== owner.accountId) throw new BlinkOperationNotStartedError('ownership-unavailable');
+    const authority = this.captureOperationAuthority(owner.accountId, generation, ['liveView', owner.reservationId]);
+    authority();
     try {
       const response = await this.sharedRootHttp.get<{ complete?: unknown; status?: unknown }>(
         `accounts/${owner.accountId}/networks/${owner.networkId}/commands/${owner.commandId}`,
         { ...options, deadline: Math.min(options.deadline ?? Infinity, Date.now() + 10_000), retry: false,
-          responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: () =>
-            this.assertOperationAuthority('liveView', owner.reservationId, generation, owner.accountId) });
-      this.assertOperationAuthority('liveView', owner.reservationId, generation, owner.accountId);
+          responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: authority });
+      authority();
       if (response.complete === true && response.status === 0) {
         if (!await this.persistLiveViewOwner(undefined, owner.reservationId, generation)) return false;
         options.beforeDispatch();
-        this.assertOperationAuthority('liveView', owner.reservationId, generation, owner.accountId, true);
+        authority(true);
         return true;
       }
     } catch {
