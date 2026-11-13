@@ -14,6 +14,9 @@ owns subsequent acceptance and finding dispositions.
   retain manual retries, and bound concurrent connection tests without saving config.
 - Coalesce pending connection tests across UI retries and provide a precise JSON
   Config repair path for malformed saved settings without changing their values.
+- Keep sign-in and verification available for migration-only drafts when saved
+  feed limits require authenticated discovery; unrelated unsaved edits still block
+  account actions.
 - Replace lengthy field descriptions with accessible information help; highlight
   unsaved changes, group temperature with motion sensors, clarify status refresh
   versus saved-clip retries, and display clip-cache limits in MiB while retaining bytes.

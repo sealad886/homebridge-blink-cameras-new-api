@@ -130,3 +130,18 @@ its existing ownership; the UI guard releases on its deadline even if that raw
 request remains pending. Tests cover both admission directions, the status-
 refresh interval and real deadline release. Callback-only restart controls are
 not reachable from a testable step and retain their existing reservation checks.
+
+### Late automatic review: migration and authentication recovery
+
+Automatic Codex review of 44b06de identified a valid startup dependency cycle:
+a migration-only dirty draft blocked authentication actions, while saved feed
+limits required authenticated discovery before Save. The canonical Draft now
+tracks the migration-only baseline separately from user edits. Account recovery
+can persist the semantics-preserving migration with its existing account save;
+user edits still require Save or discard. Opening or testing never saves config.
+Baseline replacement after the account save clears migration dirtiness normally.
+The correction requires a focused real-validator/feed-limit regression and fresh
+exact-head independent review. CodeRabbit remains retired clean at 44b06de;
+subsequent source changes use fresh independent coverage and normal automatic
+review feedback. Existing source-download TLS failure remains an external gate,
+with the exact Opus archive subsequently reachable and hash-verified.

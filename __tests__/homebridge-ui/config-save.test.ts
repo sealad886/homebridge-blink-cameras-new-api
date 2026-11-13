@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { migrateEarlyNotificationConfig } from '../../src/early-notification-config';
+import { SettingsValidator } from '../../src/homebridge-ui/settings-validation';
 
 const html = readFileSync(join(__dirname, '../../src/homebridge-ui/public/index.html'), 'utf8');
 const accountGuard = html.slice(html.indexOf('  function beginAccountAction()'), html.indexOf('  async function saveTokenOnlyConfig('));
@@ -115,4 +117,60 @@ it('reserves token-only persistence until host save settles and releases it afte
   draft.set('pollInterval', 180); await draft.flush();
   expect(draft.config.pollInterval).toBe(180);
   expect(homebridge.updatePluginConfig).toHaveBeenCalledWith([expect.objectContaining({ pollInterval: 60 })]);
+});
+
+it.each([false, true])('persists only startup migration with auth recovery and adopts baseline after host save (reserved: %s)', async reserved => {
+  const stateContext = { module: { exports: {} }, structuredClone, setTimeout, clearTimeout };
+  runInNewContext(readFileSync(join(__dirname, '../../src/homebridge-ui/public/settings-state.js'), 'utf8'), stateContext);
+  const { Draft } = stateContext.module.exports as any;
+  const original = [{ platform: 'Other', extension: { keep: true } }, { platform: 'BlinkCameras', name: 'Blink',
+    disableEarlyNotification: true, syncModuleFeedLimits: [{ syncModuleId: '20', maxFeeds: 1 }],
+    extension: { keep: true }, _bridge: { username: 'synthetic' }, trustDevice: false }];
+  const validator = new SettingsValidator(() => undefined);
+  const host = { validate: async (payload: unknown) => validator.validate(payload), stage: jest.fn(), changed: jest.fn(), saveEnabled: jest.fn() };
+  const draft = new Draft(original, host, migrateEarlyNotificationConfig(original[1]).config);
+  draft.retry(); await draft.flush();
+  expect(draft.state.errors).toEqual([expect.objectContaining({ code: 'inventory_unavailable' })]);
+  let finishSave: () => void;
+  let submit: (event: { preventDefault: () => void }) => Promise<void>;
+  const homebridge = {
+    request: jest.fn().mockResolvedValue({ authenticated: true }),
+    updatePluginConfig: jest.fn().mockResolvedValue(undefined),
+    savePluginConfig: jest.fn(() => new Promise<void>(resolve => { finishSave = resolve; })),
+    showSpinner: jest.fn(), hideSpinner: jest.fn(),
+  };
+  const context = { connectionTestInFlight: false,
+    settings: { draft, beginAccountAction: () => draft.beginAccountAction(), replaceBaseline: (blocks: unknown[]) => draft.replaceBaseline(blocks) },
+    homebridge, deviceIdValue: '', updateLockUI: jest.fn(), pluginConfig: [],
+    verifyForm: { addEventListener: (_event: string, handler: typeof submit) => { submit = handler; } },
+    document: { getElementById: () => ({ value: 'synthetic-code' }) }, verifyType: 'client', verifyBtn: {},
+    hideError: jest.fn(), setButtonBusy: jest.fn(), showError: jest.fn(),
+    handleAuthResponse: (data: unknown, { accountAction }: any) => save(data, accountAction),
+  };
+  runInNewContext(section('  async function saveTokenOnlyConfig(', '  async function handleAuthResponse('), context);
+  const save = (context as typeof context & { saveTokenOnlyConfig: (data: unknown, action?: unknown) => Promise<void> }).saveTokenOnlyConfig;
+  runInNewContext(section("  verifyForm.addEventListener('submit'", '  async function testStoredConnection('), context);
+  const operation = reserved ? submit!({ preventDefault: jest.fn() }) : save({ authenticated: true });
+  await new Promise(resolve => setImmediate(resolve));
+  if (reserved) expect(homebridge.request).toHaveBeenCalledWith('/verify', { code: 'synthetic-code', type: 'client', trustDevice: false });
+  expect(homebridge.savePluginConfig).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(draft.baseline)).toEqual(original);
+  expect(draft.state.accountAction).toBe(true);
+  expect(draft.set('name', 'Unsaved user edit')).toBe(false);
+  expect(draft.beginAccountAction()).toBeNull();
+  const saved = [original[0], { ...migrateEarlyNotificationConfig(original[1]).config,
+    deviceId: 'homebridge-blink', tier: 'prod', persistAuth: true, authLocked: true }];
+  expect(homebridge.updatePluginConfig).toHaveBeenCalledWith(saved);
+  finishSave!(); await operation; await draft.flush();
+  expect(context.showError).not.toHaveBeenCalled();
+  expect(draft.blocks).toEqual(saved);
+  expect(JSON.parse(draft.baseline)).toEqual(saved);
+  expect(draft.state).toMatchObject({ dirty: false, accountAction: false });
+  expect(draft.hasUserChanges()).toBe(false);
+  expect(draft.canRunAccountAction()).toBe(true);
+  expect(host.stage).not.toHaveBeenCalled();
+  draft.set('name', 'User edit'); await draft.flush();
+  expect(draft.canRunAccountAction()).toBe(false);
+  expect(homebridge.savePluginConfig).toHaveBeenCalledTimes(1);
+  expect(original[1]).toHaveProperty('disableEarlyNotification', true);
 });

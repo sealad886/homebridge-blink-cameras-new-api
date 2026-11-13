@@ -18,6 +18,7 @@
       }
       this.baseline = JSON.stringify(this.blocks);
       if (initialConfig !== undefined) this.blocks[this.index] = copy(initialConfig);
+      this.migrationBaseline = JSON.stringify(this.blocks);
       this.host = host;
       this.revision = 0;
       this.inventoryRevision = undefined;
@@ -25,7 +26,8 @@
       this.running = null;
     }
     get config() { return this.blocks[this.index]; }
-    canRunAccountAction() { return !this.state.dirty && !this.state.pending && !this.state.accountAction; }
+    hasUserChanges() { return JSON.stringify(this.blocks) !== this.migrationBaseline; }
+    canRunAccountAction() { return !this.hasUserChanges() && !this.state.pending && !this.state.accountAction; }
     beginAccountAction() {
       if (!this.canRunAccountAction()) return null;
       this.state.accountAction = true;
@@ -84,10 +86,10 @@
     }
     async flush() { while (this.running) await this.running; }
     replaceBaseline(blocks) {
-      if (this.state.dirty) throw new Error('Save or discard settings before an account action.');
+      if (this.hasUserChanges()) throw new Error('Save or discard settings before an account action.');
       this.blocks = copy(blocks);
       this.index = this.blocks.findIndex(block => block.platform === 'BlinkCameras');
-      this.baseline = JSON.stringify(this.blocks);
+      this.baseline = this.migrationBaseline = JSON.stringify(this.blocks);
       this.retry();
     }
   }
