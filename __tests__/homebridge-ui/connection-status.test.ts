@@ -40,7 +40,7 @@ it.each(['login', 'callback', 'verify'])('invalidates the previous connection re
 
 function connectionFixture() {
   const context = {
-    settings: { draft: { state: { accountAction: false }, index: 0 } }, connectionTestInFlight: false,
+    settings: { draft: { state: { accountAction: false }, index: 0 }, beginAccountAction: jest.fn(() => ({ finish: jest.fn() })) }, connectionTestInFlight: false,
     testConnectionButton: {}, verifyTestConnectionButton: {}, successEmail: { textContent: 'Synthetic account' }, successTier: { textContent: 'prod' },
     homebridge: { request: jest.fn().mockResolvedValue({ success: true }), showSpinner: jest.fn(), hideSpinner: jest.fn(), updatePluginConfig: jest.fn(), savePluginConfig: jest.fn() },
     window: { BlinkSettings: { deadline: jest.fn((promise: Promise<unknown>) => promise) } },
@@ -50,6 +50,58 @@ function connectionFixture() {
   const test = runInNewContext(section('  async function testStoredConnection(', "  verifyTestConnectionButton.addEventListener(") + '\ntestStoredConnection', context);
   return { context, test };
 }
+
+function accountAction(context: object) {
+  return runInNewContext(section('  function beginAccountAction()', '  async function saveTokenOnlyConfig(') + '\nbeginAccountAction', context);
+}
+
+it('keeps account actions out through connection testing and the subsequent status refresh, then allows them after completion', async () => {
+  const { context, test } = connectionFixture();
+  const begin = accountAction(context);
+  let releaseRequest: (value: unknown) => void;
+  let releaseStatus: (value: unknown) => void;
+  context.homebridge.request.mockImplementation(() => new Promise(resolve => { releaseRequest = resolve; }));
+  context.refreshAuthStatus.mockImplementation(() => new Promise(resolve => { releaseStatus = resolve; }));
+  const operation = test(context.testConnectionButton);
+  expect(begin()).toBeNull();
+  expect(context.settings.beginAccountAction).not.toHaveBeenCalled();
+  expect(context.showError).toHaveBeenCalledWith(expect.stringMatching(/check is in progress/i));
+  releaseRequest!({ success: true });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(context.refreshAuthStatus).toHaveBeenCalledTimes(1);
+  expect(begin()).toBeNull();
+  expect(context.settings.beginAccountAction).not.toHaveBeenCalled();
+  releaseStatus!({ authenticated: true, verified: true }); await operation;
+  expect(begin()).toEqual(expect.objectContaining({ finish: expect.any(Function) }));
+  expect(context.settings.beginAccountAction).toHaveBeenCalledTimes(1);
+});
+
+it('releases the account-action guard on the UI deadline while the underlying connection request is still unresolved', async () => {
+  jest.useFakeTimers();
+  try {
+    const { context, test } = connectionFixture();
+    const timers = { module: { exports: {} }, structuredClone, setTimeout, clearTimeout };
+    runInNewContext(readFileSync(join(__dirname, '../../src/homebridge-ui/public/settings-state.js'), 'utf8'), timers);
+    context.window.BlinkSettings.deadline.mockImplementation((timers.module.exports as any).deadline);
+    context.homebridge.request.mockImplementation(() => new Promise(() => {}));
+    const begin = accountAction(context);
+    const operation = test(context.testConnectionButton);
+    expect(begin()).toBeNull();
+    expect(context.settings.beginAccountAction).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(12000); await operation;
+    expect(context.connectionTestInFlight).toBe(false);
+    expect(context.refreshAuthStatus).not.toHaveBeenCalled();
+    expect(begin()).toEqual(expect.objectContaining({ finish: expect.any(Function) }));
+  } finally { jest.useRealTimers(); }
+});
+
+it('refuses a connection test while an account action already owns the page', async () => {
+  const { context, test } = connectionFixture();
+  context.settings.draft.state.accountAction = true;
+  await test(context.testConnectionButton);
+  expect(context.homebridge.request).not.toHaveBeenCalled();
+  expect(context.connectionTestInFlight).toBe(false);
+});
 
 it('coalesces concurrent connection tests, bounds the request, and releases both buttons without saving configuration', async () => {
   const { context, test } = connectionFixture();

@@ -3,7 +3,26 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
 const html = readFileSync(join(__dirname, '../../src/homebridge-ui/public/index.html'), 'utf8');
-const section = (start: string, end: string) => html.slice(html.indexOf(start), html.indexOf(end, html.indexOf(start)));
+const accountGuard = html.slice(html.indexOf('  function beginAccountAction()'), html.indexOf('  async function saveTokenOnlyConfig('));
+const section = (start: string, end: string) => accountGuard + html.slice(html.indexOf(start), html.indexOf(end, html.indexOf(start)));
+
+it('blocks token-only saves and lock or restart actions before any account request while a connection test owns the page', async () => {
+  let lock: () => Promise<void>;
+  const context = {
+    connectionTestInFlight: true, settings: { beginAccountAction: jest.fn() }, showError: jest.fn(),
+    lockAuthBtn: { addEventListener: (_event: string, handler: typeof lock) => { lock = handler; } },
+    homebridge: { request: jest.fn(), updatePluginConfig: jest.fn(), savePluginConfig: jest.fn() },
+  };
+  runInNewContext(section('  async function saveTokenOnlyConfig(', '  async function handleAuthResponse('), context);
+  const restart = runInNewContext(section("  lockAuthBtn.addEventListener('click'", "  unlockAuthBtn.addEventListener('click'") + '\nrestartAuthentication', context);
+  await expect((context as typeof context & { saveTokenOnlyConfig: (data: unknown) => Promise<void> }).saveTokenOnlyConfig({})).rejects.toThrow();
+  await lock!(); await restart();
+  expect(context.settings.beginAccountAction).not.toHaveBeenCalled();
+  expect(context.homebridge.request).not.toHaveBeenCalled();
+  expect(context.homebridge.updatePluginConfig).not.toHaveBeenCalled();
+  expect(context.homebridge.savePluginConfig).not.toHaveBeenCalled();
+  expect(context.showError).toHaveBeenCalledTimes(3);
+});
 
 it('auth completion preserves settings edited since boot and sanitizes only auth fields', async () => {
   const latest = [{ platform: 'BlinkCameras', pollInterval: 120, excludedNetworks: ['2'], password: 'synthetic' }, { platform: 'Other', name: 'kept' }];
@@ -11,7 +30,7 @@ it('auth completion preserves settings edited since boot and sanitizes only auth
     getPluginConfig: jest.fn().mockResolvedValue(latest),
     updatePluginConfig: jest.fn(), savePluginConfig: jest.fn(),
   };
-  const context = {
+  const context = { connectionTestInFlight: false,
     homebridge, getLatestPluginConfig: homebridge.getPluginConfig, pluginConfig: [{ platform: 'BlinkCameras', pollInterval: 60 }],
     deviceIdValue: 'synthetic-device', updateLockUI: jest.fn(), settings: { draft: { index: 0 }, beginAccountAction: () => ({ blocks: structuredClone(latest), finish: jest.fn() }), replaceBaseline: jest.fn() },
   };
@@ -28,7 +47,7 @@ it('auth completion preserves settings edited since boot and sanitizes only auth
 it.each(['client', 'account'])('keeps %s verification reachable when config save fails', async type => {
   const classes = { add: jest.fn(), remove: jest.fn() };
   const data = { authenticated: true, [type === 'client' ? 'requiresClientVerification' : 'requiresAccountVerification']: true };
-  const context = {
+  const context = { connectionTestInFlight: false,
     settings: { setAccountReady: jest.fn() }, pendingAuthConfig: null, saveTokenOnlyConfig: jest.fn().mockRejectedValue(new Error('synthetic failure')),
     document: { getElementById: () => ({ classList: classes }) },
     homebridge: { showSchemaForm: jest.fn(), toast: { warning: jest.fn(), success: jest.fn() } },
@@ -50,7 +69,7 @@ it.each([false, true, undefined])('verification honors current trust-device sett
     request: jest.fn().mockResolvedValue({ authenticated: true }),
     showSpinner: jest.fn(), hideSpinner: jest.fn(),
   };
-  const context = {
+  const context = { connectionTestInFlight: false,
     settings: { draft: { index: 0 }, beginAccountAction: () => ({ blocks: [{ trustDevice }], finish: jest.fn() }) }, verifyForm: { addEventListener: (_event: string, handler: typeof submit) => { submit = handler; } },
     document: { getElementById: () => codeInput }, homebridge, getLatestPluginConfig: homebridge.getPluginConfig, verifyType: 'client', verifyBtn: {},
     hideError: jest.fn(), setButtonBusy: jest.fn(), handleAuthResponse: jest.fn(), showError: jest.fn(),
@@ -62,7 +81,7 @@ it.each([false, true, undefined])('verification honors current trust-device sett
 
 
 it('refuses an immediate account save while settings have unsaved edits', async () => {
-  const context = { settings: { beginAccountAction: () => null }, homebridge: { updatePluginConfig: jest.fn(), savePluginConfig: jest.fn() } };
+  const context = { connectionTestInFlight: false, settings: { beginAccountAction: () => null }, homebridge: { updatePluginConfig: jest.fn(), savePluginConfig: jest.fn() } };
   runInNewContext(section('  async function saveTokenOnlyConfig(', '  async function handleAuthResponse('), context);
   await expect((context as typeof context & { saveTokenOnlyConfig: (data: unknown) => Promise<void> }).saveTokenOnlyConfig({})).rejects.toThrow();
   expect(context.homebridge.updatePluginConfig).not.toHaveBeenCalled();
@@ -81,7 +100,7 @@ it('reserves token-only persistence until host save settles and releases it afte
   const draft = new Draft([{ platform: 'BlinkCameras', pollInterval: 60 }], {
     validate: async ({ revision }: any) => ({ revision, valid: true }), stage: jest.fn(), changed: jest.fn(), saveEnabled: jest.fn(),
   });
-  const context = {
+  const context = { connectionTestInFlight: false,
     settings: { draft, beginAccountAction: () => draft.beginAccountAction(), replaceBaseline: (blocks: unknown[]) => draft.replaceBaseline(blocks) },
     homebridge, deviceIdValue: '', updateLockUI: jest.fn(), pluginConfig: [],
   };

@@ -387,8 +387,16 @@
     }
   }
 
+  function beginAccountAction() {
+    if (connectionTestInFlight) {
+      showError('A Blink connection check is in progress. Try the account action again shortly.');
+      return null;
+    }
+    return settings.beginAccountAction();
+  }
+
   async function saveTokenOnlyConfig(data, reservedAction = null) {
-    const action = reservedAction || settings.beginAccountAction();
+    const action = reservedAction || beginAccountAction();
     if (!action) throw new Error('Settings are unavailable for an account action.');
     try {
       const latestConfig = action.blocks;
@@ -510,7 +518,7 @@
       showError('Device ID may contain only letters, numbers, dots, underscores, and hyphens.');
       return;
     }
-    const action = settings.beginAccountAction();
+    const action = beginAccountAction();
     if (!action) return;
     let blinkWindow;
     setButtonBusy(startAuthButton, true, 'Starting Blink sign-in…', 'Sign in securely with Blink');
@@ -625,7 +633,7 @@
       return;
     }
 
-    const action = settings.beginAccountAction();
+    const action = beginAccountAction();
     if (!action) return;
     let submitted = callbackUrl;
     callbackUrl = '';
@@ -749,7 +757,7 @@
 
   verifyForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const action = settings.beginAccountAction();
+    const action = beginAccountAction();
     if (!action) return;
     hideError();
     const code = document.getElementById('verifyCode').value.trim();
@@ -822,7 +830,7 @@
   document.getElementById('openCameras').addEventListener('click', () => settings.showSection(1));
 
   lockAuthBtn.addEventListener('click', async () => {
-    const action = settings.beginAccountAction();
+    const action = beginAccountAction();
     if (!action) return;
     try {
       await homebridge.request('/lock');
@@ -846,7 +854,7 @@
   });
 
   async function restartAuthentication() {
-    const action = settings.beginAccountAction();
+    const action = beginAccountAction();
     if (!action) return;
     try {
       await homebridge.request('/unlock');

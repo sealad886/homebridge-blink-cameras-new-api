@@ -119,3 +119,14 @@ Service/route regressions: 109 passed; UI regressions: 83 passed. Four synthetic
 Chromium malformed-input cases preserved the complete Blink and sibling blocks
 with zero writes, then reopened after explicit synthetic repair. Fresh final
 independent review and the next CodeRabbit round are required before merge.
+
+### PR review round 2 correction
+
+CodeRabbit completed a second pass at cc1b403 with one additional page-flow
+finding: account actions could begin while a connection test was awaiting its
+response/status refresh. All six account entrypoints now share one admission
+guard for the bounded UI test interval. The underlying server operation retains
+its existing ownership; the UI guard releases on its deadline even if that raw
+request remains pending. Tests cover both admission directions, the status-
+refresh interval and real deadline release. Callback-only restart controls are
+not reachable from a testable step and retain their existing reservation checks.

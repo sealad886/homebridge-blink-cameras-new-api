@@ -236,13 +236,15 @@ it.each(['/lock', '/unlock'])('keeps edits and a second account action out of %s
   Object.assign(homebridge, { savePluginConfig: save, toast: { success: jest.fn(), info: jest.fn() } });
   const lock = new Element();
   const context = {
+    connectionTestInFlight: false,
     settings: editor, homebridge, lockAuthBtn: lock, getLatestPluginConfig: async () => editor.blocks,
     pluginConfig: editor.blocks, updateLockUI: jest.fn(), showError: jest.fn(),
     setAuthLockVisibility: jest.fn(), pendingAuthConfig: null, resetHostedFlow: jest.fn(),
     document: { getElementById: () => new Element() },
   };
   const html = source('index.html');
-  const unlock = runInNewContext(html.slice(html.indexOf("  lockAuthBtn.addEventListener('click'"), html.indexOf("  unlockAuthBtn.addEventListener('click'")) + '\nrestartAuthentication', context) as () => Promise<void>;
+  const accountGuard = html.slice(html.indexOf('  function beginAccountAction()'), html.indexOf('  async function saveTokenOnlyConfig('));
+  const unlock = runInNewContext(accountGuard + html.slice(html.indexOf("  lockAuthBtn.addEventListener('click'"), html.indexOf("  unlockAuthBtn.addEventListener('click'")) + '\nrestartAuthentication', context) as () => Promise<void>;
   const operation = (path === '/lock' ? lock.handlers.click() : unlock()) as Promise<void>;
   editor.draft.set('pollInterval', 120);
   editor.showSection(4);
