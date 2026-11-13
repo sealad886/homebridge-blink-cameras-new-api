@@ -293,8 +293,11 @@ export class BlinkApi {
           // Preserve mutation dispatch proof through status and public readback failures.
           if (execution.mutationAcknowledged) throw afterWorkFailure(error, true);
           if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
-          const reconciled = await conflictResolution?.(execution);
-          checkCompletion();
+          let reconciled: ConflictResolution<T> | undefined;
+          try {
+            reconciled = await conflictResolution?.(execution);
+            checkCompletion();
+          } catch { throw error; } // Failed readback cannot undo a definite POST refusal.
           if (reconciled?.resolved) {
             this.log.info(`[${label}] Requested state verified after conflict (attempt ${attempt + 1}).`);
             return reconciled.value as T;

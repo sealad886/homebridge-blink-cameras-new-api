@@ -171,3 +171,11 @@ to discard only the original newly captured by that refused attempt. Pre-existin
 originals and uncertain command outcomes retain their durable ownership evidence.
 No setting POST is replayed. This source finding does not establish the cause of
 the historical generic Pi fault.
+
+Review then identified the shared cause of a related case: a failed conflict
+readback replaced a known POST refusal with a GET error. The common state-command
+queue now retains the definite refusal through readback and completion failures.
+Its preceding acknowledged-mutation guard still preserves accepted-command
+uncertainty, and readback failures do not trigger another POST. This applies to
+the existing network, motion, video-quality and Early Notification callbacks; it
+adds no compatibility layer or new public error type.

@@ -7,7 +7,7 @@ import { URL } from 'node:url';
 import { BlinkApi, BlinkEarlyNotificationNotConfirmedError } from '../../src/blink-api/client';
 import { BlinkAuth } from '../../src/blink-api/auth';
 import { OperationTimeoutError } from '../../src/operation-budget';
-import { BlinkHttpError } from '../../src/blink-api/http';
+import { BlinkHttpError, isBlinkPostRefusal } from '../../src/blink-api/http';
 import { readOwnerOnlyJsonFile } from '../../src/blink-api/secure-json-file';
 import {
   BlinkAuthState,
@@ -497,6 +497,54 @@ describe('BlinkApi', () => {
       else await expect(outcome).resolves.toMatchObject({ current: false, changed: false });
       expect(http.get).toHaveBeenCalledTimes(2); expect(http.post).toHaveBeenCalledTimes(1);
       expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+    });
+
+    it.each([
+      new BlinkHttpError('Read unavailable', 503, '', 'https://example.com/config', 'GET'),
+      new BlinkHttpError('Read transport failed', 0, '', 'https://example.com/config', 'GET', undefined, undefined, 'network'),
+      new OperationTimeoutError(),
+    ])('preserves a definite setting refusal when conflict readback fails: %s', async readFailure => {
+      const { client, http } = createEarlyApi();
+      const refusal = new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+      const beforeChange = jest.fn();
+      http.get.mockResolvedValueOnce(metadata()).mockRejectedValueOnce(readFailure);
+      http.post.mockRejectedValueOnce(refusal);
+      await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false, { beforeChange })).rejects.toBe(refusal);
+      expect(isBlinkPostRefusal(refusal)).toBe(true);
+      expect(beforeChange).toHaveBeenCalledWith(true);
+      expect(http.post).toHaveBeenCalledTimes(1); expect(http.get).toHaveBeenCalledTimes(2);
+      expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+    });
+
+    it('preserves a definite refusal when conflict readback finishes after its deadline', async () => {
+      jest.useFakeTimers();
+      try {
+        const { client, http } = createEarlyApi();
+        const refusal = new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+        http.get.mockResolvedValueOnce(metadata()).mockImplementationOnce(async () => {
+          jest.setSystemTime(Date.now() + 1000); return metadata(false);
+        });
+        http.post.mockRejectedValueOnce(refusal);
+        await expect(client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false, { deadline: Date.now() + 500 }))
+          .rejects.toBe(refusal);
+        expect(http.post).toHaveBeenCalledTimes(1);
+        expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+      } finally { jest.useRealTimers(); }
+    });
+
+    it.each(['status', 'readback'] as const)('does not classify an accepted setting command as refused after failed %s GET', async phase => {
+      const { client, http } = createEarlyApi();
+      const failure = new BlinkHttpError('Read unavailable', 409, '', 'https://example.com/config', 'GET');
+      http.get.mockResolvedValueOnce(metadata());
+      if (phase === 'readback') http.get.mockResolvedValueOnce({ complete: true, status: 0 });
+      http.get.mockRejectedValueOnce(failure); http.post.mockResolvedValueOnce({ id: 42 });
+      const outcome = await client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false).catch(error => error);
+      expect(outcome).toBe(failure); expect(isBlinkPostRefusal(outcome)).toBe(false);
+      expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.get).toHaveBeenCalledTimes(phase === 'status' ? 2 : 3);
+      if (phase === 'status') expect(client.getRemoteOperationState().stateCommand)
+        .toMatchObject({ kind: 'early-notification', phase: 'unresolved', commandId: 42 });
+      else expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
     });
 
     it.each(['transport', 'status'] as const)('fences an unknown %s outcome without replaying the POST', async failure => {
