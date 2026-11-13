@@ -34,7 +34,7 @@ const scratch = mkdtempSync(join(tmpdir(), 'blink-package-'));
 try {
   const [initial] = packedResults(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { encoding: 'utf8' }));
   const paths = initial.files.map((file) => file.path);
-  for (const path of [manifest.main, manifest.types, 'config.schema.json', 'dist/homebridge-ui/server.js', 'dist/homebridge-ui/public/index.html', 'CHANGELOG.md', 'LICENSE', 'scripts/preuninstall.js', 'scripts/migrate-secure-media-config.cjs', 'scripts/migrate-native-recording-config.cjs', 'docs/native-recording-config-migration.md', 'dist/blink-api/fcm/worker.js']) {
+  for (const path of [manifest.main, manifest.types, 'config.schema.json', 'dist/homebridge-ui/server.js', 'dist/homebridge-ui/public/index.html', 'CHANGELOG.md', 'LICENSE', 'scripts/preuninstall.js', 'scripts/postinstall.cjs', 'scripts/migrate-secure-media-config.cjs', 'scripts/migrate-native-recording-config.cjs', 'docs/native-recording-config-migration.md', 'dist/blink-api/fcm/worker.js']) {
     assert(paths.includes(path), `Package is missing ${path}`);
   }
   assert(!paths.some((path) => /(^|\/)(\.env|\.ssh|\.beads|\.blink-auth\.json|\.blink-native-recording|node_modules|__tests__|logs)(\/|$)|\.(log|pem|key)$|\.private\.(json|jsonl)$/.test(path)), 'Package contains private or development artifacts');

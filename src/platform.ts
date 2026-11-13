@@ -54,7 +54,7 @@ import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } f
 import type { NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
 import type { NativeMotionDevice } from './blink-api/motion-events';
-import { migrateEarlyNotificationConfig } from './early-notification-config';
+import { assertCanonicalEarlyNotificationConfig } from './early-notification-config';
 import { redactDiagnosticText } from './blink-api/redaction';
 
 const DEFAULT_POLL_INTERVAL = 60;
@@ -170,7 +170,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
 
-    this.config = migrateEarlyNotificationConfig(this.config).config as BlinkPlatformConfig;
+    assertCanonicalEarlyNotificationConfig(this.config);
 
     // Validate configuration
     this.validateConfig();

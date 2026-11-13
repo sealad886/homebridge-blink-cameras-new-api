@@ -74,7 +74,7 @@ describePosix('explicit native recording configuration migration', () => {
     expect(readFileSync(backup, 'utf8')).toBe(bytes);
     for (const filename of [file, backup]) {
       const stats = statSync(filename);
-      expect(stats.mode & 0o777).toBe(0o600);
+      expect(stats.mode & 0o777).toBe(filename === backup ? 0o600 : before.mode & 0o777);
       expect([stats.uid, stats.gid]).toEqual([before.uid, before.gid]);
     }
     expect(result.stdout + result.stderr).not.toMatch(/private-(pin|password)|camera:12|owl:12|Entry/);

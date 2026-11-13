@@ -11,16 +11,46 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
 ## Upgrade from 1.1.0-beta.1
 
-The editor stages the Early Notification conversion for review when it opens.
-Homebridge Save persists that draft. Sign-in, verification and other immediate
-account actions may also persist a migration-only draft with their account
-changes, so authentication recovery does not depend on authenticated discovery.
-Actual user edits still block account actions until saved or discarded. Opening
-the editor and testing the connection never save configuration. The runtime also interprets the legacy
-setting in memory, so upgrading does not require an immediate configuration
-write. The explicit preview/apply commands below perform the same canonical
-conversion in a complete Homebridge file. From a source checkout, run
-`npm run build` first; the installed package already includes the compiled helper.
+Close all settings and JSON Config editors and stop other configuration writers
+until installation or explicit migration completes. The final file check and
+atomic replacement do not form a lock shared with Homebridge's settings service;
+concurrent writers are outside this migration's supported operating requirements.
+
+On POSIX Homebridge npm installations, the installed package's postinstall step
+runs this one-time migration against `config.json` in the explicit
+`UIX_STORAGE_PATH` supplied by the installer. Without that authoritative path,
+it leaves config untouched and reports how to run the explicit converter.
+It never infers storage from a global package prefix or searches home directories
+or other storage roots. Source checkout dependency installs never access Homebridge config, even
+when they inherit `UIX_STORAGE_PATH`; installation is verified before using that
+path. The existing guarded converter writes an owner-only backup of the exact
+original bytes before atomic replacement, preserving file ownership and unrelated
+configuration. The replacement retains the config permission bits so service
+group-read access is preserved; the backup stays private at `0600`. Already-converted files are left untouched without another backup.
+Invalid choices, unsafe files and detected concurrent changes fail the migration
+without replacing the configuration.
+Automatic migration also stops on `unresolved-camera-aliases` before changing
+config or creating a backup. Review the explicit preview and resolve ambiguous
+camera overrides before applying the migration; installation cannot infer aliases.
+
+The persisted file contains only canonical values after conversion; the runtime
+and settings editor do not interpret legacy keys. Opening settings, discovering
+cameras and testing the connection do not stage or save a configuration change.
+Only a real edit stages a draft for Homebridge Save. Explicit account operations
+may save their own changes; unrelated drafts must still be saved or discarded.
+
+If lifecycle scripts were disabled or the installer cannot identify this
+Homebridge storage path, run the explicit preview/apply commands below before
+starting the new plugin. Missing migration produces an actionable validation
+error rather than silently choosing a different policy. From a source checkout,
+run `npm run build` first; the installed package includes the compiled helper.
+The migration itself never contacts Blink or restarts Homebridge.
+
+The guarded file converter requires POSIX ownership and file semantics. On Windows,
+the installation step leaves the file untouched and reports manual conversion
+instead of failing an otherwise valid installation. Use Homebridge's backup and
+JSON Config editor to perform the mapping below before starting with legacy keys;
+already-canonical Windows configurations need no conversion.
 
 At global, Sync Module and camera scopes, `disableEarlyNotification: true`
 becomes `earlyNotificationMode: "off"`; explicit `false` becomes `"unmanaged"`.
@@ -30,20 +60,62 @@ without modifying the supplied file. Unknown fields and other plugins survive.
 Choosing `"on"` is a new explicit action; the migration never infers it from an
 old false value. See [Early Notification](configuration.md#early-notification-and-clip-scheduling).
 
-The private `.early-notification-ACCOUNT-TIER.json` companion journal accepts
-validated version 1 originals. A subsequent journal change writes version 2,
-which can retain an original Off value for the new Force on behavior. Opening
-the editor does not rewrite this operational journal.
+The private `.early-notification-ACCOUNT-TIER.json` companion journal distinguishes
+an unverified `pending` intent from a confirmed `owned` setting change. The plugin
+saves a pending original before a new setting POST and promotes it only after the
+command confirms the requested change. Pending entries never authorize automatic
+restoration. A refused write whose cleanup cannot persist therefore cannot become
+an owned change merely because someone later supplies the same value manually.
+An unchanged read may reconfirm continuity only for a previously confirmed-owned
+entry when no intervening change was observed; it cannot establish ownership of a
+new, migrated or otherwise unverified pending entry.
+A definite Live View, storage or unrelated ordinary-command admission refusal
+that started no work may retain that same prior ownership, provided no change
+callback ran and the account/writer scope is still current. Routine contention
+therefore does not turn a previously owned entry into an unverified change. A
+typed terminal failure of the initial configuration GET can retain the same
+prior ownership: that read has ended without reaching the change callback or a
+setting POST. The SDK checks account/writer authority on failure as well as
+success; a stale continuation cannot supply that proof.
+Typed request-local proof that no request was sent is treated similarly. If a
+reapply read observed the original value, an unsent or refused write cannot own a
+new change, so its pending intent is discarded. If restoration observed the
+still-owned forced value, an unsent or refused write can retain that prior
+ownership. Generic timeouts, uncertain network outcomes and authority changes do
+not supply this proof and remain pending.
 
-An older beta cannot read version 2 or interpret the new mode key. Before a
-downgrade, use this beta to select Leave unchanged for every managed camera,
-Save and restart, and verify restoration completes. Keep owner-only backups of
-configuration and the companion journal. Stop the child bridge before restoring
-the pre-upgrade configuration/journal and installing the older exact registry
-version. Do not replace a journal containing unresolved originals with an empty
-file: that would lose restoration ownership. If originals cannot reconcile,
-retain the new runtime and diagnose that failure before downgrading. Package
-rollback alone does not convert configuration or operational state.
+At the first safe account-scoped startup, journal versions 1 and 2 are migrated
+once to version 3, with an exact-byte private backup beside the journal named
+`JOURNAL.vVERSION-backup-SHA256.json`. This is separate from
+the installer's configuration conversion: the installer cannot identify and
+validate the active account journal safely. Every legacy original is preserved as
+pending because those formats do not prove whether its setting write succeeded.
+Opening settings does not perform this migration. Already-current journals are
+not rewritten just to load them.
+
+An unresolved pending entry requires manual review before that camera's preference
+can be managed again. Other cameras, push reception, recording and arm/disarm work
+remain available. Do not infer ownership from a matching current Blink value.
+To resolve an entry:
+
+1. Stop the Blink child bridge and retain a private copy of the current journal
+   and its migration backup.
+2. Identify the entry's camera confidently and choose its intended Early
+   Notification value in the Blink app. The retained `original` value is evidence
+   for that review, not proof that the plugin changed the setting.
+3. Remove only the reviewed pending entry from the current journal, preserving
+   all other entries and its private file ownership and permissions. Leave any
+   entry you cannot identify pending; never clear the journal wholesale.
+4. Restart the child bridge. An explicitly configured Force on/off policy can
+   then make a new, recorded change. Use Leave unchanged if no forcing is wanted.
+
+An older beta cannot read version 3 or interpret the new mode key. Before a
+downgrade, resolve pending entries manually, select Leave unchanged for managed
+cameras and verify confirmed-owned restoration completes. Retain the current
+journal as well as the pre-upgrade backups. Stop the child bridge before restoring
+reviewed configuration/journal backups and installing the older exact registry
+version. Package rollback alone does not convert configuration or operational
+state; do not discard unresolved originals to make a downgrade start.
 
 ## Upgrade from 0.10.0
 
@@ -95,8 +167,9 @@ beside the configuration:
 config.json.native-recording-backup-<unique-id>.json
 ```
 
-Both the backup and replacement use mode `0600` and retain the original file's
-owner and group. The replacement is staged in the same directory and promoted
+The backup uses mode `0600`; the replacement preserves the original config's
+access permission bits. Both retain the original file's owner and group.
+The replacement is staged in the same directory and promoted
 with an atomic rename. Unchanged input creates no backup. Repeating a completed
 migration leaves the file unchanged. A failure before promotion preserves the
 original; a completed backup is retained. The error code
@@ -196,5 +269,7 @@ another operation. Enable recording permission separately in Apple Home, and
 restart the Blink child bridge after reviewing and applying configuration.
 
 To restore the original configuration, retain the current file separately and
-restore the selected private backup under the original owner with mode `0600`.
+restore a copy of the selected backup under the original owner and group, with
+the original config's required access permissions (for example, `0640` when the
+Homebridge service reads through its group). Keep the backup itself private at `0600`.
 The migration tool does not automatically restore backups or manage services.

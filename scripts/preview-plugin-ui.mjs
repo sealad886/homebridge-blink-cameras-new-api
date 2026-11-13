@@ -11,8 +11,6 @@ const project = new URL('../', import.meta.url);
 const validatorPath = fileURLToPath(new URL('dist/homebridge-ui/settings-validation.js', project));
 if (!existsSync(validatorPath)) throw new Error('Run npm run build before starting or checking the settings preview.');
 const { SettingsValidator } = require(validatorPath);
-const { migrateEarlyNotificationConfig } = require(fileURLToPath(new URL('dist/early-notification-config.js', project)));
-const { SettingsConstraintError } = require(fileURLToPath(new URL('dist/settings-inventory.js', project)));
 const publicPath = new URL('src/homebridge-ui/public/', project);
 const schema = JSON.parse(await readFile(new URL('config.schema.json', project), 'utf8'));
 const cameras = Array.from({ length: 6 }, (_, index) => ({ key: `${index === 5 ? 'owl' : 'camera'}:${index + 1}`, id: String(index + 1), kind: index === 5 ? 'owl' : 'camera', name: ['Front door', 'Garden', 'Hall', 'Driveway', 'Kitchen', 'Office'][index], networkId: index < 3 ? '10' : '20', enabled: true, status: index === 4 ? 'offline' : 'online', excluded: false, moduleAssociation: { state: index === 5 ? 'noneReported' : 'unique', candidateIds: index === 5 ? [] : [index < 3 ? '101' : '202'], source: 'network_id' } }));
@@ -37,7 +35,6 @@ const adapter = `<style>:root{--bs-primary:#b76a00;--bs-border-color:#a5a5a5}bod
  api.request=async(path,payload)=>{
   if(path==='/status'){if(proof.statusUnavailable)throw new Error('Synthetic status unavailable');return proof.statusOverride||{authenticated:true,email:'Synthetic preview account',tier:'prod',verified:proof.verified}};
   if(path==='/test-connection'){proof.testCalls++;if(proof.result==='throw')throw new Error('Synthetic connection failure');proof.verified=proof.result!=='failure';return {success:proof.verified,message:'Synthetic connection only'}};
-  if(path==='/settings/migrate'){const response=await fetch('/__preview/migrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw data;return data};
   if(path==='/settings/inventory'){if(failDiscovery)throw new Error('Synthetic discovery failure');return ${JSON.stringify(inventory)}};
   if(path==='/settings/validate'){const response=await fetch('/__preview/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});return response.json()};
   throw new Error('Account mutations are disabled in this local preview');
@@ -54,16 +51,10 @@ const rendered = adapter + await readFile(new URL('index.html', publicPath), 'ut
 for (const [, code] of rendered.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) if (code.trim()) new Script(code);
 const server = http.createServer(async (request, response) => {
   try {
-    if (request.method === 'POST' && ['/__preview/validate', '/__preview/migrate'].includes(request.url)) {
+    if (request.method === 'POST' && request.url === '/__preview/validate') {
       let body = ''; for await (const chunk of request) { body += chunk; if (body.length > 128 * 1024) throw new Error('Preview request too large'); }
       const payload = JSON.parse(body);
-      let result;
-      try { result = request.url === '/__preview/migrate' ? migrateEarlyNotificationConfig(payload.config) : validator.validate(payload); }
-      catch (error) {
-        if (!(error instanceof SettingsConstraintError)) throw error;
-        response.statusCode = 400;
-        result = { message: 'Saved Blink settings need repair.', error: { status: 400, category: 'invalid_request', path: error.path, message: error.message } };
-      }
+      const result = validator.validate(payload);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(result)); return;
     }

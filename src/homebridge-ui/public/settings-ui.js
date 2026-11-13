@@ -10,7 +10,7 @@
   const copy = value => structuredClone(value);
   const numberValue = value => value === '' ? undefined : /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
 
-  function mount(homebridge, schema, blocks, initialConfig) {
+  function mount(homebridge, schema, blocks) {
     const properties = schema.schema.properties;
     const sections = schema.layout;
     const nav = document.getElementById('settingsNavigation');
@@ -33,7 +33,7 @@
       stage: data => deadline(homebridge.updatePluginConfig(data)),
       saveEnabled: enabled => enabled ? homebridge.enableSaveButton() : homebridge.disableSaveButton(),
       changed: refreshState,
-    }, initialConfig);
+    });
     function values(key) { return Array.isArray(draft.config[key]) ? draft.config[key] : []; }
     function cameras() { return inventory?.cameras || []; }
     function match(token, camera) { const result = resolveSelector(token, cameras()); return result.length === 1 && result[0].key === camera.key; }

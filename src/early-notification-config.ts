@@ -7,6 +7,30 @@ export function isEarlyNotificationMode(value: unknown): value is EarlyNotificat
   return EARLY_NOTIFICATION_MODES.includes(value as EarlyNotificationMode);
 }
 
+/** Runtime/settings accept only persisted canonical values; conversion belongs to installation. */
+export function assertCanonicalEarlyNotificationConfig(input: unknown): void {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new SettingsConstraintError('', 'Invalid Blink configuration.');
+  const check = (value: Record<string, unknown>, path: string): void => {
+    if (Object.hasOwn(value, 'disableEarlyNotification')) {
+      throw new SettingsConstraintError(`${path}/disableEarlyNotification`,
+        'Run scripts/migrate-native-recording-config.cjs with the explicit config path and --apply before starting.');
+    }
+    if (value.earlyNotificationMode !== undefined && !isEarlyNotificationMode(value.earlyNotificationMode)) {
+      throw new SettingsConstraintError(`${path}/earlyNotificationMode`, 'Early Notification must be on, off, or unmanaged.');
+    }
+  };
+  const config = input as Record<string, unknown>;
+  check(config, '');
+  for (const key of ['deviceSettingOverrides', 'syncModuleSettingOverrides']) {
+    if (config[key] === undefined) continue;
+    if (!Array.isArray(config[key])) throw new SettingsConstraintError(`/${key}`, 'Settings overrides must be a list.');
+    (config[key] as unknown[]).forEach((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new SettingsConstraintError(`/${key}/${index}`, 'Invalid settings override.');
+      check(row as Record<string, unknown>, `/${key}/${index}`);
+    });
+  }
+}
+
 /** Pure, idempotent migration of one Blink platform. Unknown fields and explicit choices are retained. */
 export function migrateEarlyNotificationConfig(input: unknown): { config: Record<string, unknown>; changed: boolean } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new SettingsConstraintError('', 'Invalid Blink configuration.');

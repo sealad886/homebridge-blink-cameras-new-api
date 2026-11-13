@@ -74,6 +74,10 @@ export interface BlinkEarlyNotificationState {
   changed: boolean;
 }
 
+export class BlinkEarlyNotificationNotConfirmedError extends Error {
+  constructor() { super('Blink Early Notification was not confirmed after the command.'); this.name = 'BlinkEarlyNotificationNotConfirmedError'; }
+}
+
 export interface BlinkEarlyNotificationOptions extends RequestOptions {
   /** Persist the original value before the owned mutation can be dispatched. */
   beforeChange?: (current: boolean) => Promise<void>;
@@ -91,7 +95,7 @@ class AuthMetadataChangedError extends Error {
 
 export class BlinkOperationNotStartedError extends Error {
   readonly dispatched = false;
-  constructor(public readonly reason: 'storage-pending' | 'liveview-pending' | 'ownership-unavailable' | 'invalid-native-route') {
+  constructor(public readonly reason: 'storage-pending' | 'liveview-pending' | 'state-command-pending' | 'ownership-unavailable' | 'invalid-native-route') {
     super(`Blink operation was not started: ${reason}.`);
     this.name = 'BlinkOperationNotStartedError';
   }
@@ -254,10 +258,7 @@ export class BlinkApi {
       if (queueTimer) globalThis.clearTimeout(queueTimer);
       this.hasSentStateCommand = true;
       let accountAuthority: (() => void) | undefined;
-      const execution: CommandRequestOptions = { ...options, generation, mutationAcknowledged: false, deadline: Math.min(options.deadline ?? Infinity,
-        ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
-      beforeDispatch: () => {
-        checkRequestBudget(execution);
+      const checkAuthority = () => {
         if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
         if (!accountAuthority) {
           // Bind once to the routing account; an initial login may populate an empty cache.
@@ -265,7 +266,10 @@ export class BlinkApi {
           if (accountId !== null) accountAuthority = this.captureOperationAuthority(accountId, generation);
         }
         accountAuthority?.();
-      } };
+      };
+      const execution: CommandRequestOptions = { ...options, generation, mutationAcknowledged: false, deadline: Math.min(options.deadline ?? Infinity,
+        ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
+      beforeDispatch: () => { checkRequestBudget(execution); checkAuthority(); } };
       const checkCompletion = () => {
         try { execution.beforeDispatch(); }
         catch (error) { throw afterWorkFailure(error, execution.mutationAcknowledged); }
@@ -286,11 +290,26 @@ export class BlinkApi {
             this.expireOperationOwners();
           }
         } catch (error) {
+          if (error instanceof BlinkHttpError && error.method === 'GET') {
+            try { checkAuthority(); }
+            catch (authorityError) {
+              throw afterWorkFailure(authorityError, execution.mutationAcknowledged
+                || (error as BlinkHttpError & { dispatched?: boolean }).dispatched === true);
+            }
+          }
           // Preserve mutation dispatch proof through status and public readback failures.
           if (execution.mutationAcknowledged) throw afterWorkFailure(error, true);
           if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
-          const reconciled = await conflictResolution?.(execution);
-          checkCompletion();
+          let reconciled: ConflictResolution<T> | undefined;
+          try {
+            reconciled = conflictResolution ? await withinRequestBudget(conflictResolution(execution), execution) : undefined;
+            checkCompletion();
+          } catch {
+            // A known refusal survives readback failure only while this continuation still owns its scope.
+            try { checkAuthority(); }
+            catch (authorityError) { throw afterWorkFailure(authorityError, execution.mutationAcknowledged); }
+            throw error;
+          }
           if (reconciled?.resolved) {
             this.log.info(`[${label}] Requested state verified after conflict (attempt ${attempt + 1}).`);
             return reconciled.value as T;
@@ -362,7 +381,9 @@ export class BlinkApi {
     this.expireOperationOwners();
     const live = this.liveViewOwner;
     const matchesLive = Boolean(live?.commandId && live.networkId === admission.networkId && live.commandId === admission.commandId);
-    if (this.stateCommandOwner) throw new BlinkOperationNotStartedError('ownership-unavailable');
+    if (this.stateCommandOwner) throw new BlinkOperationNotStartedError(
+      ['arm', 'disarm', 'motion', 'capture', 'quality'].includes(this.stateCommandOwner.kind)
+        ? 'state-command-pending' : 'ownership-unavailable');
     // Closing an owned view can resolve a restored conflict; never clean up an unrelated command.
     if (admission.kind === 'retire' && matchesLive) return;
     for (const fence of this.nativeStorageFences.values()) {
@@ -1551,12 +1572,17 @@ export class BlinkApi {
       await this.ownedStateCommand('early-notification', accountId, networkId, deviceId,
         beforeDispatch => this.sharedHttp.post<BlinkCommandResponse>(this.deviceConfigPath(type, accountId, networkId, deviceId),
           { early_notification: enabled }, [409], { ...execution, retry: false, beforeDispatch }), execution);
-      const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
-      if (!observed.supported || observed.current !== enabled) {
-        throw new Error('Blink Early Notification was not confirmed after the command.');
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
+        if (!observed.supported) throw new BlinkEarlyNotificationNotConfirmedError();
+        if (observed.current === enabled) return { ...observed, changed: true };
+        if (attempt < 4) await budgetedDelay(500, execution);
       }
-      return { ...observed, changed: true };
-    }, [], undefined, requestOptions);
+      throw new BlinkEarlyNotificationNotConfirmedError();
+    }, [], async execution => {
+      const observed = await this.readDeviceEarlyNotification(type, networkId, deviceId, rawType, execution);
+      return { resolved: observed.supported && observed.current === enabled, value: observed };
+    }, requestOptions);
   }
 
   /** Auto preserves vendor state. Explicit capture quality changes also affect Blink recordings. */

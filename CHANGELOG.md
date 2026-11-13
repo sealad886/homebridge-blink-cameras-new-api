@@ -7,6 +7,52 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.4] - 2026-11-13
+
+### Fixed
+- Require manual review of unresolved camera aliases before automatic migration
+  changes configuration, preserving overrides and recording intent.
+- Keep refused and unconfirmed Early Notification writes out of automatic
+  restoration, including after failed cleanup and restart.
+- Opening settings, connection tests and discovery no longer stage unchanged
+  configuration or show a false unsaved-changes alert. Real edits, reverts and
+  authentication recovery retain their existing save behavior.
+- Confirm Early Notification changes with bounded GET readback under the existing
+  deadline. Resolve conflicts only when a fresh read confirms the desired value;
+  never replay the setting POST. Preserve original-preference ownership and
+  identify failures with sanitized camera context and bounded reason categories.
+- Preserve configuration access permissions and ownership during migration while
+  keeping exact-byte backups private, including group-readable Homebridge configs.
+
+### Changed
+- Persist pending versus confirmed-owned Early Notification changes explicitly.
+  Only a confirmed-owned change can authorize automatic restoration.
+- Migrate legacy settings once during supported POSIX installation: convert and
+  remove legacy keys in the saved config using the guarded, atomic converter.
+  Already-canonical files remain unchanged without another backup.
+- Remove in-memory legacy interpretation and editor migration compatibility paths.
+  Runtime and settings now accept canonical values only. Opening settings is read-only.
+
+### Upgrade notes
+- The private Early Notification journal upgrades once to version 3 at the first
+  account-scoped startup, retaining a private backup. Legacy originals are kept
+  as unverified pending entries and require manual review before that camera's
+  preference is managed again. Other Blink work remains available; see the
+  journal review and recovery procedure in the migration guide.
+- Close settings editors before installation. Install this exact registry version,
+  restart the Blink child bridge, then reopen settings. The installer uses the
+  explicit `UIX_STORAGE_PATH` supplied by the installer; without it, migration
+  requires the documented explicit command. It does not infer storage from package
+  locations, scan other storage locations or contact Blink. Source checkout
+  dependency installs skip migration even when a storage-path environment is inherited.
+- If lifecycle scripts are disabled or storage cannot be identified, run the
+  documented explicit preview/apply migration before starting with legacy keys.
+  Windows keeps config untouched and requires manual canonical JSON conversion;
+  the guarded file converter uses POSIX ownership and file semantics.
+- See [configuration migration](docs/native-recording-config-migration.md) for
+  conversion, backup and rollback instructions. Physical upgrade and Home/iCloud
+  acceptance remain separate from source and installed-package qualification.
+
 ## [1.1.0-beta.3] - 2026-11-13
 
 ### Changed

@@ -48,6 +48,25 @@ function earlyNotificationControl(parent: Element): Element {
   return parent.querySelectorAll('select').find(input => input.id === label.htmlFor)!;
 }
 
+it('opens, discovers cameras and retries validation without notifying Homebridge of configuration changes', async () => {
+  const { editor, homebridge, elements } = mount({ pollInterval: 60, extension: { keep: true } });
+  await editor.draft.flush();
+  editor.setAccountReady(true); await tick(); await editor.draft.flush();
+  await editor.refreshInventory(); await editor.draft.flush();
+  editor.showSection(1); editor.showSection(4);
+  expect(editor.draft.state.dirty).toBe(false);
+  expect(elements.get('draftStatus')!.dataset.state).toBe('clean');
+  expect(homebridge.updatePluginConfig).not.toHaveBeenCalled();
+  expect(homebridge.enableSaveButton).not.toHaveBeenCalled();
+  editor.draft.set('pollInterval', 120); await editor.draft.flush();
+  expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(1);
+  expect(editor.draft.state.dirty).toBe(true);
+  editor.draft.set('pollInterval', 60); await editor.draft.flush();
+  expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(2);
+  expect(editor.draft.state.dirty).toBe(false);
+  expect(elements.get('draftStatus')!.dataset.state).toBe('clean');
+});
+
 it('identifies every blocking field and stages only after canonical validation succeeds', async () => {
   const validator = new SettingsValidator(() => undefined);
   const { editor, homebridge, elements, schema } = mount({ enableMotionPolling: false, hksvCameras: ['camera:1'],
@@ -376,6 +395,7 @@ it('keeps an invalid oversized integer raw across section navigation rather than
 
 it('records an unrelated browser error after a settled editor without claiming an action failed or disabling valid Save', async () => {
   const { editor, homebridge } = mount({}); await editor.draft.flush();
+  editor.draft.set('name', 'Updated Blink'); await editor.draft.flush();
   const diagnostic = new Element();
   const html = source('index.html');
   const start = html.indexOf('  let browserDiagnosticCount =');

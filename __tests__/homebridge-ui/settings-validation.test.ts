@@ -11,11 +11,11 @@ const inventory = projectSettingsInventory({ networks: [{ id: 10, name: 'System'
 describe('full settings draft validation', () => {
   const validator = new SettingsValidator(() => inventory);
 
-  it('requires canonical migration of legacy settings and rejects malformed legacy choices', () => {
+  it('rejects every legacy setting with an actionable one-time migration requirement', () => {
     expect(validator.validate({ revision: 1, config: { name: 'Blink', disableEarlyNotification: false } }))
       .toMatchObject({ valid: false, errors: expect.arrayContaining([expect.objectContaining({ code: 'migration_required' })]) });
     expect(validator.validate({ revision: 1, config: { name: 'Blink', disableEarlyNotification: 'false', earlyNotificationMode: 'on' } }))
-      .toMatchObject({ valid: false, errors: expect.arrayContaining([expect.objectContaining({ code: 'early_notification' })]) });
+      .toMatchObject({ valid: false, errors: expect.arrayContaining([expect.objectContaining({ code: 'migration_required', path: '/disableEarlyNotification', message: expect.stringContaining('--apply') })]) });
   });
 
   it('accepts six qualified recording cameras, absent/empty recording overrides and unknown fields without mutation', () => {

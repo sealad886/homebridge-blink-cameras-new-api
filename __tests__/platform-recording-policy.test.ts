@@ -89,6 +89,17 @@ describe('platform native recording and ordinary command ownership', () => {
     await expect(retryControl(platform).onSetHandler!(true)).resolves.toBeUndefined();
   }
 
+  it.each([
+    { disableEarlyNotification: true },
+    { earlyNotificationMode: 'off' as const, disableEarlyNotification: true },
+    { deviceSettingOverrides: [{ deviceIdentifier: 'camera:40', disableEarlyNotification: false }] },
+    { syncModuleSettingOverrides: [{ syncModuleId: '30', disableEarlyNotification: true }] },
+  ])('requires the one-time saved migration before starting with legacy keys: %j', config => {
+    expect(() => new BlinkCamerasPlatform(createLogger() as unknown as Logger,
+      { platform: 'BlinkCameras', ...config }, api as unknown as API)).toThrow('migrate-native-recording-config.cjs');
+    expect(createRuntime).not.toHaveBeenCalled();
+  });
+
   it('logs push and HSV handoffs by default with bounded safe camera context', async () => {
     const platform = await launch(emptyHomescreen());
     const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Explicit local migration only. This tool never discovers a host, contacts Blink, or restarts a service.
+// Guarded local migration, also used by installation. Never contacts Blink or restarts a service.
 const fs = require('node:fs');
 const path = require('node:path');
 const process = require('node:process');
@@ -141,12 +141,12 @@ function verifyUnchanged(plan) {
   } finally { fs.closeSync(descriptor); }
 }
 
-function writePrivate(filename, bytes, owner) {
+function writeOwnedFile(filename, bytes, owner, mode = 0o600) {
   const descriptor = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL |
     (fs.constants.O_NOFOLLOW ?? 0), 0o600);
   let complete = false;
   try {
-    fs.fchownSync(descriptor, owner.uid, owner.gid); fs.fchmodSync(descriptor, 0o600);
+    fs.fchownSync(descriptor, owner.uid, owner.gid); fs.fchmodSync(descriptor, mode);
     fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); complete = true;
   } finally {
     fs.closeSync(descriptor);
@@ -169,9 +169,9 @@ function apply(plan) {
   const temporary = path.join(directory, `.${path.basename(plan.config)}.native-recording-${identity}.tmp`);
   let staged = false;
   try {
-    writePrivate(backup, plan.bytes, plan.original);
+    writeOwnedFile(backup, plan.bytes, plan.original);
     syncDirectory(directory); // Preserve the backup before the configuration's directory entry changes.
-    writePrivate(temporary, Buffer.from(JSON.stringify(plan.conversion.document, null, 2) + '\n'), plan.original);
+    writeOwnedFile(temporary, Buffer.from(JSON.stringify(plan.conversion.document, null, 2) + '\n'), plan.original, plan.original.mode & 0o777);
     staged = true;
     verifyUnchanged(plan);
     fs.renameSync(temporary, plan.config); staged = false;
