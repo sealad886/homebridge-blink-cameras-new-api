@@ -228,3 +228,21 @@ result. Exact source hashes and logs are recorded in
 `logs/notification-settings-beta4/journal-implementation-final.json`. Canonical
 exact-head preflight, final independent source review, bot review, fresh source CI
 and installed-package/registry release evidence remain required after this milestone.
+
+## Definite admission continuity
+
+Review identified a normal connection race: Live View or storage admission can
+refuse a preference request after its prior owned record was safely demoted.
+The runtime now retains that same prior ownership only for the genuine typed
+no-dispatch admission outcomes, while scope and lease remain current and no
+change callback was entered. This applies to both revalidation and restoration.
+It does not promote new, migrated or uncertain entries, unwrap unknown outcomes,
+ignore authority errors, or retry the setting POST. Failed reinstatement remains
+pending for review. Thus routine admission contention can recover on the existing
+explicit retry without inventing ownership or permanently changing normal
+connection behavior. Final qualification is recorded in the review ledger.
+
+All 475 runtime/SDK boundary tests passed for that admission repair, including
+both held-demotion races, failed reinstatement and negative provenance cases.
+TypeScript, runtime source lint and diff checks also passed. Exact frozen hashes
+and logs are retained in `logs/notification-settings-beta4/journal-admission-final.json`.

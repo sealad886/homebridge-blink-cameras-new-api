@@ -1072,6 +1072,92 @@ describe('native recording runtime composition', () => {
     expect(f.settingWrites).toEqual([false, true]);
   });
 
+  it.each([
+    ['reapply', 'liveview-pending'], ['restore', 'liveview-pending'],
+    ['reapply', 'storage-pending'], ['restore', 'storage-pending'],
+  ] as const)('retains prior ownership after %s admission is blocked by %s during durable demotion', async (pathway, reason) => {
+    const f = await setup({ earlyNotification: true });
+    if (pathway === 'restore') await f.runtime.stop();
+    const gate = deferred<void>(), write = secureJson.writeOwnerOnlyJsonFile;
+    let held = false, busy = false;
+    const writing = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (filename, state) => {
+      if (!held && path.basename(filename) === path.basename(f.originalsPath)
+        && (state as { devices?: { ownership?: string }[] }).devices?.some(row => row.ownership === 'pending')) {
+        held = true; await gate.promise;
+      }
+      await write(filename, state);
+    });
+    const normal = f.client.setDeviceEarlyNotification.getMockImplementation()!;
+    f.client.setDeviceEarlyNotification.mockImplementation(async (...args) => {
+      if (busy) throw new BlinkOperationNotStartedError(reason);
+      return normal(...args);
+    });
+    let current = f.runtime;
+    try {
+      const attempting = pathway === 'restore' ? f.rebind({ devices: [] }) : f.runtime.retryConnection();
+      await until(() => held); busy = true; gate.resolve();
+      const replacement = await attempting;
+      if (pathway === 'restore') current = replacement as NativeRecordingRuntime;
+      await until(() => f.events.includes(`early-notification-${pathway === 'restore' ? 'restore-' : ''}not-started-${reason}-faulted`));
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'owned' }]);
+      expect(f.settingWrites).toEqual([false]);
+      busy = false; const since = f.events.length;
+      await current.retryConnection();
+      await until(() => f.events.slice(since).includes(pathway === 'restore' ? 'early-notification-restored' : 'early-notification-confirmed-off'));
+      expect(f.settingWrites).toEqual(pathway === 'restore' ? [false, true] : [false]);
+      if (pathway === 'reapply') {
+        await current.stop(); await f.rebind({ devices: [] });
+        expect(f.settingWrites).toEqual([false, true]);
+      }
+    } finally { gate.resolve(); writing.mockRestore(); }
+  });
+
+  it.each(['reapply', 'restore'] as const)('keeps %s pending when definite admission ownership reinstatement cannot persist', async pathway => {
+    const f = await setup({ earlyNotification: true });
+    if (pathway === 'restore') await f.runtime.stop();
+    const write = secureJson.writeOwnerOnlyJsonFile;
+    const writing = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (filename, state) => {
+      if (path.basename(filename) === path.basename(f.originalsPath)
+        && (state as { devices?: { ownership?: string }[] }).devices?.some(row => row.ownership === 'owned')) throw new Error('Reinstatement disk failure');
+      await write(filename, state);
+    });
+    f.client.setDeviceEarlyNotification.mockRejectedValueOnce(new BlinkOperationNotStartedError('liveview-pending'));
+    try {
+      if (pathway === 'restore') await f.rebind({ devices: [] }); else await f.runtime.retryConnection();
+      await until(() => f.events.includes('early-notification-originals-revalidation-faulted'));
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('pending');
+      expect(f.settingWrites).toEqual([false]);
+    } finally { writing.mockRestore(); }
+  });
+
+  it.each(['reapply', 'restore'] as const)('does not reinstate %s ownership without exact untouched admission proof', async pathway => {
+    const cases = ['authority', 'route', 'lookalike', 'dispatched', 'wrapped', 'read-failure', 'timeout', 'callback-seen', 'stale-scope'] as const;
+    for (const kind of cases) {
+      const storagePath = path.join(root, `admission-${pathway}-${kind}`);
+      const f = await setup({ earlyNotification: true, storagePath });
+      if (pathway === 'restore') await f.runtime.stop();
+      f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+        if (kind === 'callback-seen') await options?.beforeChange?.(true);
+        if (kind === 'stale-scope') f.client.getCachedIdentity.mockReturnValue({ ...scope, accountId: 99, sharedTier: 'u001' });
+        if (kind === 'authority') throw new BlinkOperationNotStartedError('ownership-unavailable');
+        if (kind === 'route') throw new BlinkOperationNotStartedError('invalid-native-route');
+        if (kind === 'lookalike') throw Object.assign(new Error('Admission lookalike'), { reason: 'liveview-pending', dispatched: false });
+        if (kind === 'dispatched') {
+          const sent = new BlinkOperationNotStartedError('liveview-pending');
+          Object.defineProperty(sent, 'dispatched', { value: true }); throw sent;
+        }
+        if (kind === 'timeout') throw new OperationTimeoutError();
+        if (kind === 'wrapped') throw new Error('Outcome unknown', { cause: new BlinkOperationNotStartedError('liveview-pending') });
+        if (kind === 'read-failure') throw new Error('Read failed');
+        throw new BlinkOperationNotStartedError('liveview-pending');
+      });
+      if (pathway === 'restore') await f.rebind({ devices: [] }); else await f.runtime.retryConnection();
+      await until(() => f.events.some(event => event.endsWith('-faulted')));
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('pending');
+      expect(f.settingWrites).toEqual([false]);
+    }
+  });
+
   it('leaves a refused reapply unowned after prior ownership ended and a fresh process starts', async () => {
     const f = await setup({ earlyNotification: true }); f.earlyProvider.current = true;
     const rename = fs.rename.bind(fs); let writes = 0;

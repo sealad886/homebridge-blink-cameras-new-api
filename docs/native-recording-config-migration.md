@@ -64,6 +64,10 @@ an owned change merely because someone later supplies the same value manually.
 An unchanged read may reconfirm continuity only for a previously confirmed-owned
 entry when no intervening change was observed; it cannot establish ownership of a
 new, migrated or otherwise unverified pending entry.
+A definite Live View or storage admission refusal that started no work may retain
+that same prior ownership, provided no change callback ran and the account/writer scope is
+still current. Routine Live View or storage contention therefore does not turn
+a previously owned entry into an unverified change.
 
 At the first safe account-scoped startup, journal versions 1 and 2 are migrated
 once to version 3, with an exact-byte private backup beside the journal named
