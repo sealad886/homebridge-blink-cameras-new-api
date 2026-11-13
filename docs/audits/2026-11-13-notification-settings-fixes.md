@@ -60,7 +60,7 @@ check passed. Canonical-boundary/platform checks: 40 tests passed. Canonical-onl
 UI/server cleanup: 219 tests across eight suites passed, with type/lint/syntax
 checks. Installer and existing file-migration suites: 33 tests passed; package
 dry-run includes the hook, converter and compiled helper. Integrated source
-verification and independent review are pending. Physical
+verification and independent review are recorded in the final closeout below. Physical
 HomeKit recording/iCloud retention and installation of these fixes are untested.
 
 ## Migration architecture correction
@@ -92,7 +92,7 @@ passed 86/86. Evidence is retained in `logs/notification-settings-fixes/checks.j
 package and do not qualify a new installed native artifact or production upgrade.
 The package version is still the published baseline beta.3; it must not be
 republished for these different bytes. New review/publication requires a new
-version and the normal release gates. Independent review is pending.
+version and the normal release gates. See final independent review below.
 
 ## Independent availability finding
 
@@ -101,5 +101,33 @@ forced the replacement config to `0600`, which could revoke Homebridge access to
 a root-owned/group-readable `0640` config when invoked automatically. The backup
 remains private at `0600`; replacement config now preserves the original access
 permission bits and UID/GID. Regression coverage includes private and group-readable
-configs, exact backup bytes and repeat no-op behavior. Independent refresh and
-integrated verification of this correction are pending.
+configs, exact backup bytes and repeat no-op behavior. Final independent refresh and integrated verification are recorded below.
+
+## Final verification and local handoff
+
+Final implementation source is `d4638459cda037904e6b8229f944f65ce95027d8`,
+compared with published beta.3 base `62d5255ffa715cb87a9c6112a49f1265d6ea1c97`.
+Canonical preflight passed lint, build, 2,236 tests with 18 existing skips,
+78 passing suites with one skipped suite, and package preview/cleanup. Separate
+release-contract tests passed 86/86. Final results are in
+`logs/notification-settings-fixes/checks-final.json`, `preflight-final.log` and
+`release-contracts-final.log`.
+
+Fresh independent final review is CLEAN, with no actionable findings. Its 69
+focused tests across five suites passed without skips. Actual installation-hook
+probes confirmed replacement modes 0600/0640, unchanged UID/GID, exact original
+backup bytes, private 0600 backups, and repeat no-op behavior without new backups.
+The original NEEDS WORK report is preserved beside `independent-review-final.md`.
+
+Implementation commits are local on `codex/notification-settings-fixes`:
+`978a757` (settings staging), `96779a5` (bounded preference verification),
+`e598c54` (persisted migration and canonical-only callers), and `d463845`
+(service-access preservation). No version bump, push, PR, release, Pi migration,
+installation or restart was performed for these new fixes. Prior beta.3 publication
+is separately complete; its package bytes must remain immutable. A subsequent
+beta needs its own reviewed source and all normal release qualifications.
+
+Historical fault cause remains unproved; live readback established all four
+cameras off at the observed time. Source/host qualification is not installed Pi,
+physical Home delivery or iCloud-retention acceptance. Automatic converter scope
+remains POSIX; Windows legacy values require manual canonical JSON conversion.
