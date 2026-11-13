@@ -77,7 +77,9 @@ the resulting squash commit. Wrap body prose to 100 characters or fewer.
 ## Gates and publication
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
-build, and package contents. Full native package verification requires all five
+build, and package contents. Jest runs serially, matching CI and the contributor
+validation workflow while preserving every assertion and deadline.
+Full native package verification requires all five
 verified workers and corresponding sources staged by the canonical package job;
 an ordinary source checkout cannot substitute JavaScript-only smoke for it. Use a dedicated clean clone when the working checkout
 contains unrelated user files; never stash or delete those files to satisfy it.

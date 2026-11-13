@@ -102,10 +102,10 @@ describe('release script', () => {
       'npm run lint',
       'npm run clean',
       'npm run build',
-      'npm test',
+      'npm test -- --runInBand',
       'npm pack',
     ]));
-    expect(result.commands.indexOf('npm run build')).toBeLessThan(result.commands.indexOf('npm test'));
+    expect(result.commands.indexOf('npm run build')).toBeLessThan(result.commands.indexOf('npm test -- --runInBand'));
     expect(result.commands.some(command => /^(?:npm publish|git push)\b/.test(command))).toBe(false);
     expect(result.stdout).toContain('gh workflow run publish.yml --ref main -f version=1.2.3-alpha.0');
   });
