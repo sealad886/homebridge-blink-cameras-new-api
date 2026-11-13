@@ -246,3 +246,31 @@ All 475 runtime/SDK boundary tests passed for that admission repair, including
 both held-demotion races, failed reinstatement and negative provenance cases.
 TypeScript, runtime source lint and diff checks also passed. Exact frozen hashes
 and logs are retained in `logs/notification-settings-beta4/journal-admission-final.json`.
+
+## Request-local known-outcome completion
+
+A final SDK trace distinguishes connection failure from uncertain mutation. The
+HTTP layer can supply typed, request-local `dispatched:false` evidence after a
+connection-establishment failure. Before a callback, that proof can retain a
+previously owned setting. After a reapply callback observes the original value,
+a definitely unsent or refused POST owns no new change and its intent can be
+discarded. A restoration callback instead observes the expected forced value; a
+definitely unsent or refused POST leaves that prior ownership intact. Runtime
+handling now uses these observations and exact typed proof rather than treating
+all callbacks or all network errors alike. Generic, sent/unknown, wrapped and
+authority outcomes remain pending, and no setting POST is replayed.
+
+The separate hypothesis of a Live View/storage busy refusal after the callback
+was ruled out by the SDK's actual admission checks: those checks precede send
+and metadata reads. Conservative synthetic negative tests do not substitute for
+that control-flow contract. The final source review and qualification after this
+completion remain recorded separately from the earlier admission-only result.
+
+That shared known-outcome completion passed 485/485 tests across the complete
+runtime, client and client-native suites, plus TypeScript, source lint and diff
+checks. Frozen hashes and logs are in
+`logs/notification-settings-beta4/outcome-final.json`. The earlier synthetic
+POST-refusal-before-callback case was corrected to a metadata GET failure for its
+unknown-read assertion; realistic callback-value matrices separately cover known
+unsent/refused apply, reapply and restoration outcomes. Historical failed logs and
+reports are preserved. Final exact-source qualification follows the commit.

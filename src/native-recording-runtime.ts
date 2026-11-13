@@ -60,6 +60,11 @@ const preferenceFailure = (error: unknown): string => {
   return 'unexpected';
 };
 
+const isUnsentPreferenceHttp = (error: unknown): error is BlinkHttpError => error instanceof BlinkHttpError
+  && error.failure === 'network' && (error as BlinkHttpError & { dispatched?: boolean }).dispatched === false;
+const isUnacceptedPreferencePost = (error: unknown): boolean => isBlinkPostRefusal(error)
+  || (isUnsentPreferenceHttp(error) && error.method === 'POST');
+
 interface DownloadedAsset {
   logFlow?: string;
   reference: string; bytes: number; sha256: string; identity: string; capturedAt: string;
@@ -383,11 +388,15 @@ export class NativeRecordingRuntime {
     await this.flushEarlyNotificationDiscards();
   }
 
-  private async retainUnstartedPreferenceOwnership(original: EarlyNotificationOriginal | undefined, error: unknown,
-    beforeChangeSeen: boolean, deadline: number): Promise<void> {
-    if (original?.ownership !== 'owned' || beforeChangeSeen || !this.preferenceWorkAllowed()
-      || !(error instanceof BlinkOperationNotStartedError) || error.dispatched !== false
-      || !['liveview-pending', 'storage-pending'].includes(error.reason)) return;
+  private async retainUnchangedPreferenceOwnership(original: EarlyNotificationOriginal | undefined, error: unknown,
+    beforeChangeCurrent: boolean | undefined, deadline: number): Promise<void> {
+    if (original?.ownership !== 'owned' || !this.preferenceWorkAllowed()
+      || (beforeChangeCurrent !== undefined && beforeChangeCurrent !== !original.original)) return;
+    const untouched = beforeChangeCurrent === undefined;
+    const busy = error instanceof BlinkOperationNotStartedError && error.dispatched === false
+      && ['liveview-pending', 'storage-pending'].includes(error.reason);
+    if (!isUnacceptedPreferencePost(error)
+      && !(untouched && (busy || (isUnsentPreferenceHttp(error) && error.method === 'GET')))) return;
     checkRequestBudget({ deadline });
     await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals!.devices.map(row =>
       row.ownership === 'pending' && settingKey(row) === settingKey(original) && row.original === original.original
@@ -420,19 +429,19 @@ export class NativeRecordingRuntime {
       if (selected && (selected.device.settings.earlyNotificationMode === 'on') !== original.original) continue;
       if (!this.preferenceWorkAllowed()) return;
       const deadline = Date.now() + REMOTE_OPERATION_LEASE_MS;
-      let beforeChangeSeen = false;
+      let beforeChangeCurrent: boolean | undefined;
       try {
         await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals.devices.map(row =>
           settingKey(row) === settingKey(original) ? { ...row, ownership: 'pending' } : row));
         const result = await this.options.client.setDeviceEarlyNotification(original.kind, original.networkId, original.deviceId,
           original.rawType, original.original, { expectedCurrent: !original.original, deadline,
-            beforeChange: async () => { beforeChangeSeen = true; } });
+            beforeChange: async current => { beforeChangeCurrent = current; } });
         if (result.supported && result.current === original.original) {
           await this.discardEarlyNotificationOriginal(settingKey(original));
           this.report('early-notification-restored', { camera });
         } else this.report('early-notification-pending-recovery-required', { camera });
       } catch (error) {
-        await this.retainUnstartedPreferenceOwnership(original, error, beforeChangeSeen, deadline)
+        await this.retainUnchangedPreferenceOwnership(original, error, beforeChangeCurrent, deadline)
           .catch(() => this.report('early-notification-originals-revalidation-faulted', { camera }));
         this.report(`early-notification-restore-${preferenceFailure(error)}-faulted`, { camera });
       }
@@ -445,7 +454,8 @@ export class NativeRecordingRuntime {
       const binding = bindingKey(device.binding), previouslyOffSince = this.earlyNotificationOffSince.get(binding);
       this.earlyNotificationOffSince.delete(binding);
       const deadline = Date.now() + REMOTE_OPERATION_LEASE_MS;
-      let savedOriginal = false, beforeChangeSeen = false;
+      let savedOriginal = false;
+      let beforeChangeCurrent: boolean | undefined;
       try {
         if (prior) await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals.devices.map(row =>
           settingKey(row) === key ? { ...row, ownership: 'pending' } : row));
@@ -453,7 +463,7 @@ export class NativeRecordingRuntime {
         const result = await this.options.client.setDeviceEarlyNotification(identity.kind, identity.networkId, identity.deviceId, identity.rawType, enabled, {
           deadline,
           beforeChange: async current => {
-            beforeChangeSeen = true;
+            beforeChangeCurrent = current;
             if (!this.preferenceWorkAllowed() || current === enabled) throw new Error('Early Notification ownership changed');
             if (!prior) await this.saveEarlyNotificationOriginals([...this.earlyNotificationOriginals!.devices,
               { ...identity, original: current, ownership: 'pending' }]);
@@ -467,7 +477,7 @@ export class NativeRecordingRuntime {
           await this.discardEarlyNotificationOriginal(key);
         }
         if (result.supported && result.compatible && result.current === enabled && this.preferenceWorkAllowed()) {
-          if (result.changed === true || (prior?.ownership === 'owned' && result.changed === false && !beforeChangeSeen)) {
+          if (result.changed === true || (prior?.ownership === 'owned' && result.changed === false && beforeChangeCurrent === undefined)) {
             await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals!.devices.map(row =>
               settingKey(row) === key ? { ...row, ownership: 'owned' } : row));
           }
@@ -476,9 +486,9 @@ export class NativeRecordingRuntime {
           this.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off', { camera: device.binding.nativeName });
         } else this.report('early-notification-unsupported', { camera: device.binding.nativeName });
       } catch (error) {
-        await this.retainUnstartedPreferenceOwnership(prior, error, beforeChangeSeen, deadline)
+        await this.retainUnchangedPreferenceOwnership(prior, error, beforeChangeCurrent, deadline)
           .catch(() => this.report('early-notification-originals-revalidation-faulted', { camera: device.binding.nativeName }));
-        if (savedOriginal && isBlinkPostRefusal(error)) {
+        if (savedOriginal && isUnacceptedPreferencePost(error)) {
           await this.discardEarlyNotificationOriginal(key)
             .catch(() => this.report('early-notification-originals-cleanup-faulted', { camera: device.binding.nativeName }));
         }

@@ -1137,7 +1137,7 @@ describe('native recording runtime composition', () => {
       const f = await setup({ earlyNotification: true, storagePath });
       if (pathway === 'restore') await f.runtime.stop();
       f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
-        if (kind === 'callback-seen') await options?.beforeChange?.(true);
+        if (kind === 'callback-seen') await options?.beforeChange?.(pathway === 'restore' ? false : true);
         if (kind === 'stale-scope') f.client.getCachedIdentity.mockReturnValue({ ...scope, accountId: 99, sharedTier: 'u001' });
         if (kind === 'authority') throw new BlinkOperationNotStartedError('ownership-unavailable');
         if (kind === 'route') throw new BlinkOperationNotStartedError('invalid-native-route');
@@ -1150,6 +1150,73 @@ describe('native recording runtime composition', () => {
         if (kind === 'wrapped') throw new Error('Outcome unknown', { cause: new BlinkOperationNotStartedError('liveview-pending') });
         if (kind === 'read-failure') throw new Error('Read failed');
         throw new BlinkOperationNotStartedError('liveview-pending');
+      });
+      if (pathway === 'restore') await f.rebind({ devices: [] }); else await f.runtime.retryConnection();
+      await until(() => f.events.some(event => event.endsWith('-faulted')));
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('pending');
+      expect(f.settingWrites).toEqual([false]);
+    }
+  });
+
+  it.each([
+    ['new', 'unsent'], ['reapply', 'unsent'], ['restore', 'unsent'],
+    ['new', 'refused'], ['reapply', 'refused'], ['restore', 'refused'],
+  ] as const)('recovers %s preference work after a definite %s POST using the observed value', async (pathway, outcome) => {
+    const f = await setup({ earlyNotification: true, start: pathway !== 'new' });
+    if (pathway === 'restore') await f.runtime.stop();
+    if (pathway === 'reapply') f.earlyProvider.current = true;
+    const error = outcome === 'refused'
+      ? new BlinkHttpError('Refused', 409, '', 'https://example.com/config', 'POST')
+      : new BlinkHttpError('Connection failed', 0, '', 'https://example.com/config', 'POST', undefined, undefined, 'network');
+    if (outcome === 'unsent') Object.defineProperty(error, 'dispatched', { value: false });
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      expect(options?.expectedCurrent).toBe(pathway === 'restore' ? false : undefined);
+      await options?.beforeChange?.(f.earlyProvider.current);
+      throw error;
+    });
+    let current = f.runtime;
+    if (pathway === 'restore') current = await f.rebind({ devices: [] });
+    else if (pathway === 'new') await current.start(); else await current.retryConnection();
+    await until(() => f.events.some(event => event.endsWith('-faulted')));
+    const rows = JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices;
+    if (pathway === 'restore') expect(rows).toMatchObject([{ original: true, ownership: 'owned' }]);
+    else expect(rows).toEqual([]);
+    expect(f.settingWrites).toEqual(pathway === 'new' ? [] : [false]);
+    const since = f.events.length; await current.retryConnection();
+    await until(() => f.events.slice(since).includes(pathway === 'restore' ? 'early-notification-restored' : 'early-notification-confirmed-off'));
+    expect(f.settingWrites).toEqual(pathway === 'restore' ? [false, true] : pathway === 'new' ? [false] : [false, false]);
+  });
+
+  it.each(['reapply', 'restore'] as const)('retains %s ownership after a proven unsent initial metadata GET', async pathway => {
+    const f = await setup({ earlyNotification: true });
+    if (pathway === 'restore') await f.runtime.stop();
+    const error = new BlinkHttpError('Connection failed', 0, '', 'https://example.com/config', 'GET', undefined, undefined, 'network');
+    Object.defineProperty(error, 'dispatched', { value: false });
+    f.client.setDeviceEarlyNotification.mockRejectedValueOnce(error);
+    let current = f.runtime;
+    if (pathway === 'restore') current = await f.rebind({ devices: [] }); else await current.retryConnection();
+    await until(() => f.events.some(event => event.endsWith('-faulted')));
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices[0].ownership).toBe('owned');
+    const since = f.events.length; await current.retryConnection();
+    await until(() => f.events.slice(since).includes(pathway === 'restore' ? 'early-notification-restored' : 'early-notification-confirmed-off'));
+    expect(f.settingWrites).toEqual(pathway === 'restore' ? [false, true] : [false]);
+  });
+
+  it.each(['reapply', 'restore'] as const)('keeps %s pending after unproven HTTP outcomes despite a realistic callback value', async pathway => {
+    for (const kind of ['unknown-post', 'sent-post', 'unsent-get', 'get-409', 'post-408', 'post-500', 'lookalike', 'wrapped', 'stale'] as const) {
+      const f = await setup({ earlyNotification: true, storagePath: path.join(root, `http-${pathway}-${kind}`) });
+      if (pathway === 'restore') await f.runtime.stop(); else f.earlyProvider.current = true;
+      f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+        await options?.beforeChange?.(f.earlyProvider.current);
+        const method = kind === 'unsent-get' || kind === 'get-409' ? 'GET' : 'POST';
+        const status = kind === 'get-409' ? 409 : kind === 'post-408' ? 408 : kind === 'post-500' ? 500 : 0;
+        const error = new BlinkHttpError('Request failed', status, '', 'https://example.com/config', method, undefined, undefined, status ? 'http' : 'network');
+        if (kind === 'unsent-get' || kind === 'stale') Object.defineProperty(error, 'dispatched', { value: false });
+        if (kind === 'sent-post') Object.defineProperty(error, 'dispatched', { value: true });
+        if (kind === 'lookalike') throw Object.assign(new Error('Lookalike'), { method: 'POST', failure: 'network', dispatched: false });
+        if (kind === 'wrapped') throw new Error('Outcome unknown', { cause: error });
+        if (kind === 'stale') f.client.getCachedIdentity.mockReturnValue({ ...scope, accountId: 99, sharedTier: 'u001' });
+        throw error;
       });
       if (pathway === 'restore') await f.rebind({ devices: [] }); else await f.runtime.retryConnection();
       await until(() => f.events.some(event => event.endsWith('-faulted')));
@@ -1234,8 +1301,8 @@ describe('native recording runtime composition', () => {
     const f = await setup({ earlyNotification: true });
     const original = await fs.readFile(f.originalsPath, 'utf8');
     f.earlyProvider.current = true;
-    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
-      throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async () => {
+      throw new BlinkHttpError('Read refused', 409, '', 'https://example.com/config', 'GET');
     });
     await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-http-409-faulted'));
     expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toMatchObject([{ original: true, ownership: 'pending' }]);

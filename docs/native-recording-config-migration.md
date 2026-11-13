@@ -68,6 +68,12 @@ A definite Live View or storage admission refusal that started no work may retai
 that same prior ownership, provided no change callback ran and the account/writer scope is
 still current. Routine Live View or storage contention therefore does not turn
 a previously owned entry into an unverified change.
+Typed request-local proof that no request was sent is treated similarly. If a
+reapply read observed the original value, an unsent or refused write cannot own a
+new change, so its pending intent is discarded. If restoration observed the
+still-owned forced value, an unsent or refused write can retain that prior
+ownership. Generic timeouts, uncertain network outcomes and authority changes do
+not supply this proof and remain pending.
 
 At the first safe account-scoped startup, journal versions 1 and 2 are migrated
 once to version 3, with an exact-byte private backup beside the journal named
