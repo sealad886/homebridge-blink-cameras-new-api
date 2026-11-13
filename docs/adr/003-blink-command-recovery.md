@@ -79,10 +79,14 @@ writer is saved, rather than after an older physical write completes.
 
 Auth token capture builds and persists a candidate before publishing live tokens
 and identity together. Failed saves never expose the candidate or roll back later
-SDK metadata updates. On successful refresh, token-supplied identity fields win;
-later metadata updates fill only token-omitted fields. A hosted new-account
-boundary clears old-session metadata. Metadata setters retain their existing
-immediate behavior and explicit queued persistence contract.
+SDK metadata updates. Of metadata updates received while a candidate save is
+pending, token-supplied fields win when that candidate is published; those
+concurrent updates fill only token-omitted fields. A hosted new-account boundary
+clears old-session metadata. After publication, fresh authenticated REST discovery
+remains an identity source under the committed-session checks below. This does
+not establish permanent precedence for optional legacy OAuth metadata over REST
+discovery. Metadata setters retain their existing immediate behavior and explicit
+queued persistence contract.
 
 Auth is the sole owner of account and client identity; SDK requests do not keep
 separate ID caches or write cached IDs back into auth. After authentication,
