@@ -909,6 +909,65 @@ describe('native recording runtime composition', () => {
     expect(f.events).not.toContain('early-notification-unexpected-faulted');
   });
 
+  it.each([
+    [new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST'), true],
+    [new BlinkHttpError('Forbidden', 403, '', 'https://example.com/config', 'POST'), true],
+    [new BlinkHttpError('Timeout', 408, '', 'https://example.com/config', 'POST'), false],
+    [new BlinkHttpError('Server error', 503, '', 'https://example.com/config', 'POST'), false],
+    [new BlinkHttpError('Lost reply', 0, '', 'https://example.com/config', 'POST', undefined, undefined, 'network'), false],
+    [new BlinkHttpError('Failed read', 409, '', 'https://example.com/config', 'GET'), false],
+  ] as const)('drops only a newly captured original after definite refusal: %s', async (failure, refused) => {
+    const f = await setup({ earlyNotification: true, start: false });
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      await options?.beforeChange?.(true);
+      throw failure;
+    });
+    await f.runtime.start();
+    await until(() => f.events.some(event => event.endsWith('-faulted')));
+    expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(refused ? 0 : 1);
+    expect(f.settingWrites).toEqual([]);
+    if (refused) {
+      f.earlyProvider.current = false;
+      await f.runtime.stop(); await f.rebind({ devices: [] });
+      expect(f.earlyProvider.current).toBe(false);
+      expect(f.client.setDeviceEarlyNotification).toHaveBeenCalledTimes(1);
+      expect(f.settingWrites).toEqual([]);
+    }
+  });
+
+  it('reports refusal journal cleanup failure while keeping delayed recording available', async () => {
+    const f = await setup({ earlyNotification: true, start: false });
+    const rename = fs.rename.bind(fs); let writes = 0;
+    const failure = jest.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (path.basename(String(args[1])) === path.basename(f.originalsPath) && ++writes === 2) throw new Error('Cleanup disk failure');
+      return rename(...args);
+    });
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      await options?.beforeChange?.(true);
+      throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+    });
+    try {
+      await f.runtime.start(); await until(() => f.events.includes('early-notification-http-409-faulted'));
+      expect(f.events).toContain('early-notification-originals-cleanup-faulted');
+      expect(JSON.parse(await fs.readFile(f.originalsPath, 'utf8')).devices).toHaveLength(1);
+      await f.push();
+      expect((await f.state()).core?.queue[0].eligibleAt).toBe(Date.now() + 60_000);
+    } finally { failure.mockRestore(); }
+  });
+
+  it('preserves a pre-existing original after a later definite refusal', async () => {
+    const f = await setup({ earlyNotification: true });
+    const original = await fs.readFile(f.originalsPath, 'utf8');
+    f.earlyProvider.current = true;
+    f.client.setDeviceEarlyNotification.mockImplementationOnce(async (_kind, _network, _id, _raw, _enabled, options) => {
+      await options?.beforeChange?.(true);
+      throw new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+    });
+    await f.runtime.retryConnection(); await until(() => f.events.includes('early-notification-http-409-faulted'));
+    expect(await fs.readFile(f.originalsPath, 'utf8')).toBe(original);
+    expect(f.settingWrites).toEqual([false]);
+  });
+
   it.each([false, true])('restores only a still-owned off value when management ends, preserving manual changes: external=%p', async externallyEnabled => {
     const f = await setup({ earlyNotification: true });
     await f.runtime.stop();

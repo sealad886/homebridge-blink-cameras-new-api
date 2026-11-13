@@ -4,7 +4,7 @@ import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 import { BlinkEarlyNotificationNotConfirmedError, BlinkOperationNotStartedError, type BlinkApi, type BlinkRemoteOperationOwnership } from './blink-api/client';
-import { BlinkHttpError } from './blink-api/http';
+import { BlinkHttpError, isBlinkPostRefusal } from './blink-api/http';
 import { supportsEarlyNotificationControl } from './blink-api/domain-validation';
 import { FcmEventSource, type FcmEventSourceOptions } from './blink-api/fcm/source';
 import type { FcmNotification, FcmReceiverState, FcmScope, FirebaseConfig } from './blink-api/fcm/types';
@@ -395,7 +395,13 @@ export class NativeRecordingRuntime {
           if (!enabled) this.earlyNotificationOffSince.set(binding, result.changed ? Date.now() : previouslyOffSince ?? Date.now());
           this.report(enabled ? 'early-notification-confirmed-on' : 'early-notification-confirmed-off', { camera: device.binding.nativeName });
         } else this.report('early-notification-unsupported', { camera: device.binding.nativeName });
-      } catch (error) { this.report(`early-notification-${preferenceFailure(error)}-faulted`, { camera: device.binding.nativeName }); }
+      } catch (error) {
+        if (savedOriginal && isBlinkPostRefusal(error)) {
+          await this.saveEarlyNotificationOriginals(this.earlyNotificationOriginals!.devices.filter(row => settingKey(row) !== key))
+            .catch(() => this.report('early-notification-originals-cleanup-faulted', { camera: device.binding.nativeName }));
+        }
+        this.report(`early-notification-${preferenceFailure(error)}-faulted`, { camera: device.binding.nativeName });
+      }
     }
   }
 

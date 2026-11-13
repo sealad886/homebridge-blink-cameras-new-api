@@ -159,3 +159,15 @@ reapplying config were rejected using the pinned host's actual lifecycle.
 Final exact-source review, CI, native installed-package qualification, registry
 identity and release readback remain required. No Pi config write, installation
 or restart is part of this source task.
+
+## Definite-refusal ownership correction
+
+Completed beta.4 CodeRabbit review identified a distinct ownership case: the
+plugin can save an original before issuing a preference POST, receive a definite
+refusal, and retain that new entry although it did not change the setting. A later
+manual Blink change could then be mistaken for the plugin's change during
+restoration. The runtime now uses the existing typed POST-refusal classification
+to discard only the original newly captured by that refused attempt. Pre-existing
+originals and uncertain command outcomes retain their durable ownership evidence.
+No setting POST is replayed. This source finding does not establish the cause of
+the historical generic Pi fault.

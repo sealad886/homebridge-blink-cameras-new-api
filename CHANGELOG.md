@@ -10,6 +10,8 @@ owns subsequent acceptance and finding dispositions.
 ## [1.1.0-beta.4] - 2026-11-13
 
 ### Fixed
+- Discard newly captured Early Notification originals after a definite setting
+  refusal, preventing later restoration from overwriting a manual Blink change.
 - Opening settings, connection tests and discovery no longer stage unchanged
   configuration or show a false unsaved-changes alert. Real edits, reverts and
   authentication recovery retain their existing save behavior.
