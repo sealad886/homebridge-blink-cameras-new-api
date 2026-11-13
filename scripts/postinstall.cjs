@@ -5,16 +5,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function run(environment = process.env, packageRoot = path.resolve(__dirname, '..')) {
+  const scope = path.dirname(packageRoot), modules = path.dirname(scope);
+  // Only an installed package may modify Homebridge configuration.
+  if (path.basename(packageRoot) !== 'homebridge-blink-cameras-new-api'
+    || path.basename(scope) !== '@sealad886' || path.basename(modules) !== 'node_modules') {
+    return { action: 'Skipped', code: 'storage-path-unavailable' };
+  }
   let config;
   if (environment.UIX_STORAGE_PATH) {
     if (!path.isAbsolute(environment.UIX_STORAGE_PATH)) return { action: 'Failed', code: 'absolute-storage-path-required' };
     config = path.join(environment.UIX_STORAGE_PATH, 'config.json');
   } else {
-    const scope = path.dirname(packageRoot), modules = path.dirname(scope);
-    if (path.basename(packageRoot) !== 'homebridge-blink-cameras-new-api'
-      || path.basename(scope) !== '@sealad886' || path.basename(modules) !== 'node_modules') {
-      return { action: 'Skipped', code: 'storage-path-unavailable' };
-    }
     config = path.join(path.dirname(modules), 'config.json');
   }
   let migration;
@@ -28,7 +29,6 @@ function run(environment = process.env, packageRoot = path.resolve(__dirname, '.
       return { action: 'Skipped', code: 'windows-manual-migration-required',
         message: 'Automatic configuration migration is unavailable on Windows. Convert legacy choices to canonical JSON before starting Homebridge.' };
     }
-    // Source dependency installs have no host config or compiled migration helper.
     migration = require('./migrate-native-recording-config.cjs');
     return { action: migration.apply(migration.inspect(config)) ? 'Applied' : 'Unchanged' };
   } catch (error) {

@@ -11,11 +11,13 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
 ## Upgrade from 1.1.0-beta.1
 
-On POSIX Homebridge npm installations, the package's postinstall step runs
-this one-time migration against the installer-identified `config.json`. It uses
+On POSIX Homebridge npm installations, the installed package's postinstall step
+runs this one-time migration against the installer-identified `config.json`. It uses
 `UIX_STORAGE_PATH`, or the config beside the installed scoped `node_modules`
 package prefix. It does not search other hosts, home directories or storage
-roots. The existing guarded converter writes an owner-only backup of the exact
+roots. Source checkout dependency installs never access Homebridge config, even
+when they inherit `UIX_STORAGE_PATH`; installation is verified before using that
+path. The existing guarded converter writes an owner-only backup of the exact
 original bytes before atomic replacement, preserving file ownership and unrelated
 configuration. The replacement retains the config permission bits so service
 group-read access is preserved; the backup stays private at `0600`. Already-converted files are left untouched without another backup.

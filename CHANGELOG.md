@@ -31,7 +31,8 @@ owns subsequent acceptance and finding dispositions.
 - Close settings editors before installation. Install this exact registry version,
   restart the Blink child bridge, then reopen settings. The installer uses the
   Homebridge storage path or config beside the installed scoped package prefix;
-  it does not scan other storage locations or contact Blink.
+  it does not scan other storage locations or contact Blink. Source checkout
+  dependency installs skip migration even when a storage-path environment is inherited.
 - If lifecycle scripts are disabled or storage cannot be identified, run the
   documented explicit preview/apply migration before starting with legacy keys.
   Windows keeps config untouched and requires manual canonical JSON conversion;
