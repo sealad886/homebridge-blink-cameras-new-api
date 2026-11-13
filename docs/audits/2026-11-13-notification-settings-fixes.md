@@ -179,3 +179,18 @@ Its preceding acknowledged-mutation guard still preserves accepted-command
 uncertainty, and readback failures do not trigger another POST. This applies to
 the existing network, motion, video-quality and Early Notification callbacks; it
 adds no compatibility layer or new public error type.
+
+Final shared-queue verification exposed an additional authority distinction:
+a known refusal must not hide account changes or writer replacement. Existing
+account/writer checks are now reused independently of the time budget when
+readback fails. A current continuation retains definite-refusal evidence; a
+stale continuation preserves the existing ownership-unavailable failure and
+cannot clean another scope's journal. The unchanged native authority regressions,
+failed-readback and accepted-command cases, simultaneous deadline/authority case,
+and preference cleanup tests pass together: 455 tests across three suites.
+
+Repeated local preflight timeouts affected unchanged child-process tests under
+parallel Jest workers. Preflight now uses the same serial Jest execution already
+required by CI and contributor validation. Every assertion and deadline remains
+unchanged; the three release-script contract tests pass. Failed full-run evidence
+is retained separately from final qualification.

@@ -532,6 +532,24 @@ describe('BlinkApi', () => {
       } finally { jest.useRealTimers(); }
     });
 
+    it('preserves authority invalidation when conflict readback also exceeds its deadline', async () => {
+      jest.useFakeTimers();
+      try {
+        const { client, http, auth } = createEarlyApi();
+        const refusal = new BlinkHttpError('Busy', 409, '', 'https://example.com/config', 'POST');
+        http.get.mockResolvedValueOnce(metadata()).mockImplementationOnce(async () => {
+          jest.setSystemTime(Date.now() + 1000); auth.getAccountId.mockReturnValue(11); return metadata(false);
+        });
+        http.post.mockRejectedValueOnce(refusal);
+        const failure = await client.setDeviceEarlyNotification('owl', 5, 7, 'owl', false, { deadline: Date.now() + 500 })
+          .catch(error => error);
+        expect(failure).toMatchObject({ cause: { reason: 'ownership-unavailable' } });
+        expect(failure.dispatched).toBeUndefined(); expect(isBlinkPostRefusal(failure)).toBe(false);
+        expect(http.post).toHaveBeenCalledTimes(1);
+        expect(client.getRemoteOperationState().stateCommand).toBeUndefined();
+      } finally { jest.useRealTimers(); }
+    });
+
     it.each(['status', 'readback'] as const)('does not classify an accepted setting command as refused after failed %s GET', async phase => {
       const { client, http } = createEarlyApi();
       const failure = new BlinkHttpError('Read unavailable', 409, '', 'https://example.com/config', 'GET');

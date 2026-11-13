@@ -258,10 +258,7 @@ export class BlinkApi {
       if (queueTimer) globalThis.clearTimeout(queueTimer);
       this.hasSentStateCommand = true;
       let accountAuthority: (() => void) | undefined;
-      const execution: CommandRequestOptions = { ...options, generation, mutationAcknowledged: false, deadline: Math.min(options.deadline ?? Infinity,
-        ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
-      beforeDispatch: () => {
-        checkRequestBudget(execution);
+      const checkAuthority = () => {
         if (generation !== this.writerGeneration) throw new BlinkOperationNotStartedError('ownership-unavailable');
         if (!accountAuthority) {
           // Bind once to the routing account; an initial login may populate an empty cache.
@@ -269,7 +266,10 @@ export class BlinkApi {
           if (accountId !== null) accountAuthority = this.captureOperationAuthority(accountId, generation);
         }
         accountAuthority?.();
-      } };
+      };
+      const execution: CommandRequestOptions = { ...options, generation, mutationAcknowledged: false, deadline: Math.min(options.deadline ?? Infinity,
+        ownerExpiresAt ?? Infinity, Date.now() + (admission.kind === 'storage' ? 120_000 : 60_000)),
+      beforeDispatch: () => { checkRequestBudget(execution); checkAuthority(); } };
       const checkCompletion = () => {
         try { execution.beforeDispatch(); }
         catch (error) { throw afterWorkFailure(error, execution.mutationAcknowledged); }
@@ -297,7 +297,12 @@ export class BlinkApi {
           try {
             reconciled = await conflictResolution?.(execution);
             checkCompletion();
-          } catch { throw error; } // Failed readback cannot undo a definite POST refusal.
+          } catch {
+            // A known refusal survives readback failure only while this continuation still owns its scope.
+            try { checkAuthority(); }
+            catch (authorityError) { throw afterWorkFailure(authorityError, execution.mutationAcknowledged); }
+            throw error;
+          }
           if (reconciled?.resolved) {
             this.log.info(`[${label}] Requested state verified after conflict (attempt ${attempt + 1}).`);
             return reconciled.value as T;
