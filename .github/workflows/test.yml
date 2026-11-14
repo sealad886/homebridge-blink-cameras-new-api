@@ -121,7 +121,7 @@ jobs:
           python-version: '3.12'
       - name: Set up isolated Windows native toolchain
         if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@fb197b72ce45fb24f17bf3f807a388985654d1f2 # v2.29.0
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           path-type: inherit
