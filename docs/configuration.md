@@ -189,9 +189,42 @@ so Home does not wait for the Blink download on an open recording connection.
 `homeKitSecureVideo` defaults to `false`. It needs a supported camera with a
 known Sync Module association and working **native Local Storage** clips. A USB
 drive holding daily cloud backups does not establish this capability. Enable
-**Stream & Allow Recording** and the desired recording-audio permission in
-Apple Home. Changing the plugin setting never arms Blink or enables camera
-motion as a side effect.
+recording in both the plugin and Apple Home using the checklist below. Changing
+the plugin setting never arms Blink or enables camera motion as a side effect.
+
+### Recording setup checklist
+
+Complete these steps for each camera you want to record:
+
+1. **Blink:** Arm its system, enable camera motion detection, and trigger a new
+   event. Confirm the finished clip plays in the Blink app's **Local Storage**
+   list for its Sync Module.
+2. **Plugin:** Enable the camera's **HomeKit recording** option, Save, then
+   restart the Blink child bridge. Exposing its **Motion Detected** sensor is
+   optional and does not grant Home recording permission.
+3. **Apple Home:** Open that camera's tile, then **Settings → Recording Options**.
+   Review **When Home** and **When Away** individually. Choose **Stream & Allow
+   Recording** in every mode where you want recordings. **Stream** alone permits
+   viewing without recording. Home switches modes using household members'
+   locations, so an Away-only recording choice will not record while someone is
+   considered home.
+4. **Event selection:** Under **More Options**, review what each enabled mode
+   records. Use **Any Motion** for initial verification; specific motion types
+   and Activity Zones can filter an event out. Select **Record Audio** if wanted;
+   audio permission is separate from video recording permission.
+5. **Apple services:** Keep a compatible home hub connected and use an eligible
+   iCloud+ plan with enough camera capacity. See [Apple's HSV requirements](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud)
+   and [camera recording controls](https://support.apple.com/guide/home/hmeb54708fc8/mac).
+6. **Verify:** Trigger fresh motion after setup. Check the new playable Blink
+   Local clip, then the saved clip in the same camera's Home timeline. Motion
+   notifications, a live picture, and successful transport logs do not establish
+   saved Home playback. See [missing-recording checks](troubleshooting.md#motion-arrives-but-no-home-recording-appears).
+
+Home's **Status and Notifications** controls alert delivery separately. Enabling
+alerts does not enable recording. These settings apply per camera; check each
+camera rather than assuming a change applies to the whole Blink system.
+
+### Clip matching and scheduling
 
 Each motion observation creates an independently scheduled FIFO job. Matching uses
 the actual catalog's network, native device name and offset-bearing `created_at`

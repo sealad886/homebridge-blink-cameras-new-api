@@ -53,6 +53,27 @@ test('ready observes validated STATUS and media drain waits for codec callbacks 
   await flush(); expect(drained).toBe(false); release(); await worker.whenMediaDrained; expect(drained).toBe(true);
   const closed = worker.finishInput(); f.child.emit('close', 0); await closed; expect(worker.failed).toBe(false);
 });
+test('retains only a complete allowlisted native fatal code across split stderr chunks', async () => {
+  const f = fixture(), worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
+  f.child.stderr.write(Buffer.from('private-url-and-token\nBLINK_WORKER_AUDIO_DIS'));
+  expect(worker.failureCode).toBeUndefined();
+  f.child.stderr.write(Buffer.from('CONTINUITY\n'));
+  expect(worker.failureCode).toBe('AUDIO_DISCONTINUITY');
+  const rejected = expect(worker.whenReady).rejects.toThrow('Media worker unavailable');
+  f.child.emit('close', 2); await rejected; await worker.whenClosed;
+  expect(worker.failureCode).toBe('AUDIO_DISCONTINUITY');
+});
+test.each([
+  'BLINK_WORKER_PRIVATE_TOKEN\n', 'prefix BLINK_WORKER_MEDIA\n', 'BLINK_WORKER_MEDIA private-path\n',
+  'BLINK_WORKER_MEDIA', 'x'.repeat(97) + 'BLINK_WORKER_MEDIA\n',
+  'x'.repeat(4096) + '\nBLINK_WORKER_MEDIA\n', 'BLINK_WORKER_\u00c1UDIO_MISSING\n',
+])('discards unsafe, incomplete and excessive stderr without exposing it', async stderr => {
+  const f = fixture(), worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
+  f.child.stderr.write(Buffer.from(stderr));
+  expect(worker.failureCode).toBeUndefined();
+  const rejected = expect(worker.whenReady).rejects.toThrow('Media worker unavailable');
+  f.child.emit('close', 2); await rejected; await worker.whenClosed;
+});
 test('STOP rejects ready and media drain observers', async () => {
   const f = fixture(); const worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
   const ready = expect(worker.whenReady).rejects.toThrow(); const drained = expect(worker.whenMediaDrained).rejects.toThrow();

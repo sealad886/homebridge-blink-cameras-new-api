@@ -9,6 +9,27 @@ export const MEDIA_WORKER_LIMITS = Object.freeze({ frameBytes: 1024 * 1024, inpu
   finiteInputBytes: 32 * 1024 * 1024, finiteDrainMs: 120000,
   recordingInitBytes: 256 * 1024, recordingFragmentBytes: 8 * 1024 * 1024, recordingQueueBytes: 16 * 1024 * 1024,
   outstanding: 1, requestMs: 2000, stopMs: 1000, lifetimeMs: 300000, lifetimeOutputBytes: 64 * 1024 * 1024 });
+// Only fixed native fatal literals may cross the private worker boundary.
+const MEDIA_WORKER_FAILURE_CODES = [
+  'ARGUMENTS', 'AUDIO_CODEC', 'AUDIO_CONFIG', 'AUDIO_DECODE', 'AUDIO_DISCONTINUITY',
+  'AUDIO_ENCODE', 'AUDIO_ENCODER', 'AUDIO_INPUT', 'AUDIO_LIMIT', 'AUDIO_MEMORY',
+  'AUDIO_MISSING', 'AUDIO_RESAMPLE', 'AUDIO_TIMESTAMP', 'CODEC', 'CONFIG',
+  'CONFIG_TIMEOUT', 'CORE_LIMIT', 'DECODE', 'DEMUXER', 'ENCODE',
+  'ENCODER', 'ERROR_MODE', 'FINAL_IDLE_TIMEOUT', 'FRAGMENT_LIMIT', 'FRAME_LIMIT',
+  'FRAMING', 'INPUT_LIMIT', 'INPUT_TIMEOUT', 'IO_SETUP', 'MEDIA',
+  'MEMORY', 'MP4_EMPTY', 'MP4_HEADER', 'MP4_KEYFRAME', 'MP4_MUX',
+  'MP4_MUXER', 'MP4_PACKET', 'MP4_PARAMETERS', 'MP4_TIMESTAMP', 'MP4_TRAILER',
+  'OUTPUT', 'OUTPUT_LIMIT', 'OUTPUT_TIMEOUT', 'PACKET_LIMIT', 'PACKET_METADATA',
+  'RECORDING_DURATION', 'SCALE', 'SRTP_CLOSE', 'SRTP_CONFIG', 'SRTP_FRAMING',
+  'SRTP_INIT', 'SRTP_PROTECT', 'SRTP_REQUEST', 'SRTP_SSRC', 'SRTP_VERSION',
+  'THREAD', 'TIME_LIMIT', 'TRUNCATED', 'VERSION', 'VIDEO_DISCONTINUITY',
+  'VIDEO_TIMESTAMP',
+] as const;
+export type MediaWorkerFailureCode = typeof MEDIA_WORKER_FAILURE_CODES[number];
+const workerFailureCodes = new Set<string>(MEDIA_WORKER_FAILURE_CODES);
+export function isMediaWorkerFailureCode(value: unknown): value is MediaWorkerFailureCode {
+  return typeof value === 'string' && workerFailureCodes.has(value);
+}
 export interface CodecPacket {
   pts: bigint; dts: bigint; duration: bigint; stream: 1 | 2; keyframe: boolean;
   skipStart: number; skipEnd: number; data: Buffer;
@@ -44,6 +65,9 @@ export class PrivateMediaWorker {
   readonly whenClosed: Promise<void>;
   readonly whenReady: Promise<void>;
   readonly whenMediaDrained: Promise<void>;
+  #diagnosticBytes = 0; #diagnosticLine = ''; #diagnosticOverflow = false;
+  #failureCode?: MediaWorkerFailureCode;
+  get failureCode(): MediaWorkerFailureCode | undefined { return this.#failureCode; }
   #failed = false;
   get failed(): boolean { return this.#failed; }
   #child: ChildProcessWithoutNullStreams; #closed = false; #stopping = false; #ended = false; #configured = false; #inputEnded = false; #inputBytes = 0;
@@ -74,14 +98,29 @@ export class PrivateMediaWorker {
     this.#child.stdout.on('data', (chunk: Buffer) => this.#receive(chunk));
     this.#child.stdout.on('end', () => { if (!this.#stopping && (!this.#ended || this.#buffer.length)) { this.#fail(); } });
     this.#child.stdout.on('error', () => this.#fail()); this.#child.stdin.on('error', () => this.#fail());
-    // Drain and discard: native diagnostics never cross this client's public error surface.
-    this.#child.stderr.on('data', () => {}); this.#child.stderr.on('error', () => this.#fail());
+    // Drain all stderr; retain only a bounded, complete allowlisted fatal code.
+    this.#child.stderr.on('data', (chunk: Buffer) => this.#diagnostic(chunk)); this.#child.stderr.on('error', () => this.#fail());
     this.#child.on('error', () => this.#fail());
     this.#child.on('close', (code: number | null) => {
       if (!this.#stopping && (code !== 0 || !this.#ended || this.#buffer.length || this.#pending.size || this.#mediaConsumption || this.#consuming || this.#codecQueue.length || this.#recordingQueue.length || this.#writing || this.#control || this.#producer)) { this.#failed = true; this.#rejectAll(); }
       this.#closed = true; this.#stopping = true; this.#cancel.abort(); this.#buffer.fill(0); this.#dropCodec(); this.#buffer = Buffer.alloc(0); this.#rejectAll();
       globalThis.clearTimeout(this.#frameTimer); globalThis.clearTimeout(this.#life); globalThis.clearTimeout(this.#kill); this.#finish();
     });
+  }
+  #diagnostic(chunk: Buffer): void {
+    if (this.#failureCode || this.#diagnosticBytes >= 4096) return;
+    for (const byte of chunk.subarray(0, 4096 - this.#diagnosticBytes)) {
+      this.#diagnosticBytes++;
+      if (byte === 10) {
+        const code = this.#diagnosticLine.startsWith('BLINK_WORKER_') ? this.#diagnosticLine.slice(13) : '';
+        if (!this.#diagnosticOverflow && isMediaWorkerFailureCode(code)) {
+          this.#failureCode = code; this.#diagnosticLine = ''; return;
+        }
+        this.#diagnosticLine = ''; this.#diagnosticOverflow = false;
+      } else if (byte < 32 || byte > 126 || this.#diagnosticLine.length >= 96) {
+        this.#diagnosticOverflow = true;
+      } else if (!this.#diagnosticOverflow) this.#diagnosticLine += String.fromCharCode(byte);
+    }
   }
   #dropCodec(): void {
     for (const packet of this.#codecQueue.splice(0)) { this.#codecBytes -= packet.data.length + 48; }

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Last reviewed: 9 November 2026.
+Last reviewed: 15 November 2026.
 
 Start with the checks below. For safe collection/redaction use the
 [diagnostic specification](debug_logging_spec.md) and the
@@ -63,6 +63,37 @@ Automatic status recovery retries one transient homescreen GET failure within a
 25-second budget, without automatically signing in again for network outages.
 Confirmed outages log a bounded, unauthenticated DNS/connection diagnostic;
 credentials, response bodies, and resolved IP addresses are excluded.
+
+## Motion arrives but no Home recording appears
+
+First complete the [recording setup checklist](configuration.md#recording-setup-checklist)
+for the affected camera. In Apple Home, open its tile, then **Settings → Recording
+Options**. Check **When Home** and **When Away** separately: the current mode must
+allow **Stream & Allow Recording**. A streaming-only mode, working live view or
+enabled activity notifications does not grant recording permission. For the
+first test, choose **Any Motion** under **More Options** and review any Activity
+Zones; event filters can exclude the motion you are testing.
+
+Compare one fresh event across the Blink app's playable **Local Storage** clip,
+the plugin logs and that camera's saved Home timeline. Record timestamps and
+camera names without publishing media or private identifiers. A completed Blink
+clip must exist before this plugin can offer it to Home.
+
+- `motion-suppressed-home-policy-inactive` means the camera's effective Home
+  recording policy is unavailable or inactive. Check its Home recording mode,
+  camera availability and connected home hub; the message alone does not identify
+  which setting or readiness condition blocked it.
+- `acquisition-missing` means the available catalog has no usable clip satisfying
+  the camera, scope, timestamp and other matching checks. Compare the new clip's
+  timestamp with the motion event. Do not assume the nearest clip is the same
+  event or widen the matching window without confirming that relationship.
+- A Home recording request can be rejected while no prepared clip exists. Check
+  acquisition and preparation first; that rejection alone does not establish an
+  encoder or Home transport failure.
+
+Successful download, preparation or a Home transport acknowledgment still needs
+confirmation by playing the saved clip in Home. Apple's hub decides whether to
+retain it under your recording policy. See [Apple's recording controls](https://support.apple.com/guide/home/hmeb54708fc8/mac).
 
 ## Live video fails, stutters or stops
 

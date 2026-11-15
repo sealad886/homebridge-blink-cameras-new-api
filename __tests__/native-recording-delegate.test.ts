@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { CameraRecordingConfiguration, RecordingPacket } from 'homebridge';
 import { NativeRecordingDelegate, type NativeRecordingDeliveryMetadata } from '../src/accessories/native-recording-delegate';
-import { type NativeRecordingSource, type PreparedNativeRecording, type prepareNativeRecording } from '../src/accessories/native-recording-preparation';
+import { NativeRecordingPreparationError, type NativeRecordingSource, type PreparedNativeRecording, type prepareNativeRecording } from '../src/accessories/native-recording-preparation';
 
 const configuration = (): CameraRecordingConfiguration => ({
   prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
@@ -255,6 +255,16 @@ describe('finite native recording delegate', () => {
     await jest.advanceTimersByTimeAsync(1000);
     expect(f.deliveryOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ outcome: 'uncertain' }));
     expect(f.prepared[1].disposed).toBe(true);
+  });
+
+  it('retains only typed preparation diagnostics while never offering failed media', async () => {
+    const f = setup(); f.enable();
+    f.prepare.mockRejectedValueOnce(new NativeRecordingPreparationError({ phase: 'output', workerCode: 'AUDIO_DISCONTINUITY' }));
+    expect(await f.delegate.offerDownloaded(source, f.metadata())).toEqual({ status: 'not-offered', reason: 'preparation-failed',
+      diagnostic: { phase: 'output', workerCode: 'AUDIO_DISCONTINUITY' } });
+    f.prepare.mockRejectedValueOnce(new Error('private-provider-url-and-token'));
+    expect(await f.delegate.offerDownloaded(source, f.metadata())).toEqual({ status: 'not-offered', reason: 'preparation-failed' });
+    expect(f.readyMotion).not.toHaveBeenCalled();
   });
 
   it('keeps local preparation failures unoffered and retires all media on stop', async () => {

@@ -197,12 +197,29 @@ records security evidence and remaining acceptance limits.
 
 ## HomeKit Secure Video
 
-Recording is disabled by default. Enable **HomeKit recording** for a camera in
-plugin settings, Save and restart the Blink child bridge. Then allow **Stream &
-Allow Recording** and the desired recording-audio permission in Apple Home.
-The camera must already save native Local Storage motion clips to its associated
-Blink Sync Module. A USB drive containing daily cloud backups does not establish
-that capability.
+Recording is disabled by default. Set up each camera in both Blink and Apple Home:
+
+1. In Blink, arm the system, enable that camera's motion detection and confirm a
+   new motion clip plays from **Local Storage** on its associated Sync Module.
+   A USB drive containing daily cloud backups does not establish this capability.
+2. In plugin settings, enable **HomeKit recording** for that camera, Save and
+   restart the Blink child bridge.
+3. In Apple Home, open the camera tile, then **Settings → Recording Options**.
+   Set **When Home** and **When Away** separately to **Stream & Allow Recording**
+   for each mode in which you want recordings. Setting only When Away will not
+   allow recording while Home considers someone at home; **Stream** alone does
+   not allow recording.
+4. Review **More Options** for each recording mode. For the first test, choose
+   **Any Motion**; specific event types and Activity Zones can exclude your test
+   event. Choose the desired **Record Audio** permission separately.
+5. Have a compatible, connected home hub and an iCloud+ plan that supports your
+   camera count. Trigger new motion, allow the native clip to finish, then verify
+   playback in that camera's Home timeline.
+
+Home chooses its Home/Away mode from household location information. Its
+notification settings and the plugin's **Motion Detected** sensor visibility are
+separate from recording permission. See [Apple's camera recording instructions](https://support.apple.com/guide/home/hmeb54708fc8/mac)
+and the [recording setup checklist](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#recording-setup-checklist).
 
 ```json
 {

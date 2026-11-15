@@ -19,8 +19,11 @@ int main(int argc,char **argv){
 #endif
     int bundled=argc>1 && strcmp(argv[1],"audio-latm-bundled")==0;
     int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
-    int mp4=argc>1 && (!strcmp(argv[1],"video-mp4") || !strcmp(argv[1],"audio-mp4"));
-    int with_audio=latm || (argc>1 && (!strcmp(argv[1],"audio") || !strcmp(argv[1],"audio-mp4")));
+    int sei_overlap=argc>1 && !strcmp(argv[1],"audio-mp4-sei-overlap");
+    int sei_corrupt=argc>1 && !strcmp(argv[1],"audio-mp4-sei-corrupt");
+    int sei=sei_overlap || sei_corrupt || (argc>1 && !strcmp(argv[1],"audio-mp4-sei"));
+    int mp4=sei || (argc>1 && (!strcmp(argv[1],"video-mp4") || !strcmp(argv[1],"audio-mp4")));
+    int with_audio=sei || latm || (argc>1 && (!strcmp(argv[1],"audio") || !strcmp(argv[1],"audio-mp4")));
     int width=16,height=16,fps=15,count=4,offset=0;
     if(bundled)count=30;
     if(argc>2 || (argc>1 && !with_audio)) {
@@ -36,6 +39,7 @@ int main(int argc,char **argv){
     if(!encoder) return 2;
     encoder->width=width;encoder->height=height;encoder->pix_fmt=AV_PIX_FMT_YUV420P;
     encoder->time_base=(AVRational){1,fps};encoder->framerate=(AVRational){fps,1};encoder->thread_count=1;encoder->max_b_frames=0;
+    if(sei) { encoder->time_base=(AVRational){1001,fps*1000};encoder->framerate=(AVRational){fps*1000,1001}; }
     if(mp4)encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
     AVDictionary *options=NULL;av_dict_set(&options,"preset","ultrafast",0);av_dict_set(&options,"tune","zerolatency",0);
     if(avcodec_open2(encoder,codec,&options)<0)return 2;
@@ -71,7 +75,7 @@ int main(int argc,char **argv){
     if(!frame || !packet)return 2;
     frame->format=encoder->pix_fmt;frame->width=width;frame->height=height;
     if(av_frame_get_buffer(frame,32)<0)return 2;
-    int64_t audio_next=0;
+    int64_t audio_next=0,metadata_slots=0;
     for(int i=0;i<=count;i++){
         if(i<count){
             if(av_frame_make_writable(frame)<0)return 2;
@@ -82,13 +86,27 @@ int main(int argc,char **argv){
         if(avcodec_send_frame(encoder,i<count?frame:NULL)<0)return 2;
         while(avcodec_receive_packet(encoder,packet)>=0){
             if(packet->duration<=0)packet->duration=1;
+            if(sei && i>0 && i%(fps*4)==0) {
+                AVPacket *metadata=av_packet_alloc();if(!metadata || av_new_packet(metadata,9)<0)return 2;
+                const uint8_t recovery[]={0,0,0,1,6,6,1,0xc0,0x80};memcpy(metadata->data,recovery,sizeof(recovery));
+                metadata->pts=metadata->dts=packet->dts+metadata_slots;metadata->duration=1;metadata->stream_index=stream->index;
+                if(sei_overlap)metadata->pts++;
+                av_packet_rescale_ts(metadata,encoder->time_base,stream->time_base);
+                if(av_interleaved_write_frame(format,metadata)<0)return 2;
+                av_packet_free(&metadata);metadata_slots++;
+            }
+            if(sei) { packet->pts+=metadata_slots;packet->dts+=metadata_slots; }
+            if(sei_corrupt)for(int n=0;n+4<packet->size;n++) {
+                if(!packet->data[n] && !packet->data[n+1] && packet->data[n+2]==1 && (packet->data[n+3]&31)==5)packet->data[n+3]|=0x80;
+            }
             packet->stream_index=stream->index;av_packet_rescale_ts(packet,encoder->time_base,stream->time_base);
             if(av_interleaved_write_frame(format,packet)<0)return 2;
         }
         if(with_audio){
             /* Match duration on the shared clock; AAC and video frame sizes differ. */
             int64_t target=av_rescale_rnd(i+1,16000,fps,AV_ROUND_UP);
-            do {
+            if(sei)target=av_rescale_rnd((int64_t)(i+1)*1001,16000,fps*1000,AV_ROUND_UP);
+            while(i==count || audio_next<target) {
             if(i<count){
                 if(av_frame_make_writable(audio_frame)<0)return 2;
                 float *samples=(float*)audio_frame->data[0];
@@ -100,7 +118,8 @@ int main(int argc,char **argv){
                 packet->stream_index=audio_stream->index;av_packet_rescale_ts(packet,audio->time_base,audio_stream->time_base);
                 if(av_interleaved_write_frame(format,packet)<0)return 2;
             }
-            } while(i<count && audio_next<target);
+            if(i==count)break;
+            }
         }
     }
     av_frame_free(&audio_frame);avcodec_free_context(&audio);

@@ -1,7 +1,8 @@
 /** HAP0.14 finite-file recording delivery, independent of Blink acquisition. */
 import { Buffer } from 'node:buffer';
 import type { CameraRecordingConfiguration, CameraRecordingDelegate, HDSProtocolSpecificErrorReason, RecordingPacket } from 'homebridge';
-import { prepareNativeRecording, snapshotNativeRecordingConfiguration, type NativeRecordingPreparationOptions,
+import { prepareNativeRecording, snapshotNativeRecordingConfiguration, NativeRecordingPreparationError,
+  type NativeRecordingPreparationDiagnostic, type NativeRecordingPreparationOptions,
   type NativeRecordingSource, type PreparedNativeRecording } from './native-recording-preparation';
 
 export interface NativeRecordingDeliveryMetadata {
@@ -22,7 +23,7 @@ export interface NativeRecordingPolicy {
   allowed: boolean;
 }
 export type NativeRecordingOfferResult = { status: 'ready' } | { status: 'uncertain'; reason: 'motion-publication-failed' | 'policy-changed-after-offer' } |
-  { status: 'not-offered'; reason: 'disabled' | 'busy' | 'duplicate' | 'policy-changed' | 'preparation-failed' };
+  { status: 'not-offered'; reason: 'disabled' | 'busy' | 'duplicate' | 'policy-changed' | 'preparation-failed'; diagnostic?: NativeRecordingPreparationDiagnostic };
 export type NativeRecordingDeliveryOutcome = 'request-rejected' | 'requested' | 'transfer-finished' | 'transport-acknowledged' | 'closed' | 'cancelled' | 'not-requested' | 'uncertain';
 export interface NativeRecordingDeliveryEvent { metadata?: NativeRecordingDeliveryMetadata; outcome: NativeRecordingDeliveryOutcome; }
 export interface NativeRecordingDelegateOptions {
@@ -177,9 +178,10 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
           this.offerTimer = timer;
         }
         return { status: 'ready' };
-      } catch {
+      } catch (error) {
         prepared?.dispose();
-        return { status: 'not-offered', reason: owner.signal.aborted ? 'policy-changed' : 'preparation-failed' };
+        return { status: 'not-offered', reason: owner.signal.aborted ? 'policy-changed' : 'preparation-failed',
+          ...(!owner.signal.aborted && error instanceof NativeRecordingPreparationError ? { diagnostic: error.diagnostic } : {}) };
       }
     })();
     this.preparing = { owner, done: run };

@@ -265,8 +265,21 @@ defaults validated by `src/native-recording-config.ts`:
 All fields are integers. Maximum job age must cover the initial delay. Missing
 clip retries share completed catalogs and respect the catalog refresh interval;
 an unknown remote command outcome keeps ownership blocked instead of allocating
-another operation. Enable recording permission separately in Apple Home, and
-restart the Blink child bridge after reviewing and applying configuration.
+another operation. Restart the Blink child bridge after reviewing and applying
+configuration. Migration does not grant Apple Home recording permission or arm
+Blink.
+
+For each recording camera, arm Blink and enable camera motion detection, then
+confirm a new native Local Storage clip plays in the Blink app. In Apple Home,
+open the camera tile and **Settings → Recording Options**. Set **When Home** and
+**When Away** separately to **Stream & Allow Recording** for the modes where you
+want recordings. Check the currently active mode; **Stream** alone does not allow
+recording. Under **More Options**, use **Any Motion** for initial verification,
+review any Activity Zones, and choose **Record Audio** if wanted. A connected
+compatible home hub and an eligible iCloud+ plan are also required. Complete the
+[recording setup checklist](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#recording-setup-checklist)
+and verify a saved clip plays in that camera's Home timeline; motion notifications
+or live viewing alone do not confirm recording.
 
 To restore the original configuration, retain the current file separately and
 restore a copy of the selected backup under the original owner and group, with
