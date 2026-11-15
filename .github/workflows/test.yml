@@ -132,14 +132,28 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nasm
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-python
+      - name: Install x86 assembler
+        if: matrix.target == 'linux-x64' || matrix.target == 'darwin-x64'
+        run: |
+          set -euo pipefail
+          if ! command -v nasm; then
+            if [[ "$RUNNER_OS" == "Linux" ]]; then
+              sudo apt-get update
+              sudo apt-get install --no-install-recommends -y nasm
+            else
+              brew install nasm
+            fi
+          fi
       - name: Check runner tools and architecture
         env:
           NATIVE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           for tool in cc make cmake pkg-config gpg openssl; do command -v "$tool"; done
+          if [[ "$NATIVE_TARGET" == *-x64 ]]; then command -v nasm; nasm -v; fi
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             test "$MSYSTEM" = UCRT64
             test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
@@ -167,8 +181,7 @@ jobs:
       - name: Verify pinned sources and build private static prefix
         run: |
           set -euo pipefail
-          # Assembly disabled explicitly for prototype CI; performance is not release evidence.
-          python native/dependencies/prepare.py --build-local --jobs 3 --disable-assembly --prefix-file native/build/deps/ci-prefix.txt
+          python native/dependencies/prepare.py --build-local --jobs 3 --prefix-file native/build/deps/ci-prefix.txt
       - name: Build and test private-pipe native prototype
         run: |
           set -euo pipefail

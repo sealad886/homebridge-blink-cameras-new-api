@@ -40,7 +40,7 @@ function fixture() {
     const bytes = Buffer.from(target); write(path, bytes);
     manifest.targets[target] = { path, sha256: sha256(bytes) };
     const receipt = { target, protocolVersion: 4, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
-      dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
+      dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs, prototype_assembly_disabled: false }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
     receipts[target] = receipt; entries.push([`receipts/${target}.json`, json(receipt)]);
   }
   const bundle = tar(entries); const manifestBytes = json(manifest);
@@ -51,6 +51,15 @@ function fixture() {
 }
 test('accepts five synthetic workers with complete source and dependency identity, without declaring readiness', () => {
   const f = fixture(); try { const result = verifyNativePackage(f.root, f.proof); assert.equal(result.distribution_ready, false); assert.deepEqual(Object.keys(result.targets).sort(), [...TARGETS].sort()); } finally { f.cleanup(); }
+});
+test('refuses installed packages with assembly-disabled or unproved codec libraries', () => {
+  for (const value of [true, undefined, null, 0, 'false']) {
+    const f = fixture(); try {
+      f.distribution.targets['linux-arm64'].dependencies.prototype_assembly_disabled = value;
+      f.write('native/runtime/distribution-receipt.json', json(f.distribution));
+      assert.throws(() => verifyNativePackage(f.root, f.proof), /requires assembly-enabled/);
+    } finally { f.cleanup(); }
+  }
 });
 for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'protocol', 'bundle', 'source', 'recipe', 'pins', 'readiness', 'symlink']) {
   test(`refuses ${mutation} native package`, () => {

@@ -219,6 +219,18 @@ def fetch():
     return downloads
 
 
+def verify_assembly_configuration(ffmpeg, x264, machine):
+    features = {'arm64': ('HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
+                'aarch64': ('HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
+                'x86_64': ('HAVE_X86ASM', 'HAVE_MMX'),
+                'amd64': ('HAVE_X86ASM', 'HAVE_MMX')}
+    if machine.lower() not in features:
+        raise ValueError('Unsupported assembly architecture')
+    for configuration, feature in zip((ffmpeg, x264), features[machine.lower()]):
+        if not re.search(rf'^#define\s+{feature}\s+1\s*$', configuration, re.MULTILINE):
+            raise ValueError(f'Required codec assembly unavailable: {feature}')
+
+
 def build(downloads, jobs, disable_assembly=False):
     # This native-host recipe intentionally makes no cross-platform acceptance claim.
     system = platform.system()
@@ -286,6 +298,8 @@ def build(downloads, jobs, disable_assembly=False):
     execute(['make', f'-j{jobs}'], ffmpeg)
     execute(['make', 'install'], ffmpeg)
     config = (ffmpeg / 'config.h').read_text()
+    if not disable_assembly:
+        verify_assembly_configuration(config, (x264 / 'config.h').read_text(), platform.machine())
     for forbidden in ('CONFIG_NETWORK', 'CONFIG_NONFREE', 'CONFIG_LIBFDK_AAC'):
         if f'#define {forbidden} 0' not in config:
             raise ValueError(f'Forbidden configuration: {forbidden}')

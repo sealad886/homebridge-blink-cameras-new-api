@@ -165,15 +165,26 @@ Windows installs its build tools only in the ephemeral CI job through
 `fb197b72ce45fb24f17bf3f807a388985654d1f2`. Its
 [checked action inputs](https://github.com/msys2/setup-msys2/blob/fb197b72ce45fb24f17bf3f807a388985654d1f2/action.yml)
 select UCRT64, disabled action cache and explicit GNU Make/GnuPG/diffutils plus
-native GCC/CMake/Ninja/pkgconf/Python packages. MSYS2's signed package workflow
+native GCC/CMake/Ninja/NASM/pkgconf/Python packages. MSYS2's signed package workflow
 supplies tools, not prebuilt codec libraries. All four codec/security libraries
 still build from the unchanged verified source pins. Actual package inventory is
 retained in the dependency receipt; compiler/tool versions are not claimed fixed
 by the action pin. No local package installation or service change is involved.
 
-`--disable-assembly` disables x264/FFmpeg assembly explicitly for candidate CI,
-avoiding assembler installation. This sacrifices performance and does not establish
-production real-time behavior. Opus may still use compiler-supported intrinsics.
+Shipping candidates retain x264/FFmpeg assembly optimizations. x86 lanes check
+NASM; Linux and Intel macOS install it in the ephemeral job when absent, and
+Windows selects the native UCRT64 NASM package. ARM64 uses its compiler assembler.
+The pinned configure scripts check assembler support; the recipe also verifies
+FFmpeg's native external-assembly feature and x264's matching assembly feature
+in generated configuration headers. Source pins and CPU runtime dispatch remain
+unchanged. See [FFmpeg platform prerequisites](https://ffmpeg.org/platform.html)
+and the [UCRT64 NASM package](https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-nasm).
+
+`--disable-assembly` remains an explicit local prototype option. It sacrifices
+performance; both candidate staging and installed-package verification reject
+its receipts, including missing assembly evidence. Assembly-enabled builds still
+require measured Pi conversion and physical Home recording acceptance; this
+build setting alone does not establish production real-time behavior.
 Verification decoders for Opus/PCMA/PCMU are selected to independently decode worker
 output; worker input remains explicitly restricted to H.264/AAC/AAC-LATM.
 

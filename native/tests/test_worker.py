@@ -316,9 +316,8 @@ class WorkerTests(unittest.TestCase):
                 self.assertGreater(len(media),0)
                 self.assertEqual(len(media)%188,0)
                 self.assertTrue(all(media[offset]==0x47 for offset in range(0,len(media),188)))
-                # Exercise bytes Windows text streams translate or treat as EOF.
-                self.assertIn(b'\n',media)
-                if mode:self.assertIn(b'\x1a',media)
+                # The null PID payload deliberately exercises CR/LF and DOS EOF.
+                self.assertEqual(media[-188:],b'\x47\x1f\xff\x10\r\n\x1a'+b'\xff'*181)
     def test_srtp_and_srtcp_published_vectors_and_correlation(self):
         # Public libsrtp srtp_driver.c srtp_validate vectors at pinned commit.
         key=bytes.fromhex('e1f97a0d3e018be0d64fa32c06de41390ec675ad498afeebb6960b3aabe6')
@@ -642,7 +641,8 @@ class WorkerTests(unittest.TestCase):
     def test_frame_budget_has_no_success_end(self):
         result=self.run_worker(config(max_frames=1)+frame(2,self.media)+frame(3))
         self.assertEqual(result.returncode,2)
-        self.assertNotIn((3,b''),messages(result.stdout))
+        self.assertIn(result.stderr,(b'BLINK_WORKER_FRAME_LIMIT\n',b'BLINK_WORKER_FRAME_LIMIT\r\n'))
+        self.assertNotIn((3,b''),messages(result.stdout,allow_truncated=True))
     def test_eof_without_media_is_failure_not_success(self):
         for data in [b'', config(), config()+frame(3), config()+frame(2,b'garbage')+frame(3)]:
             self.assertEqual(self.run_worker(data).returncode,2)
