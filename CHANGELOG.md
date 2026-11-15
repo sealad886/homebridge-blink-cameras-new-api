@@ -7,6 +7,25 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.5] - 2026-11-15
+
+### Fixed
+- Match saved Blink USB clips whose catalog camera names use the observed
+  compacted full-name representation, so they can reach their respective existing
+  Home camera accessories' HomeKit Secure Video recording delegates.
+- Reject ambiguous raw/compacted name mappings across all discovered cameras in
+  the same account/network/Sync Module, including cameras excluded from HSV.
+  Preserve exact-name behavior, timestamp limits and consumed-clip safeguards.
+
+### Acceptance notes
+- Local tests verify two distinct clips through their own camera recording
+  delegates, including final packets and acknowledgements. Provider downloads
+  and media preparation in those regressions are synthetic; physical Home/iCloud
+  saved-timeline acceptance remains a separate check after installation.
+- This release adds no replay camera, configuration key, state migration or
+  dependency/native-pin change. Enable the camera's existing HSV policy in the
+  plugin and Stream & Allow Recording in Apple Home for recording delivery.
+
 ## [1.1.0-beta.4] - 2026-11-13
 
 ### Fixed

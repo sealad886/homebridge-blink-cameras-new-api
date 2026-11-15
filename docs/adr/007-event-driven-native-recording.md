@@ -189,8 +189,13 @@ not a measured physical PIR or completed-file timestamp.
 
 The inspected USB catalog exposes `network_id`, native `device_name`, clip ID,
 `created_at` and an opaque media URL. Match a unique canonical camera/time
-candidate within configured tolerance; reject duplicate native names or equal
-candidates. Home display aliases do not identify physical clips. Do not invent a
+candidate within configured tolerance. Accept the authoritative full raw camera
+name or its nonempty, case-sensitive ASCII-alphanumeric compacted form observed
+in USB catalogs. Compare catalog text exactly; do not compact arbitrary incoming
+names or infer identity from partial names. Reject overlapping raw/compacted
+aliases across the full scoped inventory, including excluded cameras, and reject
+equal candidates. Keep provider clip identities unchanged for consumed-media
+tracking. Home display aliases do not identify physical clips. Do not invent a
 filename timestamp from an API URL. Full explicit-offset timestamps establish
 the actual comparison; unsupported time-only filenames cannot substitute.
 

@@ -28,6 +28,72 @@ describe('native clip metadata matching', () => {
     });
   });
 
+  it.each(['Entry Camera (AB-12)', 'EntryCameraAB12'])('matches the full raw or observed compacted provider name: %s', deviceName => {
+    const decorated = { ...camera, nativeName: 'Entry Camera (AB-12)' };
+    const selected = clip(101, { deviceName });
+    expect(matchNativeClip(options([selected], { camera: decorated, devices: [decorated] })))
+      .toMatchObject({ status: 'matched', clip: selected, identity: nativeClipIdentity(scope, selected) });
+  });
+
+  it.each(['Entry Camera AB12', 'entryCameraAB12', 'Entry', 'AB12'])('does not normalize catalog text or match a partial/case-folded name: %s', deviceName => {
+    const decorated = { ...camera, nativeName: 'Entry Camera (AB-12)' };
+    expect(matchNativeClip(options([clip(101, { deviceName })], { camera: decorated, devices: [decorated] })))
+      .toEqual({ status: 'missing' });
+  });
+
+  it.each(['Entry-Camera', 'Entry Camera', 'EntryCamera'])('rejects compacted-name collisions with any known scoped camera: %s', otherName => {
+    const selected = { ...camera, nativeName: 'Entry-Camera' };
+    const other = { ...selected, providerId: 41, cameraId: 'camera:41', nativeName: otherName };
+    for (const deviceName of ['Entry-Camera', 'EntryCamera']) {
+      expect(matchNativeClip(options([clip(101, { deviceName })], { camera: selected, devices: [selected, other] })))
+        .toEqual({ status: 'ambiguous', reason: 'duplicate-device-name' });
+    }
+  });
+
+  it('rejects a compacted alias collision across distinct provider device kinds', () => {
+    const selected = { ...camera, nativeName: 'Entry-Camera' };
+    const other = { ...selected, target: 'other-kind', cameraId: 'other-kind:40', nativeName: 'EntryCamera' };
+    expect(matchNativeClip(options([clip(101, { deviceName: 'EntryCamera' })], { camera: selected, devices: [selected, other] })))
+      .toEqual({ status: 'ambiguous', reason: 'duplicate-device-name' });
+  });
+
+  it('keeps compacted aliases scoped to the accepted account, network and module', () => {
+    const selected = { ...camera, nativeName: 'Entry-Camera' };
+    const alias = { ...camera, providerId: 41, cameraId: 'camera:41', nativeName: 'EntryCamera' };
+    const devices = [selected, { ...alias, accountId: 11 }, { ...alias, networkId: 21 },
+      { ...alias, syncModuleId: 31, moduleId: 'sync:31' }];
+    expect(matchNativeClip(options([clip(101, { deviceName: 'EntryCamera' })], { camera: selected, devices })).status).toBe('matched');
+    expect(matchNativeClip(options([clip(101, { deviceName: 'EntryCamera', networkId: 21 })], { camera: selected, devices })))
+      .toEqual({ status: 'missing' });
+  });
+
+  it('keeps Unicode raw names exact and never creates an empty or transliterated alias', () => {
+    const selected = { ...camera, nativeName: '門口!!' };
+    for (const deviceName of ['門口', '', null]) {
+      expect(matchNativeClip(options([clip(101, { deviceName })], { camera: selected, devices: [selected] })))
+        .toEqual({ status: 'missing' });
+    }
+    expect(matchNativeClip(options([clip(101, { deviceName: selected.nativeName })], { camera: selected, devices: [selected] })).status)
+      .toBe('matched');
+    const accented = { ...camera, nativeName: 'Entrée (AB-12)' };
+    expect(matchNativeClip(options([clip(101, { deviceName: 'EntreeAB12' })], { camera: accented, devices: [accented] })))
+      .toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { deviceName: 'EntreAB12' })], { camera: accented, devices: [accented] })).status)
+      .toBe('matched');
+  });
+
+  it('preserves consumed, timestamp and conflicting-identity guards for compacted names', () => {
+    const selected = { ...camera, nativeName: 'Entry Camera (AB-12)' };
+    const current = clip(101, { deviceName: 'EntryCameraAB12' });
+    const scoped = { camera: selected, devices: [selected] };
+    expect(matchNativeClip(options([current], { ...scoped, consumedClipIdentities: new Set([nativeClipIdentity(scope, current)!]) })))
+      .toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([{ ...current, capturedAt: '2026-11-09T06:00:02.001Z' }], scoped)))
+      .toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([current, { ...current, deviceName: 'OtherCamera' }], scoped)))
+      .toEqual({ status: 'ambiguous', reason: 'conflicting-clip-identity' });
+  });
+
   it('chooses the nearest unique candidate independently of catalog ordering', () => {
     const farther = clip(101, { capturedAt: '2026-11-09T06:00:01.500Z' });
     const nearer = clip(102, { capturedAt: '2026-11-09T05:59:59.500Z' });

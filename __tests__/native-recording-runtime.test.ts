@@ -61,6 +61,7 @@ describe('native recording runtime composition', () => {
 
   async function setup(overrides: { config?: NativeRecordingConfigInput; exposure?: boolean; hsv?: boolean;
     prepare?: typeof prepareNativeRecording; storagePath?: string; nativeStorage?: boolean; secondCamera?: boolean;
+    nativeName?: string; cornerNativeName?: string;
     start?: boolean; report?: NativeRecordingRuntimeOptions['report'];
     earlyNotification?: boolean; earlyNotificationMode?: 'on' | 'off' | 'unmanaged'; rawType?: string; earlyCurrent?: boolean; earlyCompatible?: boolean; earlyFailure?: 'before-write' | 'after-write';
     matchingDevices?: readonly NativeMotionDevice[]; eventSourceFactory?: NativeRecordingRuntimeOptions['eventSourceFactory'] } = {}) {
@@ -141,12 +142,12 @@ describe('native recording runtime composition', () => {
           return { ...current, current: enabled, changed: true };
         }),
     };
-    const devices: NativeRecordingRuntimeOptions['devices'] = [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: 'Entry native name' },
+    const devices: NativeRecordingRuntimeOptions['devices'] = [{ binding: { accountId: 10, networkId: 20, providerId: 40, target: 'camera', cameraId: 'camera:40', nativeName: overrides.nativeName ?? 'Entry native name' },
         rawType: overrides.rawType ?? 'catalina',
         ...(overrides.nativeStorage === false ? {} : { nativeStorage: { moduleId: '20:30', syncModuleId: 30 } }),
         settings: { exposeMotionDetected: overrides.exposure ?? true, homeKitSecureVideo: overrides.hsv ?? true, earlyNotificationMode: overrides.earlyNotificationMode ?? (overrides.earlyNotification ? 'off' : 'unmanaged') },
         motion: publicMotion, recording: () => delegate }, ...(cornerDelegate ? [{
-        binding: { accountId: 10, networkId: 20, providerId: 41, target: 'camera', cameraId: 'camera:41', nativeName: 'Corner native name' },
+        binding: { accountId: 10, networkId: 20, providerId: 41, target: 'camera', cameraId: 'camera:41', nativeName: overrides.cornerNativeName ?? 'Corner native name' },
         nativeStorage: { moduleId: '20:30', syncModuleId: 30 }, settings: { exposeMotionDetected: true, homeKitSecureVideo: true, earlyNotificationMode: 'unmanaged' as const },
         motion: jest.fn(), recording: () => cornerDelegate,
       }] : [])];
@@ -1543,6 +1544,63 @@ describe('native recording runtime composition', () => {
     expect((await fs.stat(f.runtime.directory)).mode & 0o777).toBe(0o700);
     expect((await fs.stat(path.join(f.runtime.directory, 'state.json'))).mode & 0o777).toBe(0o600);
     expect((await f.state()).consumed).toHaveLength(1);
+  });
+
+  it('delivers compact catalog names through their own camera recording delegates without crossing clip payloads', async () => {
+    const f = await setup({ secondCamera: true, nativeName: 'Entry (SERIAL-40)', cornerNativeName: 'Corner (SERIAL-41)',
+      config: { initialDelaySeconds: 0 } });
+    f.media[0].device_name = 'EntrySERIAL40';
+    f.media.push({ ...f.media[0], id: 102, device_name: 'CornerSERIAL41',
+      media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/102/' });
+    f.prepare.mockImplementation(async (input, selected, audioActive) => ({ ...prepared(selected, audioActive),
+      fragments: [{ data: await fs.readFile(input.filePath), startMs: 0, durationMs: 1000 }] }));
+    const corner = f.devices[1].recording()!;
+    await f.push(f.notification('corner-compact', { camera: '41' }));
+    await f.push(f.notification('entry-compact'));
+    await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.readyMotion.mock.calls.some(([active]) => active) && f.cornerReady.mock.calls.some(([active]) => active));
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(2);
+    expect(f.prepare).toHaveBeenCalledTimes(2);
+    for (const [delegate, streamId, clipId, nativeName] of [
+      [f.delegate, 70, 101, 'Entry (SERIAL-40)'], [corner, 71, 102, 'Corner (SERIAL-41)'],
+    ] as const) {
+      const stream = delegate.handleRecordingStreamRequest(streamId);
+      expect((await stream.next()).value?.isLast).toBe(false);
+      expect((await stream.next()).value).toEqual({
+        data: Buffer.from(`downloaded /api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/${clipId}/`),
+        isLast: true,
+      });
+      expect((await stream.next()).done).toBe(true);
+      delegate.acknowledgeStream(streamId);
+      expect(f.reports).toEqual(expect.arrayContaining(['downloaded', 'prepared', 'home-requested', 'home-transfer-finished', 'home-transport-acknowledged']
+        .map(event => expect.objectContaining({ event, context: expect.objectContaining({ camera: nativeName }) }))));
+    }
+    await until(async () => (await f.state()).downloads.length === 0);
+    expect((await f.state()).consumed).toHaveLength(2);
+    const previousDownloads = f.transport.downloadMedia.mock.calls.length;
+    await f.push(f.notification('entry-repeat'));
+    await f.push(f.notification('corner-repeat', { camera: '41' }));
+    await jest.advanceTimersByTimeAsync(0);
+    await until(async () => !(await f.state()).core?.operation);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(previousDownloads);
+  });
+
+  it('does not download a compact-name collision from an excluded camera in the authoritative inventory', async () => {
+    const matchingDevices = [
+      { accountId: 10, networkId: 20, syncModuleId: 30, moduleId: '20:30', providerId: 40,
+        target: 'camera', cameraId: 'camera:40', nativeName: 'Entry (SERIAL-40)' },
+      { accountId: 10, networkId: 20, syncModuleId: 30, moduleId: '20:30', providerId: 41,
+        target: 'camera', cameraId: 'camera:41', nativeName: 'EntrySERIAL40' },
+    ];
+    const f = await setup({ nativeName: 'Entry (SERIAL-40)', matchingDevices, config: { initialDelaySeconds: 0 } });
+    f.media[0].device_name = 'EntrySERIAL40';
+    expect(f.devices).toHaveLength(1);
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.events.includes('clip-ambiguous'));
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    expect(f.prepare).not.toHaveBeenCalled(); expect(f.readyMotion).not.toHaveBeenCalledWith(true);
+    expect((await f.state()).consumed).toEqual([]);
+    await expect(f.delegate.handleRecordingStreamRequest(72).next()).rejects.toThrow('No permitted prepared');
   });
 
   it('finishes a timed-out prepared download and records the next motion without restarting the runtime', async () => {
