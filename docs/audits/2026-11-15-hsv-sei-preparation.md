@@ -69,6 +69,17 @@ worker retains its existing EOF behavior. An explicit comment and strict-output
 regression document this decision. All 55 native tests and the 15 preparation
 tests pass after this test/comment-only follow-up.
 
+Hosted review and the Windows native candidate exposed the same diagnostic
+defect: CRT text-mode stderr emits CRLF, while the new parser initially rejected
+the carriage return and lost the fixed code. The Windows corrupt-input test
+failed because its expected `MEDIA` code was absent. The shared parser now
+accepts LF or exactly one terminal CR before LF, including split chunks;
+embedded/repeated CR, arbitrary text and incomplete records remain rejected.
+The existing byte/line limits and allowlist are unchanged. Focused worker,
+preparation and delegate tests pass 108 cases with four existing skips;
+TypeScript and source lint pass. Fresh exact-head CI remains required after
+this repair; the failing old revision is retained rather than blindly rerun.
+
 The first full native run exposed two failure-path tests that incorrectly
 required complete asynchronous output framing after a proved fatal `_Exit(2)`.
 The bounded retry passes after allowing a truncated tail only for those tests,

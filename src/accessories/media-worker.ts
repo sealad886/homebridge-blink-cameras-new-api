@@ -112,12 +112,13 @@ export class PrivateMediaWorker {
     for (const byte of chunk.subarray(0, 4096 - this.#diagnosticBytes)) {
       this.#diagnosticBytes++;
       if (byte === 10) {
-        const code = this.#diagnosticLine.startsWith('BLINK_WORKER_') ? this.#diagnosticLine.slice(13) : '';
+        const line = this.#diagnosticLine.endsWith('\r') ? this.#diagnosticLine.slice(0, -1) : this.#diagnosticLine;
+        const code = line.startsWith('BLINK_WORKER_') ? line.slice(13) : '';
         if (!this.#diagnosticOverflow && isMediaWorkerFailureCode(code)) {
           this.#failureCode = code; this.#diagnosticLine = ''; return;
         }
         this.#diagnosticLine = ''; this.#diagnosticOverflow = false;
-      } else if (byte < 32 || byte > 126 || this.#diagnosticLine.length >= 96) {
+      } else if ((byte < 32 && byte !== 13) || byte > 126 || this.#diagnosticLine.length >= 96) {
         this.#diagnosticOverflow = true;
       } else if (!this.#diagnosticOverflow) this.#diagnosticLine += String.fromCharCode(byte);
     }
