@@ -33,6 +33,8 @@ const validScope = (scope: NativeClipCatalogScope): boolean => !!scope && positi
 const sameScope = (scope: NativeClipCatalogScope, device: NativeMotionDevice): boolean => device.accountId === scope.accountId
   && device.networkId === scope.networkId && device.syncModuleId === scope.syncModuleId && device.moduleId === scope.moduleId;
 const deviceIdentity = (device: NativeMotionDevice): string => JSON.stringify([device.providerId, device.target]);
+// Observed USB catalog names retain only ASCII alphanumerics from the full provider name.
+const catalogNames = (name: string): string[] => [name, name.replace(/[^a-zA-Z0-9]/g, '')].filter(Boolean);
 
 /** Stable across catalog refreshes and equivalent timestamp-offset spellings. */
 export function nativeClipIdentity(scope: NativeClipCatalogScope, clip: NativeStorageClip): string | null {
@@ -43,7 +45,7 @@ export function nativeClipIdentity(scope: NativeClipCatalogScope, clip: NativeSt
 }
 
 /**
- * Matches available metadata only. URLs remain opaque, native names are exact,
+ * Matches exact raw or compacted authoritative names only. URLs remain opaque,
  * and notification-created_at is not promoted to a measured physical PIR time.
  */
 export function matchNativeClip(options: NativeClipMatchOptions): NativeClipMatchResult {
@@ -57,7 +59,8 @@ export function matchNativeClip(options: NativeClipMatchOptions): NativeClipMatc
   if (!devices.some(device => deviceIdentity(device) === deviceIdentity(camera) && device.cameraId === camera.cameraId && device.nativeName === camera.nativeName)) {
     return { status: 'invalid', reason: 'unknown-camera' };
   }
-  const sameName = new Set(devices.filter(device => device.nativeName === camera.nativeName).map(deviceIdentity));
+  const names = new Set(catalogNames(camera.nativeName));
+  const sameName = new Set(devices.filter(device => catalogNames(device.nativeName).some(name => names.has(name))).map(deviceIdentity));
   if (sameName.size > 1) return { status: 'ambiguous', reason: 'duplicate-device-name' };
   if (!catalog.clips.length) return { status: 'missing' };
   if (!positiveId(catalog.manifestId)) return { status: 'invalid', reason: 'invalid-input' };
@@ -73,7 +76,7 @@ export function matchNativeClip(options: NativeClipMatchOptions): NativeClipMatc
 
   const candidates = new Map<string, { clip: NativeStorageClip; captureTimeMs: number; deltaMs: number }>();
   for (const clip of catalog.clips) {
-    if (!clip || clip.deviceName !== camera.nativeName || clip.networkId !== scope.networkId
+    if (!clip || typeof clip.deviceName !== 'string' || !names.has(clip.deviceName) || clip.networkId !== scope.networkId
       || typeof clip.mediaUrl !== 'string' || !clip.mediaUrl.length || clip.mediaUrl.length > 8_192) continue;
     const identity = nativeClipIdentity(scope, clip);
     const captureTimeMs = parseBlinkOffsetTimestamp(clip.capturedAt);

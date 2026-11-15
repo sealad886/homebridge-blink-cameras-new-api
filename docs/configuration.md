@@ -195,7 +195,11 @@ motion as a side effect.
 
 Each motion observation creates an independently scheduled FIFO job. Matching uses
 the actual catalog's network, native device name and offset-bearing `created_at`
-timestamp; display aliases and invented URL filenames are not camera identity.
+timestamp. A catalog name must exactly equal the camera's authoritative name or
+its case-sensitive ASCII-alphanumeric compacted form, as observed in USB catalogs.
+Overlapping raw/compacted names across any discovered cameras in the same
+account/network/Sync Module are rejected, including cameras excluded from HSV.
+Display aliases, partial names and invented URL filenames are not camera identity.
 The first attempt normally occurs after 60 seconds. Ten retries means at most
 11 ordinary attempts, subject to maximum job age and remote-command ownership.
 Early Notification management can add one opportunistic early attempt.
