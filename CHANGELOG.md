@@ -24,7 +24,9 @@ owns subsequent acceptance and finding dispositions.
 - Schedule recording keyframes by source time and preserve finite picture duration
   when source frame rate differs from the negotiated rate. Valid low-frame-rate
   clips no longer fail fragment bounds or the demonstrated audio-tail check.
-  Existing media guards and preparation deadlines remain enforced.
+  Preserve actual selected-picture intervals when downsampling and reserve AAC
+  headroom before short-fragment boundaries. Existing media guards and preparation
+  deadlines remain enforced.
 - Reject a maximum recording-job age equal to its initial discovery delay, which
   otherwise expires before its first ordinary attempt. Existing defaults remain
   unchanged. Document the conservative matching tolerance and its measured limits.

@@ -12,7 +12,7 @@ import { TARGETS, collectSourceProof, regularFile, sha256, verifyNativePackage, 
 
 export const QUALIFICATION_SELECTIONS = Object.freeze(['audio-latm', 'audio-latm-bundled'].flatMap(mode =>
   ['opus:16000', 'opus:24000', 'pcma:8000', 'pcmu:8000'].map(audio => `${mode}:${audio}`)));
-export const FINITE_RECORDING_SELECTIONS = Object.freeze(['audio-16khz', 'audio-24khz', 'audio-disabled', '30fps-source-15fps-output', 'recovery-metadata', 'low-fps-source']);
+export const FINITE_RECORDING_SELECTIONS = Object.freeze(['audio-16khz', 'audio-24khz', 'audio-disabled', '30fps-source-15fps-output', 'recovery-metadata', 'low-fps-source', '25fps-source-15fps-output']);
 export const RUNTIME_BOOTSTRAP_EXPECTATION = Object.freeze({ instances: 2, sourceStarts: 2, sourceStops: 2,
   publicMotionEvents: 2, stateReloaded: true, syntheticDownloads: 1, networkAttempts: 0 });
 const selections = QUALIFICATION_SELECTIONS;
@@ -109,46 +109,47 @@ export async function exerciseInstalledRecording(packageRoot, validationRoot) {
       audioCodec: { type: 0, samplerate: 1, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
     for (const selected of FINITE_RECORDING_SELECTIONS) {
       const longSource = selected === '30fps-source-15fps-output';
-      const lowFps = selected === 'low-fps-source';
-      const recovery = selected === 'recovery-metadata' || lowFps;
-      const rate = selected === 'audio-16khz' || recovery ? 16000 : selected === 'audio-24khz' ? 24000 : 0;
+      const lowFps = selected === 'low-fps-source', nonIntegral = selected === '25fps-source-15fps-output';
+      const timing = lowFps || nonIntegral, recovery = selected === 'recovery-metadata' || timing;
+      const rate = nonIntegral || selected === 'audio-24khz' ? 24000 : selected === 'audio-16khz' || recovery ? 16000 : 0;
       const sourceBytes = longSource ? execFileSync(join(validationRoot, 'fixture' + suffix), ['video-mp4', '16', '16', '30', '1800'],
         { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : recovery ?
-        execFileSync(join(validationRoot, 'fixture' + suffix), ['audio-mp4-sei', '320', '180', lowFps ? '5' : '15', lowFps ? '45' : '90'],
+        execFileSync(join(validationRoot, 'fixture' + suffix), ['audio-mp4-sei', '320', '180', nonIntegral ? '25' : lowFps ? '5' : '15', nonIntegral ? '225' : lowFps ? '45' : '90'],
           { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : bytes;
       const selectedFile = longSource || recovery ? join(scratch, `${selected}-source.mp4`) : filePath;
       if (longSource || recovery) writeFileSync(selectedFile, sourceBytes, { mode: 0o600, flag: 'wx' });
       const selectedConfiguration = { ...configuration,
-        mediaContainerConfiguration: { ...configuration.mediaContainerConfiguration, fragmentLength: recovery ? 4000 : 1000 },
-        videoCodec: { ...configuration.videoCodec, resolution: longSource ? [16, 16, 15] : recovery ? [320, 180, 30] : configuration.videoCodec.resolution,
-          parameters: { ...configuration.videoCodec.parameters, iFrameInterval: recovery ? 4000 : 1000 } },
+        mediaContainerConfiguration: { ...configuration.mediaContainerConfiguration, fragmentLength: recovery && !timing ? 4000 : 1000 },
+        videoCodec: { ...configuration.videoCodec, resolution: longSource ? [16, 16, 15] : nonIntegral ? [320, 180, 15] : recovery ? [320, 180, 30] : configuration.videoCodec.resolution,
+          parameters: { ...configuration.videoCodec.parameters, iFrameInterval: recovery && !timing ? 4000 : 1000 } },
         audioCodec: { ...configuration.audioCodec, samplerate: rate === 24000 ? 2 : 1, bitrate: recovery ? 16 : 32 } };
       const memory = new NativeRecordingMemoryBudget();
       const prepared = await prepareNativeRecording({ filePath: selectedFile, expectedBytes: sourceBytes.length, expectedSha256: sha256(sourceBytes) },
         selectedConfiguration, rate !== 0, new globalThis.AbortController().signal, { memory, admit: work => work() });
       try {
-        assert(prepared.fragments.length > 1); assert(prepared.durationMs > (longSource ? 59999 : lowFps ? 8900 : recovery ? 5900 : 2100) && prepared.durationMs <= (longSource ? 60000.1 : lowFps ? 9200 : recovery ? 6100 : 2200.1));
+        assert(prepared.fragments.length > 1); assert(prepared.durationMs > (longSource ? 59999 : timing ? 8900 : recovery ? 5900 : 2100) && prepared.durationMs <= (longSource ? 60000.1 : timing ? 9200 : recovery ? 6100 : 2200.1));
         assert(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= selectedConfiguration.mediaContainerConfiguration.fragmentLength + 0.01));
         const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
         try {
           assert.equal(sha256(output), prepared.preparedSha256);
           const decoded = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
             { input: output, env: {}, timeout: 5000, maxBuffer: 65536 }));
-          assert.equal(decoded.videoFrames, longSource ? 900 : lowFps ? 45 : recovery ? 90 : 33); assert.equal(decoded.videoWidth, longSource ? 16 : 320); assert.equal(decoded.videoHeight, longSource ? 16 : 180);
+          assert.equal(decoded.videoFrames, longSource ? 900 : nonIntegral ? 135 : lowFps ? 45 : recovery ? 90 : 33); assert.equal(decoded.videoWidth, longSource ? 16 : 320); assert.equal(decoded.videoHeight, longSource ? 16 : 180);
           assert.equal(decoded.audioTracks, rate ? 1 : 0);
           assert.equal(decoded.audioSampleRate, rate);
           assert.equal(decoded.audioChannels, rate ? 1 : 0);
           if (recovery) {
-            assert(Math.abs(decoded.lastVideoUs - decoded.firstVideoUs - (lowFps ? 44 * 1001000 / 5 : 89 * 1001000 / 15)) <= 15, 'Metadata must not add picture time');
-            assert(Math.abs(decoded.audioSamples / 16 - prepared.durationMs) < 160, 'Recovery metadata must preserve A/V alignment');
+            assert(Math.abs(decoded.lastVideoUs - decoded.firstVideoUs - (nonIntegral ? 224 * 1001000 / 25 : lowFps ? 44 * 1001000 / 5 : 89 * 1001000 / 15)) <= 15, 'Metadata must not add picture time');
+            assert(Math.abs(decoded.audioSamples * 1000 / rate - prepared.durationMs) < 160, 'Recovery metadata must preserve A/V alignment');
           }
-          if (lowFps) for (const fragment of prepared.fragments) {
+          if (timing) for (const [index, fragment] of prepared.fragments.entries()) {
+            if (index + 1 < prepared.fragments.length) assert(Math.abs(fragment.startMs + fragment.durationMs - prepared.fragments[index + 1].startMs) < 0.01, 'Selected source clocks must remain contiguous');
             const independent = Buffer.concat([prepared.initialization, fragment.data]);
             try {
               const part = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
                 { input: independent, env: {}, timeout: 5000, maxBuffer: 65536 }));
               assert(part.videoFrames > 0); assert.equal(part.audioTracks, 1);
-              assert(Math.abs(part.firstVideoUs - decoded.firstVideoUs - fragment.startMs * 1000) <= 15, 'Low-FPS fragments must retain source clocks');
+              assert(Math.abs(part.firstVideoUs - decoded.firstVideoUs - fragment.startMs * 1000) <= 15, 'Selected fragments must retain source clocks');
             } finally { independent.fill(0); }
           }
           assert.equal(sha256(readFileSync(selectedFile)), sha256(sourceBytes), 'Preparation must preserve Blink original');

@@ -197,6 +197,18 @@ static void packets(AVCodecContext *encoder, AVPacket *packet, uint64_t *bytes,u
     }
     if(result!=AVERROR(EAGAIN) && result!=AVERROR_EOF) fatal("ENCODE");
 }
+static void encode_picture(AVCodecContext *encoder,AVFrame *picture,AVPacket *packet,uint64_t *bytes,int64_t *keyframe_pts) {
+    picture->pict_type=AV_PICTURE_TYPE_NONE;
+    /* Demuxed AAC may lead the current picture by one source-picture interval. */
+    int64_t target=recording_fragment_target-(config[13]==2 && config[6]?picture->duration:0);
+    if(config[13] && (*keyframe_pts==AV_NOPTS_VALUE ||
+       (config[13]==2?picture->pts-*keyframe_pts+picture->duration>target:
+                       picture->pts-*keyframe_pts>=recording_fragment_target-1))) {
+        picture->pict_type=AV_PICTURE_TYPE_I;*keyframe_pts=picture->pts;
+    }
+    if(avcodec_send_frame(encoder,picture)<0)fatal("ENCODE");
+    packets(encoder,packet,bytes,BLINK_VIDEO_PACKET);
+}
 #include "audio.inc"
 
 /* Blink stores recovery SEI as a timed MP4 sample without a picture. Keep its
@@ -360,7 +372,7 @@ int main(int argc, char **argv) {
     if(av_frame_get_buffer(scaled,32)<0) fatal("MEMORY");
     struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;
     int64_t first_video_pts=AV_NOPTS_VALUE,last_selected_pts=AV_NOPTS_VALUE,last_source_pts=AV_NOPTS_VALUE,next_output_frame=0;
-    int64_t recording_keyframe_pts=AV_NOPTS_VALUE;
+    int64_t recording_keyframe_pts=AV_NOPTS_VALUE;int pending_picture=0;
     for (;;) {
         result=av_read_frame(input,packet);
         if(result<0 && result!=AVERROR_EOF) fatal("MEDIA");
@@ -409,6 +421,11 @@ int main(int argc, char **argv) {
             int64_t after_source=av_rescale_rnd((int64_t)elapsed,config[2],1000000,AV_ROUND_DOWN)+1;
             next_output_frame=FFMAX(next_output_frame+1,after_source);
             last_selected_pts=pts;
+            if(pending_picture) {
+                /* The next selected source timestamp closes the previous picture. */
+                scaled->duration=pts-scaled->pts;
+                encode_picture(encoder,scaled,encoded,&bytes,&recording_keyframe_pts);
+            }
             int inner_width=encoder->width,inner_height=encoder->height;
             if((int64_t)decoded->width*encoder->height>(int64_t)decoded->height*encoder->width)
                 inner_height=(int)((int64_t)decoded->height*encoder->width/decoded->width)&~1;
@@ -423,24 +440,21 @@ int main(int argc, char **argv) {
                 scaled->data[1]+(y/2)*scaled->linesize[1]+x/2,scaled->data[2]+(y/2)*scaled->linesize[2]+x/2,NULL};
             if(sws_scale(scaler,(const uint8_t *const*)decoded->data,decoded->linesize,0,decoded->height,target,scaled->linesize)!=inner_height) fatal("SCALE");
             scaled->pts=pts;
-            scaled->duration=0;
+            scaled->duration=0;pending_picture=config[13]==2;
             if(config[13]==2 && decoded->duration>0) {
                 int64_t duration=av_rescale_q(decoded->duration,input->streams[video]->time_base,AV_TIME_BASE_Q);
                 if(duration<=0 || duration>1000000)fatal("VIDEO_TIMESTAMP");
                 /* Slower source pictures cover more time than one negotiated frame. */
                 scaled->duration=FFMAX(duration,av_rescale(1,1000000,config[2]));
+                pending_picture=duration<scaled->duration;
             }
-            scaled->pict_type=AV_PICTURE_TYPE_NONE;
-            if(config[13] && (recording_keyframe_pts==AV_NOPTS_VALUE || pts-recording_keyframe_pts>=recording_fragment_target-1)) {
-                scaled->pict_type=AV_PICTURE_TYPE_I;recording_keyframe_pts=pts;
-            }
-            if(avcodec_send_frame(encoder,scaled)<0) { fatal("ENCODE"); }
-            packets(encoder,encoded,&bytes,2);
+            if(!pending_picture)encode_picture(encoder,scaled,encoded,&bytes,&recording_keyframe_pts);
             av_frame_unref(decoded);
         }
         if(received!=AVERROR(EAGAIN) && received!=AVERROR_EOF) fatal("DECODE");
         if(result==AVERROR_EOF) break;
     }
+    if(pending_picture)encode_picture(encoder,scaled,encoded,&bytes,&recording_keyframe_pts);
     if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
     packets(encoder,encoded,&bytes,2); audio_finish(&bytes); if(config[13])recording_finish();output(3,NULL,0);
     /* A terminal SEI has no following picture; discard it without adding a clock slot. */

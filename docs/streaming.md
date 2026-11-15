@@ -41,8 +41,8 @@ runs the combined conversion. Otherwise preview the installed converter against
 an explicit complete Homebridge configuration path, then apply after review:
 
 ```sh
-node /absolute/plugin/path/scripts/migrate-native-recording-config.cjs /absolute/homebridge/config.json
-node /absolute/plugin/path/scripts/migrate-native-recording-config.cjs /absolute/homebridge/config.json --apply
+node "/absolute/plugin/path/scripts/migrate-native-recording-config.cjs" "/absolute/homebridge/config.json"
+node "/absolute/plugin/path/scripts/migrate-native-recording-config.cjs" "/absolute/homebridge/config.json" --apply
 ```
 
 The historical secure-media script name delegates to this same converter and

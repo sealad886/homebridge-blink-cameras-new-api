@@ -185,7 +185,7 @@ Run the converter from this checkout with a supported Node.js version
 (20.3+, 22, 24 or 26):
 
 ```sh
-node scripts/migrate-native-recording-config.cjs /explicit/path/to/config.json
+node "scripts/migrate-native-recording-config.cjs" "/explicit/path/to/config.json"
 ```
 
 The default is a preview. It reads only the supplied complete Homebridge JSON
@@ -195,7 +195,7 @@ data, or restarts a service. Review its output and the relevant configuration
 locally before applying it:
 
 ```sh
-node scripts/migrate-native-recording-config.cjs /explicit/path/to/config.json --apply
+node "scripts/migrate-native-recording-config.cjs" "/explicit/path/to/config.json" --apply
 ```
 
 Use the account that owns the configuration, with write permission in its

@@ -144,6 +144,31 @@ class WorkerTests(unittest.TestCase):
                         self.assertEqual(decoded['audioTracks'],int(audio))
                         self.assertAlmostEqual(decoded['lastVideoUs'],(fps*9-1)*1000000/fps*(1.001 if metadata else 1),delta=12)
                         if audio:self.assertAlmostEqual(decoded['audioSamples']/16000,9*(1.001 if metadata else 1),delta=0.15)
+    def test_finite_selected_source_clocks_fit_short_fragments(self):
+        for source_fps,output_fps in ((5,30),(25,15)):
+            for metadata in (False,True):
+                media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei' if metadata else 'audio-mp4',
+                                               '16','16',str(source_fps),str(source_fps*9)],timeout=5)
+                for fragment_ms in (1000,4000):
+                    for rate in (0,16000,24000):
+                        with self.subTest(source_fps=source_fps,output_fps=output_fps,metadata=metadata,fragment_ms=fragment_ms,audio_rate=rate):
+                            options=dict(fps=output_fps,output_mode=2,fragment_ms=fragment_ms,iframe_ms=fragment_ms,max_frames=300)
+                            if rate:options.update(audio_codec=4,audio_rate=rate,audio_channels=1,audio_bitrate=16000)
+                            result=self.run_worker(config(**options)+frame(2,media)+frame(3))
+                            self.assertEqual(result.returncode,0,result.stderr)
+                            rows=messages(result.stdout);init=next(body for kind,body in rows if kind==8)
+                            fragments=[body for kind,body in rows if kind==9];self.assertGreater(len(fragments),1)
+                            for index,body in enumerate(fragments):
+                                _,start,duration,_=struct.unpack('!IqqI',body[:24])
+                                self.assertGreater(duration,0);self.assertLessEqual(duration,fragment_ms*1000)
+                                if index+1<len(fragments):self.assertEqual(start+duration,struct.unpack('!IqqI',fragments[index+1][:24])[1])
+                                decoded=self.decode_recording(init+body[24:]);self.assertGreater(decoded['videoFrames'],0)
+                                self.assertAlmostEqual(decoded['firstVideoUs'],start,delta=12)
+                                self.assertEqual(decoded['audioTracks'],int(rate!=0))
+                            decoded=self.decode_recording(init+b''.join(body[24:] for body in fragments))
+                            self.assertEqual(decoded['videoFrames'],9*min(source_fps,output_fps))
+                            self.assertAlmostEqual(decoded['lastVideoUs'],(source_fps*9-1)*1000000/source_fps*(1.001 if metadata else 1),delta=12)
+                            if rate:self.assertAlmostEqual(decoded['audioSamples']/rate,9*(1.001 if metadata else 1),delta=0.15)
     def test_finite_mp4_recovery_metadata_keeps_picture_and_audio_clocks(self):
         media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei','16','16','15','901'],timeout=5)
         for enabled in (False,True):

@@ -116,9 +116,10 @@ static void recording_packet_internal(AVCodecContext *encoder,AVPacket *packet,u
             recording_last_video=pts;
         }
         if(recording_waiting_audio) { recording_hold_video(packet,pts);return; }
-        /* Scene cuts may introduce extra keyframes. Keep whole short GOPs together
-         * instead of producing one-frame fragments with empty audio traf boxes. */
-        if((packet->flags&AV_PKT_FLAG_KEY) && recording_has_video && pts-recording_start>=recording_fragment_target-1) {
+        /* Finite IDRs include picture duration and AAC margin; live scene cuts
+         * keep whole short GOPs together instead of empty-audio fragments. */
+        if((packet->flags&AV_PKT_FLAG_KEY) && recording_has_video &&
+           (config[13]==2 || pts-recording_start>=recording_fragment_target-1)) {
             if(recording_audio>=0 && (recording_first_audio==AV_NOPTS_VALUE || recording_end-recording_audio_end>recording_audio_tolerance)) {
                 recording_waiting_audio=1;recording_hold_video(packet,pts);return;
             }

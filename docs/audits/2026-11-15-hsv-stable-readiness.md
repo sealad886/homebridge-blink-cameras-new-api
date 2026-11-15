@@ -72,3 +72,37 @@ physical critical paths and two successful natural token refreshes. Stable runti
 must match accepted RC except version/notes; stable install24hours plus a natural
 refresh precede completion. No paid credits, native pins, dependencies, new
 worktrees, history rewrites or Home/Blink settings changes are included.
+
+## Round-one review repairs
+
+Canonical exact5308 release preflight passed:2354tests and18existing skips,
+lint/build/package. Fresh whole30-file independent review was CLEAN. CodeRabbit
+explicitly completed all30files with two major conditional timing findings and
+one minor documentation finding. Both native cases reproduced with valid source
+media, so source review success did not waive them.
+
+-5fps→30fps with1second fragments and16/24kAAC failed FRAGMENT_LIMIT.
+-25fps→15fps failed1second fragments and produced26667microsecond overlap in
+nonfinal fragment metadata with4second fragments. Selected source intervals vary;
+assigning a constant negotiated-frame duration was incorrect.
+
+The repair holds only downsampled or unknown-duration pictures until the next
+selected timestamp supplies their duration; full-duration low-FPS pictures still
+submit immediately. Finite IDRs reserve complete picture duration, existing AAC
+margin and one picture interval of demux lead. The shared muxer closes finite
+known IDRs immediately while retaining live GOP grouping. No extra picture buffer,
+source-clock normalization or validation relaxation is introduced.
+
+The first pending-picture repair passed plain probes but expanded regression found
+two SEI/audio boundary failures. Those failures and numeric diagnostics are retained;
+instrumentation was removed. Final24boundary subcases and full57native tests pass,
+with15preparation tests and12final numeric probes passing. Each fragment independently
+decodes; nonfinal metadata is contiguous and original strict fragment limits hold.
+Installed qualification adds those boundaries across all five candidate targets.
+
+Quote both migration command paths in the streaming and conversion guides so
+operator paths containing spaces remain a single shell argument. No production
+migration was executed. The signed5308 source reviews and preflight are historical
+after these repairs; exact repaired-head preflight, independent review and active
+CodeRabbit round2 remain required before push. Candidate physical and natural
+refresh/stable soak gates remain unchanged.

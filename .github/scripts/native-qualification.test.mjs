@@ -54,6 +54,7 @@ test('publication aggregation requires exactly five successful qualifications fo
     rows.map((row, i) => i ? row : { ...row, finite_selections: [FINITE_RECORDING_SELECTIONS[0]] }),
     rows.map((row, i) => i ? row : { ...row, finite_selections: FINITE_RECORDING_SELECTIONS.filter(value => value !== 'recovery-metadata') }),
     rows.map((row, i) => i ? row : { ...row, finite_selections: FINITE_RECORDING_SELECTIONS.filter(value => value !== 'low-fps-source') }),
+    rows.map((row, i) => i ? row : { ...row, finite_selections: FINITE_RECORDING_SELECTIONS.filter(value => value !== '25fps-source-15fps-output') }),
     rows.map((row, i) => { if (i) return row; const value = { ...row }; delete value.finite_recording_verified; return value; })]) {
     assert.throws(() => validateQualificationReceipts(changed, source, base.package_integrity, base.source_bundle_sha256));
   }
