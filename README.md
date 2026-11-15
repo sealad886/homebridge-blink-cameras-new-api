@@ -22,8 +22,8 @@ Modern Blink platform plugin for Homebridge using Blink-hosted OAuth. Exposes Bl
 - **Doorbell** service exposed for doorbell devices; automatic ring delivery is not implemented
 - **Switch** for enabling/disabling motion detection per device
 - **Camera** live video/audio and snapshots, with an optional manual snapshot-refresh switch
-- **Opt-in HomeKit Secure Video** from completed native Blink USB clips;
-  physical Apple home hub and retained-recording acceptance remains pending
+- **Opt-in HomeKit Secure Video** from completed native Blink USB clips, delivered
+  through each camera’s existing Home accessory; see the per-camera setup below
 - **Connection monitor and retry control** for provider outages
 - **Optional TemperatureSensor** for traditional cameras reporting temperature;
   default off, with global and per-device settings
@@ -112,12 +112,19 @@ npm install -g @sealad886/homebridge-blink-cameras-new-api
 
 Restart Homebridge after installing.
 
-For this prerelease, select the exact beta version in Homebridge UI, or use the
-Homebridge service command:
+To upgrade from **0.10.0**, read the [one-time upgrade procedure](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/native-recording-config-migration.md#upgrade-from-0100)
+before installation. It preserves other plugins and creates a private backup when
+conversion is needed. Existing camera identities and pairing are retained.
+
+Use Homebridge UI for routine upgrades, or the standard Homebridge service command:
 
 ```sh
-hb-service add @sealad886/homebridge-blink-cameras-new-api@1.1.0-beta.0
+hb-service add @sealad886/homebridge-blink-cameras-new-api
 ```
+
+For prerelease testing, select the exact published prerelease in Homebridge UI
+or append its version to the package name. Do not assume an unversioned install
+selects the beta channel.
 
 Use the [release guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/RELEASE.md)
 for backup, child-bridge restart, verification and rollback. Beta publication does
@@ -197,7 +204,12 @@ records security evidence and remaining acceptance limits.
 
 ## HomeKit Secure Video
 
-Recording is disabled by default. Set up each camera in both Blink and Apple Home:
+Recording is disabled by default. It delivers completed Blink **native Local Storage**
+motion clips to the same camera’s saved Home timeline after download and local
+preparation. Live viewing remains independent; this does not replace the live
+feed or create a separate replay camera.
+
+Set up each camera in both Blink and Apple Home:
 
 1. In Blink, arm the system, enable that camera's motion detection and confirm a
    new motion clip plays from **Local Storage** on its associated Sync Module.
@@ -214,7 +226,8 @@ Recording is disabled by default. Set up each camera in both Blink and Apple Hom
    event. Choose the desired **Record Audio** permission separately.
 5. Have a compatible, connected home hub and an iCloud+ plan that supports your
    camera count. Trigger new motion, allow the native clip to finish, then verify
-   playback in that camera's Home timeline.
+   playback in that camera's Home timeline. Open the saved entry and let playback
+   advance; a thumbnail, motion alert or live view alone does not prove recording.
 
 Home chooses its Home/Away mode from household location information. Its
 notification settings and the plugin's **Motion Detected** sensor visibility are
@@ -259,10 +272,13 @@ This delayed offer does not establish pre-event recording or insert a clip at an
 arbitrary historical point in Home's timeline. The home hub decides whether to
 request and retain it. Apple requires a compatible home hub and an eligible
 iCloud+ plan; see [Apple's HomeKit Secure Video guide](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud).
-Native Blink clip retrieval, Home retention/playback and full Pi runtime are
-operator acceptance steps for this beta. Receiving motion alone proves none of
-those outcomes, and the historical persistent-recording lock's cause remains
-unproven.
+Saved Home recordings from both tested cameras have been played on the physical
+installation. That is bounded evidence for those cameras and settings, not every
+Blink model or clip. Verify your own camera after setup or upgrade; unsupported
+or malformed media can still be rejected with a bounded preparation diagnostic.
+Home controls retention and playback. Clip length comes from the completed Blink
+recording, not the plugin motion-sensor timeout. A saved entry’s Home timeline
+time can reflect delayed delivery rather than the original Blink capture time.
 
 The [recording configuration guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#motion-and-homekit-recording)
 owns timing and resource settings. Before upgrading an older HSV configuration,

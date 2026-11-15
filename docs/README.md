@@ -4,7 +4,7 @@ Start with the [user guide](../README.md). This map assigns one owner to each
 maintained topic. Update that owner first; use links elsewhere instead of copying
 procedures, settings tables or release decisions.
 
-Last reviewed: 9 November 2026.
+Last reviewed: 15 November 2026.
 
 ## Current guides and sources
 
@@ -15,7 +15,7 @@ Last reviewed: 9 November 2026.
 | Sign-in and recovery | [Authentication](authentication.md) | Operator procedure; ADR-001 owns architecture |
 | Video/audio and quality | [Streaming](streaming.md) | Packaged codec requirements, migration, input/output profiles and talkback |
 | Motion and native HomeKit recording | [Configuration](configuration.md#motion-and-homekit-recording) | Push subscription, completed USB clips, timing and Home policy; ADR-007 owns architecture |
-| Recording configuration conversion | [One-off migration](native-recording-config-migration.md) | Preview, private backup, atomic application and verified retired keys |
+| Stable and beta upgrade conversion | [One-off migration](native-recording-config-migration.md) | Combined 0.10.0 media/motion upgrade, intermediate beta recording/journal migration, preview/apply, private backup and Windows manual steps |
 | Faults and recovery | [Troubleshooting](troubleshooting.md) | Operator diagnosis |
 | Diagnostic policy | [Logging specification](debug_logging_spec.md) | Controls, bounds and redaction |
 | Trusted evidence reproduction | [Pi evidence reporter](../scripts/pi-evidence/README.md) | Data-only bundles and trusted normalizer |

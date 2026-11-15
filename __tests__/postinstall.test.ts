@@ -18,6 +18,30 @@ describePosix('one-time installed configuration migration', () => {
   beforeEach(() => { directory = fs.mkdtempSync(join(tmpdir(), 'blink-postinstall-')); });
   afterEach(() => { jest.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
+  it.each([0o600, 0o640])('upgrades published 0.10.0 settings together, retaining canonical choices and access mode %o', mode => {
+    // The removed properties and values below existed in the published 0.10.0 schema.
+    const other = { platform: 'Other', ffmpegPath: 'keep', enableMotionPolling: false };
+    const source = { bridge: { keep: true }, platforms: [other, { platform: 'BlinkCameras',
+      enableMotionPolling: true, ffmpegPath: 'ffmpeg', ffmpegDebug: true, rtspTransport: 'tcp',
+      videoEncoder: 'auto', twoWayAudio: false, audioCodec: 'aac-eld',
+      exposeMotionDetected: false, mediaDebug: false, unknown: { keep: true } }] };
+    const bytes = JSON.stringify(source, null, 4); fs.writeFileSync(file(), bytes, { mode }); fs.chmodSync(file(), mode);
+    const owner = fs.statSync(file());
+    expect(installer.run({ UIX_STORAGE_PATH: directory }, installedRoot())).toEqual({ action: 'Applied' });
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).toEqual({ bridge: source.bridge, platforms: [other,
+      { platform: 'BlinkCameras', exposeMotionDetected: false, mediaDebug: false, audioCodec: 'opus', unknown: { keep: true } }] });
+    expect(backups()).toHaveLength(1);
+    const backup = join(directory, backups()[0]);
+    expect(fs.readFileSync(backup, 'utf8')).toBe(bytes);
+    for (const filename of [file(), backup]) {
+      const stat = fs.statSync(filename);
+      expect([stat.uid, stat.gid]).toEqual([owner.uid, owner.gid]);
+      expect(stat.mode & 0o777).toBe(filename === backup ? 0o600 : mode);
+    }
+    expect(installer.run({ UIX_STORAGE_PATH: directory }, installedRoot())).toEqual({ action: 'Unchanged' });
+    expect(backups()).toHaveLength(1);
+  });
+
   it.each([0o600, 0o640])('persists canonical choices and config access mode %o with an exact private backup, idempotently', mode => {
     const input = { bridge: { keep: 'PRIVATE_CONFIG_VALUE' }, platforms: [
       { platform: 'Other', disableEarlyNotification: 'keep' },
@@ -100,7 +124,7 @@ describePosix('one-time installed configuration migration', () => {
     expect(fs.readdirSync(join(directory, 'checkout'))).toEqual(['scripts']);
   });
 
-  it.each(['not-json', JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: 'false' }] }),
+  it.each([JSON.stringify({ platforms: [{ platform: 'BlinkCameras', ffmpegDebug: 'false', enableMotionPolling: true }] }), 'not-json', JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: 'false' }] }),
     JSON.stringify({ platforms: [{ platform: 'BlinkCameras', hksv: { unverified: true } }] })])('fails without changing malformed or conflicted configuration: %s', bytes => {
     fs.writeFileSync(file(), bytes);
     const result = installer.run({ UIX_STORAGE_PATH: directory }, installedRoot());
@@ -132,6 +156,7 @@ describePosix('one-time installed configuration migration', () => {
     const scripts = join(installedRoot(), 'scripts'); fs.mkdirSync(scripts, { recursive: true });
     fs.copyFileSync(script, join(scripts, 'postinstall.cjs'));
     fs.copyFileSync(resolve('scripts/migrate-native-recording-config.cjs'), join(scripts, 'migrate-native-recording-config.cjs'));
+    fs.copyFileSync(resolve('scripts/migrate-secure-media-config.cjs'), join(scripts, 'migrate-secure-media-config.cjs'));
     fs.symlinkSync(resolve('dist'), join(installedRoot(), 'dist'), 'dir');
     const result = spawnSync(process.execPath, [join(scripts, 'postinstall.cjs')], { env: { PATH: process.env.PATH, UIX_STORAGE_PATH: directory }, encoding: 'utf8' });
     expect(result.status).toBe(1); expect(result.stderr).toContain('invalid-json');
@@ -143,6 +168,7 @@ describePosix('one-time installed configuration migration', () => {
 it.each([
   { platform: 'BlinkCameras', earlyNotificationMode: 'off' },
   { platform: 'BlinkCameras', disableEarlyNotification: true },
+  { platform: 'BlinkCameras', ffmpegPath: 'ffmpeg', enableMotionPolling: true },
 ])('leaves Windows config untouched and reports manual migration without loading POSIX code: %s', config => {
   const directory = fs.mkdtempSync(join(tmpdir(), 'blink-windows-install-'));
   try {

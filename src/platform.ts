@@ -268,7 +268,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     }
     const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     if (retired.some(key => Object.hasOwn(this.config, key))) {
-      throw new Error('Retired streaming settings require the explicit scripts/migrate-secure-media-config.cjs migration');
+      throw new Error('Retired streaming settings require scripts/migrate-native-recording-config.cjs: preview the explicit full config path, then apply with --apply; on Windows follow the manual conversion guide');
     }
     for (const key of ['mediaDebug', 'enableAudio', 'enableStreaming', 'persistSnapshotCache']) {
       if (this.config[key] !== undefined && typeof this.config[key] !== 'boolean') throw new Error('Invalid streaming boolean setting');

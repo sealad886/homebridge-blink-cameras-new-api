@@ -10,6 +10,8 @@ const { randomUUID } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 const { migrateEarlyNotificationConfig } = require('../dist/early-notification-config.js');
 
+const { convertSecureMediaSettings } = require('./migrate-secure-media-config.cjs');
+
 const MAX_BYTES = 4 * 1024 * 1024;
 const OBSOLETE_RECORDING_KEYS = ['hksvSource', 'syncModuleRecording'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -42,6 +44,13 @@ function convert(document) {
         issues.push({ platformIndex, code, severity });
       }
     };
+    try {
+      const previous = next;
+      next = convertSecureMediaSettings(next);
+      for (const key of Object.keys(previous)) if (!has(next, key)) retire(key);
+      if (has(previous, 'ffmpegDebug') && has(previous, 'mediaDebug')) summary.explicitChoicesPreserved++;
+    }
+    catch { issue('invalid-media-debug-choice'); }
     try { next = migrateEarlyNotificationConfig(next).config; }
     catch { issue('invalid-early-notification-choice'); }
     if (has(next, 'hksv')) issue('unverified-hksv-shape');
@@ -185,6 +194,8 @@ function main(args) {
   if (args.length === 1 && args[0] === '--help') {
     process.stdout.write('Usage: node scripts/migrate-native-recording-config.cjs /explicit/config.json [--apply]\n'
       + 'Default: preview only. --apply preserves exact original bytes in a private local backup before atomic replacement.\n'
+      + 'Both migration entrypoints preview by default and convert secure-media, motion and recording settings together.\n'
+      + 'Removes retired FFmpeg/transport/talkback choices; maps ffmpegDebug to mediaDebug and AAC-ELD to Opus.\n'
       + 'Converts enableMotionPolling and verified hksvCameras selectors.\n'
       + 'Migrates disableEarlyNotification to earlyNotificationMode at plugin, module, and camera scopes. Requires the installed dist helper.\n'
       + 'Removes obsolete hksvSource and syncModuleRecording after backup; preserves live-view feed limits.\n'
@@ -208,5 +219,5 @@ function main(args) {
   }
 }
 
-module.exports = { convert, inspect, apply, MigrationError };
+module.exports = { convert, inspect, apply, main, MigrationError };
 if (require.main === module) process.exitCode = main(process.argv.slice(2));

@@ -152,6 +152,29 @@ describePosix('explicit native recording configuration migration', () => {
     expect(readFileSync(file, 'utf8')).toBe(newer); expect(backups()).toEqual([]);
   });
 
+  it('rejects a config access-mode change after preview before writing any backup', () => {
+    const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', ffmpegPath: 'ffmpeg', ffmpegDebug: true }] });
+    writeFileSync(file, bytes); fs.chmodSync(file, 0o640); const plan = migration.inspect(file);
+    fs.chmodSync(file, 0o600);
+    expect(() => migration.apply(plan)).toThrow('concurrent-change');
+    expect(readFileSync(file, 'utf8')).toBe(bytes); expect(backups()).toEqual([]);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('does not replace combined legacy config when the private backup directory cannot be synced', () => {
+    const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', ffmpegPath: 'ffmpeg', enableMotionPolling: true }] });
+    writeFileSync(file, bytes); const plan = migration.inspect(file), sync = fs.fsyncSync;
+    jest.spyOn(fs, 'fsyncSync').mockImplementation(descriptor => {
+      if (fs.fstatSync(descriptor).isDirectory()) throw new Error('fixture directory sync failure');
+      sync(descriptor);
+    });
+    expect(() => migration.apply(plan)).toThrow('fixture directory sync failure');
+    expect(readFileSync(file, 'utf8')).toBe(bytes); expect(backups()).toHaveLength(1);
+    const backup = join(directory, backups()[0]); expect(readFileSync(backup, 'utf8')).toBe(bytes);
+    expect(statSync(backup).mode & 0o777).toBe(0o600);
+    expect(readdirSync(directory).some(name => name.endsWith('.tmp'))).toBe(false);
+  });
+
   it('replaces the directory entry atomically while an open reader retains the exact original file', () => {
     const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', enableMotionPolling: true }] });
     writeFileSync(file, bytes); const descriptor = fs.openSync(file, 'r');

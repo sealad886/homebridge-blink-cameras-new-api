@@ -86,10 +86,26 @@ clip must exist before this plugin can offer it to Home.
 - `acquisition-missing` means the available catalog has no usable clip satisfying
   the camera, scope, timestamp and other matching checks. Compare the new clip's
   timestamp with the motion event. Do not assume the nearest clip is the same
-  event or widen the matching window without confirming that relationship.
+  event or widen the matching window without confirming that relationship. The
+  default 15-second bound can exclude valid events when Blink timestamps differ
+  by more; verify several isolated events and adjacent recordings before choosing
+  the smallest measured global tolerance and check all enabled cameras. Changing
+  the initial lookup delay does not
+  change timestamp matching.
 - A Home recording request can be rejected while no prepared clip exists. Check
   acquisition and preparation first; that rejection alone does not establish an
   encoder or Home transport failure.
+
+The clip appears under its original camera, not a replay camera. Wait for Blink
+to finish recording, then for download and local preparation. The default ordinary
+lookup starts after 60 seconds; catalog cooldown and queue contention can add
+delay. Home may place the entry at delivery time. `motionTimeout` only controls
+the public motion indication; it does not set the saved clip length.
+
+Preparation failures are reported with bounded phase/code diagnostics. A rejected
+clip does not establish that all recording is broken; preserve the code and event
+time for an issue. Do not widen identity/time matching or disable media validation
+to force an unrelated or malformed clip through.
 
 Successful download, preparation or a Home transport acknowledgment still needs
 confirmation by playing the saved clip in Home. Apple's hub decides whether to
@@ -176,13 +192,15 @@ node --version
 
 ## Configuration migration required
 
-An upgrade from 0.10.0 can contain both retired secure-media and old recording
-settings. Follow the [secure media upgrade](streaming.md#upgrade-configuration)
-first, then the [native recording preview and application](native-recording-config-migration.md).
-Use the explicit full Homebridge config path. The first converter applies with a
-private backup; the second defaults to preview and requires `--apply` to replace.
-Both preserve unrelated configuration and make no Blink requests or service
-changes. The current `syncModuleFeedLimits` live-view setting remains valid.
+For stable 0.10.0, follow the [combined one-time upgrade](native-recording-config-migration.md#upgrade-from-0100).
+It handles retired media options and motion settings in one guarded replacement.
+Early Notification and legacy HSV mappings apply separately to intermediate beta
+users. Both migration script names now default to preview; an explicit `--apply`
+is required to replace the file with a private backup. Do not assume the old
+secure-media command still writes when given only a path. POSIX postinstall needs
+the explicit installer storage path; Windows uses the guide’s manual conversion.
+Neither path changes Blink settings or pairing. Existing `syncModuleFeedLimits`
+live-view settings remain valid.
 
 ## Motion Not Detected
 

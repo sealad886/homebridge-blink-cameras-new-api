@@ -1,6 +1,6 @@
 # Configuration reference
 
-Last reviewed: 13 November 2026.
+Last reviewed: 15 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -22,7 +22,10 @@ further checks. Testing does not save Homebridge configuration.
 
 Information buttons beside field labels provide help on hover, keyboard focus
 or touch; Escape dismisses it. Unsaved changes have a contrasting warning banner.
-The local clip-cache control displays MiB; JSON retains integer bytes.
+The local clip-cache control displays MiB; JSON retains integer bytes. The temporary
+1.1.0 setup notice links the recording checklist. Dismiss hides it for the current
+settings window only and never changes the configuration or enables Save. It is
+scheduled for removal in the first maintenance release after 1.1.0.
 
 The editor separates five tasks:
 
@@ -194,6 +197,10 @@ the plugin setting never arms Blink or enables camera motion as a side effect.
 
 ### Recording setup checklist
 
+Completed Blink clips are offered through their respective existing Home camera
+accessories after download and preparation. No replay accessory or live-feed
+replacement is needed. Existing accessory identities and pairing are retained.
+
 Complete these steps for each camera you want to record:
 
 1. **Blink:** Arm its system, enable camera motion detection, and trigger a new
@@ -218,7 +225,9 @@ Complete these steps for each camera you want to record:
 6. **Verify:** Trigger fresh motion after setup. Check the new playable Blink
    Local clip, then the saved clip in the same camera's Home timeline. Motion
    notifications, a live picture, and successful transport logs do not establish
-   saved Home playback. See [missing-recording checks](troubleshooting.md#motion-arrives-but-no-home-recording-appears).
+   saved Home playback. Open the saved entry and let playback advance beyond its
+   thumbnail. The event duration is determined by Blink’s finished clip, not
+   `motionTimeout`; Home’s timeline position can reflect delivery delay. See [missing-recording checks](troubleshooting.md#motion-arrives-but-no-home-recording-appears).
 
 Home's **Status and Notifications** controls alert delivery separately. Enabling
 alerts does not enable recording. These settings apply per camera; check each
@@ -309,8 +318,19 @@ Blink's notification and clip timestamps always describe the same instant.
 | `matchToleranceSeconds` | `15` | Integer 0–300; maximum timestamp distance for an unambiguous match |
 | `catalogRefreshSeconds` | `60` | Integer 60–3600; minimum spacing between new catalog preparations for a module |
 | `maxQueuedJobs` | `128` | Integer 1–1024; bounded event backlog |
-| `maxJobAgeSeconds` | `900` | Integer 1–86400, at least the initial delay; expires undispatched jobs |
+| `maxJobAgeSeconds` | `900` | Integer 1–86400, greater than the initial delay; expires jobs at this age |
 | `maxCachedBytes` | `134217728` | Integer 33554432–1073741824; owned downloaded-file budget |
+
+The 15-second matching tolerance is a conservative starting bound, not a measured
+maximum for every Blink camera or Early Notification mode. A tested installation
+had confirmed clip/notification differences of 18–19 seconds, beyond this default.
+If acquisition repeatedly reports no matching clip, compare several isolated
+motion events with their actual playable Blink clips before adjusting it. This
+setting applies globally, so check every enabled camera and choose the smallest
+measured window that fits the events you verified. A larger
+window can select a neighboring recording from the same camera; the nearest
+recording is not proof of the same event. Do not use clip duration as an assumed
+timestamp offset. See [missing-recording checks](troubleshooting.md#motion-arrives-but-no-home-recording-appears).
 
 Catalog cooldown is a conservative plugin policy, not a measured vendor rate
 limit. A five-second retry can reuse a completed catalog or wait locally; it

@@ -103,8 +103,8 @@ describe('full settings draft validation', () => {
     expect(JSON.stringify(result)).not.toContain('private-user-value'); expect(JSON.stringify(result)).not.toContain('private-path-value');
   });
 
-  it('checks native retry/age bounds without mutating the draft', () => {
-    const config = { name: 'Blink', nativeRecording: { initialDelaySeconds: 120, maxJobAgeSeconds: 60 } };
+  it.each([60, 120])('checks native retry/age bounds without mutating the draft: age %i', maxJobAgeSeconds => {
+    const config = { name: 'Blink', nativeRecording: { initialDelaySeconds: 120, maxJobAgeSeconds } };
     const before = structuredClone(config);
     const result = validator.validate({ revision: 1, config });
     expect(result.valid).toBe(false);

@@ -486,7 +486,7 @@
           },
           "maxJobAgeSeconds": {
             "title": "Maximum Recording Job Age (seconds)",
-            "description": "Discard a motion recording after this age. Must be at least the initial clip discovery delay.",
+            "description": "Discard a motion recording after this age. Must be greater than the initial clip discovery delay so an ordinary acquisition can start before expiry.",
             "type": "integer",
             "default": 900,
             "minimum": 1,

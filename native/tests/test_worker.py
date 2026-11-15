@@ -121,6 +121,29 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(decoded['videoFrames'],180)
         self.assertGreaterEqual(decoded['audioSamples'],6*16000)
         self.assertLessEqual(decoded['audioSamples'],6*16000+2048)
+    def test_finite_low_frame_rate_sources_keep_bounded_independent_fragments(self):
+        for fps in (5,7,15):
+            for metadata in (False,True):
+                media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei' if metadata else 'audio-mp4',
+                                               '16','16',str(fps),str(fps*9)],timeout=5)
+                for audio in (False,True):
+                    with self.subTest(source_fps=fps,metadata=metadata,audio=audio):
+                        options=dict(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=300)
+                        if audio:options.update(audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=16000)
+                        result=self.run_worker(config(**options)+frame(2,media)+frame(3))
+                        self.assertEqual(result.returncode,0,result.stderr)
+                        rows=messages(result.stdout);init=next(body for kind,body in rows if kind==8)
+                        fragments=[body for kind,body in rows if kind==9]
+                        self.assertGreater(len(fragments),2)
+                        for body in fragments:
+                            self.assertGreater(struct.unpack('!IqqI',body[:24])[2],0)
+                            self.assertLessEqual(struct.unpack('!IqqI',body[:24])[2],4000000)
+                            self.assertGreater(self.decode_recording(init+body[24:])['videoFrames'],0)
+                        decoded=self.decode_recording(init+b''.join(body[24:] for body in fragments))
+                        self.assertEqual(decoded['videoFrames'],fps*9)
+                        self.assertEqual(decoded['audioTracks'],int(audio))
+                        self.assertAlmostEqual(decoded['lastVideoUs'],(fps*9-1)*1000000/fps*(1.001 if metadata else 1),delta=12)
+                        if audio:self.assertAlmostEqual(decoded['audioSamples']/16000,9*(1.001 if metadata else 1),delta=0.15)
     def test_finite_mp4_recovery_metadata_keeps_picture_and_audio_clocks(self):
         media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei','16','16','15','901'],timeout=5)
         for enabled in (False,True):

@@ -57,12 +57,12 @@ export class SettingsValidator {
       catch (error) {
         const field = error instanceof Error ? /nativeRecording\.([A-Za-z]+)/.exec(error.message)?.[1] : undefined;
         result.errors.push({ path: `/nativeRecording${field ? `/${field}` : ''}`, code: 'native_recording',
-          message: 'Use valid native recording limits; maximum job age must cover the initial delay.' });
+          message: 'Use valid native recording limits; maximum job age must exceed the initial delay.' });
       }
     }
     const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     for (const key of retired) if (Object.hasOwn(config, key)) {
-      result.errors.push({ path: `/${key}`, code: 'retired', message: 'Run scripts/migrate-secure-media-config.cjs with the explicit full config path; it backs up locally before replacement.' });
+      result.errors.push({ path: `/${key}`, code: 'retired', message: 'Preview scripts/migrate-native-recording-config.cjs with the explicit full config path, then use --apply after review. Windows requires manual conversion; see docs/native-recording-config-migration.md.' });
     }
     if (Boolean(typeof config.username === 'string' && config.username.trim()) !== Boolean(typeof config.password === 'string' && config.password.trim())) {
       result.errors.push({ path: '/username', code: 'credentials', message: 'Username and password must be provided together.' });

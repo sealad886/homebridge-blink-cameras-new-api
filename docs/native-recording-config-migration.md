@@ -9,7 +9,7 @@ Use the plugin's existing five-section settings editor. Motion exposure belongs
 to the camera settings; HomeKit recording selects the new per-camera policy.
 Homebridge Save and a child-bridge restart apply the reviewed configuration.
 
-## Upgrade from 1.1.0-beta.1
+## Installation and one-time conversion
 
 Close all settings and JSON Config editors and stop other configuration writers
 until installation or explicit migration completes. The final file check and
@@ -25,8 +25,11 @@ or other storage roots. Source checkout dependency installs never access Homebri
 when they inherit `UIX_STORAGE_PATH`; installation is verified before using that
 path. The existing guarded converter writes an owner-only backup of the exact
 original bytes before atomic replacement, preserving file ownership and unrelated
-configuration. The replacement retains the config permission bits so service
-group-read access is preserved; the backup stays private at `0600`. Already-converted files are left untouched without another backup.
+configuration. Secure-media, motion and recording conversions share this one
+guarded file operation; do not chain two separate writers. The replacement retains
+the config permission bits so service group-read access is preserved; the backup
+stays private at `0600`. Already-converted files are left untouched without another
+backup.
 Invalid choices, unsafe files and detected concurrent changes fail the migration
 without replacing the configuration.
 Automatic migration also stops on `unresolved-camera-aliases` before changing
@@ -51,6 +54,12 @@ the installation step leaves the file untouched and reports manual conversion
 instead of failing an otherwise valid installation. Use Homebridge's backup and
 JSON Config editor to perform the mapping below before starting with legacy keys;
 already-canonical Windows configurations need no conversion.
+
+## Intermediate beta Early Notification and journal conversion
+
+These settings were introduced after stable 0.10.0. A normal 0.10.0 upgrade has
+no Early Notification preference or HSV journal to convert. If you used an
+intermediate 1.1.0 beta, retain its journal and apply the relevant rules below.
 
 At global, Sync Module and camera scopes, `disableEarlyNotification: true`
 becomes `earlyNotificationMode: "off"`; explicit `false` becomes `"unmanaged"`.
@@ -119,20 +128,56 @@ state; do not discard unresolved originals to make a downgrade start.
 
 ## Upgrade from 0.10.0
 
-First review the [secure media upgrade](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#upgrade-configuration).
-The secure media converter removes retired live-view CLI options and maps the
-retired audio choice. It has no preview flag: when a conversion is needed, this
-command writes an owner-only backup before replacing the explicit file:
+The published 0.10.0 configuration includes retired live-view settings such as
+`ffmpegPath`, `ffmpegDebug`, `rtspTransport`, `videoEncoder` and `twoWayAudio`, plus
+`enableMotionPolling`. The combined converter below removes retired media options,
+maps `ffmpegDebug` to `mediaDebug`, maps `audioCodec: "aac-eld"` to `"opus"`, and
+converts `enableMotionPolling` to `exposeMotionDetected`. Valid explicit canonical
+values win. Unknown fields, other platforms, credentials and current camera
+identities are preserved. It does not enable HSV automatically.
 
-```sh
-node scripts/migrate-secure-media-config.cjs /explicit/path/to/config.json
-```
+1. Make a private Homebridge backup. Keep existing authentication, accessories and
+   pairing state. Close settings/JSON editors and stop other configuration writers.
+2. Install through normal Homebridge tooling. On a supported POSIX installation,
+   postinstall applies the combined conversion only when the installer supplies
+   the explicit `UIX_STORAGE_PATH`. Read its result; installation alone does not
+   prove conversion happened.
+3. If scripts were disabled or that path was unavailable, use the explicit
+   preview and `--apply` procedure below before starting the plugin. Use the
+   installed plugin path in place of the checkout-relative `scripts/` path.
+4. Restart the Blink child bridge. Open settings and confirm an unchanged editor
+   remains clean. Verify sign-in, existing accessories and controls, then follow
+   the [per-camera HSV setup](configuration.md#recording-setup-checklist).
 
-Use the complete Homebridge configuration path, preserve current auth/accessory
-state, and close concurrent settings editors. Then preview the native recording
-converter below against that same path. It preserves other platform and bridge
-blocks and the valid live-view module limits. Neither converter contacts Blink,
-changes an installed package or restarts Homebridge.
+Both installed migration script names now use the same combined converter.
+`migrate-secure-media-config.cjs` also defaults to preview and requires `--apply`
+to write; its historical implicit-write behavior is removed. Running either
+converter after a successful conversion is a no-op without another backup.
+Neither contacts Blink, changes the installed version or restarts Homebridge.
+
+### Windows manual conversion
+
+Automatic conversion deliberately skips Windows; the file writer requires POSIX
+ownership semantics. Keep a private Homebridge backup, close competing editors,
+and use JSON Config to make the conversion below in each BlinkCameras platform.
+Preserve other plugins and unknown fields. An already-canonical configuration
+needs no conversion.
+
+- Remove `ffmpegPath`, `ffmpegDebug`, `rtpSsrcMode`, `rtspTransport`,
+  `verifyImmisTls`, `twoWayAudio` and `videoEncoder`. Before removing
+  `ffmpegDebug`, copy its boolean to `mediaDebug` if `mediaDebug` is absent.
+- Map `audioCodec: "aac-eld"` to `"opus"`. For historical nested audio/video
+  objects, remove `audio.aacEldEncoder`, `audio.twoWay` and `video.encoder`, and
+  map `audio.codec: "aac-eld"` to `"opus"`.
+- Copy boolean `enableMotionPolling` to `exposeMotionDetected` only if the latter
+  is absent, then remove `enableMotionPolling`.
+- Intermediate beta users must also apply the Early Notification and recording
+  mappings in this guide. Review conflicting camera aliases manually; do not
+  guess identity or discard unresolved journal evidence.
+
+Save the converted configuration, restart the Blink child bridge and verify it.
+The plugin and settings editor intentionally reject retired keys instead of
+interpreting them indefinitely at runtime.
 
 ## Preview and apply native recording settings
 
@@ -212,8 +257,9 @@ selectors may refer to the same camera. This cannot be established from
 configuration alone. The converter preserves them and does not merge aliases.
 Review row order because the first matching per-device row applies.
 
-The report lists removed setting names under `removedKeys`. Removal is limited
-to the four verified keys in the table above. Their original values remain in
+The report lists removed setting names under `removedKeys`. This includes the
+native keys in the table above and the retired secure-media keys listed in the
+Windows conversion checklist. Their original values remain in
 the private original-byte backup. Other unknown settings are preserved.
 
 Reports contain counts, platform array indexes, and fixed issue codes; they do
@@ -262,10 +308,12 @@ defaults validated by `src/native-recording-config.ts`:
 | `maxJobAgeSeconds` | 900 | 1–86400 |
 | `maxCachedBytes` | 134217728 | 33554432–1073741824 |
 
-All fields are integers. Maximum job age must cover the initial delay. Missing
+All fields are integers. Maximum job age must be greater than the initial delay, leaving a nonempty
+ordinary acquisition window before expiry. Missing
 clip retries share completed catalogs and respect the catalog refresh interval;
-an unknown remote command outcome keeps ownership blocked instead of allocating
-another operation. Restart the Blink child bridge after reviewing and applying
+an unknown remote command outcome retains uncertainty within the bounded local
+lease described in the configuration guide, then permits a distinct action after
+expiry without replaying the old POST. Restart the Blink child bridge after reviewing and applying
 configuration. Migration does not grant Apple Home recording permission or arm
 Blink.
 

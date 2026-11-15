@@ -342,13 +342,15 @@ int main(int argc, char **argv) {
     encoder->profile=profiles[config[10]];encoder->level=levels[config[11]];
     encoder->rc_max_rate=config[3];encoder->rc_buffer_size=(int)config[3];
     if(config[13])encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
+    if(config[13]==2)encoder->flags|=AV_CODEC_FLAG_FRAME_DURATION;
     /* Profiles are exact: libx264 applies these public options after the preset.
      * CABAC distinguishes Main; the 8x8 transform distinguishes High. */
     if(av_dict_set(&options,"preset",config[5]?"ultrafast":"veryfast",0)<0 ||
        av_dict_set(&options,"tune","zerolatency",0)<0 ||
        av_dict_set(&options,"coder",config[10]?"cabac":"cavlc",0)<0 ||
        av_dict_set_int(&options,"8x8dct",config[10]==2,0)<0)fatal("MEMORY");
-    if(config[13] && av_dict_set_int(&options,"sc_threshold",0,0)<0)fatal("MEMORY");
+    if(config[13] && (av_dict_set_int(&options,"sc_threshold",0,0)<0 ||
+       av_dict_set_int(&options,"forced-idr",1,0)<0))fatal("MEMORY");
     if(avcodec_open2(encoder,codec,&options)<0) { fatal("ENCODER"); }
     av_dict_free(&options);
     if(config[13]) { if(config[6])audio_open_encoder();recording_open(encoder,audio_encoder); }
@@ -358,6 +360,7 @@ int main(int argc, char **argv) {
     if(av_frame_get_buffer(scaled,32)<0) fatal("MEMORY");
     struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;
     int64_t first_video_pts=AV_NOPTS_VALUE,last_selected_pts=AV_NOPTS_VALUE,last_source_pts=AV_NOPTS_VALUE,next_output_frame=0;
+    int64_t recording_keyframe_pts=AV_NOPTS_VALUE;
     for (;;) {
         result=av_read_frame(input,packet);
         if(result<0 && result!=AVERROR_EOF) fatal("MEDIA");
@@ -420,6 +423,17 @@ int main(int argc, char **argv) {
                 scaled->data[1]+(y/2)*scaled->linesize[1]+x/2,scaled->data[2]+(y/2)*scaled->linesize[2]+x/2,NULL};
             if(sws_scale(scaler,(const uint8_t *const*)decoded->data,decoded->linesize,0,decoded->height,target,scaled->linesize)!=inner_height) fatal("SCALE");
             scaled->pts=pts;
+            scaled->duration=0;
+            if(config[13]==2 && decoded->duration>0) {
+                int64_t duration=av_rescale_q(decoded->duration,input->streams[video]->time_base,AV_TIME_BASE_Q);
+                if(duration<=0 || duration>1000000)fatal("VIDEO_TIMESTAMP");
+                /* Slower source pictures cover more time than one negotiated frame. */
+                scaled->duration=FFMAX(duration,av_rescale(1,1000000,config[2]));
+            }
+            scaled->pict_type=AV_PICTURE_TYPE_NONE;
+            if(config[13] && (recording_keyframe_pts==AV_NOPTS_VALUE || pts-recording_keyframe_pts>=recording_fragment_target-1)) {
+                scaled->pict_type=AV_PICTURE_TYPE_I;recording_keyframe_pts=pts;
+            }
             if(avcodec_send_frame(encoder,scaled)<0) { fatal("ENCODE"); }
             packets(encoder,encoded,&bytes,2);
             av_frame_unref(decoded);
