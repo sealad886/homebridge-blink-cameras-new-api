@@ -7,6 +7,30 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.6] - 2026-11-15
+
+### Fixed
+- Prepare saved Blink MP4 clips containing standalone recovery-point metadata
+  without treating those samples as failed pictures. Preserve their metadata
+  with the next picture and remove validated metadata-only clock slots so video
+  remains aligned with audio. Malformed pictures and ambiguous timing still fail.
+- Include bounded preparation stages and allowlisted native error codes in
+  ordinary failure warnings, without logging raw FFmpeg output or camera media.
+
+### Setup and qualification
+- Document per-camera Home Recording Options, separate When Home/When Away
+  recording permissions, motion filters, and Blink Local Storage prerequisites
+  in the README and end-user setup and troubleshooting guides.
+- Require the metadata-only regression in all five installed-package native
+  qualifications, preserving existing codec and recording checks.
+- Local reproduction fails with the shipped beta.5 worker and passes with the
+  corrected worker, including independently decoded pictures and audio timing.
+  Actual Pi conversion and saved Home timeline playback remain physical
+  acceptance checks after the registry upgrade; issue #109 remains open.
+- No new configuration, persistent-state migration, dependency or native-pin
+  change. Live viewing and per-camera Home recording accessories retain their
+  existing paths. Update through Homebridge and restart the Blink child bridge.
+
 ## [1.1.0-beta.5] - 2026-11-15
 
 ### Fixed

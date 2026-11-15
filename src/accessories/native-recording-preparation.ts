@@ -5,8 +5,25 @@ import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 import type { CameraRecordingConfiguration } from 'homebridge';
-import { PrivateMediaWorker, MEDIA_WORKER_LIMITS } from './media-worker';
+import { PrivateMediaWorker, MEDIA_WORKER_LIMITS, isMediaWorkerFailureCode, type MediaWorkerFailureCode } from './media-worker';
 import { loadPackagedMediaWorker } from './media-worker-artifact';
+
+export interface NativeRecordingPreparationDiagnostic {
+  phase: 'configuration' | 'input' | 'output' | 'closure' | 'validation';
+  workerCode?: MediaWorkerFailureCode;
+}
+export class NativeRecordingPreparationError extends Error {
+  readonly diagnostic: Readonly<NativeRecordingPreparationDiagnostic>;
+  constructor(diagnostic: NativeRecordingPreparationDiagnostic) {
+    if (!['configuration', 'input', 'output', 'closure', 'validation'].includes(diagnostic.phase) ||
+        (diagnostic.workerCode !== undefined && !isMediaWorkerFailureCode(diagnostic.workerCode))) {
+      throw new Error('Invalid recording preparation diagnostic');
+    }
+    super(`Recording conversion failed during ${diagnostic.phase}`);
+    this.diagnostic = Object.freeze({ phase: diagnostic.phase,
+      ...(diagnostic.workerCode ? { workerCode: diagnostic.workerCode } : {}) });
+  }
+}
 
 export const NATIVE_RECORDING_MEDIA_LIMITS = Object.freeze({
   sourceBytes: 32 * 1024 * 1024,
@@ -299,7 +316,8 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
         if (owner.aborted) throw new Error('Recording conversion cancelled');
         if (outputFailure) throw outputFailure;
         if (error instanceof Error && /Recording (?:output exhausted|source)/.test(error.message)) throw error;
-        throw new Error(`Recording conversion failed during ${phase}`);
+        await worker.stop();
+        throw new NativeRecordingPreparationError({ phase, ...(worker.failureCode ? { workerCode: worker.failureCode } : {}) });
       } finally {
         owner.removeEventListener('abort', abort); await worker.stop();
       }
@@ -309,7 +327,9 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       try { output = Buffer.concat(chunks, collected); } catch (error) { memory.release(collected); throw error; }
       for (const chunk of chunks) chunk.fill(0);
       chunks.length = 0; memory.release(collected);
-      const parsed = parsePrepared(output, selected, audioActive);
+      let parsed: ReturnType<typeof parsePrepared>;
+      try { parsed = parsePrepared(output, selected, audioActive); }
+      catch { throw new NativeRecordingPreparationError({ phase: 'validation' }); }
       const bytes = output.length, preparedSha256 = createHash('sha256').update(output).digest('hex');
       const owned = output;
       let disposed = false;

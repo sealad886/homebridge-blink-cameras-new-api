@@ -23,13 +23,15 @@ def config(**changes):
     if values['audio_codec']==1 and 'audio_packet_ms' not in changes:values['audio_packet_ms']=20
     return frame(1, struct.pack('!16I', *values.values()))
 
-def messages(data):
+def messages(data, allow_truncated=False):
     result = []
     while data:
+        if len(data) < 12 and allow_truncated:break
         if len(data) < 12 or data[:4] != b'BMO1':
             raise AssertionError('partial or invalid output frame')
         kind, length = struct.unpack('!II', data[4:12])
         if len(data) < 12 + length:
+            if allow_truncated:break
             raise AssertionError('partial output body')
         result.append((kind, data[12:12+length]))
         data = data[12+length:]
@@ -57,6 +59,12 @@ class WorkerTests(unittest.TestCase):
         cls.media = subprocess.check_output([str(binary('fixture'))], timeout=5)
     def run_worker(self, data):
         return subprocess.run([str(WORKER)], input=data, capture_output=True, timeout=5)
+    def test_only_expected_failure_output_allows_a_truncated_tail(self):
+        complete=b'BMO1'+struct.pack('!II',1,0)
+        truncated=b'BMO1'+struct.pack('!II',9,100)+b'partial'
+        with self.assertRaises(AssertionError):messages(complete+truncated)
+        self.assertEqual(messages(complete+truncated,allow_truncated=True),[(1,b'')])
+        with self.assertRaises(AssertionError):messages(b'BAD!'+bytes(8),allow_truncated=True)
     def recording(self, mode='video', rate=0, offset=0, audio_enabled=None):
         media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','90',str(offset)],timeout=5)
         enabled=(mode!='video') if audio_enabled is None else audio_enabled
@@ -102,6 +110,70 @@ class WorkerTests(unittest.TestCase):
         result=self.run_worker(config(output_mode=2,fragment_ms=4000,iframe_ms=1000)+frame(2,self.media)+frame(3))
         self.assertEqual(result.returncode,2)
         self.assertFalse(any(kind in (8,9) for kind,_ in messages(result.stdout)))
+    def test_finite_mp4_high_frame_rate_audio_matches_video_duration(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio-mp4','16','16','30','180'],timeout=5)
+        options=dict(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=1000,max_frames=200,
+                     audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000)
+        result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        output=b''.join(body if kind==8 else body[24:] for kind,body in messages(result.stdout) if kind in (8,9))
+        decoded=self.decode_recording(output)
+        self.assertEqual(decoded['videoFrames'],180)
+        self.assertGreaterEqual(decoded['audioSamples'],6*16000)
+        self.assertLessEqual(decoded['audioSamples'],6*16000+2048)
+    def test_finite_mp4_recovery_metadata_keeps_picture_and_audio_clocks(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei','16','16','15','901'],timeout=5)
+        for enabled in (False,True):
+            with self.subTest(audio=enabled):
+                options=dict(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=1000)
+                if enabled:options.update(audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=16000)
+                result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                self.assertEqual(result.returncode,0,result.stderr)
+                output=b''.join(body if kind==8 else body[24:] for kind,body in messages(result.stdout) if kind in (8,9))
+                decoded=self.decode_recording(output)
+                self.assertEqual(decoded['videoFrames'],901)
+                self.assertEqual(decoded['audioTracks'],int(enabled))
+                self.assertAlmostEqual(decoded['lastVideoUs']-decoded['firstVideoUs'],900*1001000/15,delta=1001000/15)
+                if enabled:self.assertLessEqual(abs(decoded['audioSamples']/16000-901*1001/15000),0.15)
+    def test_terminal_recovery_metadata_does_not_change_completed_recording(self):
+        for enabled in (False,True):
+            with self.subTest(audio=enabled):
+                decoded=[]
+                for mode in ('audio-mp4-sei','audio-mp4-sei-terminal'):
+                    media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','901'],timeout=5)
+                    options=dict(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=1000)
+                    if enabled:options.update(audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=16000)
+                    result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    rows=messages(result.stdout);self.assertTrue(any(kind==3 for kind,_ in rows))
+                    output=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+                    decoded.append(self.decode_recording(output))
+                self.assertEqual(decoded[0]['videoFrames'],901)
+                self.assertEqual(decoded[0]['audioTracks'],int(enabled))
+                self.assertEqual(decoded[0],decoded[1])
+    def test_finite_mp4_rejects_invalid_recovery_metadata(self):
+        original=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei','16','16','15','180'],timeout=5)
+        marker=b'\x00\x00\x00\x05\x06\x06\x01\xc0\x80'
+        self.assertEqual(original.count(marker),2)
+        for index,value in ((4,0x86),(6,0xff),(8,0)):
+            with self.subTest(index=index):
+                media=bytearray(original);media[media.index(marker)+index]=value
+                result=self.run_worker(config(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=200)+
+                    b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                self.assertEqual(result.returncode,2)
+                self.assertIn(b'BLINK_WORKER_DECODE',result.stderr)
+    def test_finite_mp4_rejects_overlapping_metadata_timestamps(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei-overlap','16','16','15','180'],timeout=5)
+        result=self.run_worker(config(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=200)+
+            b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual(result.returncode,2)
+        self.assertIn(b'BLINK_WORKER_VIDEO_DISCONTINUITY',result.stderr)
+    def test_finite_mp4_recovery_metadata_does_not_mask_corrupt_picture(self):
+        media=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei-corrupt','16','16','15','180'],timeout=5)
+        result=self.run_worker(config(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=200)+
+            b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual(result.returncode,2)
+        self.assertIn(b'BLINK_WORKER_DECODE',result.stderr)
     def test_finite_mp4_accepts_no_bytes_after_end(self):
         result=self.run_worker(config(output_mode=2,fragment_ms=4000,iframe_ms=1000)+frame(3)+frame(2,b'x'))
         self.assertEqual(result.returncode,2)
@@ -160,7 +232,7 @@ class WorkerTests(unittest.TestCase):
                 audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=32000)+
                 b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
             self.assertEqual(result.returncode,2);self.assertIn(code,result.stderr)
-            self.assertFalse(any(k==3 for k,_ in messages(result.stdout)))
+            self.assertFalse(any(k==3 for k,_ in messages(result.stdout,allow_truncated=True)))
     def test_recording_video_gap_fails_instead_of_stitching_missing_coverage(self):
         media=bytearray(subprocess.check_output([str(binary('fixture')),'video','16','16','15','90'],timeout=5))
         video_packets=0
@@ -230,7 +302,7 @@ class WorkerTests(unittest.TestCase):
             except BrokenPipeError:pass # Early explicit rejection may close the producer pipe.
             self.assertEqual(process.wait(timeout=3),2)
             self.assertIn(b'AUDIO_DISCONTINUITY',process.stderr.read())
-            rows=messages(process.stdout.read());self.assertFalse(any(k==3 for k,_ in rows))
+            rows=messages(process.stdout.read(),allow_truncated=True);self.assertFalse(any(k==3 for k,_ in rows))
             self.assertLessEqual(sum(k==9 for k,_ in rows),3)
         finally:
             if process.poll() is None:process.kill();process.wait()

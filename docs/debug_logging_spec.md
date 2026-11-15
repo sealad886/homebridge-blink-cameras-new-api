@@ -132,6 +132,12 @@ Camera names are sanitized and bounded; opaque process-local flow labels connect
 handoffs without exposing provider event identifiers. Logging failures cannot
 change acquisition, persistence or delivery ownership.
 
+Preparation warnings include a fixed stage (`configuration`, `input`, `output`,
+`closure` or `validation`) and, when available, an allowlisted native worker
+failure code, for example `phase=output worker=DECODE`. Raw FFmpeg stderr and
+arbitrary exception messages remain excluded. These codes distinguish local
+conversion failures from missing clips and Home recording policy suppression.
+
 An offer means a prepared clip is available. Transfer completion means the
 finite stream was emitted; transport acknowledgement means Home acknowledged
 that stream. None proves iCloud retention. Blink clips remain saved footage,

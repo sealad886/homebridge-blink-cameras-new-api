@@ -121,6 +121,21 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(output).not.toContain('Entry\\n');
   });
 
+  it('logs safe preparation phase and worker code at WARN and discards arbitrary diagnostic context', async () => {
+    const platform = await launch(emptyHomescreen());
+    const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
+    const report = createRuntime.mock.calls[0][0].report;
+    log.warn.mockClear(); log.debug.mockClear();
+    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'DECODE' } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=DECODE');
+    report('delivery-not-offered-preparation-failed', {
+      preparation: { phase: 'private-path-or-token', workerCode: 'private-url-or-password' },
+    } as never);
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed');
+    expect(log.debug).not.toHaveBeenCalled();
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain('private-');
+  });
+
   it.each(['rtsp', 'rtsps', 'immis'])('redacts %s capability URLs from normal camera-context logs', async scheme => {
     const platform = await launch(emptyHomescreen());
     const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;

@@ -17,7 +17,7 @@ import type { NativeMotionDevice } from '../src/blink-api/motion-events';
 import { writeOwnerOnlyJsonFile } from '../src/blink-api/secure-json-file';
 import * as secureJson from '../src/blink-api/secure-json-file';
 import { NativeRecordingDelegate } from '../src/accessories/native-recording-delegate';
-import type { PreparedNativeRecording, prepareNativeRecording } from '../src/accessories/native-recording-preparation';
+import { NativeRecordingPreparationError, type PreparedNativeRecording, type prepareNativeRecording } from '../src/accessories/native-recording-preparation';
 import { resolveNativeRecordingConfig, type NativeRecordingConfigInput } from '../src/native-recording-config';
 import { NativeRecordingRuntime, type NativeRecordingRuntimeOptions, type NativeRecordingRuntimeState } from '../src/native-recording-runtime';
 import { OperationTimeoutError } from '../src/operation-budget';
@@ -1517,6 +1517,20 @@ describe('native recording runtime composition', () => {
       .map(report => report.context?.flow);
     expect(new Set(flows).size).toBe(1);
     expect(flows[0]).toMatch(/^flow-[a-f0-9]{10}$/);
+  });
+
+  it('reports typed preparation failure diagnostics and cleans the failed clip without offering it', async () => {
+    const f = await setup();
+    f.prepare.mockRejectedValueOnce(new NativeRecordingPreparationError({ phase: 'output', workerCode: 'DECODE' }));
+    await f.push(); await jest.advanceTimersByTimeAsync(60_000);
+    await until(() => f.events.includes('delivery-not-offered-preparation-failed'));
+    expect(f.reports.find(report => report.event === 'delivery-not-offered-preparation-failed')?.context?.preparation)
+      .toEqual({ phase: 'output', workerCode: 'DECODE' });
+    expect(f.events).not.toContain('prepared'); expect(f.events).not.toContain('offered');
+    expect(f.readyMotion).not.toHaveBeenCalled(); expect(f.prepare).toHaveBeenCalledTimes(1);
+    await until(async () => (await f.state()).downloads.length === 0);
+    await expect(fs.stat(f.prepare.mock.calls[0][0].filePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.delegate.snapshot().state).toBe('idle');
   });
 
   it('reports PIR immediately, then downloads once and only triggers HSV after local preparation', async () => {

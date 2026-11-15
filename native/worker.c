@@ -199,6 +199,83 @@ static void packets(AVCodecContext *encoder, AVPacket *packet, uint64_t *bytes,u
 }
 #include "audio.inc"
 
+/* Blink stores recovery SEI as a timed MP4 sample without a picture. Keep its
+ * metadata with the next picture, excluding only proved contiguous empty slots. */
+static uint8_t *video_metadata;
+static size_t video_metadata_size;
+static int64_t video_source_end=AV_NOPTS_VALUE,video_metadata_start,video_clock_offset;
+static int sei_payload_valid(const uint8_t *nal,size_t length) {
+    uint8_t *rbsp=av_malloc(length);if(!rbsp)fatal("MEMORY");
+    size_t size=0;int zeros=0,valid=0;
+    for(size_t i=1;i<length;i++) {
+        if(zeros==2 && nal[i]==3) {
+            if(i+1>=length || nal[i+1]>3)goto done;
+            zeros=0;continue;
+        }
+        rbsp[size++]=nal[i];zeros=nal[i]==0?zeros+1:0;
+    }
+    if(!size || rbsp[size-1]!=0x80)goto done;
+    size_t position=0;
+    while(position<size-1) {
+        while(position<size-1 && rbsp[position]==255)position++;
+        if(position>=size-1)goto done;
+        position++;size_t payload=0;
+        while(position<size-1 && rbsp[position]==255) { payload+=255;position++; }
+        if(position>=size-1)goto done;
+        payload+=rbsp[position++];
+        if(payload>size-1-position)goto done;
+        position+=payload;
+    }
+    valid=position==size-1;
+done:
+    av_free(rbsp);return valid;
+}
+static int normalize_video_metadata(AVPacket *packet,AVStream *stream) {
+    AVCodecParameters *params=stream->codecpar;
+    if(config[13]!=2 || params->extradata_size<7 || params->extradata[0]!=1)return 0;
+    unsigned width=(params->extradata[4]&3)+1;size_t position=0;int only_sei=1,has_picture=0;
+    while(position<(size_t)packet->size) {
+        if((size_t)packet->size-position<width)fatal("DECODE");
+        uint32_t length=0;for(unsigned i=0;i<width;i++)length=(length<<8)|packet->data[position++];
+        if(!length || length>(size_t)packet->size-position || packet->data[position]&0x80)fatal("DECODE");
+        unsigned type=packet->data[position]&31;
+        if(type!=6)only_sei=0;
+        else if(!sei_payload_valid(packet->data+position,length))fatal("DECODE");
+        if(type>=1 && type<=5)has_picture=1;
+        position+=length;
+    }
+    if(only_sei && packet->size) {
+        int64_t duration_us=av_rescale_q(packet->duration,stream->time_base,AV_TIME_BASE_Q);
+        if(packet->pts==AV_NOPTS_VALUE || packet->pts!=packet->dts || packet->duration<=0 ||
+           video_source_end==AV_NOPTS_VALUE || packet->dts!=video_source_end ||
+           packet->dts>INT64_MAX-packet->duration ||
+           duration_us<=0 || duration_us>1000000)fatal("VIDEO_DISCONTINUITY");
+        if((size_t)packet->size>2u*1024u*1024u-video_metadata_size)fatal("PACKET_LIMIT");
+        if(!video_metadata_size)video_metadata_start=packet->dts;
+        uint8_t *owned=av_realloc(video_metadata,video_metadata_size+(size_t)packet->size);if(!owned)fatal("MEMORY");
+        video_metadata=owned;memcpy(owned+video_metadata_size,packet->data,(size_t)packet->size);
+        video_metadata_size+=(size_t)packet->size;video_source_end=packet->dts+packet->duration;return 1;
+    }
+    if(video_metadata_size) {
+        uint64_t extra=(uint64_t)video_source_end-(uint64_t)video_metadata_start;
+        if(!has_picture || packet->pts!=packet->dts || packet->dts!=video_source_end ||
+           extra>(uint64_t)(INT64_MAX-video_clock_offset))fatal("VIDEO_DISCONTINUITY");
+        video_clock_offset+=(int64_t)extra;
+        if(av_rescale_q(video_clock_offset,stream->time_base,AV_TIME_BASE_Q)>90000000)fatal("RECORDING_DURATION");
+        if((size_t)packet->size>2u*1024u*1024u-video_metadata_size)fatal("PACKET_LIMIT");
+        int original=packet->size;
+        if(av_grow_packet(packet,(int)video_metadata_size)<0)fatal("MEMORY");
+        memmove(packet->data+video_metadata_size,packet->data,(size_t)original);
+        memcpy(packet->data,video_metadata,video_metadata_size);av_freep(&video_metadata);video_metadata_size=0;
+    }
+    if(video_clock_offset && (packet->pts==AV_NOPTS_VALUE || packet->dts==AV_NOPTS_VALUE || packet->duration<=0 ||
+       packet->dts>INT64_MAX-packet->duration || packet->pts<INT64_MIN+video_clock_offset ||
+       packet->dts<INT64_MIN+video_clock_offset))fatal("VIDEO_TIMESTAMP");
+    video_source_end=packet->dts!=AV_NOPTS_VALUE && packet->duration>0 && packet->dts<=INT64_MAX-packet->duration?
+        packet->dts+packet->duration:AV_NOPTS_VALUE;
+    packet->pts-=video_clock_offset;packet->dts-=video_clock_offset;return 0;
+}
+
 int main(int argc, char **argv) {
     (void)argv; if(argc!=1) fatal("ARGUMENTS");
 #ifdef _WIN32
@@ -300,6 +377,7 @@ int main(int argc, char **argv) {
             }
             if(packet->stream_index==audio_stream) { audio_decode(packet,&bytes);av_packet_unref(packet);continue; }
             if(packet->stream_index!=video) { av_packet_unref(packet); continue; }
+            if(normalize_video_metadata(packet,input->streams[video])) { av_packet_unref(packet);continue; }
         }
         if(!decoder) fatal("MEDIA");
         if(avcodec_send_packet(decoder,result>=0?packet:NULL)<0) fatal("DECODE");
@@ -351,6 +429,8 @@ int main(int argc, char **argv) {
     }
     if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
     packets(encoder,encoded,&bytes,2); audio_finish(&bytes); if(config[13])recording_finish();output(3,NULL,0);
+    /* A terminal SEI has no following picture; discard it without adding a clock slot. */
+    av_freep(&video_metadata);
     sws_freeContext(scaler); av_frame_free(&decoded); av_frame_free(&scaled); av_packet_free(&packet); av_packet_free(&encoded); avcodec_free_context(&decoder); avcodec_free_context(&encoder);
     avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);
     if(file_input) { memset(file_input,0,file_size);av_freep(&file_input); }
