@@ -135,6 +135,22 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(decoded['audioTracks'],int(enabled))
                 self.assertAlmostEqual(decoded['lastVideoUs']-decoded['firstVideoUs'],900*1001000/15,delta=1001000/15)
                 if enabled:self.assertLessEqual(abs(decoded['audioSamples']/16000-901*1001/15000),0.15)
+    def test_terminal_recovery_metadata_does_not_change_completed_recording(self):
+        for enabled in (False,True):
+            with self.subTest(audio=enabled):
+                decoded=[]
+                for mode in ('audio-mp4-sei','audio-mp4-sei-terminal'):
+                    media=subprocess.check_output([str(binary('fixture')),mode,'16','16','15','901'],timeout=5)
+                    options=dict(fps=30,output_mode=2,fragment_ms=4000,iframe_ms=4000,max_frames=1000)
+                    if enabled:options.update(audio_codec=4,audio_rate=16000,audio_channels=1,audio_bitrate=16000)
+                    result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    rows=messages(result.stdout);self.assertTrue(any(kind==3 for kind,_ in rows))
+                    output=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
+                    decoded.append(self.decode_recording(output))
+                self.assertEqual(decoded[0]['videoFrames'],901)
+                self.assertEqual(decoded[0]['audioTracks'],int(enabled))
+                self.assertEqual(decoded[0],decoded[1])
     def test_finite_mp4_rejects_invalid_recovery_metadata(self):
         original=subprocess.check_output([str(binary('fixture')),'audio-mp4-sei','16','16','15','180'],timeout=5)
         marker=b'\x00\x00\x00\x05\x06\x06\x01\xc0\x80'

@@ -13,6 +13,13 @@
 #include <libavutil/opt.h>
 static void quiet(void *p,int n,const char *f,va_list a){(void)p;(void)n;(void)f;(void)a;}
 static int write_bytes(void *unused,const uint8_t *data,int length){(void)unused; return fwrite(data,1,(size_t)length,stdout)==(size_t)length?length:AVERROR(EIO);}
+static int write_recovery_metadata(AVFormatContext *format,AVStream *stream,AVRational time_base,int64_t pts,int overlap){
+    AVPacket *metadata=av_packet_alloc();if(!metadata || av_new_packet(metadata,9)<0)return -1;
+    const uint8_t recovery[]={0,0,0,1,6,6,1,0xc0,0x80};memcpy(metadata->data,recovery,sizeof(recovery));
+    metadata->pts=pts+overlap;metadata->dts=pts;metadata->duration=1;metadata->stream_index=stream->index;
+    av_packet_rescale_ts(metadata,time_base,stream->time_base);
+    int result=av_interleaved_write_frame(format,metadata);av_packet_free(&metadata);return result;
+}
 int main(int argc,char **argv){
 #ifdef _WIN32
     if(_setmode(_fileno(stdout),_O_BINARY)<0)return 2;
@@ -21,7 +28,8 @@ int main(int argc,char **argv){
     int latm=bundled || (argc>1 && strcmp(argv[1],"audio-latm")==0);
     int sei_overlap=argc>1 && !strcmp(argv[1],"audio-mp4-sei-overlap");
     int sei_corrupt=argc>1 && !strcmp(argv[1],"audio-mp4-sei-corrupt");
-    int sei=sei_overlap || sei_corrupt || (argc>1 && !strcmp(argv[1],"audio-mp4-sei"));
+    int sei_terminal=argc>1 && !strcmp(argv[1],"audio-mp4-sei-terminal");
+    int sei=sei_overlap || sei_corrupt || sei_terminal || (argc>1 && !strcmp(argv[1],"audio-mp4-sei"));
     int mp4=sei || (argc>1 && (!strcmp(argv[1],"video-mp4") || !strcmp(argv[1],"audio-mp4")));
     int with_audio=sei || latm || (argc>1 && (!strcmp(argv[1],"audio") || !strcmp(argv[1],"audio-mp4")));
     int width=16,height=16,fps=15,count=4,offset=0;
@@ -87,13 +95,8 @@ int main(int argc,char **argv){
         while(avcodec_receive_packet(encoder,packet)>=0){
             if(packet->duration<=0)packet->duration=1;
             if(sei && i>0 && i%(fps*4)==0) {
-                AVPacket *metadata=av_packet_alloc();if(!metadata || av_new_packet(metadata,9)<0)return 2;
-                const uint8_t recovery[]={0,0,0,1,6,6,1,0xc0,0x80};memcpy(metadata->data,recovery,sizeof(recovery));
-                metadata->pts=metadata->dts=packet->dts+metadata_slots;metadata->duration=1;metadata->stream_index=stream->index;
-                if(sei_overlap)metadata->pts++;
-                av_packet_rescale_ts(metadata,encoder->time_base,stream->time_base);
-                if(av_interleaved_write_frame(format,metadata)<0)return 2;
-                av_packet_free(&metadata);metadata_slots++;
+                if(write_recovery_metadata(format,stream,encoder->time_base,packet->dts+metadata_slots,sei_overlap)<0)return 2;
+                metadata_slots++;
             }
             if(sei) { packet->pts+=metadata_slots;packet->dts+=metadata_slots; }
             if(sei_corrupt)for(int n=0;n+4<packet->size;n++) {
@@ -122,6 +125,7 @@ int main(int argc,char **argv){
             }
         }
     }
+    if(sei_terminal && write_recovery_metadata(format,stream,encoder->time_base,count+metadata_slots,0)<0)return 2;
     av_frame_free(&audio_frame);avcodec_free_context(&audio);
     if(av_write_trailer(format)<0)return 2;
     if(mp4) {

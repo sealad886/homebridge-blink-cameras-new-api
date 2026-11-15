@@ -429,6 +429,7 @@ int main(int argc, char **argv) {
     }
     if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
     packets(encoder,encoded,&bytes,2); audio_finish(&bytes); if(config[13])recording_finish();output(3,NULL,0);
+    /* A terminal SEI has no following picture; discard it without adding a clock slot. */
     av_freep(&video_metadata);
     sws_freeContext(scaler); av_frame_free(&decoded); av_frame_free(&scaled); av_packet_free(&packet); av_packet_free(&encoded); avcodec_free_context(&decoder); avcodec_free_context(&encoder);
     avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);

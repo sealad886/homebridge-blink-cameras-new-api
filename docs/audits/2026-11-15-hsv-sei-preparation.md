@@ -60,6 +60,15 @@ Local qualification passed:
   during review was corrected before the full qualification run. The subsequent
   profile alignment and fatal-output test-parser corrections change tests only.
 
+Review follow-up also verifies terminal SEI metadata. Eight comparisons of
+90/901-picture clips, with/without terminal SEI and audio enabled/disabled,
+produce identical independently decoded pictures, timestamps and audio samples.
+Unused terminal metadata never advances the picture clock. Rejecting an
+otherwise complete clip solely for that metadata would be a regression; the
+worker retains its existing EOF behavior. An explicit comment and strict-output
+regression document this decision. All 55 native tests and the 15 preparation
+tests pass after this test/comment-only follow-up.
+
 The first full native run exposed two failure-path tests that incorrectly
 required complete asynchronous output framing after a proved fatal `_Exit(2)`.
 The bounded retry passes after allowing a truncated tail only for those tests,
