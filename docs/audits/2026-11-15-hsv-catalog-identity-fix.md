@@ -54,3 +54,23 @@ They establish routing and handoff contracts, not live codecs, vendor downloads,
 a Home hub's timeline/iCloud decision or physical camera acceptance. Full local
 qualification and fresh independent verification are separate integration gates.
 Publication, Pi installation and physical acceptance have not been performed.
+
+## Integrated local qualification
+
+Signed source commit `6c958423b35cac5c726d40035671468a3426267e`, based on
+published beta.4 source `783ed6e8c8c31537f2e53e959b6fa4f60c03a10e`, passed the
+canonical clean-checkout release preflight: lint, clean/build, 2,325 tests with
+18 existing skips, and package preview. No check failed or required a retry.
+The generated preview still reports beta.4 because this task has not authorized
+another version or publication; it must never replace the already published
+beta.4 bytes.
+
+Fresh independent review found no actionable issue in the five affected
+implementation/test/documentation files. Root independently matched all five
+reviewed file hashes against the committed files; the separate audit file adds
+only evidence and limitations. Reports, exact hashes and actual logs remain in
+logs/hsv109/qualification.json, independent-review.md and preflight.log.
+
+The local source fix and qualification are complete. A reviewed PR/new beta,
+installed-package qualification and Pi/Home physical acceptance remain separate
+steps. Issue 109 stays open until its acceptance criteria are verified.
