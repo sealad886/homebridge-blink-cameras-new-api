@@ -7,6 +7,26 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-beta.7] - 2026-11-15
+
+### Fixed
+- Build native codec libraries with their architecture-specific assembly
+  optimizations. Earlier candidates inherited a prototype build flag disabling
+  these paths; physical beta.6 checks on the Pi downloaded clips but reached the
+  two-minute preparation deadline before offering them to Home.
+- Reject release candidates and installed packages whose dependency receipts do
+  not prove assembly-enabled builds. Check generated codec configuration and
+  provide the required x86 assembler in native CI.
+
+### Qualification and acceptance
+- Preserve codec source pins, encoding policy, resource limits and the finite
+  preparation deadline. Optimized builds still require all five installed-package
+  qualifications and measured Pi conversion; they do not establish saved Home
+  playback by themselves. Issue #109 remains open until that physical check passes.
+- No configuration or persistent-state migration is introduced in this correction.
+  Install the exact registry version through Homebridge and restart the Blink
+  child bridge.
+
 ## [1.1.0-beta.6] - 2026-11-15
 
 ### Fixed

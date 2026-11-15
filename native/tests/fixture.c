@@ -132,6 +132,12 @@ int main(int argc,char **argv){
         uint8_t *bytes=NULL;int size=avio_close_dyn_buf(format->pb,&bytes);format->pb=NULL;
         if(size<=0 || size>32*1024*1024 || fwrite(bytes,1,(size_t)size,stdout)!=(size_t)size)return 2;
         av_free(bytes);
+    } else {
+        /* A null TS packet tests binary stdout independently of codec output. */
+        uint8_t transport[188];memset(transport,0xff,sizeof(transport));
+        const uint8_t header[]={0x47,0x1f,0xff,0x10,0x0d,0x0a,0x1a};
+        memcpy(transport,header,sizeof(header));
+        if(write_bytes(NULL,transport,sizeof(transport))<0)return 2;
     }
     av_frame_free(&frame);av_packet_free(&packet);avcodec_free_context(&encoder);
     if(format->pb) { av_freep(&format->pb->buffer);avio_context_free(&format->pb); }

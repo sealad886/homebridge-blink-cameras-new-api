@@ -113,6 +113,7 @@ export function verifyNativePackage(root, proof) {
     assert.equal(receipt.protocolVersion, 4, 'Native target protocol mismatch');
     assert.equal(receipt.target, target); assert.equal(receipt.source_sha, proof.sourceSha); assert.equal(receipt.sha256, entry.sha256); hash(receipt.artifact_sha256);
     assert.equal(receipt.distribution_ready, false); assert.equal(receipt.dependencies.recipe_sha256, proof.recipeSha, 'Native dependency recipe mismatch');
+    assert.equal(receipt.dependencies.prototype_assembly_disabled, false, 'Native package requires assembly-enabled codec libraries');
     assert.deepEqual(receipt.dependencies.source_inputs, proof.pins, 'Native pinned inputs mismatch');
     assert(typeof receipt.dynamic_dependencies === 'string' && receipt.dynamic_dependencies.length > 0 && Array.isArray(receipt.limitations));
   }

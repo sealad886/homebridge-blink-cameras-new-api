@@ -287,6 +287,27 @@ class BuildHostTests(unittest.TestCase):
                          ['/work/configure', '--disable-network'])
 
 
+class AssemblyConfigurationTests(unittest.TestCase):
+    def test_requires_native_assembly_in_both_codec_configurations(self):
+        for machine, ffmpeg, x264 in [('arm64', 'HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
+                                      ('aarch64', 'HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
+                                      ('x86_64', 'HAVE_X86ASM', 'HAVE_MMX'),
+                                      ('AMD64', 'HAVE_X86ASM', 'HAVE_MMX')]:
+            with self.subTest(machine=machine):
+                configurations = [f'#define {ffmpeg} 1\n', f'#define {x264} 1\n']
+                prepare.verify_assembly_configuration(*configurations, machine)
+                for index in (0, 1):
+                    for value in ('', configurations[index].replace(' 1', ' 0')):
+                        changed = configurations.copy()
+                        changed[index] = value
+                        with self.assertRaisesRegex(ValueError, 'Required codec assembly unavailable'):
+                            prepare.verify_assembly_configuration(*changed, machine)
+
+    def test_rejects_unverified_architecture(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported assembly architecture'):
+            prepare.verify_assembly_configuration('', '', 'unknown')
+
+
 class WorkerArtifactTests(unittest.TestCase):
     def test_archive_carries_exact_worker_hash_and_dependency_receipt_without_release_claim(self):
         with tempfile.TemporaryDirectory() as directory:

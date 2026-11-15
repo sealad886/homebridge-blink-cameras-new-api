@@ -74,7 +74,8 @@ class PackageTests(unittest.TestCase):
         worker = ('synthetic ' + target).encode()
         receipt = {'target': target, 'source_sha': SHA, 'sha256': hashlib.sha256(worker).hexdigest(),
                    'protocolVersion': 4,
-                   'dependencies': {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins},
+                   'dependencies': {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins,
+                                    'prototype_assembly_disabled': False},
                    'dynamic_dependencies': 'synthetic system import evidence', 'distribution_ready': False,
                    'limitations': ['synthetic fixture']}
         if receipt_change:
@@ -150,7 +151,7 @@ class PackageTests(unittest.TestCase):
         dump = imports + '0000000000001000 unwind/relocation entry\n' * 80000
         with patch.object(package.prepare.subprocess, 'check_output', return_value=dump):
             probe_evidence = package.prepare.audit_dependencies(build / 'probe.exe', 'Windows', {})
-        dependency = {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins,
+        dependency = {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins, 'prototype_assembly_disabled': False,
                       'dynamic_dependencies': probe_evidence}
         (prefix.parent / 'normalized-build-receipt.json').write_text(json.dumps(dependency))
         output = build / 'native-win32-x64.tar.gz'
@@ -186,6 +187,18 @@ class PackageTests(unittest.TestCase):
             self.candidate('linux-x64', receipt_change=mutate)
             with self.assertRaises(ValueError):
                 package.stage_package(self.root, self.inputs, SHA)
+
+    def test_rejects_assembly_disabled_or_unproved_candidates_before_staging(self):
+        for value in (True, None, 0, 'false'):
+            with self.subTest(value=value):
+                self.candidate('linux-arm64', receipt_change=lambda row: row['dependencies'].update(prototype_assembly_disabled=value))
+                with self.assertRaisesRegex(ValueError, 'requires assembly-enabled'):
+                    package.stage_package(self.root, self.inputs, SHA)
+        self.candidate('linux-arm64', receipt_change=lambda row: row['dependencies'].pop('prototype_assembly_disabled'))
+        with self.assertRaisesRegex(ValueError, 'requires assembly-enabled'):
+            package.stage_package(self.root, self.inputs, SHA)
+        self.fetch.assert_not_called()
+        self.assertFalse((self.root / 'native/runtime').exists())
 
     def test_rejects_old_or_missing_candidate_protocol_and_source_mismatch(self):
         for mutate in (lambda row: row.update(protocolVersion=3), lambda row: row.pop('protocolVersion'),

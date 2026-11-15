@@ -148,6 +148,8 @@ def read_candidate(path: Path, target: str, source_sha: str, recipe: str, pins: 
     if (receipt.get('sha256') != digest(members[expected_worker]) or not isinstance(dependency, dict) or
             dependency.get('recipe_sha256') != recipe or json_bytes(dependency.get('source_inputs')) != json_bytes(pins)):
         raise ValueError('Candidate binary or dependency identity mismatch')
+    if dependency.get('prototype_assembly_disabled') is not False:
+        raise ValueError('Native package requires assembly-enabled codec libraries')
     return members[expected_worker], receipt
 
 
@@ -181,9 +183,9 @@ def source_bundle(bundle: Path, sources: dict[str, bytes], pins: dict, downloads
                 add_bytes(archive, f'receipts/{target}.json', json_bytes(receipt))
             add_bytes(archive, 'README.md', b'Native worker source and rebuild instructions\n\n'
                       b'Use a native host matching the target; this recipe does not cross-compile.\n'
-                      b'Install Python3.12+, CMake, make, pkg-config, GnuPG and the recorded compiler/toolchain.\n'
+                      b'Install Python3.12+, CMake, make, pkg-config, GnuPG and the recorded compiler/toolchain; x86 hosts also require NASM.\n'
                       b'Copy dependencies/* into project/native/build/deps/downloads/, then work from project/.\n'
-                      b'Run: python native/dependencies/prepare.py --build-local --jobs 3 --disable-assembly --prefix-file native/build/deps/rebuild-prefix.txt\n'
+                      b'Run: python native/dependencies/prepare.py --build-local --jobs 3 --prefix-file native/build/deps/rebuild-prefix.txt\n'
                       b'Read that prefix and pass it as both FFMPEG_PREFIX and SRTP_PREFIX to make -C native test PYTHON=python.\n'
                       b'Darwin uses CC=/usr/bin/clang and MACOSX_DEPLOYMENT_TARGET=13.0; Windows uses UCRT64, CC=gcc and LDFLAGS="-static -static-libgcc".\n'
                       b'Exact target commands/configurations/compiler identities are in receipts/ and project/.github/workflows/test.yml.\n'
