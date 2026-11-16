@@ -1,5 +1,8 @@
 # Live streaming and quality
 
+[Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
+
+
 Last reviewed: 15 November 2026. Exact package qualification and physical runtime
 acceptance are tracked separately in the release evidence.
 

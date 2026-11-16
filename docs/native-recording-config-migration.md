@@ -1,5 +1,8 @@
 # Native recording configuration migration
 
+[Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
+
+
 The redesign uses Blink motion push notifications and completed USB clips. Its
 configuration exposes motion sensors globally or per camera and enables HomeKit
 Secure Video separately for each camera. The timing and cache controls are under

@@ -1,13 +1,23 @@
 ![Blink for Homebridge — Outdoor 4, Video Doorbell and Mini cameras](https://raw.githubusercontent.com/sealad886/homebridge-blink-cameras-new-api/main/docs/assets/header-editorial-brand-wordmarks.png)
 
-# @sealad886/homebridge-blink-cameras-new-api
+# Homebridge Blink Cameras
 
-Last reviewed: 9 November 2026.
+Bring Blink cameras into Apple Home for live viewing, motion controls and optional
+recording from completed native Blink clips.
+
+`@sealad886/homebridge-blink-cameras-new-api` · Unofficial community plugin
+
+Last reviewed: 16 November 2026.
 
 [![npm](https://img.shields.io/npm/v/%40sealad886%2Fhomebridge-blink-cameras-new-api.svg)](https://www.npmjs.com/package/@sealad886/homebridge-blink-cameras-new-api)
 [![License](https://img.shields.io/github/license/sealad886/homebridge-blink-cameras-new-api.svg)](LICENSE)
 [![Test](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml/badge.svg)](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api/branch/main/graph/badge.svg)](https://codecov.io/gh/sealad886/homebridge-blink-cameras-new-api)
+
+**[Read the documentation](https://sealad886.github.io/homebridge-blink-cameras-new-api/)**
+· [Configuration](https://sealad886.github.io/homebridge-blink-cameras-new-api/configuration/)
+· [Troubleshooting](https://sealad886.github.io/homebridge-blink-cameras-new-api/troubleshooting/)
+· [Download the offline guide](https://sealad886.github.io/homebridge-blink-cameras-new-api/offline.html)
 
 > Important: This plugin uses Blink's private OAuth and REST APIs. All APK-known
 > production regions use the same production OAuth host; geography changes only
@@ -74,7 +84,7 @@ Temperature sensing uses Blink's cached camera configuration metadata and does
 not force a new physical measurement. Enabling it adds one bounded metadata read
 per camera per normal state poll. Missing/offline readings produce a sensor fault;
 Owl/Mini and doorbell temperature are not supported. See
-[temperature configuration](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#camera-temperature)
+[temperature configuration](https://sealad886.github.io/homebridge-blink-cameras-new-api/configuration/#camera-temperature)
 for global/per-device controls and sampling limitations.
 
 #### SecuritySystem modes
@@ -93,7 +103,7 @@ Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's 
 - Homebridge 1.11.1 or later
 - Node.js 20.3+, 22, 24 or 26 (see [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json))
 - A Blink account
-- For live streaming, the matching private codec worker supplied in the package; see [streaming requirements](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#packaged-codec-requirements).
+- For live streaming, the matching private codec worker supplied in the package; see [streaming requirements](https://sealad886.github.io/homebridge-blink-cameras-new-api/streaming/#packaged-codec-requirements).
 
 ## Installation
 
@@ -112,7 +122,7 @@ npm install -g @sealad886/homebridge-blink-cameras-new-api
 
 Restart Homebridge after installing.
 
-To upgrade from **0.10.0**, read the [one-time upgrade procedure](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/native-recording-config-migration.md#upgrade-from-0100)
+To upgrade from **0.10.0**, read the [one-time upgrade procedure](https://sealad886.github.io/homebridge-blink-cameras-new-api/migration/#upgrade-from-0100)
 before installation. It preserves other plugins and creates a private backup when
 conversion is needed. Existing camera identities and pairing are retained.
 
@@ -138,7 +148,7 @@ Blink**. Enter credentials and hosted MFA only on Blink’s page, then return th
 complete callback address through **Paste Blink Result and Finish**. Complete
 any distinct post-token verification requested by Homebridge.
 
-Follow the [sign-in and recovery guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/authentication.md) for the full
+Follow the [sign-in and recovery guide](https://sealad886.github.io/homebridge-blink-cameras-new-api/authentication/) for the full
 procedure, clipboard fallback, session storage and known validation boundaries.
 Never put passwords or verification codes into plugin settings.
 
@@ -154,7 +164,7 @@ and offers the normal restart workflow; restart the Blink child bridge to apply
 changes. Camera selections or a successful connection check do not establish
 that Apple Home has allowed recording or saved a clip.
 
-The [configuration reference](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md) owns defaults, manual
+The [configuration reference](https://sealad886.github.io/homebridge-blink-cameras-new-api/configuration/) owns defaults, manual
 JSON examples, exclusions, naming overrides and snapshot settings. The
 [UI schema](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/config.schema.json) defines selectable fields and validation.
 
@@ -190,12 +200,12 @@ is per camera. The default preserves automatic selection. Optional 720p/15 and
 640×360/15 profiles reduce encoding work; 1080p/30 increases it. Smoothness depends
 on the installed host and source; synthetic tests do not establish playback.
 
-See [streaming and quality](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md) for codec requirements, profiles,
+See [streaming and quality](https://sealad886.github.io/homebridge-blink-cameras-new-api/streaming/) for codec requirements, profiles,
 2K input, software encoding, transport guards and known security limitations.
 
 ### Two-way talk status
 
-Talkback remains disabled. See the [talkback guard](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/streaming.md#two-way-talk-status).
+Talkback remains disabled. See the [talkback guard](https://sealad886.github.io/homebridge-blink-cameras-new-api/streaming/#two-way-talk-status).
 
 The release workflow verifies the exact packaged workers, their corresponding
 source and installed behavior on all five supported targets. The
@@ -240,7 +250,7 @@ Set up each camera in both Blink and Apple Home:
 Home chooses its Home/Away mode from household location information. Its
 notification settings and the plugin's **Motion Detected** sensor visibility are
 separate from recording permission. See [Apple's camera recording instructions](https://support.apple.com/guide/home/hmeb54708fc8/mac)
-and the [recording setup checklist](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#recording-setup-checklist).
+and the [recording setup checklist](https://sealad886.github.io/homebridge-blink-cameras-new-api/configuration/#recording-setup-checklist).
 
 ```json
 {
@@ -288,16 +298,16 @@ Home controls retention and playback. Clip length comes from the completed Blink
 recording, not the plugin motion-sensor timeout. A saved entry’s Home timeline
 time can reflect delayed delivery rather than the original Blink capture time.
 
-The [recording configuration guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/configuration.md#motion-and-homekit-recording)
+The [recording configuration guide](https://sealad886.github.io/homebridge-blink-cameras-new-api/configuration/#motion-and-homekit-recording)
 owns timing and resource settings. Before upgrading an older HSV configuration,
-preview the [one-off migration](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/native-recording-config-migration.md).
+preview the [one-off migration](https://sealad886.github.io/homebridge-blink-cameras-new-api/migration/).
 It creates a private original-byte backup before an explicitly requested change.
 
 ## Troubleshooting
 
-Use the [troubleshooting guide](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/troubleshooting.md) for connection faults,
+Use the [troubleshooting guide](https://sealad886.github.io/homebridge-blink-cameras-new-api/troubleshooting/) for connection faults,
 recovery, motion, rate limits and runtime checks. Use
-[bounded diagnostics](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/debug_logging_spec.md) when collecting evidence.
+[bounded diagnostics](https://sealad886.github.io/homebridge-blink-cameras-new-api/diagnostics/) when collecting evidence.
 HomeKit bridge audit entries are logged at INFO with an explicit UTC datetime and
 camera/accessory name, including motion detections and clears, characteristic
 requests/results, and camera control lifecycles. Debug mode is not required.
@@ -305,7 +315,7 @@ A cached snapshot or a Live label alone does not prove sustained video/audio.
 
 ## Documentation and development
 
-The [documentation map](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/README.md) identifies the canonical owner for
+The [documentation map](https://sealad886.github.io/homebridge-blink-cameras-new-api/documentation-map/) identifies the canonical owner for
 each topic and separates current guidance from historical evidence.
 
 - [Contributing and local testing](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/CONTRIBUTING.md)

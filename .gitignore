@@ -279,3 +279,10 @@ vite.config.ts.timestamp-*
 /native/runtime/
 /native/corresponding-source.tar.gz
 /native/NOTICE
+
+# Local documentation work and generated site; selected illustrations are source
+.rtfm/
+.rtfm-trace/
+.local/docs-site/
+/output/documentation/index.html
+!/output/articles/**/*.png

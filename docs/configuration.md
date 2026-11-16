@@ -1,5 +1,8 @@
 # Configuration reference
 
+[Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
+
+
 Last reviewed: 15 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.

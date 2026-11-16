@@ -107,3 +107,12 @@ keywords in the default-branch PR that delivers that resolution.
 Version changes, release review, publication, and installation follow
 [docs/RELEASE.md](docs/RELEASE.md). A development build or merged PR does not by
 itself authorize publication or changes to a live Homebridge host.
+
+## Documentation publication
+
+The [canonical public documentation](https://sealad886.github.io/homebridge-blink-cameras-new-api/)
+is built from the maintained Markdown and selected illustrations. Documentation
+pull requests run a separate validation workflow; eligible changes merged to
+`main` publish automatically through GitHub Pages. See the
+[documentation build and publication guide](output/documentation/README.md) for
+local checks, build inputs and the publication boundary.
