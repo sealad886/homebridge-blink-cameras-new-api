@@ -26,9 +26,13 @@ export class FfmpegByteQueue {
   }
   async push(bytes: Buffer): Promise<void> {
     if (!bytes.length || bytes.length > EXTERNAL_FFMPEG_LIMITS.packetBytes) throw unavailable();
-    while (this.#bytes + bytes.length > EXTERNAL_FFMPEG_LIMITS.packetBytes) await this.#change();
-    this.signal.throwIfAborted(); if (this.#ended) throw unavailable();
-    this.#chunks.push(Buffer.from(bytes)); this.#bytes += bytes.length; this.#notify();
+    for (let offset = 0; offset < bytes.length;) {
+      this.signal.throwIfAborted(); if (this.#ended) throw unavailable();
+      const size = Math.min(bytes.length - offset, EXTERNAL_FFMPEG_LIMITS.packetBytes - this.#bytes);
+      if (!size) { await this.#change(); continue; }
+      // A pipe chunk can straddle a near-limit packet. Admit its fitting prefix so take() can drain that packet.
+      this.#chunks.push(Buffer.from(bytes.subarray(offset, offset + size))); this.#bytes += size; offset += size; this.#notify();
+    }
   }
   async take(length: number): Promise<Buffer> {
     if (!Number.isInteger(length) || length < 1 || length > EXTERNAL_FFMPEG_LIMITS.packetBytes) throw unavailable();

@@ -42,6 +42,35 @@ test('bounded byte queue waits for space and aborts pending readers and producer
   const first = await queue.take(1); first.fill(0); await waiting; expect(admitted).toBe(true); queue.dispose();
   const pending = queue.take(1); owner.abort(); await expect(pending).rejects.toThrow();
 });
+test('near-limit packet completes when an ordinary pipe chunk straddles its boundary', async () => {
+  jest.useFakeTimers();
+  const owner = new globalThis.AbortController(), queue = new FfmpegByteQueue(owner.signal);
+  const prefix = Buffer.alloc(1000000), incoming = Buffer.alloc(65536);
+  for (let index = 0; index < prefix.length; index++) prefix[index] = index % 251;
+  for (let index = 0; index < incoming.length; index++) incoming[index] = index % 237;
+  await queue.push(prefix);
+  const packet = queue.take(1020000), admitted = queue.push(incoming);
+  let completed = false;
+  const both = Promise.all([packet, admitted]).then(value => { completed = true; return value; });
+  // Keep the intentional pre-fix failure bounded and clean up every pending operation.
+  both.catch(() => undefined);
+  try {
+    await jest.advanceTimersByTimeAsync(1);
+    expect(completed).toBe(true);
+    const [actual] = await both, expected = Buffer.concat([prefix, incoming.subarray(0, 20000)]);
+    expect(actual.equals(expected)).toBe(true); expect(packetAdler32(actual)).toBe(packetAdler32(expected)); actual.fill(0);
+    queue.end();
+    expect((await queue.take(45536)).equals(incoming.subarray(20000))).toBe(true); await queue.finish();
+  } finally { owner.abort(); await Promise.allSettled([packet, admitted]); queue.dispose(); jest.useRealTimers(); }
+});
+test.each(['abort', 'end'])('%s releases a producer blocked after partial chunk admission', async action => {
+  const owner = new globalThis.AbortController(), queue = new FfmpegByteQueue(owner.signal);
+  await queue.push(Buffer.alloc(1000000));
+  const pending = queue.push(Buffer.alloc(65536));
+  if (action === 'abort') owner.abort(); else queue.end();
+  try { await expect(pending).rejects.toThrow('External codec packets unavailable'); }
+  finally { owner.abort(); queue.dispose(); }
+});
 test('packet grammar rejects unbounded numbers and preserves zero-duration copy metadata for finite owner validation', () => {
   expect(parseFrameCrcPacket('0, -1, -1, 0, 1, 0x00000000')).toMatchObject({ pts: -1n, duration: 0n });
   expect(() => parseFrameCrcPacket(`0, ${1n << 63n}, 0, 1, 1, 0x00000000`)).toThrow();
