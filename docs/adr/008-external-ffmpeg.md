@@ -38,6 +38,55 @@ deadlines, one bounded salvage attempt, audio/privacy permissions and terminal
 cleanup. Metadata-only samples must not become a blanket decoder-error waiver.
 Independent decoded frame and audio timing tests remain release requirements.
 
+## Internal media contracts
+
+The recording plan owns the meanings shared by inspection, conversion and
+independent output validation. Times are microseconds unless a stream's rational
+time base is explicitly being converted.
+
+| Quantity | Meaning |
+| --- | --- |
+| `corrections.at` / `offset` | Raw input timestamp / cumulative metadata duration removed from video. |
+| `originUs` | First corrected video timestamp on the common input timeline after `copyts` / `start_at_zero`. |
+| `pictures[].pts`, `selected[].pts` | Corrected video timestamp relative to `originUs`. |
+| `durationUs` | Corrected video end relative to `originUs`, independent of frame selection. |
+| `audioOriginUs` | First decoded source audio timestamp on the common input timeline, after AAC priming/edit handling; absent if observation is disabled or unavailable. |
+| Output A/V offset | Decoded audio origin minus decoded video origin, compared with the source offset; silence recovery uses its explicitly generated audio origin. |
+
+Select frames by source-anchored time intervals. A source gap or a temporarily
+slow source does not accumulate credit to exceed the selected frame rate later.
+Packet duration and the gap between packets are different quantities; live
+timestamp gaps remain subject to monotonicity, pacing and the session lifetime.
+The live and finite paths retain their distinct discontinuity and repair rules.
+
+A pipe chunk is not a packet. Bounded queues admit a fitting prefix when a
+chunk straddles a near-limit packet, preserving exact bytes, cancellation and
+backpressure without raising the queue bound.
+
+Admission limits must compose through execution. Up to 512 metadata corrections
+must fit the generated expression's parser depth and the actual platform-quoted
+command length. Allocation estimates are not command-length limits. Keep source,
+packet, retained-memory, lifetime-output and process-time budgets distinct; each
+protects its named resource. Qualify the maximum admitted correction plan through
+the installed helper, in addition to rejecting malformed or excessive metadata.
+
+Prepared recording bytes remain provisional until source/snapshot cleanup and
+the admission wrapper have completed. Recheck privacy ownership and the original
+deadline at the public handoff, with no intervening await before transfer. Refuse
+and dispose revoked output; after a valid transfer, the caller owns disposal.
+Cleanup failure must erase provisional output and release its memory budget.
+
+Boundary qualification includes source gaps/rate changes, nonzero A/V offsets
+with independent decoded-content timing, maximum correction complexity through
+actual launch, adversarial pipe chunk boundaries, and cancellation during final
+cleanup. Source test counts do not replace the immutable installed-package
+qualification or an observed FFmpeg 6.1 runtime receipt.
+
+The bounded follow-up in [issue #120](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/120)
+will distinguish disabled, unavailable and observed source audio explicitly in
+the existing plan/API. No additional post-fix media failure is established by
+that representation concern; it does not replace the contract corrections above.
+
 ## Alternatives and consequences
 
 - Keeping bundled codec libraries violates the requested distribution model.

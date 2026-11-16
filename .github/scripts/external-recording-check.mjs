@@ -117,30 +117,41 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
   };
   try {
     const trials = [...selected.map(name => ({ name })), { name: 'low-fps-source', fps: 7, fragment: 4000 },
-      { name: '25fps-source-15fps-output', fragment: 4000 }, { name: 'recovery-metadata', hd: true, fragment: 4000 }];
+      { name: '25fps-source-15fps-output', fragment: 4000 }, { name: 'recovery-metadata', hd: true, fragment: 4000 },
+      { name: 'recovery-metadata', count: 1026, metadataEvery: 2, tiny: true },
+      { name: 'recovery-metadata', count: 1028, metadataEvery: 2, tiny: true, rejectMetadata: true }];
     for (const trial of trials) {
       const { name } = trial;
       const long = name === '30fps-source-15fps-output', low = name === 'low-fps-source', odd = name === '25fps-source-15fps-output';
       const metadata = low || odd || name === 'recovery-metadata', missing = name === 'missing-audio-recovery';
       const corrupt = name === 'corrupt-audio-recovery' || name === 'damaged-audio-disabled';
-      const width = long ? 16 : 320, height = long ? 16 : 180, fps = trial.fps ?? (long ? 30 : low ? 5 : odd ? 25 : 15);
+      const width = long || trial.tiny ? 16 : 320, height = long || trial.tiny ? 16 : 180, fps = trial.fps ?? (long ? 30 : low ? 5 : odd ? 25 : 15);
       const outputWidth = trial.hd ? 1920 : width, outputHeight = trial.hd ? 1080 : height, fragmentMs = trial.fragment ?? 1000;
-      const count = long ? 1800 : low ? fps * 9 : odd ? 225 : metadata || corrupt || missing || name === 'audio-clock-repair' ? 90 : 33;
-      const label = trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name;
+      const count = trial.count ?? (long ? 1800 : low ? fps * 9 : odd ? 225 : metadata || corrupt || missing || name === 'audio-clock-repair' ? 90 : 33);
+      const label = trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name;
       const source = join(scratch, label + '-generated.mp4'), path = join(scratch, label + '.mp4');
       execute(['-y', '-f', 'lavfi', '-i', `testsrc2=size=${width}x${height}:rate=${metadata ? fps * 1000 + '/1001' : fps}`,
         ...(!missing ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000'] : []), '-frames:v', String(count),
         '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-g', String(fps * 4), '-pix_fmt', 'yuv420p',
         ...(!missing ? ['-c:a', 'aac', '-ar', '16000', '-ac', '1', '-b:a', '24k', '-shortest'] : []), '-f', 'mp4', source]);
       let bytes = readFileSync(source);
-      if (metadata || corrupt || name === 'audio-clock-repair') bytes = mutateRecordingFixture(bytes, { metadataEvery: metadata ? fps * 4 : 0, corruptAudio: corrupt, audioGap: name === 'audio-clock-repair' });
+      if (metadata || corrupt || name === 'audio-clock-repair') bytes = mutateRecordingFixture(bytes, { metadataEvery: metadata ? trial.metadataEvery ?? fps * 4 : 0, corruptAudio: corrupt, audioGap: name === 'audio-clock-repair' });
       assert(bytes.indexOf(Buffer.from('moov')) > bytes.indexOf(Buffer.from('mdat'))); writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
       const active = !['audio-disabled', 'damaged-audio-disabled', '30fps-source-15fps-output'].includes(name), rate = name === 'audio-24khz' || odd || name === 'corrupt-audio-recovery' ? 24000 : 16000;
       const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: fragmentMs },
         videoCodec: { type: 0, resolution: [outputWidth, outputHeight, low || name === 'recovery-metadata' ? 30 : 15], parameters: { profile: 0, level: trial.hd ? 2 : 0, bitRate: trial.hd ? 2000 : 300, iFrameInterval: fragmentMs } },
         audioCodec: { type: 0, samplerate: rate === 16000 ? 1 : 2, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
-      const memory = new NativeRecordingMemoryBudget(), prepared = await prepareNativeRecording({ filePath: path, expectedBytes: bytes.length, expectedSha256: hash(bytes) }, configuration, active,
-        new globalThis.AbortController().signal, { ffmpegPath, memory, admit: work => work() }).catch(error => { throw new Error(`Finite qualification failed: ${name}`, { cause: error }); });
+      const memory = new NativeRecordingMemoryBudget();
+      const prepare = () => prepareNativeRecording({ filePath: path, expectedBytes: bytes.length, expectedSha256: hash(bytes) }, configuration, active,
+        new globalThis.AbortController().signal, { ffmpegPath, memory, admit: work => work() });
+      if (trial.rejectMetadata) {
+        await assert.rejects(prepare, error => error.diagnostic?.phase === 'input' && error.diagnostic?.workerCode === 'VIDEO_DISCONTINUITY',
+          '513 metadata insertions must exceed the unchanged inspection limit');
+        assert.equal(memory.bytes, 0); assert.equal(hash(readFileSync(path)), hash(bytes));
+        assert.equal(readdirSync(scratch).some(name => name.startsWith('.native-')), false, 'Rejected media must release its snapshot');
+        bytes.fill(0); continue;
+      }
+      const prepared = await prepare().catch(error => { throw new Error(`Finite qualification failed: ${name}`, { cause: error }); });
       try {
         const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
         assert.equal(hash(output), prepared.preparedSha256); assert.equal(hash(readFileSync(path)), hash(bytes));
@@ -193,9 +204,9 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       assert.equal(memory.bytes, 0); assert.equal(hash(readFileSync(source)), hash(bytes));
       assert.equal(readdirSync(scratch).some(name => name.startsWith('.native-')), false, 'Rejected media must not retain a working snapshot'); bytes.fill(0);
     }
-    // These four content tests run inside canonical installed qualification,
+    // These content tests run inside canonical installed qualification,
     // independently of source Jest jobs that do not build a native helper.
-    for (const offset of [0, 64000]) for (const rate of [16000, 24000]) {
+    for (const offset of [0, 64000, 200000]) for (const rate of [16000, 24000]) {
       const source = join(scratch, `content-${offset}-${rate}.mp4`), outputPath = join(scratch, `content-${offset}-${rate}-prepared.mp4`);
       execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=2.1',
         '-vf', `settb=1/1000000,setpts=PTS+${offset}`, '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000',

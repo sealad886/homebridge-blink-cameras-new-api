@@ -20,10 +20,19 @@ export interface ExternalRecordingContext {
   /** A fresh read-only description of the private, content-verified snapshot; its offset starts at zero. */
   open(): Promise<FileHandle>;
 }
+/** Microseconds: corrected PTS relative to the first corrected video picture, and positive picture duration. */
 interface Picture { pts: number; duration: number; }
 export interface ExternalRecordingPlan {
-  pictures: readonly Picture[]; selected: readonly Picture[]; durationUs: number; originUs: number;
-  metadata: number; corrections: readonly { at: number; offset: number }[];
+  pictures: readonly Picture[]; selected: readonly Picture[];
+  /** Corrected video end relative to originUs; selection does not change the source duration. */
+  durationUs: number;
+  /** First corrected video PTS on the shared input timeline after copyts/start_at_zero. */
+  originUs: number;
+  /** First decoded audio PTS on that input timeline, after AAC priming/edit handling; undefined if unobserved. */
+  audioOriginUs?: number;
+  metadata: number;
+  /** Raw input-microsecond breakpoints and the cumulative metadata duration to subtract from video PTS. */
+  corrections: readonly { at: number; offset: number }[];
 }
 const failure = (code: RecordingFailureCode = 'DECODE'): never => { throw new ExternalRecordingError(code); };
 function micros(value: bigint, numerator: bigint, denominator: bigint): number {
@@ -100,26 +109,62 @@ function picturePacket(data: Buffer): boolean {
   return picture;
 }
 
+const MAX_METADATA_SAMPLES = 512;
+const MAX_METADATA_DIAGNOSTIC_LINE_BYTES = 1024;
+// Per admitted metadata sample: at most two missing-picture lines, one
+// no-frame line and one decoder-submission line, each including its newline.
+const MAX_METADATA_DIAGNOSTIC_BYTES = MAX_METADATA_SAMPLES * 4 * (MAX_METADATA_DIAGNOSTIC_LINE_BYTES + 1);
+
 /** Only these fixed decoder errors are tolerated, and only for prevalidated empty SEI access units. */
 function observeMetadataErrors(stream: Readable, expected: () => number): () => boolean {
   let tail = '', invalid = false, noFrame = 0, submission = 0, missing = 0, total = 0;
   stream.on('data', (bytes: Buffer) => {
-    if ((total += bytes.length) > 64 * 1024) { invalid = true; return; }
+    if ((total += bytes.length) > MAX_METADATA_DIAGNOSTIC_BYTES) { invalid = true; return; }
     const all = (tail + bytes.toString('utf8')).split('\n'); tail = all.pop()!;
     for (const line of all) {
       if (!line) continue;
-      if (line.length > 1024) { invalid = true; continue; }
+      if (line.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = true; continue; }
       if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] missing picture in access unit with size \d+$/.test(line)) missing++;
       else if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] no frame!$/.test(line)) noFrame++;
       else if (/^\[vist#0:0\/h264 @ (?:0x)?[0-9a-fA-F]+\](?: \[dec:h264 @ (?:0x)?[0-9a-fA-F]+\])? Error submitting packet to decoder: Invalid data found when processing input$/.test(line)) submission++;
       else invalid = true;
     }
-    if (tail.length > 1024) invalid = true;
+    if (tail.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) invalid = true;
   });
   return () => !invalid && !tail && missing <= expected() * 2 && noFrame <= expected() && submission <= expected();
 }
 
-export async function inspectExternalRecording(context: ExternalRecordingContext, fps: number): Promise<ExternalRecordingPlan> {
+/** Decode only the first audio frame so AAC priming/edit lists do not become a false A/V offset. */
+async function inspectAudioOrigin(context: ExternalRecordingContext): Promise<number | undefined> {
+  const input = await context.open(), controller = new globalThis.AbortController(), abort = () => controller.abort();
+  context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
+  let closed: Promise<number | null> | undefined;
+  try {
+    const child = launch({ ...context, signal: controller.signal }, [...inputArguments, '-map', '0:a:0?', '-vn',
+      '-c:a', 'pcm_f32le', '-threads:a', '1', '-ac', '1', '-frames:a', '1', '-f', 'framecrc', 'pipe:1'], [input.fd, 'pipe', 'pipe']);
+    closed = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
+    let numerator = 0n, denominator = 0n, bytes = 0, origin: number | undefined;
+    const parsed = lines(readable(child.stdout), line => {
+      if ((bytes += line.length + 1) > 16384) failure('OUTPUT_LIMIT');
+      const tb = /^#tb 0: (\d+)\/(\d+)$/.exec(line);
+      if (tb) { numerator = BigInt(tb[1]); denominator = BigInt(tb[2]);
+        if (!numerator || !denominator || numerator > 1000000n || denominator > 1000000000n) failure(); }
+      const row = parseFrameCrcPacket(line, 8192 * 4); if (!row) return;
+      if (row.streamIndex !== 0 || origin !== undefined || !numerator || !denominator) failure();
+      origin = micros(row.pts, numerator, denominator);
+    });
+    const [code] = await Promise.all([closed, parsed]); context.signal.throwIfAborted();
+    return code === 0 ? origin : undefined;
+  } catch (error) {
+    controller.abort(); await closed; context.signal.throwIfAborted();
+    if (Date.now() >= context.deadline) failure('TIME_LIMIT');
+    if (error instanceof ExternalRecordingError && error.code === 'OUTPUT_LIMIT') throw error;
+    // Missing or undecodable source audio must still reach the existing bounded silence fallback.
+    return undefined;
+  } finally { controller.abort(); await closed; context.signal.removeEventListener('abort', abort); await input.close(); }
+}
+
+export async function inspectExternalRecording(context: ExternalRecordingContext, fps: number, audioActive = false): Promise<ExternalRecordingPlan> {
   const input = await context.open(), controller = new globalThis.AbortController();
   const abort = () => controller.abort(); context.signal.addEventListener('abort', abort, { once: true });
   // Opening the regular snapshot can yield; replay revocation that preceded
@@ -159,7 +204,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
         const hasPicture = picturePacket(data), period = micros(row.duration, numerator, denominator);
         if (period < 1 || period > 1000000) failure('VIDEO_TIMESTAMP');
         if (!hasPicture) {
-          if (++metadata > 512 || row.pts !== row.dts || previousEnd === undefined || row.dts !== previousEnd) failure('VIDEO_DISCONTINUITY');
+          if (++metadata > MAX_METADATA_SAMPLES || row.pts !== row.dts || previousEnd === undefined || row.dts !== previousEnd) failure('VIDEO_DISCONTINUITY');
           offset += row.duration; pending = true;
         } else {
           if (pending) {
@@ -185,7 +230,8 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     const last = selected.at(-1)!;
     const durationUs = last.pts + Math.max(last.duration, Math.round(1000000 / fps));
     if (durationUs < 1 || durationUs > 90000000) failure('VIDEO_TIMESTAMP');
-    return { pictures, selected, durationUs, originUs: origin, metadata, corrections };
+    const audioOriginUs = audioActive ? await inspectAudioOrigin(context) : undefined;
+    return { pictures, selected, durationUs, originUs: origin, audioOriginUs, metadata, corrections };
   } finally { controller.abort(); await closure; queue.dispose(); context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
@@ -193,8 +239,14 @@ export function recordingFfmpegArguments(configuration: CameraRecordingConfigura
   audioActive: boolean, silence: boolean): string[] {
   const v = configuration.videoCodec, [width, height, fps] = v.resolution;
   const rate = configuration.audioCodec.samplerate === 1 ? 16000 : 24000;
-  let correction = '0';
-  for (const item of plan.corrections) correction = `if(gte(PTS,${item.at}),${item.offset},${correction})`;
+  // At most 512 corrections are admitted. A balanced threshold tree keeps
+  // their expression depth logarithmic, below FFmpeg's parser recursion limit.
+  const correctionAt = (from: number, to: number): string => {
+    if (from === to) return String(from ? plan.corrections[from - 1].offset : 0);
+    const middle = Math.floor((from + to) / 2);
+    return `if(gte(PTS,${plan.corrections[middle].at}),${correctionAt(middle + 1, to)},${correctionAt(from, middle)})`;
+  };
+  const correction = correctionAt(0, plan.corrections.length);
   // Preserve the common source timeline. Resetting each track independently
   // would erase a real A/V offset and invert it after AAC encoder priming.
   const filter = `settb=1/1000000,setpts='PTS-(${correction})',` +
@@ -239,7 +291,7 @@ export async function convertExternalRecording(context: ExternalRecordingContext
 
 /** A separate decoder pass validates actual pictures/audio clocks, not only MP4 container declarations. */
 export async function validateExternalRecording(context: ExternalRecordingContext, data: Buffer,
-  configuration: CameraRecordingConfiguration, plan: ExternalRecordingPlan, audioActive: boolean): Promise<void> {
+  configuration: CameraRecordingConfiguration, plan: ExternalRecordingPlan, audioActive: boolean, silence = false): Promise<void> {
   const controller = new globalThis.AbortController(), abort = () => controller.abort();
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
   let closed: Promise<number | null> | undefined;
@@ -283,7 +335,8 @@ export async function validateExternalRecording(context: ExternalRecordingContex
     if (code !== 0) failure('DECODE');
     if (count !== plan.selected.length || videoOrigin === undefined) failure('VIDEO_FRAME_COUNT');
     const tolerance = 2048 * 1000000 / rate + 2000;
-    if (audioActive && (audioFirst === undefined || Math.abs(audioFirst - videoOrigin!) > tolerance ||
+    const expectedAudioOffset = (silence ? 0 : plan.audioOriginUs ?? 0) - plan.originUs;
+    if (audioActive && (audioFirst === undefined || Math.abs(audioFirst - videoOrigin! - expectedAudioOffset) > tolerance ||
         Math.abs(audioEnd - videoOrigin! - plan.durationUs) > tolerance)) failure('AUDIO_DISCONTINUITY');
   } catch (error) { controller.abort(); await closed; throw error; }
   finally { controller.abort(); context.signal.removeEventListener('abort', abort); }

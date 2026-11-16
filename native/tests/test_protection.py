@@ -1,7 +1,9 @@
 """libSRTP IPC, crash policy, external execution and ownership; no camera traffic."""
 import os
+import json
 from pathlib import Path
 import signal
+import shutil
 import struct
 import subprocess
 import sys
@@ -48,6 +50,15 @@ class ProtectionTests(unittest.TestCase):
                                  capture_output=True, check=True, timeout=5)
         self.assertEqual(checked.stderr, b'')
         self.assertEqual(checked.stdout, b'BMR1'+struct.pack('>III', 11, len(packet)+4, 1)+packet)
+        if os.name=='nt':
+            with tempfile.TemporaryDirectory() as directory:
+                nested=Path(directory)/('long executable path with spaces '+ 'a'*40)/('nested path '+ 'b'*60)
+                nested.mkdir(parents=True)
+                executable=nested/'independent receiver.exe';shutil.copy2(CHECKER,executable)
+                launched=subprocess.run([WORKER,'--exec',executable,'--framed'],input=receiver_input,
+                                        capture_output=True,check=True,timeout=5)
+                self.assertEqual(launched.stderr,b'')
+                self.assertEqual(launched.stdout,checked.stdout)
 
     def test_only_protection_messages_are_admitted(self):
         for data in [frame(1),frame(2,b'private-source'),frame(3),frame(4,b'x'),b'wrong-header']:
@@ -65,12 +76,51 @@ class ProtectionTests(unittest.TestCase):
                 result = subprocess.run([WORKER,'--exec',sys.executable,script],stdin=stream,capture_output=True,check=True,timeout=5)
             self.assertEqual(result.stdout,b'seekable input')
 
-    def test_external_exec_suppresses_core_dumps(self):
+    def test_external_exec_suppresses_core_dumps_and_enforces_resource_bounds(self):
         if os.name=='nt':
             return  # Windows error mode/job lifecycle is exercised on its native runner.
-        script = 'import resource;assert resource.getrlimit(resource.RLIMIT_CORE)==(0,0);print("core disabled")'
+        script = ('import resource;'
+                  'assert resource.getrlimit(resource.RLIMIT_CORE)==(0,0);'
+                  'assert resource.getrlimit(resource.RLIMIT_FSIZE)==(0,0);'
+                  'assert resource.getrlimit(resource.RLIMIT_CPU)==(300,300);'
+                  'print("core disabled; file and CPU bounds enforced")')
         result=subprocess.run([WORKER,'--exec',sys.executable,'-c',script],capture_output=True,check=True,timeout=5)
-        self.assertEqual(result.stdout,b'core disabled\n')
+        self.assertEqual(result.stdout,b'core disabled; file and CPU bounds enforced\n')
+
+    @unittest.skipUnless(os.name=='nt','Windows UTF-16 command line contract')
+    def test_windows_external_exec_preserves_long_and_quoted_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script=Path(directory)/'argument receiver \u2603.py'
+            script.write_text('import json,sys;sys.stdout.write(json.dumps(sys.argv[1:]))',encoding='utf-8')
+            arguments=['','plain','space and\ttab','quoted"value','\\'*3+'"after','trailing'+'\\'*7,'\u2603\U0001f600',
+                       'x'*17000+' space "quoted" '+'\\'*8+'"'+'\\'*7+'tail\\']
+            result=subprocess.run([WORKER,'--exec',sys.executable,script,*arguments],
+                                  capture_output=True,check=True,timeout=5)
+            self.assertEqual(result.stderr,b'')
+            self.assertEqual(json.loads(result.stdout),arguments)
+
+    @unittest.skipUnless(os.name=='nt','Windows UTF-16 command line contract')
+    def test_windows_external_exec_enforces_actual_command_limit_including_nul(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script=Path(directory)/'arguments.py'
+            script.write_text('import json,sys;sys.stdout.write(json.dumps(sys.argv[1:]))',encoding='utf-8')
+            # Plain arguments save enough parent-side quoting to deliver both boundary
+            # cases to the helper without first exceeding CreateProcessW's own limit.
+            command=[sys.executable,str(script),*(['x']*512),'']
+            base=sum(len(value.encode('utf-16-le'))//2+2 for value in command)+len(command)-1+1
+            for units in (32767,32768):
+                with self.subTest(utf16_units_including_nul=units):
+                    command[-1]='x'*(units-base)
+                    parent=[str(WORKER),'--exec',*command]
+                    self.assertLessEqual(len(subprocess.list2cmdline(parent).encode('utf-16-le'))//2+1,32767)
+                    result=subprocess.run(parent,capture_output=True,timeout=5)
+                    if units==32767:
+                        self.assertEqual(result.returncode,0,result.stderr)
+                        self.assertEqual(json.loads(result.stdout),command[2:])
+                    else:
+                        self.assertEqual(result.returncode,2)
+                        self.assertEqual(result.stdout,b'')
+                        self.assertEqual(result.stderr.splitlines(),[b'BLINK_PROTECTION_ARGUMENTS'])
 
     def test_owner_cancellation_does_not_leave_external_process(self):
         script='import os,time;print(os.getpid(),flush=True);time.sleep(60)'

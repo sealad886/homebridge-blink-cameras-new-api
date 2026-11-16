@@ -315,7 +315,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
         }
       };
       let plan: Awaited<ReturnType<typeof inspectExternalRecording>>;
-      try { plan = await inspectExternalRecording(context, selected.videoCodec.resolution[2]); }
+      try { plan = await inspectExternalRecording(context, selected.videoCodec.resolution[2], audioActive); }
       catch (error) { if (owner.aborted) throw new Error('Recording conversion cancelled');
         throw new NativeRecordingPreparationError({ phase: 'input', workerCode: error instanceof ExternalRecordingError ? error.code : 'MEDIA' }); }
       let initialWorkerCode: RecordingFailureCode | undefined;
@@ -352,7 +352,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
           let parsed: ReturnType<typeof parsePrepared>;
           try {
             parsed = parsePrepared(output, selected, audioActive);
-            await validateExternalRecording(context, output, selected, plan, audioActive);
+            await validateExternalRecording(context, output, selected, plan, audioActive, attempt === 1);
           } catch (error) { throw new NativeRecordingPreparationError({ phase: 'validation',
             ...(error instanceof ExternalRecordingError ? { workerCode: error.code } : {}), ...(attempt === 1 ? { salvageAttempted: true as const } : {}) }); }
           const bytes = output.length, preparedSha256 = createHash('sha256').update(output).digest('hex');
@@ -395,6 +395,12 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       }
     }
   }, owner));
-  try { return await Promise.race([pending, queuedAbort]); }
+  try {
+    const prepared = await Promise.race([pending, queuedAbort]);
+    // Cleanup and admission may yield after validation; ownership transfers only
+    // while the privacy owner and the original preparation deadline remain valid.
+    if (owner.aborted || Date.now() >= deadline) { prepared.dispose(); throw new Error('Recording conversion cancelled'); }
+    return prepared;
+  }
   finally { globalThis.clearTimeout(timer); owner.removeEventListener('abort', abortQueued); signal.removeEventListener('abort', cancelled); }
 }

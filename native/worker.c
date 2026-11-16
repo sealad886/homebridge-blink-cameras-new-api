@@ -55,24 +55,39 @@ static int run_protection(void) {
 /* Keep the supervisor alive: killing its process closes the job and therefore
  * kills FFmpeg and descendants. Suspended creation closes the assign-job race.
  * CRT descriptor inheritance preserves a regular fd0 and optional pipe3/4/5. */
+static void command_character(wchar_t *target,size_t *used,wchar_t character) {
+    if(*used>=32767)fatal("ARGUMENTS");
+    if(target)target[*used]=character;
+    (*used)++;
+}
+/* Count and write the same quoted UTF-16 units, including separators and NUL.
+ * Bounded single-unit admission avoids overflow and worst-case overestimates. */
+static size_t quote_command(int argc,wchar_t **argv,wchar_t *target) {
+    size_t used=0;
+    for(int i=2;i<argc;i++) {
+        if(i>2)command_character(target,&used,L' ');
+        command_character(target,&used,L'"');size_t slashes=0;
+        for(const wchar_t *s=argv[i];;s++) {
+            if(*s==L'\\') { if(slashes>=32767)fatal("ARGUMENTS");slashes++;continue; }
+            for(size_t n=0;n<slashes;n++) {
+                command_character(target,&used,L'\\');
+                if(*s==L'"' || !*s)command_character(target,&used,L'\\');
+            }
+            slashes=0;if(!*s)break;
+            if(*s==L'"')command_character(target,&used,L'\\');
+            command_character(target,&used,*s);
+        }
+        command_character(target,&used,L'"');
+    }
+    command_character(target,&used,L'\0');return used;
+}
 static void ignore_invalid(const wchar_t *a,const wchar_t *b,const wchar_t *c,unsigned int d,uintptr_t e) { (void)a;(void)b;(void)c;(void)d;(void)e; }
 static int execute_external(int argc,wchar_t **argv) {
     const wchar_t *executable=argv[2];
     if(!((executable[0] && executable[1]==L':' && (executable[2]==L'\\' || executable[2]==L'/')) || (executable[0]==L'\\' && executable[1]==L'\\')))fatal("ARGUMENTS");
-    size_t capacity=1;for(int i=2;i<argc;i++)capacity+=2*wcslen(argv[i])+4;
-    if(capacity>32767)fatal("ARGUMENTS");
-    wchar_t *command=calloc(capacity,sizeof(wchar_t));if(!command)fatal("MEMORY");wchar_t *at=command;
-    for(int i=2;i<argc;i++) {
-        if(i>2)*at++=L' ';
-        *at++=L'"';size_t slashes=0;
-        for(const wchar_t *s=argv[i];;s++) {
-            if(*s==L'\\') { slashes++;continue; }
-            if(*s==L'"' || !*s) { for(size_t n=0;n<slashes*2;n++)*at++=L'\\';if(*s)*at++=L'\\'; }
-            else { for(size_t n=0;n<slashes;n++)*at++=L'\\'; }
-            slashes=0;if(!*s)break;*at++=*s;
-        }
-        *at++=L'"';
-    }
+    size_t capacity=quote_command(argc,argv,NULL);
+    wchar_t *command=calloc(capacity,sizeof(wchar_t));if(!command)fatal("MEMORY");
+    if(quote_command(argc,argv,command)!=capacity)fatal("ARGUMENTS");
     _set_invalid_parameter_handler(ignore_invalid);
     int maximum=_getmaxstdio(),count=0;for(int fd=0;fd<maximum;fd++)if(_get_osfhandle(fd)>=0)count=fd+1;
     size_t bytes=sizeof(int)+(size_t)count*(sizeof(char)+sizeof(intptr_t));if(bytes>65535)fatal("IO_SETUP");
