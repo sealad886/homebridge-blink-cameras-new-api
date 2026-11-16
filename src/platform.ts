@@ -560,12 +560,20 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         const flow = context?.flow && /^flow-[a-f0-9]{10}$/.test(context.flow) ? context.flow : undefined;
         const phase = context?.preparation?.phase;
         const workerCode = context?.preparation?.workerCode;
+        const recovery = context?.recovery, flags = recovery?.flags;
+        const validRecovery = Number.isInteger(flags) && flags! >= 0 && flags! <= 7 && (flags! & 3) !== 3
+          && (recovery?.attempts === 1 || recovery?.attempts === 2) && (recovery.attempts === 2 || !(flags! & 6));
+        const repairs = validRecovery ? ([[1, 'audio-clock'], [2, 'audio-silence'], [4, 'fragments']] as const)
+          .filter(([bit]) => flags! & bit).map(([, name]) => name).join(',') : '';
         const details = [camera && `camera=${JSON.stringify(camera)}`, flow,
           Number.isSafeInteger(context?.attempt) && `attempt=${context!.attempt}`,
           phase && ['configuration', 'input', 'output', 'closure', 'validation'].includes(phase) && `phase=${phase}`,
-          isMediaWorkerFailureCode(workerCode) && `worker=${workerCode}`].filter(Boolean).join(' ');
+          isMediaWorkerFailureCode(workerCode) && `worker=${workerCode}`,
+          context?.preparation?.salvageAttempted === true && 'recovery=exhausted',
+          validRecovery && `conversion-attempts=${recovery!.attempts}`, repairs && `recovery=${repairs}`,
+          validRecovery && isMediaWorkerFailureCode(recovery?.initialWorkerCode) && `initial-worker=${recovery.initialWorkerCode}`].filter(Boolean).join(' ');
         const message = `[NativeRecording] ${event}${details ? ` ${details}` : ''}`;
-        if (event.includes('faulted') || event.endsWith('recovery-required') || /^(?:public-motion-failed|delivery-uncertain-motion-publication-failed|delivery-not-offered-preparation-failed|cache-capacity-exceeded|job-(?:exhausted|abandoned))$/.test(event)) this.log.warn(message);
+        if ((validRecovery && !!(flags! & 2)) || event.includes('faulted') || event.endsWith('recovery-required') || /^(?:public-motion-failed|delivery-uncertain-motion-publication-failed|delivery-not-offered-preparation-failed|cache-capacity-exceeded|job-(?:exhausted|abandoned))$/.test(event)) this.log.warn(message);
         else if (/^(?:push-(?:ready|client-bound|received|message-accepted|message-ignored|retrying)|motion-|acquisition-|job-|catalog-|clip-|download|preparation-|prepared$|offered$|delivery-|home-)/.test(event)) this.log.info(message);
         else this.log.debug(message);
       } });

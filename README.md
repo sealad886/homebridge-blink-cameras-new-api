@@ -209,6 +209,14 @@ motion clips to the same camera’s saved Home timeline after download and local
 preparation. Live viewing remains independent; this does not replace the live
 feed or create a separate replay camera.
 
+The Pi is a temporary processing and delivery host, not a recording backup.
+Preparation repairs recoverable timing problems automatically. If normal conversion
+fails, one salvage pass uses the remaining preparation budget. When audio cannot
+be recovered, usable video can be delivered with an AAC silence track; the normal
+log identifies the degraded audio. Home's audio-off permission still produces no
+audio track. The source working copy is removed after processing reaches its
+terminal result; the plugin does not maintain an archive of failed clips.
+
 Set up each camera in both Blink and Apple Home:
 
 1. In Blink, arm the system, enable that camera's motion detection and confirm a

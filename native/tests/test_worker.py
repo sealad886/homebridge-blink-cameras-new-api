@@ -99,13 +99,67 @@ class WorkerTests(unittest.TestCase):
                 result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
                 self.assertEqual(result.returncode,0,result.stderr)
                 rows=messages(result.stdout)
-                self.assertFalse(any(kind==13 for kind,_ in rows),'saved-file conversion must not infer new motion')
+                self.assertEqual([(kind,body) for kind,body in rows if kind==13],[(13,struct.pack('!I',0))])
+                self.assertEqual([kind for kind,_ in rows][-2:],[13,3])
                 credits=[struct.unpack('!I',body)[0] for kind,body in rows if kind==6]
                 self.assertEqual(credits[-1],len(media))
                 output=b''.join(body if kind==8 else body[24:] for kind,body in rows if kind in (8,9))
                 decoded=self.decode_recording(output)
                 self.assertEqual(decoded['videoFrames'],90)
                 self.assertEqual(decoded['audioTracks'],int(audio))
+    def finite_recovery(self, fixture, mode=2, rate=16000, source_fps=15, output_fps=15, fragment_ms=1000, offset=0):
+        media=subprocess.check_output([str(binary('fixture')),fixture,'16','16',str(source_fps),str(source_fps*6),str(offset)],timeout=5)
+        options=dict(fps=output_fps,output_mode=mode,fragment_ms=fragment_ms,iframe_ms=1000,max_frames=300)
+        if rate:options.update(audio_codec=4,audio_rate=rate,audio_channels=1,audio_bitrate=32000)
+        result=self.run_worker(config(**options)+b''.join(frame(2,media[i:i+65536]) for i in range(0,len(media),65536))+frame(3))
+        self.assertEqual(result.returncode,0,result.stderr)
+        rows=messages(result.stdout);diagnostics=[body for kind,body in rows if kind==13]
+        self.assertEqual(len(diagnostics),1);self.assertEqual(len(diagnostics[0]),4)
+        self.assertEqual([kind for kind,_ in rows][-2:],[13,3])
+        init=next(body for kind,body in rows if kind==8)
+        fragments=[body for kind,body in rows if kind==9]
+        self.assertGreater(len(fragments),1)
+        for body in fragments:
+            self.assertLessEqual(struct.unpack('!IqqI',body[:24])[2],fragment_ms*1000)
+            self.assertGreater(self.decode_recording(init+body[24:])['videoFrames'],0)
+        decoded=self.decode_recording(init+b''.join(body[24:] for body in fragments))
+        self.assertEqual(decoded['videoFrames'],min(source_fps,output_fps)*6)
+        self.assertEqual(decoded['audioTracks'],int(bool(rate)))
+        if rate:
+            self.assertEqual(decoded['audioSampleRate'],rate)
+            self.assertLessEqual(abs(decoded['audioSamples']-6*rate),2048)
+        return struct.unpack('!I',diagnostics[0])[0],decoded
+    def test_finite_repairs_small_audio_clock_errors_without_discarding_audio(self):
+        for fixture in ('audio-mp4-jitter','audio-mp4-gap','audio-mp4-overlap'):
+            for rate in (16000,24000):
+                with self.subTest(fixture=fixture,rate=rate):
+                    flags,decoded=self.finite_recovery(fixture,rate=rate)
+                    self.assertEqual(flags,1);self.assertGreater(decoded['audioPeak'],0.01)
+    def test_salvage_preflights_late_bad_or_missing_audio_and_substitutes_silence(self):
+        for fixture in ('audio-mp4-bad-audio','video-mp4'):
+            for rate in (16000,24000):
+                with self.subTest(fixture=fixture,rate=rate):
+                    flags,decoded=self.finite_recovery(fixture,mode=3,rate=rate)
+                    self.assertEqual(flags,6);self.assertLess(decoded['audioPeak'],1e-7)
+    def test_salvage_preserves_healthy_audio_and_audio_off_permission(self):
+        flags,decoded=self.finite_recovery('audio-mp4-sei',mode=3,fragment_ms=4000)
+        self.assertEqual(flags,4);self.assertGreater(decoded['audioPeak'],0.01)
+        flags,decoded=self.finite_recovery('audio-mp4-bad-audio',mode=3,rate=0)
+        self.assertEqual(flags,4);self.assertEqual(decoded['audioSamples'],0)
+    def test_salvage_combines_fragment_rebuild_and_late_audio_failure(self):
+        flags,decoded=self.finite_recovery('audio-mp4-bad-audio',mode=3,source_fps=25,output_fps=15)
+        self.assertEqual(flags,6);self.assertLess(decoded['audioPeak'],1e-7)
+    def test_salvage_silence_uses_original_video_timestamp_domain(self):
+        flags,decoded=self.finite_recovery('video-mp4',mode=3,offset=135)
+        self.assertEqual(flags,6);self.assertEqual(decoded['firstVideoUs'],9000000)
+        self.assertLess(decoded['audioPeak'],1e-7)
+    def test_salvage_reports_only_actual_fragment_policy_changes(self):
+        flags,_=self.finite_recovery('video-mp4',mode=3,rate=0,source_fps=1,output_fps=1)
+        self.assertEqual(flags,0)
+    def test_salvage_rejects_unusable_video_without_fabricating_pictures(self):
+        result=self.run_worker(config(output_mode=3,fragment_ms=1000,iframe_ms=1000)+frame(2,b'not an MP4')+frame(3))
+        self.assertEqual(result.returncode,2)
+        self.assertFalse(any(kind in (8,9,13) for kind,_ in messages(result.stdout)))
     def test_finite_mp4_mode_rejects_wrong_container_without_output(self):
         result=self.run_worker(config(output_mode=2,fragment_ms=4000,iframe_ms=1000)+frame(2,self.media)+frame(3))
         self.assertEqual(result.returncode,2)
@@ -472,7 +526,7 @@ class WorkerTests(unittest.TestCase):
         result = self.run_worker(data)
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = messages(result.stdout)
-        self.assertEqual(rows[0], (1, struct.pack('!II', 4, 15)))
+        self.assertEqual(rows[0], (1, struct.pack('!II', 5, 15)))
         packets = [body for kind, body in rows if kind == 2]
         self.assertEqual(len(packets), 4)
         pts=[struct.unpack('!q',p[:8])[0] for p in packets]

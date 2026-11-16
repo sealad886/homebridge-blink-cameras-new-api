@@ -11,7 +11,7 @@ parent owns verified vendor TLS, paired-controller sockets and generation lifeti
 the worker has no vendor URL, TLS, socket output, media/configuration file or
 FFmpeg CLI path. AAC-ELD remains excluded; recording uses AAC-LC.
 
-Protocol-4 adds finite MP4 input to the canonical worker. Existing packaged
+Protocol-5 adds bounded finite MP4 audio recovery; protocol-4 added finite MP4 input to the canonical worker. Existing packaged
 protocol-3 binaries and their earlier qualification do not cover this source.
 Regenerate every target and the corresponding-source archive before distribution.
 
@@ -35,7 +35,7 @@ make -C native test FFMPEG_PREFIX=/absolute/pinned/ffmpeg-9.0.2 SRTP_PREFIX=/abs
 
 The worker accepts no command-line options. Start with executable argv only, private piped stdin/stdout/stderr, and a scrubbed environment. Runtime rejects libavformat/libavcodec versions other than 63.1.102 and libavutil other than 61.1.102. This prevents observed major-version drift; distribution receipts bind exact artifact/source/dependency identity. The recorded local macOS worker statically linked the verified FFmpeg/Opus/x264/libsrtp archives and dynamically linked only Apple system libraries/frameworks. That local import result is not a claim about Linux or Windows imports; the published five-target artifacts pass their separate native dependency audits.
 
-## Protocol version 4
+## Protocol version 5
 
 All integers are big-endian. Input frame header: ASCII `BMI1`, u32 type, u32 payload length. Output header substitutes `BMO1`. Partial I/O is accumulated; partial header/body at EOF is fatal. Every input payload is capped at 65,536 bytes. Unknown type, duplicate CONFIG, media before CONFIG, media after END, invalid lengths or unknown enum values are fatal.
 
@@ -46,16 +46,17 @@ All integers are big-endian. Input frame header: ASCII `BMI1`, u32 type, u32 pay
 | 3 END | Empty; declares media EOF. Protection remains available after codec END; parent closes stdin after final protection replies or sends STOP |
 | 4 STOP | Empty; allowed before CONFIG and after END, terminates process immediately |
 
-CONFIG allows even dimensions 2..1920 by 2..1080, fps 1..30, video bitrate 20,000..8,000,000, and maximum video frames 1..9000. Audio codec enum: 0 disabled (all audio fields zero), 1 Opus (rate 16000 or 24000), 2 PCMA/3 PCMU (rate 8000), 4 AAC-LC (recording only, rate 16000 or 24000). Enabled audio requires one channel and bitrate 8000..128000. Opus packet duration must be 10, 20, 40 or 60 ms; other codecs require zero in that field. H264 profile IDs 0/1/2 select Baseline/Main/High and level IDs 0/1/2 select 3.1/3.2/4.0. Geometry and fps must fit the selected level’s macroblock/frame and macroblock/second limits. Software preset IDs 0/1 select the existing veryfast/ultrafast choices, both with zerolatency. Configured bitrate supplies both maximum rate and VBV buffer size. Ultrafast also selects Opus compression level 3, matching the existing operator choice. No hardware encoder or additional preset choice is exposed. PCM wire bitrate is fixed by codec/rate; configured bitrate does not change that. Output mode 0 emits codec packets and requires both recording duration fields zero. Modes 1 (MPEG-TS input) and 2 (completed MP4 input) emit fMP4 and accept only disabled audio or AAC-LC; fragment and I-frame durations are 1000..4000 ms, with I-frame interval no greater than fragment duration. AAC-LC and AAC-ELD are distinct codec requirements; no AAC-ELD support is advertised.
+CONFIG allows even dimensions 2..1920 by 2..1080, fps 1..30, video bitrate 20,000..8,000,000, and maximum video frames 1..9000. Audio codec enum: 0 disabled (all audio fields zero), 1 Opus (rate 16000 or 24000), 2 PCMA/3 PCMU (rate 8000), 4 AAC-LC (recording only, rate 16000 or 24000). Enabled audio requires one channel and bitrate 8000..128000. Opus packet duration must be 10, 20, 40 or 60 ms; other codecs require zero in that field. H264 profile IDs 0/1/2 select Baseline/Main/High and level IDs 0/1/2 select 3.1/3.2/4.0. Geometry and fps must fit the selected level’s macroblock/frame and macroblock/second limits. Software preset IDs 0/1 select the existing veryfast/ultrafast choices, both with zerolatency. Configured bitrate supplies both maximum rate and VBV buffer size. Ultrafast also selects Opus compression level 3, matching the existing operator choice. No hardware encoder or additional preset choice is exposed. PCM wire bitrate is fixed by codec/rate; configured bitrate does not change that. Output mode 0 emits codec packets and requires both recording duration fields zero. Modes 1 (MPEG-TS input), 2 (completed MP4 input), and 3 (completed MP4 salvage) emit fMP4 and accept only disabled audio or AAC-LC; fragment and I-frame durations are 1000..4000 ms, with I-frame interval no greater than fragment duration. AAC-LC and AAC-ELD are distinct codec requirements; no AAC-ELD support is advertised.
 
-Only first H.264 video and optional first AAC/AAC-LATM audio stream are processed. In live packet mode, missing optional audio produces no invented stream or packet. Recording with audio enabled requires source audio; missing source audio fails explicitly. Video PTS/DTS and audio timing use the selected container's original shared timestamp domain, reported as signed microseconds. Audio resampling and encoder initial/discard padding are explicit. No timeline normalization independently resets streams to zero. Video selects existing frames at no more than requested fps using source timestamps before scaling; it does not duplicate slower input. Aspect-preserving scaling uses even inner dimensions, centered black padding and square output SAR. Independent low-rate-source upconversion parity remains unverified. Source timestamp discontinuity beyond 2 ms in audio fails closed; broad real-provider jitter/wrap/reorder calibration remains pending.
+Only first H.264 video and optional first AAC/AAC-LATM audio stream are processed. In live packet mode, missing optional audio produces no invented stream or packet. Normal recording with audio enabled requires source audio; salvage substitutes negotiated AAC silence when needed. Video PTS/DTS and audio timing use the selected container's original shared timestamp domain, reported as signed microseconds. Audio resampling and encoder initial/discard padding are explicit. No timeline normalization independently resets streams to zero. Video selects existing frames at no more than requested fps using source timestamps before scaling; it does not duplicate slower input. Aspect-preserving scaling uses even inner dimensions, centered black padding and square output SAR. Independent low-rate-source upconversion parity remains unverified. Live audio discontinuity beyond 2 ms still fails closed. Finite recordings compensate bounded clock errors; errors beyond one second require salvage audio substitution. Broad real-provider jitter/wrap/reorder calibration remains pending.
 
 | Output type | Payload |
 |---|---|
-| 1 STATUS | u32 protocol version 4, u32 output fps |
+| 1 STATUS | u32 protocol version 5, u32 output fps |
 | 2 PACKET | i64 PTS/DTS/duration in microseconds, u32 owned keyframe flag, u32 stream ID 1, u32 timebase numerator 1, u32 denominator 1000000, u32 skip-start/end samples, then encoded Annex-B H.264 bytes |
 | 4 AUDIO PACKET | Same 48-byte metadata as video, stream ID 2, then encoded audio bytes |
 | 5 AUDIO INFO | u32 codec/rate/channels/initial-padding/extradata-size, followed by bounded codec extradata |
+| 13 RECORDING RECOVERY | Finite modes only: one u32 action bitmask (1 clock repair, 2 whole-track silence, 4 shorter keyframes), emitted once after final fragment |
 | 3 END | Empty; emitted only after successful media EOF and decoder/encoder draining |
 | 8 MP4 INIT | Complete `ftyp` + `moov` initialization segment, at most 256 KiB |
 | 9 MP4 FRAGMENT | u32 zero-based sequence, i64 first video PTS in microseconds, i64 video duration in microseconds, u32 keyframe-start flag 1, then complete `moof` + `mdat` fragment at most 8 MiB |
@@ -161,7 +162,7 @@ Before reading private configuration, POSIX builds set and verify the worker's o
 
 ## Parent readiness and drain
 
-`PrivateMediaWorker.whenReady` resolves only after a unique protocol-4 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a deadline from accepted input END of 120 seconds for completed MP4 input and two seconds for other input. Other preparation limits can expire earlier. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
+`PrivateMediaWorker.whenReady` resolves only after a unique protocol-5 STATUS matching configured fps. Its deadline begins at accepted CONFIG. `whenMediaDrained` resolves after output END and completion of every queued/active codec callback, with a deadline from accepted input END of 120 seconds for completed MP4 input and two seconds for other input. Other preparation limits can expire earlier. Both promises reject on failure or STOP; callers that only stop a worker need not install rejection handlers. The parent stops its own producers/timers, awaits media drain and final protection work, then calls `finishInput()` and awaits actual process/pipe closure. `endMedia()` only confirms writing input END. Neither readiness nor codec drain proves successful network delivery or physical playback.
 
 ## Owned session and independent synthetic receiver
 
@@ -216,3 +217,28 @@ VBV buffer size of 8000 kbps/kbits. Pinned x264's level-3.1 table permits 14000
 kbps, above this ceiling. Values above 8,000,000 are rejected. This verifies
 admission and encoder configuration, not sustained-rate, device CPU or RSS
 acceptance. Packet, queue and lifetime limits remain unchanged.
+
+### Finite recording recovery
+
+Output mode 2 prepares completed MP4 recordings, repairing bounded AAC clock
+irregularities with the pinned resampler. Mode 3 is the single bounded salvage
+conversion. It scans audio before emitting output, reopens the same private
+in-memory source, and preserves usable original audio. Missing or unrecoverable
+audio becomes negotiated mono AAC-LC silence clocked to the real video timeline.
+Disabled audio always remains absent. Salvage shortens the keyframe interval
+where possible without changing the selected bitrate, preset, or hard limits.
+No source file, network capability, or persistent media archive is introduced.
+
+Every successful finite conversion emits type 13 after its final fragment and
+before END: exactly one big-endian u32 diagnostic bitmask. Bit 1 means the output
+audio clock was repaired; bit 2 means the entire output audio track was replaced
+with silence; bit 4 means a shorter keyframe interval rebuilt fragmentation.
+Bits 1 and 2 are mutually exclusive. Disabled audio emits neither audio bit.
+Live modes emit no recovery diagnostic. Flags report actions actually taken.
+
+The parent retains its single admission and overall preparation deadline across
+the initial attempt and at most one salvage attempt. Unusable video, unreadable
+containers, trust failures, and resource limits remain errors. Shorter keyframes
+can repair some fragment timing failures; arbitrary byte-limit failures are not
+guaranteed recoverable. Historical failed Pi inputs are unavailable, so synthetic
+regressions do not establish their individual causes.

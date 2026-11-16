@@ -308,6 +308,29 @@ catalog prepared at or after the ordinary eligibility time, subject to module
 cooldown. This avoids selecting a nearby older clip early without assuming that
 Blink's notification and clip timestamps always describe the same instant.
 
+### Recoverable media and temporary storage
+
+Recording preparation repairs recoverable source timing while preserving usable
+video and audio. A classified media failure can enter one salvage conversion
+within the same overall 120-second preparation deadline, including admission wait.
+The deadline, memory budget and privacy checks are shared; recovery never resets
+them. A silent AAC track may replace irreparable audio when Home has recording
+audio enabled. This is reported as degraded delivery, not original sound. When
+Home audio is off, recovery does not decode or add an audio track.
+
+The local cache is a private transient working copy for processing and delivery,
+not a recording archive or backup. Original Blink clips remain on Blink storage.
+The plugin removes its temporary source when preparation finishes or finally
+fails; a successful offer then owns validated output in RAM until Home completion,
+closure, cancellation or offer expiry. An uncertain Home acknowledgement never
+starts a duplicate offer. No persistent failed-recording queue is created.
+
+Source integrity/privacy violations, exhausted hard resources, media with no
+usable video pictures and Home's refusal to retain a recording cannot be repaired
+by endlessly retrying. Final failures are logged explicitly so subsequent clips
+can continue. This pipeline does not guarantee that every Home offer is retained
+in iCloud; verify actual saved playback during setup.
+
 ### Queue timing and storage
 
 | `nativeRecording` field | Default | Allowed values / meaning |

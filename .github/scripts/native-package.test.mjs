@@ -33,13 +33,13 @@ function fixture() {
     ['project/native/dependencies/prepare.py', recipe], ['project/native/dependencies/source-inputs.json', json(inputs)], ['project/native/COPYING', copying],
     ...inputs.sources.map(input => [`dependencies/${input.filename}`, Buffer.from(input.name)])];
   entries.push(...runtimeNotices.map(([name, data]) => ['project/' + name, data]));
-  const manifest = { schemaVersion: 1, protocolVersion: 4, targets: {} }; const receipts = {};
+  const manifest = { schemaVersion: 1, protocolVersion: 5, targets: {} }; const receipts = {};
   const write = (name, bytes) => { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, bytes, { mode: 0o755 }); };
   for (const target of TARGETS) {
     const path = `native/runtime/${target}/worker${target === 'win32-x64' ? '.exe' : ''}`;
     const bytes = Buffer.from(target); write(path, bytes);
     manifest.targets[target] = { path, sha256: sha256(bytes) };
-    const receipt = { target, protocolVersion: 4, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
+    const receipt = { target, protocolVersion: 5, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
       dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs, prototype_assembly_disabled: false }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
     receipts[target] = receipt; entries.push([`receipts/${target}.json`, json(receipt)]);
   }

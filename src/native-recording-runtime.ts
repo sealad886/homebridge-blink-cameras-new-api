@@ -16,7 +16,7 @@ import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type Nativ
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
 import type { NativeRecordingConfig, NativeRecordingDevicePolicy } from './native-recording-config';
 import type { NativeRecordingDelegate, NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
-import type { NativeRecordingPreparationDiagnostic } from './accessories/native-recording-preparation';
+import type { NativeRecordingPreparationDiagnostic, NativeRecordingRecovery } from './accessories/native-recording-preparation';
 import { checkRequestBudget, isRemoteOperationLeaseActive, OperationTimeoutError, REMOTE_OPERATION_LEASE_MS, withinRequestBudget, type RequestOptions } from './operation-budget';
 import type { BlinkCameraKind } from './types';
 
@@ -45,7 +45,7 @@ interface EarlyNotificationOriginals {
   scope: { accountId: number; tier: string };
   devices: EarlyNotificationOriginal[];
 }
-export interface NativeRecordingLogContext { camera?: string; flow?: string; attempt?: number; preparation?: NativeRecordingPreparationDiagnostic; }
+export interface NativeRecordingLogContext { camera?: string; flow?: string; attempt?: number; preparation?: NativeRecordingPreparationDiagnostic; recovery?: NativeRecordingRecovery; }
 const preferenceFailure = (error: unknown): string => {
   if (error instanceof BlinkEarlyNotificationNotConfirmedError) return 'readback-unconfirmed';
   if (error instanceof OperationTimeoutError) return 'timeout';
@@ -774,7 +774,8 @@ export class NativeRecordingRuntime {
         this.report('preparation-started', context);
         const result = await recording.offerDownloaded({ filePath: asset.reference, expectedBytes: asset.bytes, expectedSha256: asset.sha256 },
           { logFlow: asset.logFlow, jobId: asset.jobId, clipIdentity: asset.identity, capturedAt: asset.capturedAt, policyEpoch: asset.policyEpoch }, current);
-        if (result.status === 'ready' || result.status === 'uncertain') this.report('prepared', context);
+        if (result.status === 'ready' || result.status === 'uncertain') this.report('prepared',
+          { ...context, ...(result.recovery ? { recovery: result.recovery } : {}) });
         this.report(result.status === 'ready' ? 'offered' : `delivery-${result.status}-${result.reason}`,
           result.status === 'not-offered' && result.diagnostic ? { ...context, preparation: result.diagnostic } : context);
         await this.removeOwnedAsset(asset);

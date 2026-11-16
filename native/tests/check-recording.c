@@ -17,11 +17,21 @@ static int read_bytes(void *opaque,uint8_t *target,int count) {
     size_t n=in->size-in->position;if(n>(size_t)count)n=(size_t)count;
     memcpy(target,in->data+in->position,n);in->position+=n;return (int)n;
 }
+static double audio_peak;
 static int decode(AVCodecContext *decoder,AVPacket *packet,int *frames,int64_t *samples) {
     if(avcodec_send_packet(decoder,packet)<0)return 2;
     AVFrame *frame=av_frame_alloc();if(!frame)return 2;int result;
     while((result=avcodec_receive_frame(decoder,frame))>=0) {
-        (*frames)++;*samples+=frame->nb_samples;av_frame_unref(frame);
+        (*frames)++;*samples+=frame->nb_samples;
+        if(frame->nb_samples) {
+            if(frame->format!=AV_SAMPLE_FMT_FLTP)return 2;
+            for(int i=0;i<frame->nb_samples;i++) {
+                float value=((const float*)frame->extended_data[0])[i];double peak=value<0?-value:value;
+                if(peak!=peak || peak>1000)return 2;
+                if(peak>audio_peak)audio_peak=peak;
+            }
+        }
+        av_frame_unref(frame);
     }
     av_frame_free(&frame);return result==AVERROR(EAGAIN) || result==AVERROR_EOF?0:2;
 }
@@ -60,9 +70,9 @@ int main(void) {
     if(result!=AVERROR_EOF)return 2;
     for(unsigned i=0;i<format->nb_streams;i++)if(decode(decoders[i],NULL,(int)i==video?&video_frames:&audio_frames,(int)i==video?&unused:&samples))return 2;
     if(video<0 || !video_frames || (audio>=0 && !samples))return 2;
-    printf("{\"videoFrames\":%d,\"videoWidth\":%d,\"videoHeight\":%d,\"audioTracks\":%d,\"audioSampleRate\":%d,\"audioChannels\":%d,\"audioSamples\":%lld,\"firstVideoUs\":%lld,\"lastVideoUs\":%lld}\n",
+    printf("{\"videoFrames\":%d,\"videoWidth\":%d,\"videoHeight\":%d,\"audioTracks\":%d,\"audioSampleRate\":%d,\"audioChannels\":%d,\"audioSamples\":%lld,\"firstVideoUs\":%lld,\"lastVideoUs\":%lld,\"audioPeak\":%.9g}\n",
         video_frames,decoders[video]->width,decoders[video]->height,audio>=0,audio>=0?decoders[audio]->sample_rate:0,
-        audio>=0?decoders[audio]->ch_layout.nb_channels:0,(long long)samples,(long long)first_pts,(long long)last_pts);
+        audio>=0?decoders[audio]->ch_layout.nb_channels:0,(long long)samples,(long long)first_pts,(long long)last_pts,audio_peak);
     for(unsigned i=0;i<format->nb_streams;i++)avcodec_free_context(&decoders[i]);
     av_packet_free(&packet);avformat_close_input(&format);av_freep(&io->buffer);avio_context_free(&io);free(in.data);return 0;
 }

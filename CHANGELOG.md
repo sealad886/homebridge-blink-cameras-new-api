@@ -35,6 +35,17 @@ owns subsequent acceptance and finding dispositions.
   config access mode, with a private exact-byte backup. No ongoing legacy setting
   interpretation is added to the runtime or editor.
 
+### Recovery-first delivery
+- Repair finite audio timing and allow one salvage conversion within the same
+  preparation deadline and resource budget. Preserve usable video and original
+  audio where recoverable; explicitly warn when an AAC silence track replaces
+  irreparable sound. Home audio-off permission remains authoritative.
+- Keep source media only as a transient processing copy. No failed-media archive,
+  persistent retry queue or repeated Home offer is introduced. Terminal failure
+  is explicit and does not renew the deadline.
+- Rebuild all native targets for private protocol version 5, with strict recovery
+  result validation and installed-package coverage required before promotion.
+
 ### Upgrade and qualification
 - Close settings/config editors before upgrading. POSIX automatic migration needs
   the installer's explicit storage path; otherwise preview the installed converter

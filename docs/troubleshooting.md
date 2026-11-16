@@ -102,6 +102,14 @@ lookup starts after 60 seconds; catalog cooldown and queue contention can add
 delay. Home may place the entry at delivery time. `motionTimeout` only controls
 the public motion indication; it does not set the saved clip length.
 
+Preparation first repairs recoverable timing; a classified media fault receives
+one salvage pass within the original overall deadline. Normal logs identify
+`recovery=audio-clock`, `audio-silence` or `fragments` when those actions
+were actually used. Silence is a warning that the real video survived with degraded
+audio. A terminal `recovery=exhausted` means the salvage attempt also failed; it is
+not a reason to keep a failed recording permanently on the Pi. No backup/archive
+mode or indefinite retry queue exists.
+
 Preparation failures are reported with bounded phase/code diagnostics. A rejected
 clip does not establish that all recording is broken; preserve the code and event
 time for an issue. Do not widen identity/time matching or disable media validation

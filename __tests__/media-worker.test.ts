@@ -20,7 +20,7 @@ function fixture(stalled = false) {
 }
 const flush = async () => { for (let i = 0; i < 4; i++) { await Promise.resolve(); } };
 function consumptionAck(bytes: number): Buffer { const body = Buffer.alloc(4); body.writeUInt32BE(bytes); return output(6, body); }
-function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(4); body.writeUInt32BE(fps, 4); return output(1, body); }
+function status(fps = 1): Buffer { const body = Buffer.alloc(8); body.writeUInt32BE(5); body.writeUInt32BE(fps, 4); return output(1, body); }
 function sourceInfo(width: number, height: number, numerator = 0, denominator = 1): Buffer {
   const body = Buffer.alloc(16); [width, height, numerator, denominator].forEach((n, i) => body.writeUInt32BE(n, i * 4)); return output(7, body);
 }
@@ -299,7 +299,7 @@ const recordingConfig = { width: 16, height: 16, fps: 15, bitrate: 100000, maxFr
 test('recording accepts complete fragments above raw frame cap and preserves ordered callbacks through drain', async () => {
   const f = fixture(); const order: string[] = []; let release!: () => void;
   const init = jest.fn(async () => { order.push('init'); await new Promise<void>(resolve => { release = resolve; }); });
-  const fragment = jest.fn(async (_fragment: RecordingFragment) => { order.push('fragment'); });
+  const fragment = jest.fn(async (value: RecordingFragment) => { expect(value.keyframeStart).toBe(true); order.push('fragment'); });
   const worker = new PrivateMediaWorker('/verified/worker', { recordingInit: init, recordingFragment: fragment }, f.launch);
   await worker.configureRecording(recordingConfig); expect(f.writes[0].readUInt32BE(8)).toBe(64); expect(f.writes[0].readUInt32BE(64)).toBe(1);
   f.child.stdout.write(status(15)); f.child.stdout.write(output(8, Buffer.alloc(16)));
@@ -361,7 +361,7 @@ test.each(['stdin', 'stdout', 'stderr'] as const)('a broken %s pipe cancels reco
 test('maximum codec frame tail coalesced with next frame remains valid across arbitrary fragments', async () => {
   const f = fixture(); const seen: Buffer[] = []; const worker = new PrivateMediaWorker('/verified/worker', { packet: async packet => { seen.push(Buffer.from(packet.data)); } }, f.launch);
   await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  const large = output(2, codecBody(MEDIA_WORKER_LIMITS.frameBytes - 60)); const status = Buffer.alloc(8); status.writeUInt32BE(4); status.writeUInt32BE(1, 4);
+  const large = output(2, codecBody(MEDIA_WORKER_LIMITS.frameBytes - 60)); const status = Buffer.alloc(8); status.writeUInt32BE(5); status.writeUInt32BE(1, 4);
   const next = output(1, status);
   f.child.stdout.write(large.subarray(0, large.length - 20));
   f.child.stdout.write(Buffer.concat([large.subarray(large.length - 20), next.subarray(0, 5)]));
@@ -444,4 +444,45 @@ test('STOP cancels bounded producer queued behind active protection', async () =
   const producer = worker.media(Buffer.alloc(16)); const producerCheck = expect(producer).rejects.toThrow();
   await worker.stop(); await protectionCheck; await producerCheck; releaseControl(); await flush();
   expect(f.writes.map(b => b.readUInt32BE(4))).toEqual([10, 1, 11]);
+});
+
+function recoveryRecord(flags: number): Buffer { const body = Buffer.alloc(4); body.writeUInt32BE(flags); return output(13, body); }
+test.each([{ salvage: false, audio: false, flags: 0 }, { salvage: false, audio: true, flags: 1 },
+  { salvage: true, audio: true, flags: 6 }, { salvage: true, audio: false, flags: 4 }])(
+  'finite recovery metadata respects mode and negotiated audio: %j', async ({ salvage, audio, flags }) => {
+    const f = fixture(), recovered = jest.fn();
+    const worker = new PrivateMediaWorker('/verified/worker', { recordingRecovery: recovered, recordingInit: async () => {}, recordingFragment: async () => {} }, f.launch);
+    await worker.configureRecording({ ...recordingConfig, inputFormat: 'mp4', salvage,
+      audioCodec: audio ? 4 : 0, audioRate: audio ? 16000 : 0, audioBitrate: audio ? 16000 : 0 });
+    expect(f.writes[0].readUInt32BE(64)).toBe(salvage ? 3 : 2);
+    f.child.stdout.write(status(15)); await worker.endMedia();
+    f.child.stdout.write(output(8, Buffer.alloc(16))); f.child.stdout.write(output(9, recordingBody()));
+    f.child.stdout.write(recoveryRecord(flags)); f.child.stdout.write(output(3, Buffer.alloc(0)));
+    await worker.whenMediaDrained; const closed = worker.finishInput(); f.child.emit('close', 0); await closed;
+    expect(recovered).toHaveBeenCalledTimes(1); expect(recovered).toHaveBeenCalledWith(flags); expect(worker.failed).toBe(false);
+  });
+test.each(['missing', 'duplicate', 'unknown flags', 'unused bitrate flag', 'normal silence', 'audio off', 'contradictory audio', 'before fragments', 'wrong length', 'live'])(
+  'rejects invalid finite recovery diagnostic: %s', async kind => {
+    const f = fixture(); const worker = new PrivateMediaWorker('/verified/worker', { recordingInit: async () => {}, recordingFragment: async () => {} }, f.launch);
+    await worker.configureRecording({ ...recordingConfig, inputFormat: kind === 'live' ? 'mpegts' : 'mp4',
+      salvage: kind !== 'live' && kind !== 'normal silence', audioCodec: kind === 'audio off' ? 0 : 4,
+      audioRate: kind === 'audio off' ? 0 : 16000, audioBitrate: kind === 'audio off' ? 0 : 16000 });
+    f.child.stdout.write(status(15)); await worker.endMedia(); f.child.stdout.write(output(8, Buffer.alloc(16)));
+    if (kind !== 'before fragments') f.child.stdout.write(output(9, recordingBody()));
+    const flags = kind === 'unknown flags' ? 16 : kind === 'unused bitrate flag' ? 8 : ['normal silence', 'audio off'].includes(kind) ? 2 : kind === 'contradictory audio' ? 3 : 0;
+    if (kind !== 'missing') f.child.stdout.write(kind === 'wrong length' ? output(13, Buffer.alloc(3)) : recoveryRecord(flags));
+    if (kind === 'duplicate') f.child.stdout.write(recoveryRecord(flags));
+    f.child.stdout.write(output(3, Buffer.alloc(0))); await worker.whenClosed; expect(worker.failed).toBe(true);
+  });
+test('rejects a version4 worker instead of interpreting it as a recovery-capable executable', async () => {
+  const f = fixture(), worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
+  await worker.configure([2, 2, 1, 20000, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const body = Buffer.alloc(8); body.writeUInt32BE(4); body.writeUInt32BE(1, 4);
+  f.child.stdout.write(output(1, body)); await worker.whenClosed; expect(worker.failed).toBe(true);
+});
+
+test.each([undefined, 'mpegts'] as const)('does not allow salvage mode for live recording input %s', async inputFormat => {
+  const f = fixture(), worker = new PrivateMediaWorker('/verified/worker', {}, f.launch);
+  expect(() => worker.configureRecording({ ...recordingConfig, inputFormat, salvage: true })).toThrow('Invalid recording salvage mode');
+  expect(f.writes).toHaveLength(0); await worker.stop();
 });

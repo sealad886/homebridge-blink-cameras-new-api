@@ -12,7 +12,7 @@ import { TARGETS, collectSourceProof, regularFile, sha256, verifyNativePackage, 
 
 export const QUALIFICATION_SELECTIONS = Object.freeze(['audio-latm', 'audio-latm-bundled'].flatMap(mode =>
   ['opus:16000', 'opus:24000', 'pcma:8000', 'pcmu:8000'].map(audio => `${mode}:${audio}`)));
-export const FINITE_RECORDING_SELECTIONS = Object.freeze(['audio-16khz', 'audio-24khz', 'audio-disabled', '30fps-source-15fps-output', 'recovery-metadata', 'low-fps-source', '25fps-source-15fps-output']);
+export const FINITE_RECORDING_SELECTIONS = Object.freeze(['audio-16khz', 'audio-24khz', 'audio-disabled', '30fps-source-15fps-output', 'recovery-metadata', 'low-fps-source', '25fps-source-15fps-output', 'audio-clock-repair', 'missing-audio-recovery', 'corrupt-audio-recovery', 'damaged-audio-disabled']);
 export const RUNTIME_BOOTSTRAP_EXPECTATION = Object.freeze({ instances: 2, sourceStarts: 2, sourceStops: 2,
   publicMotionEvents: 2, stateReloaded: true, syntheticDownloads: 1, networkAttempts: 0 });
 const selections = QUALIFICATION_SELECTIONS;
@@ -108,16 +108,23 @@ export async function exerciseInstalledRecording(packageRoot, validationRoot) {
       videoCodec: { type: 0, resolution: [320, 180, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
       audioCodec: { type: 0, samplerate: 1, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
     for (const selected of FINITE_RECORDING_SELECTIONS) {
+      const repairCase = {
+        'audio-clock-repair': { fixture: 'audio-mp4-gap', rate: 16000, attempts: 1, flags: 1 },
+        'missing-audio-recovery': { fixture: 'video-mp4', rate: 16000, attempts: 2, flags: 6, initialWorkerCode: 'AUDIO_MISSING' },
+        'corrupt-audio-recovery': { fixture: 'audio-mp4-bad-audio', rate: 24000, attempts: 2, flags: 6, initialWorkerCode: 'AUDIO_DECODE' },
+        'damaged-audio-disabled': { fixture: 'audio-mp4-bad-audio', rate: 0, attempts: 1, flags: 0 },
+      }[selected];
       const longSource = selected === '30fps-source-15fps-output';
       const lowFps = selected === 'low-fps-source', nonIntegral = selected === '25fps-source-15fps-output';
       const timing = lowFps || nonIntegral, recovery = selected === 'recovery-metadata' || timing;
-      const rate = nonIntegral || selected === 'audio-24khz' ? 24000 : selected === 'audio-16khz' || recovery ? 16000 : 0;
-      const sourceBytes = longSource ? execFileSync(join(validationRoot, 'fixture' + suffix), ['video-mp4', '16', '16', '30', '1800'],
+      const rate = repairCase ? repairCase.rate : nonIntegral || selected === 'audio-24khz' ? 24000 : selected === 'audio-16khz' || recovery ? 16000 : 0;
+      const sourceBytes = repairCase ? execFileSync(join(validationRoot, 'fixture' + suffix), [repairCase.fixture, '320', '180', '15', '90'],
+        { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : longSource ? execFileSync(join(validationRoot, 'fixture' + suffix), ['video-mp4', '16', '16', '30', '1800'],
         { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : recovery ?
         execFileSync(join(validationRoot, 'fixture' + suffix), ['audio-mp4-sei', '320', '180', nonIntegral ? '25' : lowFps ? '5' : '15', nonIntegral ? '225' : lowFps ? '45' : '90'],
           { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : bytes;
-      const selectedFile = longSource || recovery ? join(scratch, `${selected}-source.mp4`) : filePath;
-      if (longSource || recovery) writeFileSync(selectedFile, sourceBytes, { mode: 0o600, flag: 'wx' });
+      const selectedFile = longSource || recovery || repairCase ? join(scratch, `${selected}-source.mp4`) : filePath;
+      if (longSource || recovery || repairCase) writeFileSync(selectedFile, sourceBytes, { mode: 0o600, flag: 'wx' });
       const selectedConfiguration = { ...configuration,
         mediaContainerConfiguration: { ...configuration.mediaContainerConfiguration, fragmentLength: recovery && !timing ? 4000 : 1000 },
         videoCodec: { ...configuration.videoCodec, resolution: longSource ? [16, 16, 15] : nonIntegral ? [320, 180, 15] : recovery ? [320, 180, 30] : configuration.videoCodec.resolution,
@@ -127,14 +134,14 @@ export async function exerciseInstalledRecording(packageRoot, validationRoot) {
       const prepared = await prepareNativeRecording({ filePath: selectedFile, expectedBytes: sourceBytes.length, expectedSha256: sha256(sourceBytes) },
         selectedConfiguration, rate !== 0, new globalThis.AbortController().signal, { memory, admit: work => work() });
       try {
-        assert(prepared.fragments.length > 1); assert(prepared.durationMs > (longSource ? 59999 : timing ? 8900 : recovery ? 5900 : 2100) && prepared.durationMs <= (longSource ? 60000.1 : timing ? 9200 : recovery ? 6100 : 2200.1));
+        assert(prepared.fragments.length > 1); assert(prepared.durationMs > (longSource ? 59999 : timing ? 8900 : recovery || repairCase ? 5900 : 2100) && prepared.durationMs <= (longSource ? 60000.1 : timing ? 9200 : recovery || repairCase ? 6100 : 2200.1));
         assert(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= selectedConfiguration.mediaContainerConfiguration.fragmentLength + 0.01));
         const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
         try {
           assert.equal(sha256(output), prepared.preparedSha256);
           const decoded = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
             { input: output, env: {}, timeout: 5000, maxBuffer: 65536 }));
-          assert.equal(decoded.videoFrames, longSource ? 900 : nonIntegral ? 135 : lowFps ? 45 : recovery ? 90 : 33); assert.equal(decoded.videoWidth, longSource ? 16 : 320); assert.equal(decoded.videoHeight, longSource ? 16 : 180);
+          assert.equal(decoded.videoFrames, longSource ? 900 : nonIntegral ? 135 : lowFps ? 45 : recovery || repairCase ? 90 : 33); assert.equal(decoded.videoWidth, longSource ? 16 : 320); assert.equal(decoded.videoHeight, longSource ? 16 : 180);
           assert.equal(decoded.audioTracks, rate ? 1 : 0);
           assert.equal(decoded.audioSampleRate, rate);
           assert.equal(decoded.audioChannels, rate ? 1 : 0);
@@ -142,13 +149,23 @@ export async function exerciseInstalledRecording(packageRoot, validationRoot) {
             assert(Math.abs(decoded.lastVideoUs - decoded.firstVideoUs - (nonIntegral ? 224 * 1001000 / 25 : lowFps ? 44 * 1001000 / 5 : 89 * 1001000 / 15)) <= 15, 'Metadata must not add picture time');
             assert(Math.abs(decoded.audioSamples * 1000 / rate - prepared.durationMs) < 160, 'Recovery metadata must preserve A/V alignment');
           }
-          if (timing) for (const [index, fragment] of prepared.fragments.entries()) {
+          if (repairCase) {
+            if (repairCase.flags) assert.deepEqual(prepared.recovery, { flags: repairCase.flags, attempts: repairCase.attempts,
+              ...(repairCase.initialWorkerCode ? { initialWorkerCode: repairCase.initialWorkerCode } : {}) });
+            else assert.equal(prepared.recovery, undefined, 'Disabled audio must not be decoded or repaired');
+            assert(Math.abs(decoded.lastVideoUs - decoded.firstVideoUs - 89 * 1000000 / 15) <= 15, 'Recovery must preserve real video clocks');
+            assert(Number.isFinite(decoded.audioPeak));
+            if (repairCase.flags & 2) assert(decoded.audioPeak < 1e-7, 'Substituted audio must actually be silent');
+            else if (rate) assert(decoded.audioPeak > 0.01, 'Repaired original audio must retain actual sound');
+            if (rate) assert(Math.abs(decoded.audioSamples * 1000 / rate - prepared.durationMs) < 160, 'Recovery must retain A/V alignment');
+          }
+          if (timing || repairCase) for (const [index, fragment] of prepared.fragments.entries()) {
             if (index + 1 < prepared.fragments.length) assert(Math.abs(fragment.startMs + fragment.durationMs - prepared.fragments[index + 1].startMs) < 0.01, 'Selected source clocks must remain contiguous');
             const independent = Buffer.concat([prepared.initialization, fragment.data]);
             try {
               const part = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
                 { input: independent, env: {}, timeout: 5000, maxBuffer: 65536 }));
-              assert(part.videoFrames > 0); assert.equal(part.audioTracks, 1);
+              assert(part.videoFrames > 0); assert.equal(part.audioTracks, rate ? 1 : 0);
               assert(Math.abs(part.firstVideoUs - decoded.firstVideoUs - fragment.startMs * 1000) <= 15, 'Selected fragments must retain source clocks');
             } finally { independent.fill(0); }
           }

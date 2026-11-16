@@ -106,3 +106,38 @@ migration was executed. The signed5308 source reviews and preflight are historic
 after these repairs; exact repaired-head preflight, independent review and active
 CodeRabbit round2 remain required before push. Candidate physical and natural
 refresh/stable soak gates remain unchanged.
+
+## Bounded delivery recovery checkpoint — 16 November
+
+The delivery-first recovery candidate repairs finite audio timing and permits one
+salvage attempt inside the original preparation deadline, source ownership and
+resource budget. Recoverable failures may rebuild fragments or replace unusable
+audio with disclosed AAC silence while preserving real video. Live media remains
+strict. Privacy, generation, source identity and output validation still gate the
+offer; cleanup remains transient, with no archive or repeated Home motion offer.
+Ordinary logs distinguish repaired, degraded and unrecoverable outcomes without
+raw codec diagnostics or provider capabilities.
+
+Protocol5 binds the worker handshake, finite modes, mandatory recovery diagnostic,
+source manifest and all-five qualification receipts. The readiness documentation
+now correctly says protocol-5 STATUS. Final review also removed the output-only
+recovery record's duplicate input-table row. Existing protocol4 artifacts cannot
+qualify this candidate and must be rebuilt.
+
+Independent integration review covered all53 candidate files at captured hashes
+with no actionable correctness, security, data-loss or regression finding. Its
+only minor finding was the readiness documentation corrected above. Existing local
+evidence:64native tests,163native-enabled TypeScript tests with no skips,
+230runtime/delegate/logging tests,87release-contract tests,52Python packaging tests,
+and all11finite local function selections passed. The function exercise used a
+local loader override and is not installed-artifact qualification. Final hash-bound
+review and canonical exact-commit preflight remain separate gates.
+
+PR113 still contains older source and must not merge until current-head source
+reviews and CI settle. All five rebuilt installed-artifact qualifications,
+immutable registry/source/native/receipt/GitHub verification, standard Pi upgrade
+and fresh physical saved Home playback remain required. The five historical failed
+Pi sources were not retained; synthetic recovery does not identify their individual
+causes or guarantee Home retention. RC natural refreshes and stable acceptance
+remain subject to the release guide. No Leave Home or Arrive Home scene has been
+activated during this recovery work; Arrive Home is prohibited.

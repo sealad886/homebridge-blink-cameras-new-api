@@ -1519,6 +1519,30 @@ describe('native recording runtime composition', () => {
     expect(flows[0]).toMatch(/^flow-[a-f0-9]{10}$/);
   });
 
+  it('keeps the transient source through repair and reports one repaired offer before cleanup', async () => {
+    const f = await setup(); f.delegate.updateRecordingAudioActive(true);
+    let finishRepair!: () => void;
+    const repairing = new Promise<void>(resolve => { finishRepair = resolve; });
+    const recovery = { flags: 2, attempts: 2 as const, initialWorkerCode: 'AUDIO_DECODE' as const };
+    f.prepare.mockImplementationOnce(async (_source, selected, audio) => {
+      await repairing; return { ...prepared(selected, audio), recovery };
+    });
+    await f.push(); await jest.advanceTimersByTimeAsync(60_000);
+    await until(() => f.prepare.mock.calls.length === 1);
+    const source = f.prepare.mock.calls[0][0].filePath;
+    expect((await fs.stat(source)).isFile()).toBe(true);
+    expect(f.events).not.toContain('prepared'); expect(f.readyMotion).not.toHaveBeenCalled();
+    finishRepair(); await until(() => f.events.includes('offered'));
+    expect(f.reports.filter(report => report.event === 'prepared')).toEqual([
+      expect.objectContaining({ context: expect.objectContaining({ recovery }) }),
+    ]);
+    expect(f.events).not.toContain('delivery-not-offered-preparation-failed');
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect(f.readyMotion.mock.calls.filter(([active]) => active)).toHaveLength(1);
+    await until(async () => (await f.state()).downloads.length === 0);
+    await expect(fs.stat(source)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('reports typed preparation failure diagnostics and cleans the failed clip without offering it', async () => {
     const f = await setup();
     f.prepare.mockRejectedValueOnce(new NativeRecordingPreparationError({ phase: 'output', workerCode: 'DECODE' }));
