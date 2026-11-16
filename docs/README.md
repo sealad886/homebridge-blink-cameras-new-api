@@ -1,15 +1,54 @@
-# Documentation map
+# Blink for Homebridge documentation
 
-Start with the [user guide](../README.md). This map assigns one owner to each
-maintained topic. Update that owner first; use links elsewhere instead of copying
-procedures, settings tables or release decisions.
+The canonical public documentation is **[Blink for Homebridge](https://sealad886.github.io/homebridge-blink-cameras-new-api/)**.
+Connect your Blink account, choose your cameras, then verify live viewing and
+optional native-clip recording in Apple Home.
 
-Last reviewed: 15 November 2026.
+[Illustrated setup](../output/articles/set-up-blink-cameras-in-apple-home/index.md)
+· [How it works](how-it-works.md)
+· [Troubleshooting](troubleshooting.md)
+· [Offline download](https://sealad886.github.io/homebridge-blink-cameras-new-api/offline.html)
+
+## Choose your guide
+
+| I want to… | Read this |
+| --- | --- |
+| Install, sign in and test a camera | [Illustrated setup](../output/articles/set-up-blink-cameras-in-apple-home/index.md) |
+| Understand motion, live viewing and saved clips | [How it works](how-it-works.md) |
+| Connect or recover a Blink session | [Sign-in and account verification](authentication.md) |
+| Choose cameras, names, snapshots and recording options | [Configuration](configuration.md) |
+| Verify a first saved Home clip | [Recording setup checklist](configuration.md#recording-setup-checklist) |
+| Tune live viewing and sound | [Streaming](streaming.md) |
+| Upgrade an older installation | [One-time migration](native-recording-config-migration.md) |
+| Diagnose a missing clip or connection | [Troubleshooting](troubleshooting.md) |
+
+## Publication and offline reading
+
+The [public site](https://sealad886.github.io/homebridge-blink-cameras-new-api/) rebuilds automatically through
+[documentation CI](../.github/workflows/docs.yml) when its content or build inputs
+change on `main`. Pull requests validate the bundle without publishing it.
+Each guide has a stable page URL; Markdown remains its maintained source.
+
+The [offline guide](https://sealad886.github.io/homebridge-blink-cameras-new-api/offline.html) includes its text, styles,
+search and screenshots in one downloadable HTML file. Save it and open it in a
+browser without a server or sign-in. Follow the [build instructions](../output/documentation/README.md)
+for local preview, validation and publication maintenance.
+
+## Documentation map
+
+This map assigns one owner to each maintained topic. Update that owner first;
+use links elsewhere instead of copying procedures, settings tables or release
+decisions.
+
+Last reviewed: 16 November 2026.
 
 ## Current guides and sources
 
 | Topic | Canonical owner | Scope |
 | --- | --- | --- |
+| Illustrated setup | [Setup walkthrough](../output/articles/set-up-blink-cameras-in-apple-home/index.md) | Source-rendered camera setup, live viewing and first recording verification |
+| Video and motion paths | [How it works](how-it-works.md) | Concepts, control boundaries and delivery checkpoints |
+| Public documentation and CI | [Publication guide](../output/documentation/README.md) | Canonical URL, build/deploy automation and offline artifact |
 | Overview, installation and Home controls | [Root README](../README.md) | User entry point and accessory behavior |
 | Settings | [Configuration](configuration.md) | Examples, defaults and operator explanations; [schema](../config.schema.json) owns UI validation |
 | Sign-in and recovery | [Authentication](authentication.md) | Operator procedure; ADR-001 owns architecture |

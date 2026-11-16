@@ -1,5 +1,8 @@
 # Sign-in and account verification
 
+[Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
+
+
 Last reviewed: 23 October 2026.
 
 This guide owns operator sign-in and stored-session recovery. Architecture and

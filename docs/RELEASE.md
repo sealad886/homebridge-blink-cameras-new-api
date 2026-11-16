@@ -293,3 +293,12 @@ label or documentation change does not create a waiting period. Hardware failure
 and other external causes require an explicit operator disposition. Preserve the
 observed failure and the basis for that disposition without reporting a software
 fix that was not made.
+
+## Documentation publication
+
+The [canonical documentation site](https://sealad886.github.io/homebridge-blink-cameras-new-api/)
+publishes automatically from `main` through `.github/workflows/docs.yml`.
+This workflow publishes documentation only; package versions, npm publication
+and installed Homebridge hosts keep the release procedures above. See the
+[documentation publication guide](../output/documentation/README.md) for its
+build, validation and rollback procedure.

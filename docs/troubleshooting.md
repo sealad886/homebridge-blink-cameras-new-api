@@ -1,5 +1,8 @@
 # Troubleshooting
 
+[Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
+
+
 Last reviewed: 15 November 2026.
 
 Start with the checks below. For safe collection/redaction use the

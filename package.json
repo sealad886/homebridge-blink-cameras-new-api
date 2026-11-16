@@ -9,7 +9,7 @@
     },
     "license": "(MIT AND GPL-3.0-or-later AND BSD-3-Clause AND ZPL-2.1)",
     "type": "commonjs",
-    "homepage": "https://github.com/sealad886/homebridge-blink-cameras-new-api",
+    "homepage": "https://sealad886.github.io/homebridge-blink-cameras-new-api/",
     "bugs": {
         "url": "https://github.com/sealad886/homebridge-blink-cameras-new-api/issues"
     },

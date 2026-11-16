@@ -1,0 +1,19 @@
+{
+  "name": "homebridge-blink-documentation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "node --test ../../output/documentation/build.test.mjs",
+    "build": "node ../../output/documentation/build.mjs --site-dir ../../.local/docs-site --base-url https://sealad886.github.io/homebridge-blink-cameras-new-api/ --marked-module node_modules/marked/lib/marked.esm.js",
+    "build:offline": "node ../../output/documentation/build.mjs --marked-module node_modules/marked/lib/marked.esm.js",
+    "check": "node check-site.mjs ../../.local/docs-site --base-url https://sealad886.github.io/homebridge-blink-cameras-new-api/",
+    "verify": "npm run test && npm run build && npm run check"
+  },
+  "dependencies": {
+    "marked": "17.0.6"
+  }
+}
