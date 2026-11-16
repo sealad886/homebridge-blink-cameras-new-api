@@ -63,7 +63,8 @@ static int execute_external(int argc,wchar_t **argv) {
     if(capacity>32767)fatal("ARGUMENTS");
     wchar_t *command=calloc(capacity,sizeof(wchar_t));if(!command)fatal("MEMORY");wchar_t *at=command;
     for(int i=2;i<argc;i++) {
-        if(i>2)*at++=L' ';*at++=L'"';size_t slashes=0;
+        if(i>2)*at++=L' ';
+        *at++=L'"';size_t slashes=0;
         for(const wchar_t *s=argv[i];;s++) {
             if(*s==L'\\') { slashes++;continue; }
             if(*s==L'"' || !*s) { for(size_t n=0;n<slashes*2;n++)*at++=L'\\';if(*s)*at++=L'\\'; }
@@ -93,17 +94,21 @@ static int execute_external(int argc,wchar_t **argv) {
     if(!AssignProcessToJobObject(job,child.hProcess)) { TerminateProcess(child.hProcess,2);fatal("JOB"); }
     if(ResumeThread(child.hThread)==(DWORD)-1) { TerminateProcess(child.hProcess,2);fatal("EXEC"); }
     free(command);free(table);CloseHandle(child.hThread);
-    if(WaitForSingleObject(child.hProcess,INFINITE)!=WAIT_OBJECT_0)fatal("EXEC");DWORD code=2;
-    if(!GetExitCodeProcess(child.hProcess,&code))fatal("EXEC");CloseHandle(child.hProcess);CloseHandle(job);return (int)code;
+    if(WaitForSingleObject(child.hProcess,INFINITE)!=WAIT_OBJECT_0)fatal("EXEC");
+    DWORD code=2;
+    if(!GetExitCodeProcess(child.hProcess,&code))fatal("EXEC");
+    CloseHandle(child.hProcess);CloseHandle(job);return (int)code;
 }
 int wmain(int argc,wchar_t **argv) {
     suppress_crashes();if(argc>=3 && !wcscmp(argv[1],L"--exec"))return execute_external(argc,argv);
-    if(argc!=1)fatal("ARGUMENTS");return run_protection();
+    if(argc!=1)fatal("ARGUMENTS");
+    return run_protection();
 }
 #else
 int main(int argc,char **argv) {
     suppress_crashes();
     if(argc>=3 && !strcmp(argv[1],"--exec")) { if(argv[2][0]!='/')fatal("ARGUMENTS");execv(argv[2],argv+2);fatal("EXEC"); }
-    if(argc!=1)fatal("ARGUMENTS");return run_protection();
+    if(argc!=1)fatal("ARGUMENTS");
+    return run_protection();
 }
 #endif
