@@ -64,9 +64,21 @@ owns subsequent acceptance and finding dispositions.
   a conservative starting point: calibrate isolated events when measured offsets
   exceed it, and verify every enabled camera before widening the shared window.
 
+### Maintenance
+- Remove unused runtime and development dependencies while retaining the Jest
+  utilities still required transitively. Keep all remaining dependency versions
+  and native codec pins unchanged.
+- Retire the old Travis configuration, machine-specific Pi deployment helper,
+  dormant ESLint configuration and unsupported npm uninstall hook. Normal
+  installation and configuration migration preserve authentication and accessory
+  persistence; the release guide owns the registry installation workflow.
+- Update development instructions for Node 26 and watch the current UI source
+  path. Publish the maintained documentation through its canonical site workflow.
+
 ### Qualification and limits
-- Promote the accepted RC runtime with changes limited to version metadata and
-  these release notes. The RC passed all five installed-target qualifications;
+- Retain the accepted RC camera and media runtime alongside package metadata,
+  documentation and maintenance cleanup. The RC passed all five installed-target
+  qualifications;
   actual saved Home timeline playback advanced on both tested camera accessories
   on 16 November. Stable artifact verification, installation and observation are
   recorded separately under the [release guide](docs/RELEASE.md).

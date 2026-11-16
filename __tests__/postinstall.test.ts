@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 
@@ -84,6 +84,23 @@ describePosix('one-time installed configuration migration', () => {
     fs.writeFileSync(otherFile, otherBytes);
     expect(installer.run({ UIX_STORAGE_PATH: directory }, join(other, 'node_modules/@sealad886/homebridge-blink-cameras-new-api'))).toEqual({ action: 'Applied' });
     expect(fs.readFileSync(otherFile, 'utf8')).toBe(otherBytes);
+  });
+
+  it('preserves authentication and accessory persistence while migrating configuration and reentering installation', () => {
+    fs.writeFileSync(file(), JSON.stringify({ platforms: [{ platform: 'BlinkCameras', disableEarlyNotification: true }] }));
+    const preserved = ['.blink-auth.json', 'blink-auth/session.json', 'persist/AccessoryInfo.synthetic.json'].map(relative => {
+      const target = join(directory, relative), bytes = Buffer.from('synthetic persisted state');
+      fs.mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(target, bytes, { mode: 0o600 });
+      return { target, bytes, mode: fs.statSync(target).mode & 0o777 };
+    });
+
+    expect(installer.run({ UIX_STORAGE_PATH: directory }, installedRoot())).toEqual({ action: 'Applied' });
+    expect(installer.run({ UIX_STORAGE_PATH: directory }, installedRoot())).toEqual({ action: 'Unchanged' });
+    for (const { target, bytes, mode } of preserved) {
+      expect(fs.readFileSync(target)).toEqual(bytes);
+      expect(fs.statSync(target).mode & 0o777).toBe(mode);
+    }
   });
 
   it('does not inspect inherited Homebridge storage or discover other paths during a source install', () => {

@@ -10,9 +10,9 @@
 
 ## Languages & Stack
 
-- TypeScript / JavaScript: Node 20/22/24, Homebridge, HAP, Jest, FFmpeg media pipeline.
+- TypeScript / JavaScript: Node 20/22/24/26, Homebridge, HAP, Jest and the native media pipeline.
 - Python: bounded Pi evidence collection/reporting and repository checks.
-- C: native media prototypes; not accepted secure-worker runtime.
+- C: packaged native media worker and offline protocol/codec checks; target qualification and physical acceptance are recorded separately.
 - Build: npm, TypeScript, GitHub Actions; npm trusted publishing.
 - Persistence: existing configuration and authentication stores; no SQL database.
 
