@@ -100,7 +100,7 @@ export async function probeExternalFfmpeg(ffmpegPath: string, protectionPath: st
   return pending;
   async function inspect(): Promise<{ version: string }> {
     const versionText = await capture(ffmpegPath, protectionPath, ['-hide_banner', '-version'], signal, launch);
-    const match = /^ffmpeg version\s+(\d+)\.(\d+)(?:\.\d+)?[^\r\n]*/m.exec(versionText);
+    const match = /^ffmpeg version\s+n?(\d+)\.(\d+)(?:\.\d+)?[^\r\n]*/m.exec(versionText);
     if (!match || Number(match[1]) < 6 || (Number(match[1]) === 6 && Number(match[2]) < 1)) throw new ExternalFfmpegSetupError('version');
     const requirements: Array<[string, string[]]> = [
       ['-protocols', ['pipe', 'fd']], ['-demuxers', ['mpegts', 'mov', 'mp4', 'lavfi']],
