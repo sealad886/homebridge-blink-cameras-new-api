@@ -37,7 +37,7 @@ static int framed(void) {
 }
 int main(int argc,char **argv) {
 #ifdef _WIN32
-    _setmode(_fileno(stdin),_O_BINARY);
+    if(_setmode(_fileno(stdin),_O_BINARY)<0 || _setmode(_fileno(stdout),_O_BINARY)<0)return 2;
 #endif
     if(argc==2 && !strcmp(argv[1],"--framed"))return framed();
     if(argc!=1)return 2;

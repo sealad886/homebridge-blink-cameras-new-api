@@ -30,6 +30,25 @@ class ProtectionTests(unittest.TestCase):
         checked = subprocess.run([CHECKER], input=result.stdout[36:], capture_output=True, check=True, timeout=5)
         self.assertIn(b'forged packet refused',checked.stdout)
 
+    def test_framed_receiver_preserves_binary_rtp_header_and_payload(self):
+        init = struct.pack('>III', 1, 7, 1) + bytes([9])*16 + bytes([8])*14
+        # LF in the RTP sequence/timestamp and payload must never become CRLF.
+        packet = bytes.fromhex('8060000a0a00000a00000007650a0d0a001aff')
+        source = frame(10, init) + frame(11, struct.pack('>II', 1, 1)+packet) + frame(4)
+        protected = subprocess.run([WORKER], input=source, capture_output=True, check=True, timeout=5)
+        self.assertEqual(protected.stderr, b'')
+        self.assertEqual(protected.stdout[:16], b'BMO1'+struct.pack('>III', 10, 4, 1))
+        self.assertEqual(protected.stdout[16:28], b'BMO1'+struct.pack('>II', 11, len(packet)+18))
+        self.assertEqual(protected.stdout[28:36], struct.pack('>II', 1, 1))
+        encrypted = protected.stdout[36:]
+        receiver_input = b'BMR1'+struct.pack('>II', 10, len(init))+init
+        receiver_input += b'BMR1'+struct.pack('>III', 11, len(encrypted)+4, 1)+encrypted
+        receiver_input += b'BMR1'+struct.pack('>II', 4, 0)
+        checked = subprocess.run([CHECKER, '--framed'], input=receiver_input,
+                                 capture_output=True, check=True, timeout=5)
+        self.assertEqual(checked.stderr, b'')
+        self.assertEqual(checked.stdout, b'BMR1'+struct.pack('>III', 11, len(packet)+4, 1)+packet)
+
     def test_only_protection_messages_are_admitted(self):
         for data in [frame(1),frame(2,b'private-source'),frame(3),frame(4,b'x'),b'wrong-header']:
             with self.subTest(data=data[:12]):
