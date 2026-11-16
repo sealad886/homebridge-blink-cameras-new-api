@@ -24,7 +24,8 @@ static int framed(void) {
             policy.ssrc.type=ssrc_specific;policy.ssrc.value=read32(body+4);policy.key=body+12;policy.window_size=128;
             if(srtp_create(&sessions[stream-1],&policy)!=srtp_err_status_ok)return 2;
         } else if(type==11 || type==12) {
-            if(!sessions[stream-1] || size<4)return 2;int length=(int)size-4;
+            if(!sessions[stream-1] || size<4)return 2;
+            int length=(int)size-4;
             srtp_err_status_t status=type==11?srtp_unprotect(sessions[stream-1],body+4,&length):srtp_unprotect_rtcp(sessions[stream-1],body+4,&length);
             if(status!=srtp_err_status_ok)return 3;
             put32(header+8,(unsigned int)length+4);

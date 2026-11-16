@@ -281,5 +281,6 @@ if __name__ == '__main__':
     if args.build_local:
         prefix = build(fetched, args.jobs)
         if args.prefix_file:
-            with args.prefix_file.open('x') as output:
+            # Bash consumes this path verbatim; keep its line ending LF on Windows too.
+            with args.prefix_file.open('x', encoding='utf-8', newline='\n') as output:
                 output.write(str(prefix) + '\n')
