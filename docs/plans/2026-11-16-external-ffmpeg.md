@@ -279,9 +279,12 @@ media source changed during this follow-up.
 
 Source remains uncommitted in the approved checkout on `codex/external-ffmpeg`.
 No branch history, index, Git tag, remote PR/issue, published package, running
-Homebridge host or provider setting changed. Five-host exact-artifact checks,
-minimum FFmpeg 6.1 execution, physical HomeKit acceptance and the normal
-prerelease/stable process still precede any publication or verification request.
+Homebridge host or provider setting changed. Five-host exact-artifact checks and
+minimum FFmpeg 6.1 execution must precede candidate publication. Registry
+publication and subsequent authorized Homebridge installation and physical
+acceptance are distinct stages. Physical acceptance remains required before
+stable promotion; the verification request stays held until stable 2.0.0 is
+properly released and accepted through the normal release process.
 
 The additional actual offline documentation build passed, making its documented
 generated `index.html` available. All 222 relative file references across 25
