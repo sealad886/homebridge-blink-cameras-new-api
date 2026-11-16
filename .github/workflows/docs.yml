@@ -29,6 +29,8 @@ jobs:
     name: Validate documentation
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,11 +49,14 @@ jobs:
         run: npm --prefix tools/docs run build
       - name: Check all published pages, links and assets
         run: npm --prefix tools/docs run check
+      - name: Name the validated artifact
+        id: artifact
+        run: echo "name=docs-site-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Upload the validated site only
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
-          name: docs-site-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.artifact.outputs.name }}
           path: .local/docs-site
           retention-days: 1
 
@@ -91,7 +96,7 @@ jobs:
         if: steps.current.outputs.current == 'true'
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
         with:
-          artifact_name: docs-site-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact_name: ${{ needs.build.outputs.artifact_name }}
       - name: Verify the published source revision and entry point
         if: steps.current.outputs.current == 'true'
         env:

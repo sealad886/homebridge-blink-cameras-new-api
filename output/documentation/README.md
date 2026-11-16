@@ -34,6 +34,11 @@ with the current `main` head. Superseded runs skip Pages configuration,
 deployment, and the public probe. Rerunning an older successful workflow cannot
 replace newer documentation; dispatch from the latest `main` revision instead.
 
+A deployment retry through **Re-run failed jobs** reuses the artifact name saved
+by its successful build. A full workflow rerun builds a new attempt-specific
+artifact. If the one-day artifact retention has expired, rerun all jobs or
+dispatch from the latest `main` revision to produce a fresh bundle.
+
 One-time repository setup selects **GitHub Actions** as the Pages publishing
 source. The workflow checks that configuration; it never enables Pages from a
 pull request. Repository administrators manage any environment protection rules.
