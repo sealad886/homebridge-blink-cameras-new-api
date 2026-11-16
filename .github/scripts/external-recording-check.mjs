@@ -25,7 +25,7 @@ function runs(values) { const result = []; for (const value of values) { if (res
 function sampleTable(type, rows) { const payload = Buffer.alloc(8 + rows.length * 8); payload.writeUInt32BE(rows.length, 4); rows.forEach((row, i) => { payload.writeUInt32BE(row[0], 8 + i * 8); payload.writeUInt32BE(row[1], 12 + i * 8); }); return packed(type, payload); }
 /** Rebuild only bounded sample tables; source codecs are still generated externally.
  * SEI samples reserve real MP4 clock slots, matching Blink metadata-only access units. */
-export function mutateRecordingFixture(original, { metadataEvery = 0, audioGap = false, corruptAudio = false, corruptVideo = false, corruptVideoPayload = false, overlapMetadata = false } = {}) {
+export function mutateRecordingFixture(original, { metadataEvery = 0, audioGap = false, corruptAudio = false, corruptFirstAudio = false, corruptVideo = false, corruptVideoPayload = false, overlapMetadata = false } = {}) {
   const data = Buffer.from(original), top = boxes(data), moov = top.find(b => b.type === 'moov'), mdat = top.find(b => b.type === 'mdat');
   assert(moov && mdat && moov.start > mdat.end - 1, 'Fixture must retain tail moov');
   const tracks = boxes(data, moov.payload, moov.end).filter(b => b.type === 'trak').map(trak => {
@@ -51,6 +51,10 @@ export function mutateRecordingFixture(original, { metadataEvery = 0, audioGap =
     }
     if (!track.video && audioGap) track.durations[Math.floor(track.durations.length / 2)] += 512;
     if (!track.video && corruptAudio) for (let i = Math.floor(track.sizes.length * 3 / 4); i < track.sizes.length; i++) data.fill(255, track.offsets[i], track.offsets[i] + track.sizes[i]);
+    if (!track.video && corruptFirstAudio) {
+      assert(track.sizes.length && track.sizes[0] > 0, 'A real initial AAC sample is required');
+      data.fill(255, track.offsets[0], track.offsets[0] + track.sizes[0]);
+    }
     if (track.video && corruptVideo) {
       let changed = false;
       for (let at = track.offsets[0], end = at + track.sizes[0]; at < end;) {
@@ -135,6 +139,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       { name: 'recovery-metadata', audioFirst: true }, { name: 'audio-disabled', sar: 2 },
       { name: 'audio-disabled', label: '90s-24fps-source-15fps-output', fps: 24, count: 2160, tiny: true, outputFps: 15, expectedFrames: 1350 },
       { name: 'audio-disabled', label: '90s-24fps-source-24fps-output', fps: 24, count: 2160, tiny: true, outputFps: 24, expectedFrames: 2160 },
+      { name: 'corrupt-audio-recovery', corruptFirstAudio: true }, { name: 'damaged-audio-disabled', corruptFirstAudio: true },
       { name: 'recovery-metadata', count: 1026, metadataEvery: 2, tiny: true },
       { name: 'recovery-metadata', count: 1028, metadataEvery: 2, tiny: true, rejectMetadata: true }];
     for (const trial of trials) {
@@ -145,7 +150,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       const width = long || trial.tiny ? 16 : 320, height = long || trial.tiny ? 16 : 180, fps = trial.fps ?? (long ? 30 : low ? 5 : odd ? 25 : 15);
       const outputWidth = trial.hd ? 1920 : width, outputHeight = trial.hd ? 1080 : height, fragmentMs = trial.fragment ?? 1000;
       const count = trial.count ?? (long ? 1800 : low ? fps * 9 : odd ? 225 : metadata || corrupt || missing || name === 'audio-clock-repair' ? 90 : 33);
-      const label = trial.label ?? (trial.audioFirst ? `${name}-audio-first` : trial.sar ? `${name}-sar-${trial.sar}` : trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name);
+      const label = trial.label ?? (trial.corruptFirstAudio ? `${name}-first-aac` : trial.audioFirst ? `${name}-audio-first` : trial.sar ? `${name}-sar-${trial.sar}` : trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name);
       const source = join(scratch, label + '-generated.mp4'), path = join(scratch, label + '.mp4');
       execute(['-y', '-f', 'lavfi', '-i', `${trial.sar ? 'color=c=white:' : 'testsrc2='}size=${width}x${height}:rate=${metadata ? fps * 1000 + '/1001' : fps}`,
         ...(!missing ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000'] : []), '-frames:v', String(count),
@@ -160,7 +165,8 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
         });
         assert.deepEqual(handlers, ['soun', 'vide'], 'Audio-first fixture must select input video stream 1');
       }
-      if (metadata || corrupt || name === 'audio-clock-repair') bytes = mutateRecordingFixture(bytes, { metadataEvery: metadata ? trial.metadataEvery ?? fps * 4 : 0, corruptAudio: corrupt, audioGap: name === 'audio-clock-repair' });
+      if (metadata || corrupt || name === 'audio-clock-repair') bytes = mutateRecordingFixture(bytes, { metadataEvery: metadata ? trial.metadataEvery ?? fps * 4 : 0,
+        corruptAudio: corrupt && !trial.corruptFirstAudio, corruptFirstAudio: trial.corruptFirstAudio, audioGap: name === 'audio-clock-repair' });
       assert(bytes.indexOf(Buffer.from('moov')) > bytes.indexOf(Buffer.from('mdat'))); writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
       const active = !['audio-disabled', 'damaged-audio-disabled', '30fps-source-15fps-output'].includes(name), rate = name === 'audio-24khz' || odd || name === 'corrupt-audio-recovery' ? 24000 : 16000;
       const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: fragmentMs },

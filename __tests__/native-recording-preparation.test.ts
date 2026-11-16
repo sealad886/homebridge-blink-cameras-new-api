@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import process from 'node:process';
@@ -8,6 +8,7 @@ import type { CameraRecordingConfiguration } from 'homebridge';
 import { NativeRecordingMemoryBudget, NativeRecordingSource, prepareNativeRecording,
   snapshotNativeRecordingConfiguration, NativeRecordingPreparationError } from '../src/accessories/native-recording-preparation';
 import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
+import * as externalFfmpeg from '../src/accessories/external-ffmpeg';
 
 jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn() }));
 
@@ -47,6 +48,29 @@ it('keeps preparation diagnostics detached, fixed and free of arbitrary error da
   expect(() => new NativeRecordingPreparationError({ phase: 'output', workerCode: 'private-source' } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(() => new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: false } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: true }).diagnostic).toEqual({ phase: 'output', salvageAttempted: true });
+});
+
+it('closes a reopened snapshot when descriptor validation rejects without exposing the underlying error', async () => {
+  const file = await source(), memory = new NativeRecordingMemoryBudget(), open = fs.open.bind(fs);
+  let snapshot: Awaited<ReturnType<typeof fs.open>> | undefined, closed: jest.SpyInstance | undefined;
+  const resolve = jest.spyOn(externalFfmpeg, 'resolveExternalFfmpegPath').mockReturnValue('/verified/ffmpeg');
+  const probe = jest.spyOn(externalFfmpeg, 'probeExternalFfmpeg').mockResolvedValue({ version: '9.0' });
+  const opening = jest.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+    const handle = await open(target, flags, mode);
+    if (path.basename(String(target)).startsWith('.native-') && flags === (constants.O_RDONLY | constants.O_NOFOLLOW)) {
+      snapshot = handle; closed = jest.spyOn(handle, 'close');
+      jest.spyOn(handle, 'stat').mockRejectedValue(new Error('private snapshot stat failure'));
+    }
+    return handle;
+  });
+  try {
+    await expect(prepareNativeRecording(file, configuration(), false, new globalThis.AbortController().signal,
+      { memory, admit })).rejects.toMatchObject({ message: 'Recording conversion failed during input',
+      diagnostic: { phase: 'input', workerCode: 'MEDIA' } });
+    expect(snapshot).toBeDefined(); expect(closed).toHaveBeenCalledTimes(1); expect(snapshot!.fd).toBe(-1);
+    expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+    expect(createHash('sha256').update(await fs.readFile(file.filePath)).digest('hex')).toBe(file.expectedSha256);
+  } finally { opening.mockRestore(); resolve.mockRestore(); probe.mockRestore(); await snapshot?.close(); }
 });
 
 it('bounds and accounts owned media allocations', () => {

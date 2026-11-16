@@ -33,6 +33,8 @@ export interface ExternalRecordingPlan {
   originUs: number;
   /** First decoded audio PTS on that input timeline, after AAC priming/edit handling; undefined if unobserved. */
   audioOriginUs?: number;
+  /** Proven AAC failure from the isolated source-audio decode, eligible for the single silence retry. */
+  audioFailure?: 'AUDIO_DISCONTINUITY';
   metadata: number;
   /** Raw input-microsecond breakpoints and the cumulative metadata duration to subtract from video PTS. */
   corrections: readonly { at: number; offset: number }[];
@@ -68,7 +70,9 @@ function launch(context: ExternalRecordingContext, args: string[], stdio: Parame
 const inputArguments = ['-hide_banner', '-nostdin', '-loglevel', 'repeat+error', '-max_alloc', '67108864', '-copyts', '-start_at_zero', '-threads', '1',
   '-filter_threads', '1', '-max_pixels', '8388608', '-protocol_whitelist', 'fd,pipe', '-format_whitelist', 'mov,mp4,m4a,3gp,3g2,mj2',
   '-codec_whitelist', 'h264,aac', '-probesize', '65536', '-analyzeduration', '1000000', '-max_probe_packets', '32',
-  '-max_streams', '8', '-f', 'mp4', '-i', 'fd:'];
+  // Ordinary MP4 headers supply stream parameters. Probing otherwise decodes
+  // unused AAC before input -an applies; actual output has its own decoder pass.
+  '-max_streams', '8', '-nofind_stream_info', '-f', 'mp4', '-i', 'fd:'];
 
 /** Parse only access-unit framing and bounded SEI syntax, never decode pictures in JavaScript. */
 function picturePacket(data: Buffer): boolean {
@@ -221,7 +225,9 @@ function observeMetadataErrors(stream: Readable, expected: () => number, videoSt
     for (const line of all) {
       if (!line) continue;
       if (line.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = otherFailure = true; continue; }
-      if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] missing picture in access unit with size \d+$/.test(line)) missing++;
+      // Without stream-info decoding, the H.264 parser can retain its NULL
+      // codec context label. Only the same fixed missing-picture text is allowed.
+      if (/^\[(?:h264|NULL) @ (?:0x)?[0-9a-fA-F]+\] missing picture in access unit with size \d+$/.test(line)) missing++;
       else if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] no frame!$/.test(line)) noFrame++;
       else if (submitted.test(line)) submission++;
       else {
@@ -236,33 +242,44 @@ function observeMetadataErrors(stream: Readable, expected: () => number, videoSt
   return { valid: () => !invalid && metadataValid(), audioFailed: () => audioFailure && !otherFailure && metadataValid() };
 }
 
-/** Decode only the first audio frame so AAC priming/edit lists do not become a false A/V offset. */
-async function inspectAudioOrigin(context: ExternalRecordingContext): Promise<number | undefined> {
+type AudioOriginObservation = { kind: 'decoded'; originUs: number } | { kind: 'damaged' } | { kind: 'unobserved' };
+const MAX_AUDIO_OBSERVATION_BYTES = 2 * 1024 * 1024;
+// The shortest valid PCM framecrc row plus newline occupies 21 bytes.
+const MAX_AUDIO_OBSERVATION_ROWS = Math.floor(MAX_AUDIO_OBSERVATION_BYTES / 21);
+/** Validate source audio through the selected video end without encoding video.
+ * Retain the first decoded PTS so AAC priming/edit lists preserve the A/V offset. */
+async function inspectSourceAudio(context: ExternalRecordingContext, videoStreamIndex: number, endUs: number): Promise<AudioOriginObservation> {
   const input = await context.open(), controller = new globalThis.AbortController(), abort = () => controller.abort();
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
   let closed: Promise<number | null> | undefined;
   try {
-    const child = launch({ ...context, signal: controller.signal }, [...inputArguments, '-map', '0:a:0?', '-vn',
-      '-c:a', 'pcm_f32le', '-threads:a', '1', '-ac', '1', '-frames:a', '1', '-f', 'framecrc', 'pipe:1'], [input.fd, 'pipe', 'pipe']);
+    const child = launch({ ...context, signal: controller.signal }, [...inputArguments.slice(0, -2), '-vn', ...inputArguments.slice(-2),
+      '-map', '0:a:0?', '-vn', '-c:a', 'pcm_f32le', '-threads:a', '1', '-ac', '1', '-t', String(endUs / 1000000),
+      '-f', 'framecrc', 'pipe:1'], [input.fd, 'pipe', 'pipe']);
+    const okay = observeMetadataErrors(readable(child.stderr), () => 0, videoStreamIndex, true);
     closed = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
-    let numerator = 0n, denominator = 0n, bytes = 0, origin: number | undefined;
+    let numerator = 0n, denominator = 0n, bytes = 0, rows = 0, origin: number | undefined;
     const parsed = lines(readable(child.stdout), line => {
-      if ((bytes += line.length + 1) > 16384) failure('OUTPUT_LIMIT');
+      if ((bytes += line.length + 1) > MAX_AUDIO_OBSERVATION_BYTES) failure('OUTPUT_LIMIT');
       const tb = /^#tb 0: (\d+)\/(\d+)$/.exec(line);
       if (tb) { numerator = BigInt(tb[1]); denominator = BigInt(tb[2]);
         if (!numerator || !denominator || numerator > 1000000n || denominator > 1000000000n) failure(); }
       const row = parseFrameCrcPacket(line, 8192 * 4); if (!row) return;
-      if (row.streamIndex !== 0 || origin !== undefined || !numerator || !denominator) failure();
-      origin = micros(row.pts, numerator, denominator);
+      if (++rows > MAX_AUDIO_OBSERVATION_ROWS) failure('OUTPUT_LIMIT');
+      if (row.streamIndex !== 0 || !numerator || !denominator || row.size % 4 || row.duration <= 0n ||
+          micros(row.duration, numerator, denominator) > 1000000) failure();
+      const pts = micros(row.pts, numerator, denominator); origin ??= pts;
     });
     const [code] = await Promise.all([closed, parsed]); context.signal.throwIfAborted();
-    return code === 0 ? origin : undefined;
+    if (Date.now() >= context.deadline) failure('TIME_LIMIT');
+    if (code !== null && okay.audioFailed()) return { kind: 'damaged' };
+    return code === 0 && okay.valid() && origin !== undefined ? { kind: 'decoded', originUs: origin } : { kind: 'unobserved' };
   } catch (error) {
     controller.abort(); await closed; context.signal.throwIfAborted();
     if (Date.now() >= context.deadline) failure('TIME_LIMIT');
     if (error instanceof ExternalRecordingError && error.code === 'OUTPUT_LIMIT') throw error;
     // Missing or undecodable source audio must still reach the existing bounded silence fallback.
-    return undefined;
+    return { kind: 'unobserved' };
   } finally { controller.abort(); await closed; context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
@@ -335,8 +352,10 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     // an output interval extend it beyond the finite-source limit.
     const durationUs = pictures.reduce((end, picture) => Math.max(end, picture.pts + picture.duration), 0);
     if (durationUs < 1 || durationUs > 90000000) failure('VIDEO_TIMESTAMP');
-    const audioOriginUs = audioActive ? await inspectAudioOrigin(context) : undefined;
-    return { pictures, selected, durationUs, originUs: origin, audioOriginUs, metadata, corrections, videoStreamIndex };
+    const audio = audioActive ? await inspectSourceAudio(context, videoStreamIndex, origin + durationUs) : undefined;
+    return { pictures, selected, durationUs, originUs: origin,
+      ...(audio?.kind === 'decoded' ? { audioOriginUs: audio.originUs } : {}),
+      ...(audio?.kind === 'damaged' ? { audioFailure: 'AUDIO_DISCONTINUITY' as const } : {}), metadata, corrections, videoStreamIndex };
   } finally { controller.abort(); await closure; queue.dispose(); context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
@@ -376,6 +395,9 @@ export function recordingFfmpegArguments(configuration: CameraRecordingConfigura
 
 export async function convertExternalRecording(context: ExternalRecordingContext, configuration: CameraRecordingConfiguration,
   plan: ExternalRecordingPlan, audioActive: boolean, silence: boolean, collect: (bytes: Buffer) => void): Promise<void> {
+  context.signal.throwIfAborted();
+  if (Date.now() >= context.deadline) failure('TIME_LIMIT');
+  if (audioActive && !silence && plan.audioFailure === 'AUDIO_DISCONTINUITY') failure('AUDIO_DISCONTINUITY');
   const input = await context.open(), controller = new globalThis.AbortController(), abort = () => controller.abort();
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
   let closure: Promise<number | null> | undefined;

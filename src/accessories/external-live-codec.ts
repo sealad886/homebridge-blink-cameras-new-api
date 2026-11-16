@@ -34,7 +34,10 @@ export function liveFfmpegArguments(options: ExternalLiveCodecOptions): string[]
     squarePixelLetterboxFilter(v.width, v.height);
   return ['-hide_banner', '-nostdin', '-loglevel', 'info', '-xerror', '-max_alloc', '67108864', '-copyts', '-threads', '1', '-filter_threads', '1',
     '-protocol_whitelist', 'pipe', '-format_whitelist', 'mpegts', '-codec_whitelist', 'h264,aac,aac_latm',
-    '-probesize', '65536', '-analyzeduration', '1000000', '-max_probe_packets', '32', '-max_streams', '8', '-max_pixels', '8388608', '-f', 'mpegts', '-i', 'pipe:0',
+    // A shared-feed subscriber may arrive between keyframes. Bound source
+    // discovery to 5 MiB / 5 seconds / 512 packets so the next SPS/PPS/IDR can
+    // initialize decoding; retain strict -xerror handling once decoding starts.
+    '-probesize', '5242880', '-analyzeduration', '5000000', '-max_probe_packets', '512', '-max_streams', '8', '-max_pixels', '8388608', '-f', 'mpegts', '-i', 'pipe:0',
     '-map', '0:v:0', ...(a ? ['-map', '0:a:0?'] : ['-an']), '-vf', filter,
     '-c:v', 'libx264', '-threads:v', '1', '-preset', v.softwarePreset ?? 'veryfast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-bf', '0',
     '-profile:v', ['baseline', 'main', 'high'][v.profile], '-level:v', ['3.1', '3.2', '4.0'][v.level],

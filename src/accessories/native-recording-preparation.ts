@@ -300,12 +300,14 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
         open: async () => {
           owner.throwIfAborted();
           const input = await fs.open(snapshotPath!, constants.O_RDONLY | constants.O_NOFOLLOW);
-          const current = await input.stat();
-          if (!current.isFile() || current.size !== source.expectedBytes || current.dev !== snapshotReference.dev || current.ino !== snapshotReference.ino ||
-              current.mtimeMs !== snapshotReference.mtimeMs || current.ctimeMs !== snapshotReference.ctimeMs) {
-            await input.close(); throw new Error('Recording source integrity mismatch');
-          }
-          return input;
+          try {
+            const current = await input.stat();
+            if (!current.isFile() || current.size !== source.expectedBytes || current.dev !== snapshotReference.dev || current.ino !== snapshotReference.ino ||
+                current.mtimeMs !== snapshotReference.mtimeMs || current.ctimeMs !== snapshotReference.ctimeMs) {
+              throw new Error('Recording source integrity mismatch');
+            }
+            return input;
+          } catch (error) { await input.close().catch(() => undefined); throw error; }
         } };
       const unchanged = async (): Promise<void> => {
         const current = await file.stat(), named = await fs.lstat(source.filePath);

@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import process from 'node:process';
+import { withinRequestBudget } from '../src/operation-budget';
 import { createExternalLiveCodec, liveFfmpegArguments, type ExternalLiveCodecOptions } from '../src/accessories/external-live-codec';
 import { ExternalFfmpegSetupError, probeExternalFfmpeg, resolveExternalFfmpegPath, type ExternalFfmpegProcessOptions } from '../src/accessories/external-ffmpeg';
 import type { CodecPacket } from '../src/accessories/ffmpeg-packets';
@@ -13,8 +14,8 @@ function options(codec?: 'opus' | 'pcma' | 'pcmu', rate: 8000 | 16000 | 24000 = 
   return { ffmpegPath: ffmpeg!, protectionPath: process.execPath, video: { width: 16, height: 16, fps: 15, bitrate: 100000, maxFrames: 100, profile: 0, level: 0 },
     ...(codec ? { audio: { codec, rate, bitrate: 24000, mtu: 1200, packetTime: codec === 'opus' ? 20 as const : undefined } } : {}) };
 }
-const fixture = (latm: boolean, audio = true) => execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=32x16:rate=5:duration=0.4',
-  ...(audio ? ['-f', 'lavfi', '-i', 'sine=sample_rate=16000:duration=0.4'] : []), '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '0', ...(audio ? ['-c:a', 'aac'] : ['-an']),
+const fixture = (latm: boolean, audio = true, duration = 0.4) => execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', `testsrc2=size=32x16:rate=5:duration=${duration}`,
+  ...(audio ? ['-f', 'lavfi', '-i', `sine=sample_rate=16000:duration=${duration}`] : []), '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '0', ...(audio ? ['-c:a', 'aac'] : ['-an']),
   ...(latm ? ['-mpegts_flags', 'latm'] : []), '-f', 'mpegts', 'pipe:1'], { timeout: 5000, maxBuffer: 1024 * 1024 });
 function oggPage(packet: Buffer, serial: number, sequence: number, flags: number, granule: bigint): Buffer {
   const laces = [...Array(Math.floor(packet.length / 255)).fill(255), packet.length % 255], page = Buffer.alloc(27 + laces.length + packet.length);
@@ -111,6 +112,29 @@ test('missing installation produces actionable fixed setup error without exposin
     await session.write(input); await expect(session.end()).rejects.toThrow('External live codec unavailable'); expect(session.failed).toBe(true);
   } finally { await session.stop(); input.fill(0); }
 }, 10000);
+(ffmpeg ? test : test.skip)('still fails corrupt AAC after healthy live video has started', async () => {
+  const input = fixture(false, true, 10), damagedFrom = Math.floor(input.length * 0.75 / 188) * 188; let corrupt = 0;
+  for (let at = damagedFrom; at + 188 <= input.length; at += 188) {
+    if (((input[at + 1] & 31) << 8 | input[at + 2]) !== 257) continue;
+    const adaptation = (input[at + 3] >> 4) & 3; if (!(adaptation & 1)) continue;
+    let payload = at + (adaptation === 3 ? 5 + input[at + 4] : 4);
+    if (input[at + 1] & 64) payload += 9 + input[payload + 8];
+    if (payload < at + 188) { input.fill(0, payload, at + 188); corrupt++; }
+  }
+  expect(corrupt).toBeGreaterThan(0);
+  let started!: () => void; const firstVideo = new Promise<void>(resolve => { started = resolve; }); let pictures = 0;
+  const session = await createExternalLiveCodec(options('opus'), { packet: async packet => { if (packet.stream === 1) { pictures++; started(); } } },
+    new globalThis.AbortController().signal, { launch: direct, probe: async () => ({ version: 'test' }) });
+  try {
+    for (let at = 0; at < damagedFrom; at += 4096) await session.write(input.subarray(at, Math.min(damagedFrom, at + 4096)));
+    await withinRequestBudget(firstVideo, { deadline: Date.now() + 2000 }); expect(pictures).toBeGreaterThan(0);
+    await expect((async () => {
+      for (let at = damagedFrom; at < input.length; at += 4096) await session.write(input.subarray(at, at + 4096));
+      await session.end();
+    })()).rejects.toThrow('External live codec unavailable');
+    await session.whenClosed; expect(session.failed).toBe(true);
+  } finally { await session.stop(); input.fill(0); }
+}, 10000);
 (ffmpeg ? test : test.skip)('STOP interrupts an input-starved real codec and waits for actual child closure', async () => {
   let child: ReturnType<typeof spawn> | undefined;
   const session = await createExternalLiveCodec(options(), { packet: async () => {} }, new globalThis.AbortController().signal,
@@ -118,6 +142,34 @@ test('missing installation produces actionable fixed setup error without exposin
   await session.stop(); expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true); expect(session.failed).toBe(false);
   await expect(session.write(Buffer.from([1]))).rejects.toThrow('External live codec unavailable');
 });
+(ffmpeg ? test : test.skip).each(['exhaust', 'cancel'] as const)('bounds incomplete keyframe discovery and closes its child on %s', async action => {
+  const input = execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=10:duration=7',
+    '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '0', '-g', '100', '-x264-params', 'scenecut=0:repeat-headers=1:annexb=1',
+    '-mpegts_flags', 'pat_pmt_at_frames', '-muxdelay', '0', '-f', 'mpegts', 'pipe:1'], { timeout: 5000, maxBuffer: 1024 * 1024 });
+  let table = 0, pictures = 0, join = 0;
+  for (let at = 0; at < input.length; at += 188) {
+    expect(input[at]).toBe(0x47); const pid = ((input[at + 1] & 31) << 8) | input[at + 2];
+    if (pid === 0) table = at;
+    if (pid === 256 && (input[at + 1] & 64) && pictures++ === 2) { join = table; break; }
+  }
+  expect(join).toBeGreaterThan(0);
+  const owner = new globalThis.AbortController(), packets = jest.fn(); let child: ReturnType<typeof spawn> | undefined;
+  const session = await createExternalLiveCodec(options(), { packet: packets }, owner.signal,
+    { launch: (command, args, value) => { child = direct(command, args, value); return child; }, probe: async () => ({ version: 'test' }) });
+  try {
+    const tail = input.subarray(join, action === 'cancel' ? join + 188 * 3 : input.length);
+    for (let at = 0; at < tail.length; at += 4096) {
+      try { await session.write(tail.subarray(at, at + 4096)); }
+      catch { if (action !== 'exhaust') throw new Error('Unexpected discovery write failure'); break; }
+    }
+    // No END: missing decoder bootstrap must hit the discovery budget, or STOP
+    // must cancel a still-starved discovery without waiting for that budget.
+    if (action === 'cancel') owner.abort();
+    await withinRequestBudget(session.whenClosed, { deadline: Date.now() + 2000 });
+    expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
+    expect(session.failed).toBe(action === 'exhaust'); expect(packets).not.toHaveBeenCalled();
+  } finally { await session.stop(); input.fill(0); }
+}, 10000);
 test('arguments admit only pipes and numeric profiles, never controller keys or provider URLs', () => {
   const args = liveFfmpegArguments(options('opus')); expect(args).toContain('pipe:0'); expect(args.join(' ')).not.toMatch(/srtp|rtsp|https?:/);
   expect(args).toContain('pipe'); expect(args.join(' ')).toContain('showinfo@blink_source');

@@ -84,10 +84,19 @@ Requested live audio describes controller negotiation, not source inventory.
 A video-only source still produces video without synthetic audio packets or
 reports. Any actual audio metadata retains exact payload and checksum admission;
 missing or corrupt encoded audio cannot be silently discarded.
+Live source discovery allows up to 5 MiB, five seconds of analyzed media and
+512 probe packets so a subscriber joining between keyframes can discover the
+next decoder bootstrap. Strict decode errors and the existing process, pipe,
+queue and lifetime limits remain in force.
 Finite conversion classifies failure before selecting recovery. Expired deadlines
 remain time limits; hard video and unknown diagnostics do not trigger an audio
 retry. Bounded audio-specific failure evidence can authorize the existing single
 silence retry, but cannot make failed output acceptable or override another fault.
+Finite MP4 passes use the validated container headers without decoding unrelated
+streams during format discovery. An audio-only preflight covers the owned video
+extent, retaining only bounded frame metadata and the first decoded audio origin.
+Proven decoder damage can enter the existing silence retry before video encoding.
+Disabled audio never participates in this preflight.
 
 Admission limits must compose through execution. Up to 512 metadata corrections
 must fit the generated expression's parser depth and the actual platform-quoted
@@ -109,9 +118,10 @@ cleanup. Source test counts do not replace the immutable installed-package
 qualification or an observed FFmpeg 6.1 runtime receipt.
 
 The bounded follow-up in [issue #120](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/120)
-will distinguish disabled, unavailable and observed source audio explicitly in
-the existing plan/API. No additional post-fix media failure is established by
-that representation concern; it does not replace the contract corrections above.
+tracks further consolidation of source-audio observations and output-mode types.
+The bounded decoder-damage observation above addresses a demonstrated recovery
+failure; the remaining representation work is separate from these required
+contract corrections.
 
 ## Alternatives and consequences
 
@@ -126,7 +136,7 @@ that representation concern; it does not replace the contract corrections above.
 Operators now maintain their FFmpeg installation. Platform builds vary; version
 alone is insufficient, so capability checks and actionable setup errors are
 required. The current implementation requires FFmpeg 6.1 or later; development
-probes used 9.0.2. Existing `ffmpegPath` values survive configuration migration.
+probes used 6.1.6 and 9.0.2. Existing `ffmpegPath` values survive configuration migration.
 
 This change invalidates codec qualification and physical acceptance from earlier
 RCs. All supported targets require fresh installed-package checks using an

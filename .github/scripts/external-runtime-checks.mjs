@@ -118,6 +118,68 @@ export async function exerciseExternalLiveBackpressure(packageRoot, protectionPa
   }
   return results;
 }
+/** Two codec subscribers share one source, including a join between decoder bootstraps. */
+export async function exerciseExternalLiveLateJoin(packageRoot, protectionPath, ffmpegPath) {
+  const requireInstalled = createRequire(join(packageRoot, 'package.json'));
+  const { SharedCameraFeed } = requireInstalled(join(packageRoot, 'dist/accessories/shared-feed.js'));
+  const { createExternalLiveCodec } = requireInstalled(join(packageRoot, 'dist/accessories/external-live-codec.js'));
+  const { withinRequestBudget } = requireInstalled(join(packageRoot, 'dist/operation-budget.js'));
+  const execute = (args, input) => execFileSync(protectionPath, ['--exec', ffmpegPath, '-hide_banner', '-nostdin', '-v', 'error', ...args],
+    { input, env: {}, timeout: 30000, maxBuffer: 2 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
+  const source = execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=10:duration=10', '-f', 'lavfi', '-i', 'sine=sample_rate=16000:duration=10',
+    '-c:v', 'libx264', '-threads:v', '1', '-preset', 'ultrafast', '-bf', '0', '-g', '20', '-x264-params', 'scenecut=0:repeat-headers=1:annexb=1',
+    '-c:a', 'aac', '-mpegts_flags', 'pat_pmt_at_frames', '-muxdelay', '0', '-f', 'mpegts', 'pipe:1']);
+  const starts = [0]; let table = 0, pictures = 0;
+  for (let at = 0; at < source.length; at += 188) {
+    assert.equal(source[at], 0x47); const pid = ((source[at + 1] & 31) << 8) | source[at + 2];
+    if (pid === 0) table = at;
+    if (pid === 256 && (source[at + 1] & 64) && pictures++) starts.push(table);
+  }
+  starts.push(source.length); assert.equal(pictures, 100);
+  const chunks = starts.slice(0, -1).map((at, index) => source.subarray(at, starts[index + 1]));
+  const nalTypes = [...chunks[62].toString('latin1').matchAll(/\x00\x00(?:\x00)?\x01([\s\S])/g)].map(match => match[1].charCodeAt(0) & 31);
+  assert(nalTypes.includes(1) && ![5, 7, 8].some(type => nalTypes.includes(type)), 'Second subscriber must join without SPS/PPS/IDR');
+  let input, finish, vendorStarts = 0, vendorStops = 0, firstVideo;
+  const whenClosed = new Promise(resolve => { finish = resolve; }), started = new Promise(resolve => { firstVideo = resolve; });
+  const feed = new SharedCameraFeed(async sink => { input = sink; vendorStarts++; return { whenClosed, stop: async () => { vendorStops++; finish(); } }; });
+  const owners = [new globalThis.AbortController(), new globalThis.AbortController()], outputs = [[], []], codecs = [], failures = [0, 0], closed = [false, false];
+  let retained = 0;
+  try {
+    for (let index = 0; index < 2; index++) {
+      const codec = await createExternalLiveCodec({ ffmpegPath, protectionPath,
+        video: { width: 16, height: 16, fps: 10, bitrate: 100000, maxFrames: 120, profile: 0, level: 0 },
+        audio: { codec: 'opus', rate: 16000, bitrate: 24000, mtu: 1200, packetTime: 20 } }, {
+        packet: async packet => {
+          assert((retained += packet.data.length) <= 8 * 1024 * 1024 && outputs[index].length < 2048);
+          outputs[index].push({ ...packet, data: Buffer.from(packet.data) }); if (!index && packet.stream === 1) firstVideo();
+        },
+      }, owners[index].signal);
+      codec.whenClosed.then(() => { closed[index] = true; }); codecs.push(codec);
+    }
+    const sink = index => ({ write: bytes => codecs[index].write(bytes), end: () => codecs[index].end(),
+      fail: () => { failures[index]++; owners[index].abort(); } });
+    await feed.subscribe(sink(0), owners[0].signal);
+    for (const chunk of chunks.slice(0, 62)) await input.write(chunk);
+    await withinRequestBudget(started, { deadline: Date.now() + 2000 });
+    assert(outputs[0].some(packet => packet.stream === 1), 'First subscriber must already be emitting');
+    await feed.subscribe(sink(1), owners[1].signal);
+    for (const chunk of chunks.slice(62)) await input.write(chunk);
+    await input.end();
+    assert.equal(vendorStarts, 1); assert.equal(vendorStops, 0); assert.deepEqual(failures, [0, 0]);
+    assert(codecs.every(codec => !codec.failed) && closed.every(Boolean), 'Both actual codec children must finish successfully');
+    for (const [index, packets] of outputs.entries()) {
+      const video = packets.filter(packet => packet.stream === 1), audio = packets.filter(packet => packet.stream === 2);
+      assert.equal(video.length, index ? 20 : 100); assert(audio.length > 1 && audio.every(packet => packet.data.length + 22 <= 1200));
+      for (let at = 1; at < video.length; at++) assert.equal(video[at].pts - video[at - 1].pts, 100000n);
+      const pixels = execute(['-f', 'h264', '-i', 'pipe:0', '-threads', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'], Buffer.concat(video.map(packet => packet.data)));
+      assert.equal(pixels.length, video.length * 16 * 16); assert(pixels.some(value => value > 32));
+    }
+    return { subscribers: 2, sourceStarts: vendorStarts, firstPictures: 100, secondPictures: 20 };
+  } finally {
+    for (const owner of owners) owner.abort(); await Promise.all(codecs.map(codec => codec.stop())); await feed.stop(); source.fill(0);
+    for (const packets of outputs) for (const packet of packets) packet.data.fill(0);
+  }
+}
 export async function exerciseExternalLive(packageRoot, protectionPath, ffmpegPath, validationRoot) {
   const requireInstalled = createRequire(join(packageRoot, 'package.json'));
   const { createOwnedMediaSession } = requireInstalled(join(packageRoot, 'dist/accessories/media-session.js'));
@@ -190,5 +252,6 @@ export async function exerciseExternalLive(packageRoot, protectionPath, ffmpegPa
     } finally { await session.stop(); fixture.fill(0); }
   }
   await exerciseExternalLiveBackpressure(packageRoot, protectionPath, ffmpegPath);
+  await exerciseExternalLiveLateJoin(packageRoot, protectionPath, ffmpegPath);
   return selections;
 }

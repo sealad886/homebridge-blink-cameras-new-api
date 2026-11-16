@@ -82,7 +82,8 @@ it.each(['privacy', 'deadline'])('rechecks %s after an asynchronous identity rea
     expect(spawnExternalFfmpeg).not.toHaveBeenCalled(); await expect(input.stat()).rejects.toThrow();
   } finally { clock?.mockRestore(); await input?.close(); await fs.rm(directory, { recursive: true, force: true }); }
 });
-it.each([['unexpected', 'unexpected decoder error'], ['overlong', `[h264 @ 0x${'a'.repeat(1024)}] no frame!`],
+it.each([['unexpected', 'unexpected decoder error'], ['NULL decoder error', '[NULL @ 0x123] no frame!'],
+  ['overlong', `[h264 @ 0x${'a'.repeat(1024)}] no frame!`],
   ['wrong-stream', '[vist#0:1/h264 @ 0x123] Error submitting packet to decoder: Invalid data found when processing input']])(
   'refuses %s diagnostics even at the maximum metadata allowance', async (_kind, diagnostic) => {
     const child = new EventEmitter() as ChildProcess, stdout = new PassThrough(), stderr = new PassThrough();
@@ -147,6 +148,16 @@ it('reports an expired conversion deadline before classifying an audio failure',
       originUs: 0, metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined)).rejects.toMatchObject({ code: 'TIME_LIMIT' });
   } finally { clock?.mockRestore(); }
 });
+it.each(['active', 'privacy', 'deadline'])('checks %s ownership before recovering proven source audio damage', async state => {
+  const owner = new globalThis.AbortController(), open = jest.fn(), deadline = Date.now() + (state === 'deadline' ? -1 : 1000);
+  if (state === 'privacy') owner.abort();
+  const pending = convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper', signal: owner.signal,
+    deadline, open }, configuration(), { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
+    originUs: 0, audioFailure: 'AUDIO_DISCONTINUITY', metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined);
+  if (state === 'privacy') await expect(pending).rejects.toThrow();
+  else await expect(pending).rejects.toMatchObject({ code: state === 'deadline' ? 'TIME_LIMIT' : 'AUDIO_DISCONTINUITY' });
+  expect(open).not.toHaveBeenCalled(); expect(spawnExternalFfmpeg).not.toHaveBeenCalled();
+});
 
 const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK_FFMPEG_TEST_PATH ??
   (existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg')); } catch { return undefined; } })();
@@ -179,25 +190,33 @@ media.each([[1, 24], [90, 24], [1, 30]])('keeps a %s-second %s-fps source end in
   try {
     execute(['-f', 'lavfi', '-i', `testsrc2=size=16x16:rate=${sourceFps}:duration=${seconds}`, '-an', '-c:v', 'libx264',
       '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-f', 'mp4', file]);
+    await fs.chmod(file, 0o600);
+    const source = await fs.readFile(file), expectedSha256 = createHash('sha256').update(source).digest('hex');
     jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
     const context = { ffmpegPath: ffmpeg!, protectionPath: protection, signal: new globalThis.AbortController().signal,
       deadline: Date.now() + 15000, open: () => fs.open(file, 'r') };
     for (const fps of [15, 24]) {
-      const plan = await inspectExternalRecording(context, fps), selected = configuration(), chunks: Buffer[] = [];
+      const plan = await inspectExternalRecording(context, fps), selected = configuration(), memory = new NativeRecordingMemoryBudget();
       selected.videoCodec.resolution = [16, 16, fps];
       expect(plan.durationUs).toBe(seconds * 1000000);
-      await convertExternalRecording(context, selected, plan, false, false, bytes => chunks.push(Buffer.from(bytes)));
-      const output = Buffer.concat(chunks);
+      const prepared = await prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, selected, false,
+        new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
+      const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
       try {
-        await validateExternalRecording(context, output, selected, plan, false);
-        const metadata = execute(['-i', 'pipe:0', '-map', '0:v:0', '-c:v', 'copy', '-f', 'framecrc', 'pipe:1'], output).toString();
+        // Read actual tfdt/trun timing through the public prepared timeline.
+        // FFmpeg 6.1's fragmented-MOV reader substitutes nominal H.264 duration
+        // for the final packet, even when the stored sample duration is exact.
+        expect(prepared.durationMs).toBe(seconds * 1000);
+        const metadata = execute(['-i', 'pipe:0', '-map', '0:v:0', '-an', '-c:v', 'rawvideo', '-threads:v', '1',
+          '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-f', 'framecrc', 'pipe:1'], output).toString();
         const base = /^#tb 0: (\d+)\/(\d+)$/m.exec(metadata)!;
         const packets = metadata.split('\n').filter(line => /^0,/.test(line)).map(line => line.split(',').map(Number));
-        const last = packets.at(-1)!;
         expect(packets).toHaveLength(plan.selected.length);
-        expect((last[2] + last[3] - packets[0][2]) * Number(base[1]) * 1000000 / Number(base[2]))
-          .toBeCloseTo(seconds * 1000000, 0);
-      } finally { output.fill(0); }
+        for (const [index, packet] of packets.entries()) {
+          expect(Math.abs((packet[2] - packets[0][2]) * Number(base[1]) * 1000000 / Number(base[2]) - plan.selected[index].pts)).toBeLessThanOrEqual(12);
+        }
+      } finally { output.fill(0); prepared.dispose(); }
+      expect(memory.bytes).toBe(0);
     }
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 20000);
@@ -291,7 +310,7 @@ media.each([512, 513])('enforces the %s-metadata source boundary through complet
     expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 30000);
-media.each(['missing', 'corrupt', 'zero-corrupt'])('keeps %s source audio eligible for silence recovery after origin inspection', async defect => {
+media.each(['missing', 'corrupt', 'zero-corrupt', 'first-corrupt'])('keeps %s source audio eligible for silence recovery after origin inspection', async defect => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-audio-')), file = join(directory, 'source.mp4');
   try {
     execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', ...(defect === 'missing' ? [] :
@@ -301,7 +320,7 @@ media.each(['missing', 'corrupt', 'zero-corrupt'])('keeps %s source audio eligib
     const original = await fs.readFile(file);
     const source = defect === 'missing' ? Buffer.from(original) : execFileSync(process.execPath, ['--input-type=module', '-e',
       `import { readFileSync } from 'node:fs'; import { mutateRecordingFixture } from ${JSON.stringify(mutator)};` +
-      'process.stdout.write(mutateRecordingFixture(readFileSync(0), { corruptAudio: true }));'],
+      `process.stdout.write(mutateRecordingFixture(readFileSync(0), { ${defect === 'first-corrupt' ? 'corruptFirstAudio' : 'corruptAudio'}: true }));`],
     { input: original, timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
     if (defect === 'zero-corrupt') for (let at = 0; at < source.length; at++) if (source[at] !== original[at]) source[at] = 0;
     original.fill(0);
@@ -311,10 +330,53 @@ media.each(['missing', 'corrupt', 'zero-corrupt'])('keeps %s source audio eligib
     expect(pcm.every(byte => byte === 0)).toBe(true); output.fill(0);
     await fs.writeFile(file, source); await fs.chmod(file, 0o600);
     const expectedSha256 = createHash('sha256').update(source).digest('hex'), memory = new NativeRecordingMemoryBudget();
+    jest.mocked(spawnExternalFfmpeg).mockClear();
     const prepared = await prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, configuration(), true,
       new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
-    try { expect(prepared.recovery).toMatchObject({ attempts: 2, initialWorkerCode: 'AUDIO_DISCONTINUITY' }); }
+    try {
+      expect(prepared.recovery).toMatchObject({ attempts: 2, initialWorkerCode: 'AUDIO_DISCONTINUITY' });
+      if (defect !== 'missing') expect(jest.mocked(spawnExternalFfmpeg).mock.calls.filter(([, args]) => args.includes('libx264'))).toHaveLength(1);
+    }
     finally { prepared.dispose(); }
+    expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+    expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}, 20000);
+media.each([false, true])('prepares usable video with a corrupt first AAC sample when audio permission is %s', async audioActive => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-first-aac-')), file = join(directory, 'source.mp4');
+  try {
+    execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', '-f', 'lavfi', '-i',
+      'sine=frequency=440:sample_rate=16000:duration=2', '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast',
+      '-bf', '0', '-c:a', 'aac', '-ar', '16000', '-ac', '1', '-f', 'mp4', file]);
+    const mutator = pathToFileURL(join(process.cwd(), '.github/scripts/external-recording-check.mjs')).href;
+    const source = execFileSync(process.execPath, ['--input-type=module', '-e',
+      `import { readFileSync } from 'node:fs'; import { mutateRecordingFixture } from ${JSON.stringify(mutator)};` +
+      'process.stdout.write(mutateRecordingFixture(readFileSync(0), { corruptFirstAudio: true }));'],
+    { input: await fs.readFile(file), timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+    await fs.writeFile(file, source); await fs.chmod(file, 0o600);
+    jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+    const expectedSha256 = createHash('sha256').update(source).digest('hex'), memory = new NativeRecordingMemoryBudget();
+    const prepared = await prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, configuration(), audioActive,
+      new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
+    try {
+      expect(prepared.durationMs).toBeCloseTo(2000, 1); expect(prepared.audioActive).toBe(audioActive);
+      const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
+      try {
+        const decoded = execute(['-i', 'pipe:0', '-map', '0:v:0', '-an', '-c:v', 'rawvideo', '-f', 'framecrc', 'pipe:1'], output);
+        expect(decoded.toString().split('\n').filter(line => /^0,/.test(line))).toHaveLength(30);
+        if (audioActive) {
+          expect(prepared.recovery).toMatchObject({ attempts: 2, initialWorkerCode: 'AUDIO_DISCONTINUITY' });
+          const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
+          expect(pcm.length).toBeGreaterThan(0); expect(pcm.every(byte => byte === 0)).toBe(true);
+        } else {
+          expect(prepared.recovery).toBeUndefined();
+          expect(jest.mocked(spawnExternalFfmpeg).mock.calls.some(([, args]) => args.includes('0:a:0?'))).toBe(false);
+          const inventory = execute(['-i', 'pipe:0', '-map', '0', '-c', 'copy', '-f', 'framecrc', 'pipe:1'], output).toString();
+          expect(inventory).toContain('#media_type 0: video'); expect(inventory).not.toMatch(/#media_type \d+: audio/);
+        }
+      } finally { output.fill(0); }
+      expect(jest.mocked(spawnExternalFfmpeg).mock.calls.filter(([, args]) => args.includes('libx264'))).toHaveLength(1);
+    } finally { prepared.dispose(); }
     expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
     expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
