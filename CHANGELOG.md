@@ -7,6 +7,75 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0] - 2026-11-16
+
+### HomeKit recording and settings
+- Add opt-in HomeKit Secure Video from completed Blink native USB Local Storage
+  motion clips, delivered through each camera's existing Home accessory. A shared
+  plugin-owned push receiver supplies motion events and bounded clip retrieval;
+  recording does not continuously capture a live feed. Recording remains off by
+  default, and live viewing stays independent.
+- Add a per-camera setup checklist and temporary settings notice covering playable
+  Blink Local Storage clips, plugin recording enablement, a connected home hub,
+  eligible iCloud+, and separate When Home/When Away recording and audio choices.
+  Notice dismissal affects only the current editor; removal is scheduled for the
+  first maintenance release after 1.1.0.
+- Organize settings by task, with discovered camera and Sync Module selections,
+  inherited overrides, connection feedback and precise numeric controls. Opening
+  settings or testing the connection does not stage an unchanged configuration.
+- Add optional HomeKit temperature sensors for traditional cameras reporting
+  temperature, using bounded metadata reads during normal status polling.
+  Temperature exposure remains off by default.
+
+### Media preparation and recovery
+- Replace external FFmpeg command-line media handling with verified packaged
+  native workers, parent-owned TLS and protected RTP transport. Require matching
+  worker hashes, private protocol 5 and corresponding source for all five packaged
+  targets. Live audio offers Opus, PCMA and PCMU instead of AAC-ELD.
+- Preserve source-time keyframes, selected-picture duration and A/V timing when
+  preparing low-frame-rate and metadata-bearing Blink clips. Assembly-enabled
+  codec builds retain the existing encoding presets, codec pins and resource
+  limits.
+- Repair recoverable finite audio timing and allow one salvage conversion within
+  the same 120-second preparation deadline and memory budget. Preserve usable
+  video and recoverable original sound; explicitly warn when irreparable audio
+  is replaced by an AAC silence track. Home's audio-off permission omits audio.
+- Keep downloaded media as a private transient working copy. Remove the source
+  after preparation succeeds or finally fails; retain prepared output only for
+  its bounded Home delivery lifetime. No failed-media archive, indefinite retry
+  queue or duplicate Home offer is introduced. Account, camera identity, source
+  integrity and Home privacy checks remain authoritative.
+
+### Upgrade from 0.10.0
+- Back up Homebridge configuration, authentication and accessory persistence,
+  close settings/JSON editors, and use the exact registry version through normal
+  Homebridge package management. Restart the Blink child bridge after installation;
+  retain existing HomeKit pairings and camera identities.
+- Convert retired secure-media, motion and recording settings together through
+  the [one-time migration](docs/native-recording-config-migration.md#upgrade-from-0100).
+  The guarded atomic converter preserves explicit canonical values, other plugins,
+  config ownership and permissions, with a private exact-byte backup. Supported
+  POSIX installation applies it only with the installer's explicit storage path;
+  otherwise preview and use `--apply`. Both script entrypoints preview by default.
+  Windows requires the documented manual conversion. Already-canonical files stay
+  unchanged without another backup; runtime and editor accept canonical keys only.
+- Retain existing numerical defaults and media bounds. Maximum job age must exceed
+  the initial acquisition delay. The default 15-second clip-matching tolerance is
+  a conservative starting point: calibrate isolated events when measured offsets
+  exceed it, and verify every enabled camera before widening the shared window.
+
+### Qualification and limits
+- Promote the accepted RC runtime with changes limited to version metadata and
+  these release notes. The RC passed all five installed-target qualifications;
+  actual saved Home timeline playback advanced on both tested camera accessories
+  on 16 November. Stable artifact verification, installation and observation are
+  recorded separately under the [release guide](docs/RELEASE.md).
+- Completed transfer and transport acknowledgement do not establish saved Home
+  retention. Recovery cannot invent missing video, override privacy, exceed hard
+  resource limits or guarantee that Home/iCloud retains every offer. Verify saved
+  playback during setup. Talkback and automatic doorbell-ring delivery remain
+  unavailable.
+
 ## [1.1.0-rc.0] - 2026-11-15
 
 ### HomeKit Secure Video setup
