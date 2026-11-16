@@ -197,7 +197,9 @@ class ProtectionTests(unittest.TestCase):
             self.assertIsNotNone(child,'The actual external child must reach its creation boundary')
             self.assertIn(process.pid,exited,'Cancelled supervisor must exit')
             self.assertIn(child,exited,'Creation-boundary cancellation must terminate its suspended child')
-            self.assertEqual(kernel.WaitForSingleObject(child_handle,0),0)
+            # Continuing the exit event permits asynchronous kernel teardown;
+            # wait for the retained observer handle to confirm its completion.
+            self.assertEqual(kernel.WaitForSingleObject(child_handle,5000),0)
             stdout,stderr=process.communicate(timeout=5)
             self.assertEqual(stdout,b'');self.assertEqual(stderr,b'')
         finally:

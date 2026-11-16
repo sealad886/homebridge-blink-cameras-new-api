@@ -2,6 +2,8 @@ import { Buffer } from 'node:buffer';
 import { Readable } from 'node:stream';
 import { FfmpegByteQueue, packetAdler32, parseFrameCrcPacket, readFfmpegPackets, type CodecPacket } from '../src/accessories/ffmpeg-packets';
 
+afterEach(() => { jest.useRealTimers(); });
+
 const header = '#tb 0: 1/90000\n#media_type 0: video\n#codec_id 0: h264\n#dimensions 0: 16x16\n#sar 0: 1/1\n';
 const line = (bytes: Buffer, pts = 0, duration = 6000) => `0, ${pts}, ${pts}, ${duration}, ${bytes.length}, 0x${packetAdler32(bytes).toString(16).padStart(8, '0')}\n`;
 function read(bytes: Buffer[], metadata: string, consume: (packet: CodecPacket) => Promise<void> = async () => {}) {
@@ -61,7 +63,7 @@ test('near-limit packet completes when an ordinary pipe chunk straddles its boun
   const packet = queue.take(1020000), admitted = queue.push(incoming);
   let completed = false;
   const both = Promise.all([packet, admitted]).then(value => { completed = true; return value; });
-  // Keep the intentional pre-fix failure bounded and clean up every pending operation.
+  // Observe rejection while final cleanup settles every pending operation.
   both.catch(() => undefined);
   try {
     await jest.advanceTimersByTimeAsync(1);
@@ -70,7 +72,7 @@ test('near-limit packet completes when an ordinary pipe chunk straddles its boun
     expect(actual.equals(expected)).toBe(true); expect(packetAdler32(actual)).toBe(packetAdler32(expected)); actual.fill(0);
     queue.end();
     expect((await queue.take(45536)).equals(incoming.subarray(20000))).toBe(true); await queue.finish();
-  } finally { owner.abort(); await Promise.allSettled([packet, admitted]); queue.dispose(); jest.useRealTimers(); }
+  } finally { owner.abort(); await Promise.allSettled([packet, admitted]); queue.dispose(); }
 });
 test.each(['abort', 'end'])('%s releases a producer blocked after partial chunk admission', async action => {
   const owner = new globalThis.AbortController(), queue = new FfmpegByteQueue(owner.signal);

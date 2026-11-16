@@ -43,9 +43,10 @@ for command-line and prerelease selection.
 **Upgrading?** Read the [one-time migration guide](../../../docs/native-recording-config-migration.md)
 first. It covers stable 0.10.0, intermediate betas, backups and Windows conversion.
 Installation does not change Homebridge configuration automatically. For legacy
-settings, preview the converter against the explicit active `config.json` path,
-review the result, and use `--apply` only when ready. The guide explains backup
-and permission handling. New setup needs no legacy conversion.
+settings on macOS or Linux (POSIX hosts), preview the converter against the
+explicit active `config.json` path, review the result, and use `--apply` only when
+ready. On Windows, follow the guide's [manual conversion mapping](../../../docs/native-recording-config-migration.md#windows-manual-conversion).
+The guide explains backup and permission handling. New setup needs no legacy conversion.
 
 Install FFmpeg on the Homebridge host before testing video. By default the
 plugin finds `ffmpeg` through the Homebridge service's PATH. If necessary, set
