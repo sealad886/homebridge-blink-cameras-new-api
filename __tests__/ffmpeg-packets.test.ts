@@ -18,6 +18,15 @@ test('pairs fragmented byte pipes against metadata, preserving signed rational c
   expect(saved.map(p => [p.pts, p.duration, p.keyframe])).toEqual([[-66666n, 66666n, true], [0n, 66666n, false]]);
   expect(saved.map(p => p.data)).toEqual([one, two]); expect(borrowed.every(b => b.every(n => n === 0))).toBe(true);
 });
+test('preserves a monotonic source gap within the bounded live session lifetime', async () => {
+  const data = Buffer.from([0, 0, 1, 0x65]), timestamps: bigint[] = [];
+  await read([data, data], header + line(data) + line(data, 135000), async packet => { timestamps.push(packet.pts); });
+  expect(timestamps).toEqual([0n, 1500000n]);
+});
+test.each([0, -6000, 27000001])('rejects repeated/backward or over-lifetime timestamp %s', async pts => {
+  const data = Buffer.from([0, 0, 1, 0x65]);
+  await expect(read([data, data], header + line(data) + line(data, pts))).rejects.toThrow('External codec packets unavailable');
+});
 test.each(['checksum', 'short', 'residue', 'header', 'metadata'])('rejects %s without accepting successful EOF', async kind => {
   const data = Buffer.from([1, 2, 3]); let bytes = data, metadata = header + line(data);
   if (kind === 'checksum') metadata = metadata.replace(/0x[a-f0-9]+\n$/, '0x00000000\n');

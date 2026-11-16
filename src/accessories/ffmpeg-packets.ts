@@ -120,7 +120,8 @@ export async function readFfmpegPackets(video: Readable, audio: Readable | undef
         length < 1 || length > EXTERNAL_FFMPEG_LIMITS.packetBytes - 48 || (index === 0 && ++frames > options.maxFrames)) throw unavailable();
     const micros = (value: bigint) => value * header.numerator! * 1000000n / header.denominator!;
     const time = micros(pts), period = micros(duration), last = previous[index];
-    if (period <= 0n || period > 1000000n || (last !== undefined && (time <= last || time - last > 1000000n))) throw unavailable();
+    if (period <= 0n || period > 1000000n || (last !== undefined &&
+        (time <= last || time - last > BigInt(EXTERNAL_FFMPEG_LIMITS.lifetimeMs) * 1000n))) throw unavailable();
     previous[index] = time;
     const data = await queues[index].take(length);
     try {

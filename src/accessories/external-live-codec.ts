@@ -28,7 +28,8 @@ const unavailable = (): Error => new Error('External live codec unavailable');
 
 export function liveFfmpegArguments(options: ExternalLiveCodecOptions): string[] {
   const { video: v, audio: a } = options;
-  const filter = `showinfo@blink_source=checksum=0,select='isnan(prev_selected_t)+gte(t-start_t,selected_n/${v.fps}-0.000001)',` +
+  // Select at most one source frame per anchored output interval; gaps never accrue frame credit.
+  const filter = `showinfo@blink_source=checksum=0,select='isnan(prev_selected_t)+gt(floor((t-start_t)*${v.fps}+0.0001),floor((prev_selected_t-start_t)*${v.fps}+0.0001))',` +
     `scale=${v.width}:${v.height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
   return ['-hide_banner', '-nostdin', '-loglevel', 'info', '-xerror', '-max_alloc', '67108864', '-copyts', '-threads', '1', '-filter_threads', '1',
     '-protocol_whitelist', 'pipe', '-format_whitelist', 'mpegts', '-codec_whitelist', 'h264,aac,aac_latm',

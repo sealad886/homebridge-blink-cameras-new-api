@@ -6,7 +6,7 @@ import { createExternalLiveCodec, liveFfmpegArguments, type ExternalLiveCodecOpt
 import { ExternalFfmpegSetupError, probeExternalFfmpeg, resolveExternalFfmpegPath, type ExternalFfmpegProcessOptions } from '../src/accessories/external-ffmpeg';
 import type { CodecPacket } from '../src/accessories/ffmpeg-packets';
 
-const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK_TEST_FFMPEG_PATH ?? (existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg')); } catch { return undefined; } })();
+const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK_FFMPEG_TEST_PATH ?? (existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg')); } catch { return undefined; } })();
 // The test seam runs the external codec directly; product always uses the separately qualified protection launcher.
 const direct: ExternalFfmpegProcessOptions['launch'] = (_command, args, options) => spawn(args[1], args.slice(2), options);
 function options(codec?: 'opus' | 'pcma' | 'pcmu', rate: 8000 | 16000 | 24000 = 16000): ExternalLiveCodecOptions {
