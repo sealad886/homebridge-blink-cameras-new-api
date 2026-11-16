@@ -9,7 +9,7 @@ owns subsequent acceptance and finding dispositions.
 
 ## [2.0.0-alpha.0] - 2026-11-16
 
-Unpublished preparation for 2.0.0. Version 1.1.0 remains immutable. The new
+First alpha for 2.0.0. Version 1.1.0 remains immutable. The new
 external FFmpeg installation prerequisite makes this a major release; complete
 candidate, installed-package and physical acceptance before stable promotion.
 

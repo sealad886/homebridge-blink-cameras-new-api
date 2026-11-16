@@ -2,7 +2,7 @@
 
 [Documentation home](README.md) · [Illustrated setup](../output/articles/set-up-blink-cameras-in-apple-home/index.md) · [Recording checklist](configuration.md#recording-setup-checklist)
 
-Last reviewed: 16 November 2026 · Source edition: `2.0.0-alpha.0` (unreleased).
+Last reviewed: 16 November 2026 · Source edition: `2.0.0-alpha.0` (prerelease).
 
 This guide describes the 2.0 prerelease source. The published 1.1.0 used a
 packaged codec backend; its acceptance does not qualify this changed backend.

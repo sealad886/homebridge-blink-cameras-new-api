@@ -7,7 +7,7 @@
 Connect Blink to Apple Home, verify live viewing, and test a native recording
 in the camera's saved timeline.
 
-**Source edition:** `2.0.0-alpha.0` (unreleased) · **Last reviewed:** 16 November 2026
+**Source edition:** `2.0.0-alpha.0` (prerelease) · **Last reviewed:** 16 November 2026
 
 Select the intended published version when installing; an unversioned installation
 does not select a prerelease automatically. Screenshots use the actual UI with
