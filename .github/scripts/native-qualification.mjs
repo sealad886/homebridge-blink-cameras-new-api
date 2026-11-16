@@ -8,19 +8,19 @@ import { pathToFileURL } from 'node:url';
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
 import console from 'node:console';
+import { EXTERNAL_LIVE_SELECTIONS, exerciseExternalLive } from './external-runtime-checks.mjs';
 import { TARGETS, collectSourceProof, regularFile, sha256, verifyNativePackage, verifyPackageIdentity } from './native-package.mjs';
 
-export const QUALIFICATION_SELECTIONS = Object.freeze(['audio-latm', 'audio-latm-bundled'].flatMap(mode =>
-  ['opus:16000', 'opus:24000', 'pcma:8000', 'pcmu:8000'].map(audio => `${mode}:${audio}`)));
+export const QUALIFICATION_SELECTIONS = EXTERNAL_LIVE_SELECTIONS;
 export const FINITE_RECORDING_SELECTIONS = Object.freeze(['audio-16khz', 'audio-24khz', 'audio-disabled', '30fps-source-15fps-output', 'recovery-metadata', 'low-fps-source', '25fps-source-15fps-output', 'audio-clock-repair', 'missing-audio-recovery', 'corrupt-audio-recovery', 'damaged-audio-disabled']);
 export const RUNTIME_BOOTSTRAP_EXPECTATION = Object.freeze({ instances: 2, sourceStarts: 2, sourceStops: 2,
   publicMotionEvents: 2, stateReloaded: true, syntheticDownloads: 1, networkAttempts: 0 });
 const selections = QUALIFICATION_SELECTIONS;
-const names = target => ['fixture', 'check-rtp', 'check-recording'].map(name => name + (target === 'win32-x64' ? '.exe' : ''));
+const names = target => ['check-protection'].map(name => name + (target === 'win32-x64' ? '.exe' : ''));
 export function prepareValidation(build, output, target, sourceSha) {
   assert.equal(target, process.platform + '-' + process.arch); assert(TARGETS.includes(target)); assert.match(sourceSha, /^[a-f0-9]{40}$/);
   const files = Object.fromEntries(names(target).map(name => [name, sha256(regularFile(build, name))]));
-  const worker = 'blink-codec-worker' + (target === 'win32-x64' ? '.exe' : '');
+  const worker = 'blink-protection-worker' + (target === 'win32-x64' ? '.exe' : '');
   const receipt = { schemaVersion: 1, target, source_sha: sourceSha, worker_sha256: sha256(regularFile(build, worker)), files };
   mkdirSync(output); // No reuse or overwrite of an existing output directory.
   for (const name of names(target)) { copyFileSync(join(build, name), join(output, name), constants.COPYFILE_EXCL); chmodSync(join(output, name), 0o755); }
@@ -36,151 +36,6 @@ export function verifyValidation(root, target, sourceSha, workerSha) {
   for (const name of names(target)) { assert.match(receipt.files[name], /^[a-f0-9]{64}$/); assert.equal(sha256(regularFile(root, name)), receipt.files[name], 'Validation helper hash mismatch'); }
   return receipt;
 }
-function receiverFrame(type, body = Buffer.alloc(0)) {
-  const header = Buffer.alloc(12); header.write('BMR1'); header.writeUInt32BE(type, 4); header.writeUInt32BE(body.length, 8); return Buffer.concat([header, body]);
-}
-
-// Execute only installed JavaScript and the installed, hash-verified worker.
-// Protected packets use an isolated in-memory owned output; hosted UDP is a separate gate.
-export async function exerciseInstalledCodec(packageRoot, workerPath, validationRoot) {
-  const requireInstalled = createRequire(join(packageRoot, 'package.json'));
-  const { createOwnedMediaSession } = requireInstalled(join(packageRoot, 'dist/accessories/media-session.js'));
-  const suffix = process.platform === 'win32' ? '.exe' : '';
-  for (const name of names(process.platform + '-' + process.arch)) chmodSync(join(validationRoot, name), 0o755);
-  const results = [];
-  for (const selected of selections) {
-    const [mode, codec, rawRate] = selected.split(':'); const rate = Number(rawRate); const datagrams = []; let captured = 0; let observed;
-    const media = execFileSync(join(validationRoot, 'fixture' + suffix), [mode], { env: {}, timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
-    const output = (ssrc, pt) => ({ address: '192.168.1.5', addressVersion: 'ipv4', port: 5000 + ssrc,
-      suite: 'AES_CM_128_HMAC_SHA1_80', key: Buffer.alloc(16, ssrc), salt: Buffer.alloc(14, ssrc), ssrc,
-      payloadType: pt, mtu: ssrc === 7 ? 128 : 1200, fps: 15, rtcpInterval: 0.5 });
-    const negotiation = { workerPath, onSourceInfo: info => { observed = info; },
-      video: { output: output(7, 99), localPort: 6000, width: 16, height: 16, bitrate: 300000, maxFrames: 9000, profile: 0, level: 0, softwarePreset: 'ultrafast' },
-      audio: { output: output(8, 110), localPort: 6001, codec, rate, bitrate: 24000 } };
-    const session = await createOwnedMediaSession(negotiation, new globalThis.AbortController().signal, {
-      openSocket: async admitted => {
-        let close; const whenClosed = new Promise(resolve => { close = resolve; });
-        return { whenClosed, close, send: async bytes => {
-          assert((captured += bytes.length) <= 8 * 1024 * 1024 && datagrams.length < 8192, 'Qualification packet limit exceeded');
-          datagrams.push({ stream: admitted.ssrc === 7 ? 1 : 2, bytes: Buffer.from(bytes) });
-        } };
-      },
-    });
-    try {
-      await session.write(media); await session.end(); assert.equal(session.failed, false);
-      assert.equal(observed?.width, 16); assert.equal(observed?.height, 16);
-      const config = Buffer.alloc(40);
-      [16, 16, mode === 'audio-latm' ? 4 : 30, 15, { opus: 1, pcma: 2, pcmu: 3 }[codec], rate, session.audioTiming.initialPaddingSamples, 20, 99, 110].forEach((n, i) => config.writeUInt32BE(n, i * 4));
-      const input = [receiverFrame(1, config)];
-      for (const [stream, capability] of [[1, negotiation.video.output], [2, negotiation.audio.output]]) {
-        const init = Buffer.alloc(42); init.writeUInt32BE(stream); init.writeUInt32BE(capability.ssrc, 4); init.writeUInt32BE(1, 8);
-        capability.key.copy(init, 12); capability.salt.copy(init, 28); input.push(receiverFrame(10, init));
-      }
-      for (const packet of datagrams) {
-        const body = Buffer.alloc(4 + packet.bytes.length); body.writeUInt32BE(packet.stream); packet.bytes.copy(body, 4);
-        input.push(receiverFrame(packet.bytes[1] === 200 ? 12 : 11, body));
-      }
-      input.push(receiverFrame(3)); const checker = join(validationRoot, 'check-rtp' + suffix);
-      const check = frames => execFileSync(checker, [], { input: Buffer.concat(frames), env: {}, timeout: 5000, maxBuffer: 65536, stdio: ['pipe', 'pipe', 'pipe'] });
-      assert.equal(check(input).toString(), 'receiver verified\n');
-      const forged = input.map(bytes => Buffer.from(bytes)); const index = forged.findIndex(bytes => bytes.readUInt32BE(4) === 11); assert(index >= 0);
-      forged[index][forged[index].length - 1] ^= 1; assert.throws(() => check(forged), 'Receiver must reject forged SRTP');
-      results.push(selected);
-    } finally { await session.stop(); }
-  }
-  return results;
-}
-
-/** Prove the exact installed finite-file path, including seekable tail-moov MP4
- * input, H264/AAC output, permission-off track omission and independent decode. */
-export async function exerciseInstalledRecording(packageRoot, validationRoot) {
-  const requireInstalled = createRequire(join(packageRoot, 'package.json'));
-  const { prepareNativeRecording, NativeRecordingMemoryBudget } = requireInstalled(join(packageRoot, 'dist/accessories/native-recording-preparation.js'));
-  const suffix = process.platform === 'win32' ? '.exe' : '';
-  const scratch = mkdtempSync(join(tmpdir(), 'blink-finite-qualification-')); chmodSync(scratch, 0o700);
-  const results = [];
-  try {
-    const bytes = execFileSync(join(validationRoot, 'fixture' + suffix), ['audio-mp4', '320', '180', '15', '33'],
-      { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 });
-    assert(bytes.indexOf(Buffer.from('moov')) > bytes.indexOf(Buffer.from('mdat')), 'Fixture must require seeking to its tail moov');
-    const filePath = join(scratch, 'native-source.mp4'); writeFileSync(filePath, bytes, { mode: 0o600, flag: 'wx' });
-    const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
-      videoCodec: { type: 0, resolution: [320, 180, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
-      audioCodec: { type: 0, samplerate: 1, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
-    for (const selected of FINITE_RECORDING_SELECTIONS) {
-      const repairCase = {
-        'audio-clock-repair': { fixture: 'audio-mp4-gap', rate: 16000, attempts: 1, flags: 1 },
-        'missing-audio-recovery': { fixture: 'video-mp4', rate: 16000, attempts: 2, flags: 6, initialWorkerCode: 'AUDIO_MISSING' },
-        'corrupt-audio-recovery': { fixture: 'audio-mp4-bad-audio', rate: 24000, attempts: 2, flags: 6, initialWorkerCode: 'AUDIO_DECODE' },
-        'damaged-audio-disabled': { fixture: 'audio-mp4-bad-audio', rate: 0, attempts: 1, flags: 0 },
-      }[selected];
-      const longSource = selected === '30fps-source-15fps-output';
-      const lowFps = selected === 'low-fps-source', nonIntegral = selected === '25fps-source-15fps-output';
-      const timing = lowFps || nonIntegral, recovery = selected === 'recovery-metadata' || timing;
-      const rate = repairCase ? repairCase.rate : nonIntegral || selected === 'audio-24khz' ? 24000 : selected === 'audio-16khz' || recovery ? 16000 : 0;
-      const sourceBytes = repairCase ? execFileSync(join(validationRoot, 'fixture' + suffix), [repairCase.fixture, '320', '180', '15', '90'],
-        { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : longSource ? execFileSync(join(validationRoot, 'fixture' + suffix), ['video-mp4', '16', '16', '30', '1800'],
-        { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : recovery ?
-        execFileSync(join(validationRoot, 'fixture' + suffix), ['audio-mp4-sei', '320', '180', nonIntegral ? '25' : lowFps ? '5' : '15', nonIntegral ? '225' : lowFps ? '45' : '90'],
-          { env: {}, timeout: 5000, maxBuffer: 32 * 1024 * 1024 }) : bytes;
-      const selectedFile = longSource || recovery || repairCase ? join(scratch, `${selected}-source.mp4`) : filePath;
-      if (longSource || recovery || repairCase) writeFileSync(selectedFile, sourceBytes, { mode: 0o600, flag: 'wx' });
-      const selectedConfiguration = { ...configuration,
-        mediaContainerConfiguration: { ...configuration.mediaContainerConfiguration, fragmentLength: recovery && !timing ? 4000 : 1000 },
-        videoCodec: { ...configuration.videoCodec, resolution: longSource ? [16, 16, 15] : nonIntegral ? [320, 180, 15] : recovery ? [320, 180, 30] : configuration.videoCodec.resolution,
-          parameters: { ...configuration.videoCodec.parameters, iFrameInterval: recovery && !timing ? 4000 : 1000 } },
-        audioCodec: { ...configuration.audioCodec, samplerate: rate === 24000 ? 2 : 1, bitrate: recovery ? 16 : 32 } };
-      const memory = new NativeRecordingMemoryBudget();
-      const prepared = await prepareNativeRecording({ filePath: selectedFile, expectedBytes: sourceBytes.length, expectedSha256: sha256(sourceBytes) },
-        selectedConfiguration, rate !== 0, new globalThis.AbortController().signal, { memory, admit: work => work() });
-      try {
-        assert(prepared.fragments.length > 1); assert(prepared.durationMs > (longSource ? 59999 : timing ? 8900 : recovery || repairCase ? 5900 : 2100) && prepared.durationMs <= (longSource ? 60000.1 : timing ? 9200 : recovery || repairCase ? 6100 : 2200.1));
-        assert(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= selectedConfiguration.mediaContainerConfiguration.fragmentLength + 0.01));
-        const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
-        try {
-          assert.equal(sha256(output), prepared.preparedSha256);
-          const decoded = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
-            { input: output, env: {}, timeout: 5000, maxBuffer: 65536 }));
-          assert.equal(decoded.videoFrames, longSource ? 900 : nonIntegral ? 135 : lowFps ? 45 : recovery || repairCase ? 90 : 33); assert.equal(decoded.videoWidth, longSource ? 16 : 320); assert.equal(decoded.videoHeight, longSource ? 16 : 180);
-          assert.equal(decoded.audioTracks, rate ? 1 : 0);
-          assert.equal(decoded.audioSampleRate, rate);
-          assert.equal(decoded.audioChannels, rate ? 1 : 0);
-          if (recovery) {
-            assert(Math.abs(decoded.lastVideoUs - decoded.firstVideoUs - (nonIntegral ? 224 * 1001000 / 25 : lowFps ? 44 * 1001000 / 5 : 89 * 1001000 / 15)) <= 15, 'Metadata must not add picture time');
-            assert(Math.abs(decoded.audioSamples * 1000 / rate - prepared.durationMs) < 160, 'Recovery metadata must preserve A/V alignment');
-          }
-          if (repairCase) {
-            if (repairCase.flags) assert.deepEqual(prepared.recovery, { flags: repairCase.flags, attempts: repairCase.attempts,
-              ...(repairCase.initialWorkerCode ? { initialWorkerCode: repairCase.initialWorkerCode } : {}) });
-            else assert.equal(prepared.recovery, undefined, 'Disabled audio must not be decoded or repaired');
-            assert(Math.abs(decoded.lastVideoUs - decoded.firstVideoUs - 89 * 1000000 / 15) <= 15, 'Recovery must preserve real video clocks');
-            assert(Number.isFinite(decoded.audioPeak));
-            if (repairCase.flags & 2) assert(decoded.audioPeak < 1e-7, 'Substituted audio must actually be silent');
-            else if (rate) assert(decoded.audioPeak > 0.01, 'Repaired original audio must retain actual sound');
-            if (rate) assert(Math.abs(decoded.audioSamples * 1000 / rate - prepared.durationMs) < 160, 'Recovery must retain A/V alignment');
-          }
-          if (timing || repairCase) for (const [index, fragment] of prepared.fragments.entries()) {
-            if (index + 1 < prepared.fragments.length) assert(Math.abs(fragment.startMs + fragment.durationMs - prepared.fragments[index + 1].startMs) < 0.01, 'Selected source clocks must remain contiguous');
-            const independent = Buffer.concat([prepared.initialization, fragment.data]);
-            try {
-              const part = JSON.parse(execFileSync(join(validationRoot, 'check-recording' + suffix), [],
-                { input: independent, env: {}, timeout: 5000, maxBuffer: 65536 }));
-              assert(part.videoFrames > 0); assert.equal(part.audioTracks, rate ? 1 : 0);
-              assert(Math.abs(part.firstVideoUs - decoded.firstVideoUs - fragment.startMs * 1000) <= 15, 'Selected fragments must retain source clocks');
-            } finally { independent.fill(0); }
-          }
-          assert.equal(sha256(readFileSync(selectedFile)), sha256(sourceBytes), 'Preparation must preserve Blink original');
-        } finally { output.fill(0); }
-        results.push(selected);
-      } finally { prepared.dispose(); assert.equal(memory.bytes, 0); }
-    }
-    bytes.fill(0); return results;
-  } finally { rmSync(scratch, { recursive: true, force: true }); }
-}
-
-/** Real installed startup and persistence on each host's filesystem. All remote
- * and child-process capabilities fail closed; the one SDK GET is an in-memory
- * synthetic response used to exercise ordinary download-file promotion. */
 export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
   const requireInstalled = createRequire(join(packageRoot, 'package.json'));
   const scratch = mkdtempSync(join(tmpdir(), 'blink-runtime-qualification-')); chmodSync(scratch, 0o700);
@@ -277,7 +132,7 @@ function npmCli() {
   const candidate = [join(directory, 'node_modules/npm/bin/npm-cli.js'), join(directory, '../lib/node_modules/npm/bin/npm-cli.js')].find(path => existsSync(path));
   assert(candidate, 'Cannot resolve bundled npm CLI'); return candidate;
 }
-export async function qualifyPackage({ artifactDirectory, validationRoot, sourceRoot, sourceSha, receiptPath }) {
+export async function qualifyPackage({ artifactDirectory, validationRoot, sourceRoot, sourceSha, receiptPath, ffmpegPath }) {
   const target = process.platform + '-' + process.arch; assert(TARGETS.includes(target), 'Unsupported qualification host');
   const artifact = join(artifactDirectory, 'release.tgz'); const receipt = JSON.parse(regularFile(artifactDirectory, 'package-receipt.json', 65536));
   verifyPackageIdentity(artifact, receipt, sourceSha);
@@ -297,16 +152,21 @@ export async function qualifyPackage({ artifactDirectory, validationRoot, source
     assert.equal(sha256(regularFile(installed, 'native/runtime/distribution-receipt.json', 2 * 1024 * 1024)), receipt.native.distribution_receipt_sha256);
     const workerSha = native.targets[target].sha256; verifyValidation(validationRoot, target, sourceSha, workerSha);
     const installedRequire = createRequire(join(installed, 'package.json'));
-    const { loadPackagedMediaWorker } = installedRequire(join(installed, 'dist/accessories/media-worker-artifact.js'));
-    const workerPath = loadPackagedMediaWorker(installed);
+    const { loadPackagedProtectionWorker } = installedRequire(join(installed, 'dist/accessories/protection-worker-artifact.js'));
+    const workerPath = loadPackagedProtectionWorker(installed);
     const bootstrap = await exerciseInstalledRuntimeBootstrap(installed);
-    const exercised = await exerciseInstalledCodec(installed, workerPath, validationRoot);
-    const finite = await exerciseInstalledRecording(installed, validationRoot);
+    assert(typeof ffmpegPath === 'string' && ffmpegPath.length > 0, 'External FFmpeg executable required');
+    const version = execFileSync(workerPath, ['--exec', ffmpegPath, '-hide_banner', '-version'], { env: {}, timeout: 5000, maxBuffer: 65536 }).toString().split('\n')[0];
+    assert(version.startsWith('ffmpeg version '));
+    const externalFfmpeg = { version, sha256: sha256(readFileSync(ffmpegPath)) };
+    const exercised = await exerciseExternalLive(installed, workerPath, ffmpegPath, validationRoot);
+    const { exerciseExternalRecording } = await import('./external-recording-check.mjs');
+    const finite = await exerciseExternalRecording(installed, workerPath, ffmpegPath);
     // Confirm installed bytes and final npm bytes still match after all launches.
     verifyNativePackage(installed, proof); verifyPackageIdentity(artifact, receipt, sourceSha);
     const result = { schemaVersion: 1, target, source_sha: sourceSha, package_integrity: receipt.integrity, worker_sha256: workerSha,
       source_bundle_sha256: native.source_bundle_sha256, validation_receipt_sha256: sha256(regularFile(validationRoot, 'validation-receipt.json', 65536)),
-      codec_receiver_verified: true, selections: exercised, finite_recording_verified: true, finite_selections: finite, runtime_bootstrap: bootstrap };
+      external_ffmpeg: externalFfmpeg, codec_receiver_verified: true, selections: exercised, finite_recording_verified: true, finite_selections: finite, runtime_bootstrap: bootstrap };
     writeFileSync(receiptPath, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' }); return result;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
@@ -315,6 +175,7 @@ export function validateQualificationReceipts(rows, sourceSha, integrity, source
   for (const row of rows) {
     assert.equal(row.schemaVersion, 1); assert.equal(row.source_sha, sourceSha); assert.equal(row.package_integrity, integrity);
     assert.equal(row.source_bundle_sha256, sourceBundleSha); assert.equal(row.codec_receiver_verified, true); assert.deepEqual(row.selections, selections);
+    assert(row.external_ffmpeg?.version?.startsWith('ffmpeg version ')); assert.match(row.external_ffmpeg?.sha256, /^[a-f0-9]{64}$/);
     assert.equal(row.finite_recording_verified, true); assert.deepEqual(row.finite_selections, FINITE_RECORDING_SELECTIONS);
     assert.deepEqual(row.runtime_bootstrap, RUNTIME_BOOTSTRAP_EXPECTATION);
     assert.match(row.worker_sha256, /^[a-f0-9]{64}$/); assert.match(row.validation_receipt_sha256, /^[a-f0-9]{64}$/);
@@ -330,7 +191,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const [command, ...argv] = process.argv.slice(2); const args = argumentsMap(argv);
   if (command === 'prepare') prepareValidation(resolve(args['--build']), resolve(args['--output']), args['--target'], args['--source-sha']);
   else if (command === 'run') console.log(JSON.stringify(await qualifyPackage({ artifactDirectory: resolve(args['--artifact-directory']), validationRoot: resolve(args['--validation']),
-    sourceRoot: resolve(args['--source-root']), sourceSha: args['--source-sha'], receiptPath: resolve(args['--receipt']) })));
+    sourceRoot: resolve(args['--source-root']), sourceSha: args['--source-sha'], receiptPath: resolve(args['--receipt']), ffmpegPath: resolve(args['--ffmpeg']) })));
   else if (command === 'aggregate') {
     const artifactDirectory = resolve(args['--artifact-directory']); const receipt = JSON.parse(regularFile(artifactDirectory, 'package-receipt.json', 65536));
     verifyPackageIdentity(join(artifactDirectory, 'release.tgz'), receipt, args['--source-sha']);

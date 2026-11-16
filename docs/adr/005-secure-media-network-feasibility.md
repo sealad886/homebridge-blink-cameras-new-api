@@ -2,6 +2,11 @@
 
 Status: revised architecture accepted on 2026-10-03; implementation proof pending.
 
+The codec-library implementation choice below is superseded by
+[ADR-008](008-external-ffmpeg.md), following the maintainer's 16 November request
+to unbundle FFmpeg. Its network authority, secret handling and ownership
+constraints remain. The dated evidence below describes the former architecture.
+
 Stock FFmpeg 9.0.2 RTSP uses private connection functions for control and RTP
 transport, bypassing public AVFormatContext.io_open and custom AVIOContext.
 Those hooks cannot establish actual destination enforcement. The source gate

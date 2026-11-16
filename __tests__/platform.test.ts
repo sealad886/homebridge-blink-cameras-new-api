@@ -206,7 +206,7 @@ describe('BlinkCamerasPlatform', () => {
       audio: { codec: 'pcma' }, video: { softwarePreset: 'ultrafast' } });
   });
 
-  it.each(['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'])(
+  it.each(['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'])(
     'rejects retired %s before creating a vendor client', key => {
       hapApi = createApi() as unknown as MockAPI;
       (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());

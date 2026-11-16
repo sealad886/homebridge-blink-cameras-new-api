@@ -30,28 +30,23 @@ class PackageTests(unittest.TestCase):
         self.downloads = Path(self.temporary.name) / 'downloads'
         self.downloads.mkdir()
         sources = []
-        for name in ('ffmpeg', 'opus', 'x264', 'libsrtp'):
+        for name in ('libsrtp',):
             data = ('synthetic source ' + name).encode()
             filename = name + '.tar.gz'
             (self.downloads / filename).write_bytes(data)
             sources.append({'name': name, 'filename': filename, 'sha256': hashlib.sha256(data).hexdigest()})
-        for name in ('ffmpeg-9.0.2.tar.xz.asc', 'ffmpeg-devel.asc'):
-            (self.downloads / name).write_bytes(b'synthetic signature/key; verification mocked')
         self.pins = {'schema_version': 1, 'sources': sources}
         self.recipe = b'synthetic recipe, never executed'
         self.recipe_hash = hashlib.sha256(self.recipe).hexdigest()
         self.snapshot = {
             'native/worker.c': b'synthetic owned C',
-            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 5u\n',
+            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 1u\n',
             'native/Makefile': b'synthetic make',
             'native/COPYING': b'synthetic license',
             'native/dependencies/prepare.py': self.recipe,
             'native/dependencies/package.py': Path(package.__file__).read_bytes(),
             'native/dependencies/source-inputs.json': json.dumps(self.pins).encode(),
-            'native/dependencies/licenses/opus-COPYING': b'synthetic notice',
-            'native/dependencies/licenses/x264-COPYING': b'synthetic notice',
             'native/dependencies/licenses/libsrtp-LICENSE': b'synthetic notice',
-            'native/dependencies/licenses/ffmpeg-LICENSE.md': b'synthetic notice',
             'native/dependencies/licenses/mingw-w64-runtime-COPYING': b'synthetic CRT notice',
             'native/dependencies/licenses/gcc-COPYING.RUNTIME': b'synthetic runtime exception',
             '.github/workflows/test.yml': b'synthetic build workflow',
@@ -73,14 +68,13 @@ class PackageTests(unittest.TestCase):
     def candidate(self, target, *, receipt_change=None, members=None):
         worker = ('synthetic ' + target).encode()
         receipt = {'target': target, 'source_sha': SHA, 'sha256': hashlib.sha256(worker).hexdigest(),
-                   'protocolVersion': 5,
-                   'dependencies': {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins,
-                                    'prototype_assembly_disabled': False},
+                   'protocolVersion': 1,
+                   'dependencies': {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins},
                    'dynamic_dependencies': 'synthetic system import evidence', 'distribution_ready': False,
                    'limitations': ['synthetic fixture']}
         if receipt_change:
             receipt_change(receipt)
-        executable = 'blink-codec-worker' + ('.exe' if target == 'win32-x64' else '')
+        executable = 'blink-protection-worker' + ('.exe' if target == 'win32-x64' else '')
         members = members if members is not None else [(executable, worker, tarfile.REGTYPE),
                                                       ('worker-receipt.json', json.dumps(receipt).encode(), tarfile.REGTYPE)]
         with tarfile.open(self.inputs / f'native-{target}.tar.gz', 'w:gz') as archive:
@@ -99,7 +93,7 @@ class PackageTests(unittest.TestCase):
         runtime = self.root / 'native/runtime'
         manifest = json.loads((runtime / 'manifest.json').read_text())
         self.assertEqual(manifest['schemaVersion'], 1)
-        self.assertEqual(manifest['protocolVersion'], 5)
+        self.assertEqual(manifest['protocolVersion'], 1)
         self.assertEqual(set(manifest['targets']), set(TARGETS))
         for target in TARGETS:
             item = manifest['targets'][target]
@@ -109,7 +103,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(worker.is_file())
             self.assertFalse(worker.is_symlink())
             with tarfile.open(self.inputs / f'native-{target}.tar.gz') as archive:
-                executable = 'blink-codec-worker' + ('.exe' if target == 'win32-x64' else '')
+                executable = 'blink-protection-worker' + ('.exe' if target == 'win32-x64' else '')
                 self.assertEqual(archive.getmember(executable).mode, 0o755)
             # Windows chmod only changes the read-only flag, not POSIX execute bits.
             if os.name != 'nt':
@@ -151,7 +145,7 @@ class PackageTests(unittest.TestCase):
         dump = imports + '0000000000001000 unwind/relocation entry\n' * 80000
         with patch.object(package.prepare.subprocess, 'check_output', return_value=dump):
             probe_evidence = package.prepare.audit_dependencies(build / 'probe.exe', 'Windows', {})
-        dependency = {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins, 'prototype_assembly_disabled': False,
+        dependency = {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins,
                       'dynamic_dependencies': probe_evidence}
         (prefix.parent / 'normalized-build-receipt.json').write_text(json.dumps(dependency))
         output = build / 'native-win32-x64.tar.gz'
@@ -188,21 +182,10 @@ class PackageTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 package.stage_package(self.root, self.inputs, SHA)
 
-    def test_rejects_assembly_disabled_or_unproved_candidates_before_staging(self):
-        for value in (True, None, 0, 'false'):
-            with self.subTest(value=value):
-                self.candidate('linux-arm64', receipt_change=lambda row: row['dependencies'].update(prototype_assembly_disabled=value))
-                with self.assertRaisesRegex(ValueError, 'requires assembly-enabled'):
-                    package.stage_package(self.root, self.inputs, SHA)
-        self.candidate('linux-arm64', receipt_change=lambda row: row['dependencies'].pop('prototype_assembly_disabled'))
-        with self.assertRaisesRegex(ValueError, 'requires assembly-enabled'):
-            package.stage_package(self.root, self.inputs, SHA)
-        self.fetch.assert_not_called()
-        self.assertFalse((self.root / 'native/runtime').exists())
 
     def test_rejects_old_or_missing_candidate_protocol_and_source_mismatch(self):
         for mutate in (lambda row: row.update(protocolVersion=3), lambda row: row.pop('protocolVersion'),
-                       lambda row: row.update(protocolVersion=5.0)):
+                       lambda row: row.update(protocolVersion=1.0)):
             with self.subTest(mutate=mutate):
                 self.candidate('linux-x64', receipt_change=mutate)
                 with self.assertRaises(ValueError):
@@ -214,7 +197,7 @@ class PackageTests(unittest.TestCase):
         self.fetch.assert_not_called()
 
     def test_rejects_links_traversal_duplicate_and_extra_members_without_extraction(self):
-        worker = 'blink-codec-worker'
+        worker = 'blink-protection-worker'
         cases = [[(worker, b'', tarfile.SYMTYPE)], [(worker, b'', tarfile.LNKTYPE)],
                  [('../escape', b'data', tarfile.REGTYPE)], [('/escape', b'data', tarfile.REGTYPE)],
                  [(worker, b'one', tarfile.REGTYPE), (worker, b'two', tarfile.REGTYPE)],
@@ -257,18 +240,18 @@ class PackageTests(unittest.TestCase):
         self.assertFalse((self.root / 'native/runtime').exists())
         self.assertFalse((self.root / 'native/corresponding-source.tar.gz').exists())
 
-    def test_failed_signature_verification_never_creates_package_roots(self):
+    def test_failed_source_verification_never_creates_package_roots(self):
         self.fetch.side_effect = ValueError('Unexpected FFmpeg signing fingerprint')
         with self.assertRaisesRegex(ValueError, 'fingerprint'):
             package.stage_package(self.root, self.inputs, SHA)
         self.assertFalse((self.root / 'native/runtime').exists())
 
     def test_rejects_duplicate_json_keys_and_oversized_members(self):
-        self.candidate('linux-x64', members=[('blink-codec-worker', b'worker', tarfile.REGTYPE),
+        self.candidate('linux-x64', members=[('blink-protection-worker', b'worker', tarfile.REGTYPE),
                                             ('worker-receipt.json', b'{"target":"linux-x64","target":"linux-x64"}', tarfile.REGTYPE)])
         with self.assertRaisesRegex(ValueError, 'Duplicate JSON'):
             package.stage_package(self.root, self.inputs, SHA)
-        for name, limit in (('blink-codec-worker', package.WORKER_LIMIT), ('worker-receipt.json', package.RECEIPT_LIMIT)):
+        for name, limit in (('blink-protection-worker', package.WORKER_LIMIT), ('worker-receipt.json', package.RECEIPT_LIMIT)):
             with self.subTest(member=name):
                 entry = tarfile.TarInfo(name)
                 entry.size = limit + 1
@@ -327,7 +310,7 @@ class PackageTests(unittest.TestCase):
         path = self.inputs / 'native-linux-x64.tar.gz'
         with tarfile.open(path) as archive:
             receipt = archive.extractfile('worker-receipt.json').read()
-        self.candidate('linux-x64', members=[('blink-codec-worker', b'synthetic linux-x64', tarfile.CONTTYPE),
+        self.candidate('linux-x64', members=[('blink-protection-worker', b'synthetic linux-x64', tarfile.CONTTYPE),
                                             ('worker-receipt.json', receipt, tarfile.REGTYPE)])
         with self.assertRaisesRegex(ValueError, 'candidate member'):
             package.stage_package(self.root, self.inputs, SHA)
@@ -338,15 +321,11 @@ class SourceSnapshotTests(unittest.TestCase):
         root = Path('/synthetic/project')
         expected = {
             'native/worker.c': b'committed C', 'native/Makefile': b'committed make', 'native/COPYING': b'license',
-            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 5u\n', 'native/audio.inc': b'audio',
-            'native/recording.inc': b'recording', 'native/output.inc': b'output', 'native/protection.inc': b'protection',
-            'native/tests/check-recording.c': b'checker',
+            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 1u\n', 'native/protection.inc': b'protection',
+            'native/tests/check-protection.c': b'checker',
             'native/dependencies/prepare.py': b'recipe', 'native/dependencies/package.py': b'packager',
             'native/dependencies/source-inputs.json': b'{}', '.github/workflows/test.yml': b'CI',
-            'native/dependencies/licenses/ffmpeg-LICENSE.md': b'notice',
             'native/dependencies/licenses/libsrtp-LICENSE': b'notice',
-            'native/dependencies/licenses/opus-COPYING': b'notice',
-            'native/dependencies/licenses/x264-COPYING': b'notice',
             'native/dependencies/licenses/mingw-w64-runtime-COPYING': b'notice',
             'native/dependencies/licenses/gcc-COPYING.RUNTIME': b'notice',
             'native/tests/check-rtp.c': b'future committed receiver helper',
@@ -366,14 +345,12 @@ class SourceSnapshotTests(unittest.TestCase):
                 self.assertEqual(git.call_count, 1)
 
     def test_refuses_each_missing_recording_helper_or_windows_notice_in_exact_source(self):
-        names = ('native/worker.c', 'native/protocol.h', 'native/audio.inc', 'native/recording.inc',
-                 'native/output.inc', 'native/protection.inc', 'native/tests/check-recording.c',
+        names = ('native/worker.c', 'native/protocol.h', 'native/protection.inc', 'native/tests/check-protection.c',
                  'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
                  'native/dependencies/package.py', 'native/dependencies/source-inputs.json', '.github/workflows/test.yml',
-                 'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/libsrtp-LICENSE',
-                 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING',
+                 'native/dependencies/licenses/libsrtp-LICENSE',
                  'native/dependencies/licenses/mingw-w64-runtime-COPYING', 'native/dependencies/licenses/gcc-COPYING.RUNTIME')
-        for missing in (*names[-2:], 'native/recording.inc', 'native/tests/check-recording.c'):
+        for missing in (*names[-2:], 'native/protection.inc', 'native/tests/check-protection.c'):
             with self.subTest(missing=missing):
                 expected = {name: b'notice' for name in names if name != missing}
                 listing = b''.join(f'100644 blob {"b" * 40} {len(data)}\t{name}\0'.encode() for name, data in expected.items())

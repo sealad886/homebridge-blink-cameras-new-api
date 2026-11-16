@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch authenticated pinned sources; optionally build local static codec libraries.
+"""Fetch authenticated pinned sources; optionally build local static libSRTP.
 No global installs, keyring changes, worker publication, or cross-compilation.
 """
 import argparse
@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import platform
 import re
-import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -24,8 +23,6 @@ ROOT = HERE.parent / 'build' / 'deps'
 MANIFEST = json.loads((HERE / 'source-inputs.json').read_text())
 RECIPE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 ARCHIVE_LIMIT = 64 * 1024 * 1024
-KEY_LIMIT = 1024 * 1024
-SIGNATURE_LIMIT = 64 * 1024
 
 
 def run(argv, cwd=None, env=None):
@@ -40,13 +37,6 @@ def unix_path(path):
     return subprocess.check_output(['cygpath', '-u', argument(path)], text=True).strip()
 
 
-def configure_command(script, flags, system):
-    # Native Windows Python cannot directly execute a POSIX configure script.
-    if system == 'Windows':
-        # An unqualified bash can select Windows' WSL shim before the MSYS PATH.
-        bash = subprocess.check_output(['cygpath', '-m', '/usr/bin/bash.exe'], text=True).strip()
-        return [bash, unix_path(script), *flags]
-    return [argument(script), *flags]
 
 
 def build_environment(prefix, system):
@@ -125,13 +115,13 @@ def write_worker_artifact(prefix, worker, output, source_sha):
     with worker.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     receipt = {'target': target, 'source_sha': source_sha, 'sha256': digest, 'dependencies': dependency,
-               'protocolVersion': 5,
+               'protocolVersion': 1,
                'dynamic_dependencies': dynamic, 'distribution_ready': False,
                'limitations': ['CI build/test artifact only; no minimum-OS clean-host or npm artifact acceptance',
                                'No corresponding-source distribution or integrated physical acceptance']}
     payload = (json.dumps(receipt, indent=2) + '\n').encode()
     with tarfile.open(output, 'x:gz') as archive:
-        executable = archive.gettarinfo(worker, arcname='blink-codec-worker.exe' if system == 'Windows' else 'blink-codec-worker')
+        executable = archive.gettarinfo(worker, arcname='blink-protection-worker.exe' if system == 'Windows' else 'blink-protection-worker')
         executable.mode = 0o755  # Windows file modes do not otherwise preserve the package executable contract.
         with worker.open('rb') as stream:
             archive.addfile(executable, stream)
@@ -198,40 +188,10 @@ def fetch():
             digest = hashlib.file_digest(archive, 'sha256').hexdigest()
         if digest != source['sha256']:
             raise ValueError(f"Checksum mismatch: {source['name']}")
-    signature = MANIFEST['ffmpeg_signature']
-    download(signature['url'], downloads / 'ffmpeg-9.0.2.tar.xz.asc', SIGNATURE_LIMIT)
-    download(signature['key_url'], downloads / 'ffmpeg-devel.asc', KEY_LIMIT)
-    # Temporary keyring is isolated; no user's GnuPG configuration/keyring is read.
-    system = platform.system()
-    gpg_path = unix_path if system == 'Windows' else argument
-    temporary_root = tempfile.gettempdir() if system == 'Windows' else '/tmp'
-    with tempfile.TemporaryDirectory(prefix='blink-gpg-', dir=temporary_root) as keyring:
-        os.chmod(keyring, 0o700)
-        args = ['gpg', '--batch', '--no-options', '--no-autostart', '--homedir', gpg_path(Path(keyring))]
-        run(args + ['--import', gpg_path(downloads / 'ffmpeg-devel.asc')])
-        verified = subprocess.run(args + ['--status-fd', '1', '--verify',
-            gpg_path(downloads / 'ffmpeg-9.0.2.tar.xz.asc'), gpg_path(downloads / 'ffmpeg-9.0.2.tar.xz')],
-            check=True, capture_output=True, text=True)
-        lines = verified.stdout.splitlines()
-        valid = [line.split()[2] for line in lines if line.startswith('[GNUPG:] VALIDSIG ')]
-        if valid != [signature['fingerprint']]:
-            raise ValueError('Unexpected FFmpeg signing fingerprint')
     return downloads
 
 
-def verify_assembly_configuration(ffmpeg, x264, machine):
-    features = {'arm64': ('HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
-                'aarch64': ('HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
-                'x86_64': ('HAVE_X86ASM', 'HAVE_MMX'),
-                'amd64': ('HAVE_X86ASM', 'HAVE_MMX')}
-    if machine.lower() not in features:
-        raise ValueError('Unsupported assembly architecture')
-    for configuration, feature in zip((ffmpeg, x264), features[machine.lower()]):
-        if not re.search(rf'^#define\s+{feature}\s+1\s*$', configuration, re.MULTILINE):
-            raise ValueError(f'Required codec assembly unavailable: {feature}')
-
-
-def build(downloads, jobs, disable_assembly=False):
+def build(downloads, jobs):
     # This native-host recipe intentionally makes no cross-platform acceptance claim.
     system = platform.system()
     build_environment(ROOT, system)  # Reject unsupported hosts before creating a build directory.
@@ -246,7 +206,6 @@ def build(downloads, jobs, disable_assembly=False):
             raise ValueError('Unexpected archive root')
     env = build_environment(prefix, system)
     cmake_platform = []
-    install_prefix = prefix.as_posix()
     if system == 'Darwin':
         cmake_platform = ['-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0']
     elif system == 'Windows':
@@ -261,54 +220,20 @@ def build(downloads, jobs, disable_assembly=False):
         commands.append([argument(x) for x in args])
         run(args, cwd, env)
 
-    for name, extra in [('opus', ['-DOPUS_BUILD_TESTING=OFF', '-DOPUS_BUILD_PROGRAMS=OFF']),
-                        ('libsrtp', ['-DLIBSRTP_TEST_APPS=OFF', '-DENABLE_OPENSSL=OFF',
-                                     '-DENABLE_MBEDTLS=OFF', '-DENABLE_NSS=OFF'])]:
-        if name == 'libsrtp' and system == 'Windows':
-            # UCRT accepts C99 formats; libsrtp's explicit __printf__ attribute
-            # otherwise selects GCC's legacy MSVCRT checker. Keep format warnings.
-            extra.append(f'-DCMAKE_C_FLAGS={env["CFLAGS"]} -D__printf__=__gnu_printf__')
-        source = next(s for s in MANIFEST['sources'] if s['name'] == name)
-        output = work / name
-        execute(['cmake', '-S', sources / source['root'], '-B', output,
-            '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_INSTALL_PREFIX={prefix.as_posix()}',
-            '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', *cmake_platform, *extra])
-        execute(['cmake', '--build', output, '--parallel', str(jobs)])
-        execute(['cmake', '--install', output])
-    x264 = sources / next(s['root'] for s in MANIFEST['sources'] if s['name'] == 'x264')
-    execute(configure_command(x264 / 'configure', [f'--prefix={install_prefix}', '--enable-static', '--enable-pic',
-             '--disable-cli', '--disable-opencl', *(['--disable-asm'] if disable_assembly else [])], system), x264)
-    execute(['make', f'-j{jobs}'], x264)
-    execute(['make', 'install-lib-static'], x264)
-    ffmpeg = sources / 'ffmpeg-9.0.2'
-    flags = [f'--prefix={install_prefix}', '--disable-autodetect', '--disable-everything',
-        '--disable-network', '--disable-protocols', '--disable-programs', '--disable-doc',
-        '--disable-debug', '--disable-shared', '--enable-static', '--enable-pic',
-        f'--cc={env.get("CC", "cc")}', '--enable-gpl', '--enable-version3', '--enable-libx264', '--enable-libopus',
-        '--enable-avcodec', '--enable-avformat', '--enable-avutil', '--enable-swscale',
-        '--enable-swresample', '--disable-avdevice', '--disable-avfilter',
-        '--enable-demuxer=mpegts,mov', '--enable-muxer=mpegts,mp4',
-        '--enable-parser=h264,aac,aac_latm', '--enable-decoder=h264,aac,aac_latm,opus,pcm_alaw,pcm_mulaw',
-        '--enable-encoder=libx264,libopus,pcm_alaw,pcm_mulaw,aac', '--pkg-config-flags=--static']
-    if disable_assembly:
-        flags.append('--disable-asm')
+    extra = ['-DLIBSRTP_TEST_APPS=OFF', '-DENABLE_OPENSSL=OFF', '-DENABLE_MBEDTLS=OFF', '-DENABLE_NSS=OFF']
     if system == 'Windows':
-        flags += ['--target-os=mingw32', '--extra-ldflags=-static -static-libgcc']
-    execute(configure_command(ffmpeg / 'configure', flags, system), ffmpeg)
-    execute(['make', f'-j{jobs}'], ffmpeg)
-    execute(['make', 'install'], ffmpeg)
-    config = (ffmpeg / 'config.h').read_text()
-    if not disable_assembly:
-        verify_assembly_configuration(config, (x264 / 'config.h').read_text(), platform.machine())
-    for forbidden in ('CONFIG_NETWORK', 'CONFIG_NONFREE', 'CONFIG_LIBFDK_AAC'):
-        if f'#define {forbidden} 0' not in config:
-            raise ValueError(f'Forbidden configuration: {forbidden}')
-    flags = shlex.split(subprocess.check_output(['pkg-config', '--static', '--cflags', '--libs',
-        'libavformat', 'libavcodec', 'libavutil', 'libswresample'], env=env, text=True))
+        extra.append(f'-DCMAKE_C_FLAGS={env["CFLAGS"]} -D__printf__=__gnu_printf__')
+    source = MANIFEST['sources'][0]
+    output = work / 'libsrtp'
+    execute(['cmake', '-S', sources / source['root'], '-B', output,
+        '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_INSTALL_PREFIX={prefix.as_posix()}',
+        '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', *cmake_platform, *extra])
+    execute(['cmake', '--build', output, '--parallel', str(jobs)])
+    execute(['cmake', '--install', output])
     probe = work / ('check-inputs.exe' if system == 'Windows' else 'check-inputs')
     execute([env.get('CC', 'cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
         f'-I{prefix / "include"}', HERE / 'check-inputs.c', '-o', probe,
-        *flags, prefix / 'lib' / 'libsrtp2.a', *(['-static', '-static-libgcc', '-lws2_32'] if system == 'Windows' else [])])
+        prefix / 'lib' / 'libsrtp2.a', *(['-static', '-static-libgcc', '-lws2_32'] if system == 'Windows' else [])])
     checked = subprocess.check_output([str(probe)], env=env, text=True).strip()
     compiler = subprocess.check_output([env.get('CC', 'cc'), '--version'], env=env, text=True)
     dynamic = audit_dependencies(probe, system, env)
@@ -317,9 +242,8 @@ def build(downloads, jobs, disable_assembly=False):
         'recipe_sha256': RECIPE_SHA256,
         'smoke_source_sha256': hashlib.sha256((HERE / 'check-inputs.c').read_bytes()).hexdigest(),
         'prefix': str(prefix), 'commands': commands, 'distribution_ready': False,
-        'prototype_assembly_disabled': disable_assembly,
         'limitations': ['Only this native host built; five target baselines unverified',
-                        'No worker distribution, RTP/SRTP wire parity, or physical acceptance proved']}
+                        'No final npm artifact or physical acceptance proved']}
     if system == 'Windows':
         receipt['toolchain_packages'] = subprocess.check_output(['pacman', '-Q'], env=env, text=True)
     (work / 'build-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -339,8 +263,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-local', action='store_true')
     parser.add_argument('--jobs', type=int, default=4)
-    parser.add_argument('--disable-assembly', action='store_true',
-                        help='Prototype only: disable FFmpeg/x264 assembly, sacrificing performance')
     parser.add_argument('--prefix-file', type=Path, help='Write successful prefix to a new file under native/build/deps')
     args = parser.parse_args()
     if not 1 <= args.jobs <= 16:
@@ -355,9 +277,9 @@ if __name__ == '__main__':
         if args.prefix_file.exists() or args.prefix_file.is_symlink():
             parser.error('--prefix-file must not already exist')
     fetched = fetch()
-    print('Four source archives verified; FFmpeg signature fingerprint verified.', flush=True)
+    print('Pinned libSRTP source archive verified.', flush=True)
     if args.build_local:
-        prefix = build(fetched, args.jobs, args.disable_assembly)
+        prefix = build(fetched, args.jobs)
         if args.prefix_file:
             with args.prefix_file.open('x') as output:
                 output.write(str(prefix) + '\n')

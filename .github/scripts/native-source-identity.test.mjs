@@ -9,7 +9,7 @@ const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: '
 for (const path of [
   'native/dependencies/prepare.py',
   'native/dependencies/package.py',
-  'native/dependencies/licenses/opus-COPYING',
+  'native/dependencies/licenses/libsrtp-LICENSE',
 ]) {
   test(`Windows checkout preserves exact native source bytes: ${path}`, () => {
     const blob = execFileSync('git', ['show', `${head}:${path}`], { cwd: root });

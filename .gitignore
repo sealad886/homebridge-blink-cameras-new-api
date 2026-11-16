@@ -70,8 +70,6 @@ homebridge-ui/server.js.map
 !/scripts/release.mjs
 !/scripts/migrate-secure-media-config.cjs
 !/scripts/check-rtsp-network.cjs
-!/scripts/measure-secure-media.cjs
-!/scripts/postinstall.cjs
 !/scripts/migrate-native-recording-config.cjs
 !/scripts/blink-api-contract/
 !/scripts/blink-api-contract/**

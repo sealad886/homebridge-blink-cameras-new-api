@@ -30,6 +30,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: ${{ !inputs.release && 'npm' || '' }}
           package-manager-cache: ${{ !inputs.release }}
+      - name: Install external FFmpeg for media integration checks
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -52,7 +54,7 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
-  # Fetch once on Ubuntu; every consumer independently verifies cached SHA/GPG inputs.
+  # Fetch only hash-pinned libSRTP; codecs are provided by external FFmpeg.
   source-inputs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -71,20 +73,14 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-source-inputs-${{ github.sha }}
-          path: |
-            native/build/deps/downloads/ffmpeg-9.0.2.tar.xz
-            native/build/deps/downloads/opus-1.6.1.tar.gz
-            native/build/deps/downloads/libsrtp-2.8.1.tar.gz
-            native/build/deps/downloads/x264-0480cb05.tar.gz
-            native/build/deps/downloads/ffmpeg-9.0.2.tar.xz.asc
-            native/build/deps/downloads/ffmpeg-devel.asc
+          path: native/build/deps/downloads/libsrtp-2.8.1.tar.gz
           if-no-files-found: error
           overwrite: true
           retention-days: 7
 
   # Source-build/test candidates only; clean-host baselines and npm distribution remain gated.
   native-validation:
-    name: Native candidate (${{ matrix.target }})
+    name: Protection helper candidate (${{ matrix.target }})
     needs: source-inputs
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -128,32 +124,17 @@ jobs:
           update: true
           cache: false
           install: >-
-            make gnupg diffutils
+            make diffutils
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-nasm
-            mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-python
-      - name: Install x86 assembler
-        if: matrix.target == 'linux-x64' || matrix.target == 'darwin-x64'
-        run: |
-          set -euo pipefail
-          if ! command -v nasm; then
-            if [[ "$RUNNER_OS" == "Linux" ]]; then
-              sudo apt-get update
-              sudo apt-get install --no-install-recommends -y nasm
-            else
-              brew install nasm
-            fi
-          fi
       - name: Check runner tools and architecture
         env:
           NATIVE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          for tool in cc make cmake pkg-config gpg openssl; do command -v "$tool"; done
-          if [[ "$NATIVE_TARGET" == *-x64 ]]; then command -v nasm; nasm -v; fi
+          for tool in cc make cmake; do command -v "$tool"; done
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             test "$MSYSTEM" = UCRT64
             test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
@@ -182,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           python native/dependencies/prepare.py --build-local --jobs 3 --prefix-file native/build/deps/ci-prefix.txt
-      - name: Build and test private-pipe native prototype
+      - name: Build and test libSRTP-only helper
         run: |
           set -euo pipefail
           IFS= read -r native_prefix < native/build/deps/ci-prefix.txt
@@ -195,21 +176,19 @@ jobs:
             native_cc=gcc
             native_ldflags='-static -static-libgcc'
           fi
-          make -C native test FFMPEG_PREFIX="$native_prefix" SRTP_PREFIX="$native_prefix" PKG_CONFIG_FLAGS=--static CC="$native_cc" LDFLAGS="$native_ldflags" PYTHON=python
+          make -C native test SRTP_PREFIX="$native_prefix" CC="$native_cc" LDFLAGS="$native_ldflags" PYTHON=python
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Test parent IPC against the built worker
+      - name: Test parent protection IPC against the built helper
         run: |
           set -euo pipefail
           npm ci
           npm run build
-          native_worker="$PWD/native/build/blink-codec-worker"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            native_worker="$(cygpath -m "$native_worker.exe")"
-          fi
-          BLINK_MEDIA_TEST_WORKER_PATH="$native_worker" BLINK_MEDIA_NETWORK_TEST=1 npm test -- --runInBand __tests__/media-worker.test.ts __tests__/native-recording-preparation.test.ts __tests__/media-output.test.ts __tests__/media-session.test.ts __tests__/media-worker-artifact.test.ts __tests__/media-resource-bounds.test.ts __tests__/media-socket.test.ts __tests__/media-socket.integration.test.ts __tests__/secure-media-secrets.integration.test.ts __tests__/rtsp-transport.test.ts __tests__/blink-api/rtsp-broker.test.ts __tests__/blink-api/rtsp-broker.integration.test.ts
+          native_worker="$PWD/native/build/blink-protection-worker"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then native_worker="$(cygpath -m "$native_worker.exe")"; fi
+          BLINK_PROTECTION_TEST_WORKER_PATH="$native_worker" npm test -- --runInBand __tests__/srtp-worker.test.ts __tests__/protection-worker-artifact.test.ts __tests__/media-output.test.ts
       - name: Verify actual RTSP connection boundaries in an isolated network
         if: matrix.target == 'linux-x64'
         run: |
@@ -227,23 +206,10 @@ jobs:
           sys.path.insert(0, 'native/dependencies')
           import prepare
           prefix = Path('native/build/deps/ci-prefix.txt').read_text().strip()
-          worker = Path('native/build/blink-codec-worker' + ('.exe' if os.name == 'nt' else ''))
+          worker = Path('native/build/blink-protection-worker' + ('.exe' if os.name == 'nt' else ''))
           prepare.write_worker_artifact(Path(prefix), worker,
               Path('native/build/native-' + os.environ['NATIVE_TARGET'] + '.tar.gz'), os.environ['GITHUB_SHA'])
           PY
-      - name: Verify resource observations were produced
-        run: |
-          test -s native/build/resource-receipt.json
-          test -s native/build/queue-recording-receipt.json
-      - name: Upload bounded resource observations
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: native-resources-${{ matrix.target }}-${{ github.sha }}
-          path: |
-            native/build/resource-receipt.json
-            native/build/queue-recording-receipt.json
-          if-no-files-found: error
-          retention-days: 7
       - name: Upload source-build candidate evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -261,7 +227,7 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, 'native/dependencies')
           import prepare
-          for name in ('fixture', 'check-rtp', 'check-recording'):
+          for name in ('check-protection',):
               prepare.audit_dependencies(Path('native/build') / (name + ('.exe' if os.name == 'nt' else '')),
                   platform.system(), os.environ.copy())
           PY

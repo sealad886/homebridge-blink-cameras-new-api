@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import process from 'node:process';
 import console from 'node:console';
 import { releaseTag } from './release-policy.mjs';
+import { verifyPluginPackageContract, verifyPackagedMigrations } from './package-contract.mjs';
 import { collectSourceProof, sha256, verifyNativePackage, verifyPackageIdentity } from './native-package.mjs';
 
 const root = process.cwd();
@@ -34,13 +35,16 @@ const scratch = mkdtempSync(join(tmpdir(), 'blink-package-'));
 try {
   const [initial] = packedResults(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { encoding: 'utf8' }));
   const paths = initial.files.map((file) => file.path);
-  for (const path of [manifest.main, manifest.types, 'config.schema.json', 'dist/homebridge-ui/server.js', 'dist/homebridge-ui/public/index.html', 'CHANGELOG.md', 'LICENSE', 'scripts/postinstall.cjs', 'scripts/migrate-secure-media-config.cjs', 'scripts/migrate-native-recording-config.cjs', 'docs/native-recording-config-migration.md', 'dist/blink-api/fcm/worker.js']) {
+  verifyPluginPackageContract(manifest, lock, paths);
+  for (const path of [manifest.main, manifest.types, 'config.schema.json', 'dist/homebridge-ui/server.js', 'dist/homebridge-ui/public/index.html', 'CHANGELOG.md', 'LICENSE', 'scripts/migrate-secure-media-config.cjs', 'scripts/migrate-native-recording-config.cjs', 'docs/native-recording-config-migration.md', 'dist/blink-api/fcm/worker.js']) {
     assert(paths.includes(path), `Package is missing ${path}`);
   }
   assert(!paths.some((path) => /(^|\/)(\.env|\.ssh|\.beads|\.blink-auth\.json|\.blink-native-recording|node_modules|__tests__|logs)(\/|$)|\.(log|pem|key)$|\.private\.(json|jsonl)$/.test(path)), 'Package contains private or development artifacts');
+  assert(!paths.some(path => /(?:^|\/)(?:blink-codec-worker|ffmpeg|ffprobe)(?:\.exe)?$|(?:^|\/)(?:libav(?:codec|format|util)|libsw(?:scale|resample)|libx264|libopus)[^/]*$|^dist\/accessories\/media-worker(?:-artifact)?\./i.test(path)), 'Obsolete bundled codec runtime refused');
   execFileSync('tar', ['-xzf', join(scratch, initial.filename), '-C', scratch]);
   const packageRoot = join(scratch, 'package');
   if (proof) verifyNativePackage(packageRoot, proof);
+  const migrations = verifyPackagedMigrations(packageRoot);
   const packedManifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
   packedManifest.gitHead = sha;
   writeFileSync(join(packageRoot, 'package.json'), JSON.stringify(packedManifest, null, 2) + '\n');
@@ -60,7 +64,7 @@ try {
   const native = proof ? verifyNativePackage(join(finalRoot, 'package'), proof) : undefined;
   const destination = resolve(process.env.PACKAGE_OUTPUT ?? join(scratch, 'verified.tgz'));
   copyFileSync(join(scratch, packed.filename), destination);
-  const receipt = { name: manifest.name, version: manifest.version, sha, integrity: packed.integrity, filename: destination,
+  const receipt = { name: manifest.name, version: manifest.version, sha, integrity: packed.integrity, filename: destination, migrations,
     ...(native ? { native: { targets: Object.keys(native.targets), manifest_sha256: native.manifest_sha256,
       workers: Object.fromEntries(Object.entries(native.targets).map(([target, item]) => [target, item.sha256])),
       source_bundle_sha256: native.source_bundle_sha256, distribution_receipt_sha256: sha256(readFileSync(join(finalRoot, 'package/native/runtime/distribution-receipt.json'))) } } : {}) };

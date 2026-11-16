@@ -15,18 +15,16 @@ Homebridge Save and a child-bridge restart apply the reviewed configuration.
 ## Installation and one-time conversion
 
 Close all settings and JSON Config editors and stop other configuration writers
-until installation or explicit migration completes. The final file check and
+until explicit migration completes. The final file check and
 atomic replacement do not form a lock shared with Homebridge's settings service;
 concurrent writers are outside this migration's supported operating requirements.
 
-On POSIX Homebridge npm installations, the installed package's postinstall step
-runs this one-time migration against `config.json` in the explicit
-`UIX_STORAGE_PATH` supplied by the installer. Without that authoritative path,
-it leaves config untouched and reports how to run the explicit converter.
-It never infers storage from a global package prefix or searches home directories
-or other storage roots. Source checkout dependency installs never access Homebridge config, even
-when they inherit `UIX_STORAGE_PATH`; installation is verified before using that
-path. The existing guarded converter writes an owner-only backup of the exact
+Package installation does not modify Homebridge configuration. For legacy
+settings, run the explicit preview/apply commands below against the complete
+absolute path to your active `config.json` before restarting the plugin. An
+inherited `UIX_STORAGE_PATH` does not trigger conversion. The converter never
+infers storage from a package prefix or searches other storage roots.
+The guarded converter writes an owner-only backup of the exact
 original bytes before atomic replacement, preserving file ownership and unrelated
 configuration. Secure-media, motion and recording conversions share this one
 guarded file operation; do not chain two separate writers. The replacement retains
@@ -35,9 +33,9 @@ stays private at `0600`. Already-converted files are left untouched without anot
 backup.
 Invalid choices, unsafe files and detected concurrent changes fail the migration
 without replacing the configuration.
-Automatic migration also stops on `unresolved-camera-aliases` before changing
-config or creating a backup. Review the explicit preview and resolve ambiguous
-camera overrides before applying the migration; installation cannot infer aliases.
+Review unresolved camera aliases in the explicit preview before applying the
+migration. Package installation cannot infer aliases; the converter reports
+issues for review rather than treating installation as configuration approval.
 
 The persisted file contains only canonical values after conversion; the runtime
 and settings editor do not interpret legacy keys. Opening settings, discovering
@@ -45,18 +43,33 @@ cameras and testing the connection do not stage or save a configuration change.
 Only a real edit stages a draft for Homebridge Save. Explicit account operations
 may save their own changes; unrelated drafts must still be saved or discarded.
 
-If lifecycle scripts were disabled or the installer cannot identify this
-Homebridge storage path, run the explicit preview/apply commands below before
-starting the new plugin. Missing migration produces an actionable validation
+Run the explicit preview/apply commands before starting with legacy settings.
+Missing migration produces an actionable validation
 error rather than silently choosing a different policy. From a source checkout,
 run `npm run build` first; the installed package includes the compiled helper.
 The migration itself never contacts Blink or restarts Homebridge.
 
 The guarded file converter requires POSIX ownership and file semantics. On Windows,
-the installation step leaves the file untouched and reports manual conversion
-instead of failing an otherwise valid installation. Use Homebridge's backup and
+use Homebridge's backup and
 JSON Config editor to perform the mapping below before starting with legacy keys;
 already-canonical Windows configurations need no conversion.
+
+## Upgrade from 1.1.0 to 2.0.0
+
+The new media backend requires an external FFmpeg 6.1+ installation with the
+[documented capabilities](streaming.md#packaged-codec-requirements). Install it
+on the Homebridge host before upgrading. Check that the Homebridge service can
+find `ffmpeg`, or set an absolute `ffmpegPath` through Advanced & troubleshooting.
+The packaged helper provides libSRTP protection and guarded launch, without
+FFmpeg codec libraries. Earlier bundled-worker acceptance does not qualify the
+external executable.
+
+An already-canonical 1.1.0 configuration needs no data conversion for this
+change. Existing valid `ffmpegPath` values are preserved. If 1.1.0's previous
+migration removed a legacy path, choose the external executable explicitly; do
+not replace the complete configuration with an old backup. Keep authentication,
+accessory persistence and HomeKit pairing. Restart the Blink child bridge and
+verify live video/audio plus a fresh retained Home recording after upgrading.
 
 ## Intermediate beta Early Notification and journal conversion
 
@@ -99,7 +112,7 @@ not supply this proof and remain pending.
 At the first safe account-scoped startup, journal versions 1 and 2 are migrated
 once to version 3, with an exact-byte private backup beside the journal named
 `JOURNAL.vVERSION-backup-SHA256.json`. This is separate from
-the installer's configuration conversion: the installer cannot identify and
+the explicit configuration conversion: that tool cannot identify and
 validate the active account journal safely. Every legacy original is preserved as
 pending because those formats do not prove whether its setting write succeeded.
 Opening settings does not perform this migration. Already-current journals are
@@ -132,21 +145,22 @@ state; do not discard unresolved originals to make a downgrade start.
 ## Upgrade from 0.10.0
 
 The published 0.10.0 configuration includes retired live-view settings such as
-`ffmpegPath`, `ffmpegDebug`, `rtspTransport`, `videoEncoder` and `twoWayAudio`, plus
+`ffmpegDebug`, `rtspTransport`, `videoEncoder` and `twoWayAudio`, plus
 `enableMotionPolling`. The combined converter below removes retired media options,
 maps `ffmpegDebug` to `mediaDebug`, maps `audioCodec: "aac-eld"` to `"opus"`, and
 converts `enableMotionPolling` to `exposeMotionDetected`. Valid explicit canonical
-values win. Unknown fields, other platforms, credentials and current camera
+values win. The supported `ffmpegPath` is preserved; verify that it points to an
+installed FFmpeg meeting the [current requirements](streaming.md#packaged-codec-requirements).
+Unknown fields, other platforms, credentials and current camera
 identities are preserved. It does not enable HSV automatically.
 
 1. Make a private Homebridge backup. Keep existing authentication, accessories and
    pairing state. Close settings/JSON editors and stop other configuration writers.
-2. Install through normal Homebridge tooling. On a supported POSIX installation,
-   postinstall applies the combined conversion only when the installer supplies
-   the explicit `UIX_STORAGE_PATH`. Read its result; installation alone does not
-   prove conversion happened.
-3. If scripts were disabled or that path was unavailable, use the explicit
-   preview and `--apply` procedure below before starting the plugin. Use the
+2. Install through normal Homebridge tooling. Installation leaves the saved
+   configuration untouched; an installer storage environment variable does not
+   authorize or run a migration.
+3. Use the explicit preview and `--apply` procedure below before starting with
+   legacy settings. Use the
    installed plugin path in place of the checkout-relative `scripts/` path.
 4. Restart the Blink child bridge. Open settings and confirm an unchanged editor
    remains clean. Verify sign-in, existing accessories and controls, then follow
@@ -166,7 +180,7 @@ and use JSON Config to make the conversion below in each BlinkCameras platform.
 Preserve other plugins and unknown fields. An already-canonical configuration
 needs no conversion.
 
-- Remove `ffmpegPath`, `ffmpegDebug`, `rtpSsrcMode`, `rtspTransport`,
+- Preserve `ffmpegPath`. Remove `ffmpegDebug`, `rtpSsrcMode`, `rtspTransport`,
   `verifyImmisTls`, `twoWayAudio` and `videoEncoder`. Before removing
   `ffmpegDebug`, copy its boolean to `mediaDebug` if `mediaDebug` is absent.
 - Map `audioCodec: "aac-eld"` to `"opus"`. For historical nested audio/video

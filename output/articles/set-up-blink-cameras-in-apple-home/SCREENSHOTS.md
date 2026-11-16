@@ -9,6 +9,9 @@ Captured on 16 November 2026 from main source revision
 compiled in a disposable build snapshot using its locked dependencies and no
 installation lifecycle scripts. No production source or provider data was changed.
 
+The 2.0 prerelease guide reuses these illustrations of unchanged controls. They
+do not show external FFmpeg installation or qualify the changed media backend.
+
 ## Source and scope
 
 - [Synthetic preview harness](../../../scripts/preview-plugin-ui.mjs) and its

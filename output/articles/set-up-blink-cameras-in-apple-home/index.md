@@ -7,11 +7,14 @@
 Connect Blink to Apple Home, verify live viewing, and test a native recording
 in the camera's saved timeline.
 
-**Source edition:** `1.1.0` · **Last reviewed:** 16 November 2026
+**Source edition:** `2.0.0-alpha.0` (unreleased) · **Last reviewed:** 16 November 2026
 
 Select the intended published version when installing; an unversioned installation
 does not select a prerelease automatically. Screenshots use the actual UI with
 synthetic data, not a connected account or camera acceptance test.
+This guide describes the 2.0 prerelease source; it does not establish publication
+or physical acceptance of that version. The published 1.1.0 used a different
+packaged codec backend.
 
 > **Before you begin:** HomeKit recording is off by default. It imports completed
 > native Blink USB clips after download and preparation. A motion notification or
@@ -26,8 +29,9 @@ You need:
 - **Node.js 20.3 or later within 20.x, or Node.js 22, 24 or 26**, including the
   runtime used by the Blink child bridge.
 - A Blink account and desktop browser for hosted sign-in.
-- For video, the package's matching media worker for a
-  [supported host](../../../docs/streaming.md#packaged-codec-requirements).
+- For live video/audio and recording, separately installed **FFmpeg 6.1 or later**
+  with the [required capabilities](../../../docs/streaming.md#packaged-codec-requirements),
+  plus the package's matching libSRTP-only protection and launch helper for your host.
 - For recording, working native Blink **Local Storage** clips, a compatible Home
   hub and an eligible iCloud+ plan for your camera count.
 
@@ -38,8 +42,16 @@ for command-line and prerelease selection.
 
 **Upgrading?** Read the [one-time migration guide](../../../docs/native-recording-config-migration.md)
 first. It covers stable 0.10.0, intermediate betas, backups and Windows conversion.
-The converter previews unless explicitly applied; supported automatic conversion
-uses the installer's storage path. New setup needs no legacy conversion.
+Installation does not change Homebridge configuration automatically. For legacy
+settings, preview the converter against the explicit active `config.json` path,
+review the result, and use `--apply` only when ready. The guide explains backup
+and permission handling. New setup needs no legacy conversion.
+
+Install FFmpeg on the Homebridge host before testing video. By default the
+plugin finds `ffmpeg` through the Homebridge service's PATH. If necessary, set
+**Advanced & troubleshooting → Media tools and tuning → FFmpeg executable**
+to its absolute path. A desktop terminal may use a different PATH; see the
+[media setup guide](../../../docs/streaming.md#packaged-codec-requirements).
 
 ## 2. Connect your Blink account
 
@@ -182,8 +194,10 @@ Recoverable media faults may use one bounded salvage pass. If usable video is
 recovered with replacement silence, logs identify degraded audio; Home audio-off
 permission still produces no audio track.
 
-Saved Home playback was observed for two tested cameras. Verify your own
-installation after setup or upgrade: that evidence does not qualify every camera or clip.
+Saved Home playback was observed for two tested cameras with the 1.1.0 codec
+backend. The changed 2.0 external backend needs fresh physical acceptance.
+Verify your own installation after setup or upgrade; prior evidence does not
+qualify this backend, every camera, or every clip.
 
 ## If a step does not work
 

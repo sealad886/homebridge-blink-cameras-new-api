@@ -97,9 +97,9 @@ describe('full settings draft validation', () => {
     for (const payload of [null, [], { revision: -1, config: {} }, { revision: 1, config: null }]) {
       expect(validator.validate(payload)).toMatchObject({ valid: false, errors: [{ code: 'request' }] });
     }
-    const result = validator.validate({ revision: 4, config: { name: 'Blink', username: 'private-user-value', ffmpegPath: 'private-path-value' } });
+    const result = validator.validate({ revision: 4, config: { name: 'Blink', username: 'private-user-value', ffmpegPath: 'relative/private-path-value' } });
     expect(result.valid).toBe(false);
-    expect(result.errors.map(error => error.code)).toEqual(expect.arrayContaining(['credentials', 'retired']));
+    expect(result.errors.map(error => error.code)).toEqual(expect.arrayContaining(['credentials', 'ffmpeg_path']));
     expect(JSON.stringify(result)).not.toContain('private-user-value'); expect(JSON.stringify(result)).not.toContain('private-path-value');
   });
 

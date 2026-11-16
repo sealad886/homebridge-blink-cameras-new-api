@@ -50,8 +50,7 @@ import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
 import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recording-runtime';
 import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput,
   type NativeRecordingDeviceOverride, type NativeRecordingPolicyConfig } from './native-recording-config';
-import { NativeRecordingMemoryBudget, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
-import { isMediaWorkerFailureCode } from './accessories/media-worker';
+import { NativeRecordingMemoryBudget, isRecordingFailureCode, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
 import type { NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
 import type { NativeMotionDevice } from './blink-api/motion-events';
@@ -111,6 +110,7 @@ interface BlinkPlatformConfig extends PlatformConfig, NativeRecordingPolicyConfi
   deviceNameOverrides?: DeviceNameOverride[];
   deviceSettingOverrides?: DeviceSettingOverride[];
   enableStreaming?: boolean;
+  ffmpegPath?: string;
   mediaDebug?: boolean;
   maxStreams?: number;
   enableAudio?: boolean;
@@ -185,6 +185,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
 
     this.streamingConfig = resolveStreamingConfig({
       enabled: this.config.enableStreaming ?? true,
+      ffmpegPath: this.config.ffmpegPath,
       mediaDebug: this.config.mediaDebug,
       maxStreams: this.config.maxStreams,
       debugStreamPath: this.config.debugStreamPath,
@@ -266,7 +267,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (nativeRetired.some(key => Object.hasOwn(this.config, key))) {
       throw new Error('Retired motion/recording settings require scripts/migrate-native-recording-config.cjs: preview the explicit config path, then apply with --apply');
     }
-    const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
+    const retired = ['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     if (retired.some(key => Object.hasOwn(this.config, key))) {
       throw new Error('Retired streaming settings require migration via scripts/migrate-native-recording-config.cjs: preview the explicit full config path, then apply with --apply; on Windows follow the manual conversion guide');
     }
@@ -471,7 +472,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   }
 
   getNativeRecordingPreparation(): NativeRecordingPreparationOptions {
-    return { memory: this.recordingMemory,
+    return { memory: this.recordingMemory, ffmpegPath: this.streamingConfig.ffmpegPath,
       admit: <T>(work: () => Promise<T>, signal: globalThis.AbortSignal) => this.admitRecordingConversion(work, signal) };
   }
 
@@ -568,11 +569,13 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         const details = [camera && `camera=${JSON.stringify(camera)}`, flow,
           Number.isSafeInteger(context?.attempt) && `attempt=${context!.attempt}`,
           phase && ['configuration', 'input', 'output', 'closure', 'validation'].includes(phase) && `phase=${phase}`,
-          isMediaWorkerFailureCode(workerCode) && `worker=${workerCode}`,
+          isRecordingFailureCode(workerCode) && `worker=${workerCode}`,
           context?.preparation?.salvageAttempted === true && 'recovery=exhausted',
           validRecovery && `conversion-attempts=${recovery!.attempts}`, repairs && `recovery=${repairs}`,
-          validRecovery && isMediaWorkerFailureCode(recovery?.initialWorkerCode) && `initial-worker=${recovery.initialWorkerCode}`].filter(Boolean).join(' ');
-        const message = `[NativeRecording] ${event}${details ? ` ${details}` : ''}`;
+          validRecovery && isRecordingFailureCode(recovery?.initialWorkerCode) && `initial-worker=${recovery.initialWorkerCode}`].filter(Boolean).join(' ');
+        const setupHelp = phase === 'configuration' && workerCode === 'EXTERNAL_FFMPEG'
+          ? ' Install FFmpeg 6.1+ with the required codecs and check ffmpegPath.' : '';
+        const message = `[NativeRecording] ${event}${details ? ` ${details}` : ''}${setupHelp}`;
         if ((validRecovery && !!(flags! & 2)) || event.includes('faulted') || event.endsWith('recovery-required') || /^(?:public-motion-failed|delivery-uncertain-motion-publication-failed|delivery-not-offered-preparation-failed|cache-capacity-exceeded|job-(?:exhausted|abandoned))$/.test(event)) this.log.warn(message);
         else if (/^(?:push-(?:ready|client-bound|received|message-accepted|message-ignored|retrying)|motion-|acquisition-|job-|catalog-|clip-|download|preparation-|prepared$|offered$|delivery-|home-)/.test(event)) this.log.info(message);
         else this.log.debug(message);

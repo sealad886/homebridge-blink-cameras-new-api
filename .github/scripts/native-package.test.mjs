@@ -24,23 +24,23 @@ const json = value => Buffer.from(JSON.stringify(value));
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'blink-native-package-test-'));
   const sha = 'a'.repeat(40); const recipe = Buffer.from('recipe'); const copying = Buffer.from('GPL');
-  const inputs = { sources: ['ffmpeg', 'opus', 'x264', 'libsrtp'].map(name => ({ name, filename: `${name}.tar.gz`, sha256: sha256(Buffer.from(name)) })) };
+  const inputs = { sources: ['libsrtp'].map(name => ({ name, filename: `${name}.tar.gz`, sha256: sha256(Buffer.from(name)) })) };
   const sources = { 'native/dependencies/prepare.py': sha256(recipe), 'native/dependencies/source-inputs.json': sha256(json(inputs)), 'native/COPYING': sha256(copying) };
   const runtimeNotices = ['mingw-w64-runtime-COPYING', 'gcc-COPYING.RUNTIME'].map(name => [`native/dependencies/licenses/${name}`, Buffer.from(`synthetic ${name}`)]);
   for (const [name, data] of runtimeNotices) sources[name] = sha256(data);
   const proof = { sourceSha: sha, recipeSha: sha256(recipe), pins: inputs, sources };
-  const entries = [['README.md', Buffer.from('rebuild')], ['dependencies/ffmpeg-9.0.2.tar.xz.asc', Buffer.from('signature')], ['dependencies/ffmpeg-devel.asc', Buffer.from('key')],
+  const entries = [['README.md', Buffer.from('rebuild')],
     ['project/native/dependencies/prepare.py', recipe], ['project/native/dependencies/source-inputs.json', json(inputs)], ['project/native/COPYING', copying],
     ...inputs.sources.map(input => [`dependencies/${input.filename}`, Buffer.from(input.name)])];
   entries.push(...runtimeNotices.map(([name, data]) => ['project/' + name, data]));
-  const manifest = { schemaVersion: 1, protocolVersion: 5, targets: {} }; const receipts = {};
+  const manifest = { schemaVersion: 1, protocolVersion: 1, targets: {} }; const receipts = {};
   const write = (name, bytes) => { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, bytes, { mode: 0o755 }); };
   for (const target of TARGETS) {
     const path = `native/runtime/${target}/worker${target === 'win32-x64' ? '.exe' : ''}`;
     const bytes = Buffer.from(target); write(path, bytes);
     manifest.targets[target] = { path, sha256: sha256(bytes) };
-    const receipt = { target, protocolVersion: 5, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
-      dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs, prototype_assembly_disabled: false }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
+    const receipt = { target, protocolVersion: 1, source_sha: sha, sha256: sha256(bytes), artifact_sha256: 'c'.repeat(64),
+      dependencies: { recipe_sha256: proof.recipeSha, source_inputs: inputs }, dynamic_dependencies: 'system only', distribution_ready: false, limitations: [] };
     receipts[target] = receipt; entries.push([`receipts/${target}.json`, json(receipt)]);
   }
   const bundle = tar(entries); const manifestBytes = json(manifest);
@@ -51,15 +51,6 @@ function fixture() {
 }
 test('accepts five synthetic workers with complete source and dependency identity, without declaring readiness', () => {
   const f = fixture(); try { const result = verifyNativePackage(f.root, f.proof); assert.equal(result.distribution_ready, false); assert.deepEqual(Object.keys(result.targets).sort(), [...TARGETS].sort()); } finally { f.cleanup(); }
-});
-test('refuses installed packages with assembly-disabled or unproved codec libraries', () => {
-  for (const value of [true, undefined, null, 0, 'false']) {
-    const f = fixture(); try {
-      f.distribution.targets['linux-arm64'].dependencies.prototype_assembly_disabled = value;
-      f.write('native/runtime/distribution-receipt.json', json(f.distribution));
-      assert.throws(() => verifyNativePackage(f.root, f.proof), /requires assembly-enabled/);
-    } finally { f.cleanup(); }
-  }
 });
 for (const mutation of ['missing', 'extra', 'worker', 'manifest', 'protocol', 'bundle', 'source', 'recipe', 'pins', 'readiness', 'symlink']) {
   test(`refuses ${mutation} native package`, () => {
@@ -85,7 +76,7 @@ for (const mutation of ['missing source', 'changed archive', 'missing notice', '
   test(`source bundle refuses ${mutation} even after its outer hash is recomputed`, () => {
     const f = fixture(); try {
       if (mutation === 'missing source') f.entries.splice(f.entries.findIndex(([name]) => name === 'project/native/COPYING'), 1);
-      if (mutation === 'changed archive') f.entries.find(([name]) => name === 'dependencies/opus.tar.gz')[1] = Buffer.from('forged');
+      if (mutation === 'changed archive') f.entries.find(([name]) => name === 'dependencies/libsrtp.tar.gz')[1] = Buffer.from('forged');
       if (mutation === 'missing notice') delete f.proof.sources['native/COPYING'];
       if (mutation === 'link') f.entries.push(['link', Buffer.alloc(0), '2']);
       if (mutation === 'traversal') f.entries.push(['../outside', Buffer.from('outside')]);
@@ -138,7 +129,7 @@ const workflow = name => loadYaml(readFileSync(new URL(`../workflows/${name}.yml
 const sourceArtifactName = 'native-source-inputs-${{ github.sha }}';
 const sourceDirectory = 'native/build/deps/downloads';
 
-test('CI fetches and uploads only the six verified source inputs at the checked-out SHA', () => {
+test('CI fetches and uploads only the pinned libSRTP source input at the checked-out SHA', () => {
   const job = workflow('test').jobs['source-inputs'];
   assert.ok(job, 'a single source-input producer must precede native builds');
   assert.equal(job['runs-on'], 'ubuntu-24.04');
@@ -151,7 +142,7 @@ test('CI fetches and uploads only the six verified source inputs at the checked-
   assert.ok(fetchIndex >= 0 && uploadIndex > fetchIndex, 'canonical verification must finish before upload');
   const upload = job.steps[uploadIndex].with;
   const pins = JSON.parse(readFileSync(new URL('../../native/dependencies/source-inputs.json', import.meta.url), 'utf8'));
-  const filenames = [...pins.sources.map(source => source.filename), 'ffmpeg-9.0.2.tar.xz.asc', 'ffmpeg-devel.asc'];
+  const filenames = pins.sources.map(source => source.filename);
   assert.equal(upload.name, sourceArtifactName);
   assert.deepEqual(upload.path.trim().split(/\s+/).sort(), filenames.map(name => `${sourceDirectory}/${name}`).sort());
   assert.equal(upload['if-no-files-found'], 'error');
@@ -167,7 +158,7 @@ for (const [name, jobName, dependency, verification] of [
     const downloadIndex = job.steps.findIndex(step => step.uses?.startsWith('actions/download-artifact@')
       && step.with?.name === sourceArtifactName);
     const verifyIndex = job.steps.findIndex(step => step.run?.includes(verification));
-    assert.ok(downloadIndex >= 0 && verifyIndex > downloadIndex, 'download must precede unchanged SHA/GPG verification');
+    assert.ok(downloadIndex >= 0 && verifyIndex > downloadIndex, 'download must precede unchanged SHA verification');
     assert.deepEqual(job.steps[downloadIndex].with, { name: sourceArtifactName, path: sourceDirectory });
     if (name === 'test') {
       assert.deepEqual(job.strategy.matrix.include.map(target => target.target).sort(), [...TARGETS].sort());

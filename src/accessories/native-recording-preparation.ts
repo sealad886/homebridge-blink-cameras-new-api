@@ -1,28 +1,31 @@
 /** Finite local MP4 preparation. This module has no provider or live-view transport. */
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 import type { CameraRecordingConfiguration } from 'homebridge';
-import { PrivateMediaWorker, MEDIA_WORKER_LIMITS, isMediaWorkerFailureCode, type MediaWorkerFailureCode } from './media-worker';
-import { loadPackagedMediaWorker } from './media-worker-artifact';
+import { loadPackagedProtectionWorker } from './protection-worker-artifact';
+import { probeExternalFfmpeg, resolveExternalFfmpegPath, ExternalFfmpegSetupError } from './external-ffmpeg';
+import { convertExternalRecording, inspectExternalRecording, validateExternalRecording, ExternalRecordingError,
+  isRecordingFailureCode, type RecordingFailureCode } from './external-recording';
+export { isRecordingFailureCode } from './external-recording';
 
 export interface NativeRecordingPreparationDiagnostic {
   phase: 'configuration' | 'input' | 'output' | 'closure' | 'validation';
-  workerCode?: MediaWorkerFailureCode;
+  workerCode?: RecordingFailureCode;
   salvageAttempted?: true;
 }
 export interface NativeRecordingRecovery {
   readonly flags: number;
   readonly attempts: 1 | 2;
-  readonly initialWorkerCode?: MediaWorkerFailureCode;
+  readonly initialWorkerCode?: RecordingFailureCode;
 }
 export class NativeRecordingPreparationError extends Error {
   readonly diagnostic: Readonly<NativeRecordingPreparationDiagnostic>;
   constructor(diagnostic: NativeRecordingPreparationDiagnostic) {
     if (!['configuration', 'input', 'output', 'closure', 'validation'].includes(diagnostic.phase) ||
-        (diagnostic.workerCode !== undefined && !isMediaWorkerFailureCode(diagnostic.workerCode)) ||
+        (diagnostic.workerCode !== undefined && !isRecordingFailureCode(diagnostic.workerCode)) ||
         (diagnostic.salvageAttempted !== undefined && diagnostic.salvageAttempted !== true)) {
       throw new Error('Invalid recording preparation diagnostic');
     }
@@ -79,6 +82,8 @@ export class NativeRecordingMemoryBudget {
 }
 const sharedMemory = new NativeRecordingMemoryBudget();
 export interface NativeRecordingPreparationOptions {
+  /** Configured executable name or absolute path, resolved lazily when recording actually starts. */
+  ffmpegPath?: string;
   /** One shared local conversion admission gate across all cameras. */
   admit<T>(work: () => Promise<T>, signal: globalThis.AbortSignal): Promise<T>;
   memory?: NativeRecordingMemoryBudget;
@@ -229,12 +234,13 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
   }
   if (typeof options.admit !== 'function') throw new Error('Recording preparation admission unavailable');
   const timeout = options.timeoutMs ?? NATIVE_RECORDING_MEDIA_LIMITS.preparationMs;
-  if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 300000) throw new Error('Invalid recording preparation deadline');
+  if (!Number.isInteger(timeout) || timeout < 1000 || timeout > NATIVE_RECORDING_MEDIA_LIMITS.preparationMs) throw new Error('Invalid recording preparation deadline');
   const controller = new globalThis.AbortController();
   const cancelled = () => controller.abort();
   signal.addEventListener('abort', cancelled, { once: true });
   if (signal.aborted) controller.abort();
   const timer = globalThis.setTimeout(cancelled, timeout);
+  const deadline = Date.now() + timeout;
   const owner = controller.signal, memory = options.memory ?? sharedMemory;
   let started = false;
   let rejectQueued!: (reason: Error) => void;
@@ -252,6 +258,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
     if (!reference.isFile() || reference.isSymbolicLink()) throw new Error('Recording source is not a private regular file');
     const file = await fs.open(source.filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     let output: Buffer | undefined, retained = false;
+    let snapshotPath: string | undefined, snapshotOwned = false;
     const chunks: Buffer[] = [];
     let collected = 0;
     try {
@@ -259,21 +266,47 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       if (!before.isFile() || before.size !== source.expectedBytes || before.dev !== reference.dev || before.ino !== reference.ino ||
           (typeof process.getuid === 'function' && ((before.mode & 0o777) !== 0o600 || before.uid !== process.getuid()))) throw new Error('Recording source is not a private regular file');
       const hash = createHash('sha256'), block = Buffer.allocUnsafe(65536);
+      // Reuse the runtime's generated-partial namespace so crash reconciliation
+      // retires this private working copy as well as interrupted downloads.
+      snapshotPath = path.join(path.dirname(source.filePath), `.native-${randomUUID()}.partial`);
+      const snapshot = await fs.open(snapshotPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      snapshotOwned = true;
       try {
         for (let position = 0; position < before.size;) {
           owner.throwIfAborted();
           const { bytesRead } = await file.read(block, 0, Math.min(block.length, before.size - position), position);
           if (!bytesRead) throw new Error('Recording source changed');
-          hash.update(block.subarray(0, bytesRead)); position += bytesRead;
+          const value = block.subarray(0, bytesRead); hash.update(value); await snapshot.writeFile(value); position += bytesRead;
         }
-      } finally { block.fill(0); }
+      } finally { block.fill(0); await snapshot.close(); }
       const after = await file.stat();
       if (hash.digest('hex') !== source.expectedSha256 || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error('Recording source integrity mismatch');
       owner.throwIfAborted();
-      // Only the content-verified shipped worker can decode these bytes. It gets
-      // no file paths, provider capabilities, URLs or inherited environment.
+      // The private snapshot binds every external pass to the verified bytes.
+      // Child processes receive only a read-only seekable descriptor, never its
+      // path, provider capabilities, URLs, session keys or inherited environment.
       // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
-      const workerPath = loadPackagedMediaWorker(path.resolve(__dirname, '../..'));
+      const protectionPath = loadPackagedProtectionWorker(path.resolve(__dirname, '../..'));
+      let ffmpegPath: string;
+      try {
+        ffmpegPath = resolveExternalFfmpegPath(options.ffmpegPath);
+        await probeExternalFfmpeg(ffmpegPath, protectionPath, owner);
+      } catch (error) {
+        if (error instanceof ExternalFfmpegSetupError) throw new NativeRecordingPreparationError({ phase: 'configuration', workerCode: 'EXTERNAL_FFMPEG' });
+        throw error;
+      }
+      const snapshotReference = await fs.lstat(snapshotPath);
+      const context = { ffmpegPath, protectionPath, signal: owner, deadline,
+        open: async () => {
+          owner.throwIfAborted();
+          const input = await fs.open(snapshotPath!, constants.O_RDONLY | constants.O_NOFOLLOW);
+          const current = await input.stat();
+          if (!current.isFile() || current.size !== source.expectedBytes || current.dev !== snapshotReference.dev || current.ino !== snapshotReference.ino ||
+              current.mtimeMs !== snapshotReference.mtimeMs || current.ctimeMs !== snapshotReference.ctimeMs) {
+            await input.close(); throw new Error('Recording source integrity mismatch');
+          }
+          return input;
+        } };
       const unchanged = async (): Promise<void> => {
         const current = await file.stat(), named = await fs.lstat(source.filePath);
         if (!named.isFile() || named.dev !== before.dev || named.ino !== before.ino ||
@@ -281,12 +314,16 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
           throw new Error('Recording source integrity mismatch');
         }
       };
-      let initialWorkerCode: MediaWorkerFailureCode | undefined;
+      let plan: Awaited<ReturnType<typeof inspectExternalRecording>>;
+      try { plan = await inspectExternalRecording(context, selected.videoCodec.resolution[2]); }
+      catch (error) { if (owner.aborted) throw new Error('Recording conversion cancelled');
+        throw new NativeRecordingPreparationError({ phase: 'input', workerCode: error instanceof ExternalRecordingError ? error.code : 'MEDIA' }); }
+      let initialWorkerCode: RecordingFailureCode | undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
         owner.throwIfAborted(); await unchanged();
         try {
-          let outputFailure: Error | undefined, recoveryFlags = 0;
-          const collect = async (value: Buffer): Promise<void> => {
+          let outputFailure: Error | undefined;
+          const collect = (value: Buffer): void => {
             owner.throwIfAborted();
             try {
               if (collected + value.length > NATIVE_RECORDING_MEDIA_LIMITS.outputBytes) throw new Error();
@@ -296,67 +333,33 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
             try { copy = Buffer.from(value); } catch (error) { memory.release(value.length); throw error; }
             chunks.push(copy); collected += copy.length;
           };
-          const worker = new PrivateMediaWorker(workerPath, {
-            recordingRecovery: flags => { recoveryFlags = flags; },
-            recordingInit: collect,
-            recordingFragment: fragment => collect(fragment.data),
-          });
-          const abort = () => { void worker.stop(); };
-          owner.addEventListener('abort', abort, { once: true });
-          let phase: 'configuration' | 'input' | 'output' | 'closure' = 'configuration';
           try {
-            owner.throwIfAborted();
-            const video = selected.videoCodec, [width, height, fps] = video.resolution;
-            await worker.configureRecording({ width, height, fps, bitrate: video.parameters.bitRate * 1000,
-              // This is a decoded-source budget, independent of HomeKit output fps.
-              maxFrames: 9000, preset: 0,
-              profile: video.parameters.profile, level: video.parameters.level, inputFormat: 'mp4', salvage: attempt === 1,
-              audioCodec: audioActive ? 4 : 0, audioRate: audioActive ? audio.samplerate === 1 ? 16000 : 24000 : 0,
-              audioBitrate: audioActive ? audio.bitrate * 1000 : 0,
-              fragmentMs: selected.mediaContainerConfiguration.fragmentLength,
-              iFrameIntervalMs: Math.min(video.parameters.iFrameInterval, selected.mediaContainerConfiguration.fragmentLength) });
-            await worker.whenReady;
-            phase = 'input';
-            const actual = createHash('sha256'), block = Buffer.allocUnsafe(MEDIA_WORKER_LIMITS.inputBytes);
-            try {
-              for (let position = 0; position < before.size;) {
-                owner.throwIfAborted();
-                const { bytesRead } = await file.read(block, 0, Math.min(block.length, before.size - position), position);
-                if (!bytesRead) throw new Error('Recording source changed');
-                const bytes = block.subarray(0, bytesRead); actual.update(bytes);
-                await worker.media(bytes); position += bytesRead;
-              }
-            } finally { block.fill(0); }
-            const consumed = await file.stat();
-            if (actual.digest('hex') !== source.expectedSha256 || before.size !== consumed.size ||
-                before.mtimeMs !== consumed.mtimeMs || before.ctimeMs !== consumed.ctimeMs) throw new Error('Recording source integrity mismatch');
-            await unchanged(); owner.throwIfAborted(); phase = 'output'; await worker.endMedia(); await worker.whenMediaDrained;
-            phase = 'closure'; await worker.finishInput();
-            if (worker.failed) throw new Error('Recording conversion failed');
+            await convertExternalRecording(context, selected, plan, audioActive, attempt === 1, collect);
+            await unchanged();
           } catch (error) {
             if (owner.aborted) throw new Error('Recording conversion cancelled');
             if (outputFailure) throw outputFailure;
             if (error instanceof Error && /Recording (?:output exhausted|source)/.test(error.message)) throw error;
-            await worker.stop();
-            throw new NativeRecordingPreparationError({ phase, ...(worker.failureCode ? { workerCode: worker.failureCode } : {}),
+            throw new NativeRecordingPreparationError({ phase: 'output', workerCode: error instanceof ExternalRecordingError ? error.code : 'EXTERNAL_FFMPEG',
               ...(attempt === 1 ? { salvageAttempted: true as const } : {}) });
-          } finally {
-            owner.removeEventListener('abort', abort); await worker.stop();
           }
           owner.throwIfAborted();
-          if (!collected) throw new Error('Recording worker produced no media');
+          if (!collected) throw new Error('Recording conversion produced no media');
           memory.reserve(collected);
           try { output = Buffer.concat(chunks, collected); } catch (error) { memory.release(collected); throw error; }
           for (const chunk of chunks) chunk.fill(0);
           chunks.length = 0; memory.release(collected);
           let parsed: ReturnType<typeof parsePrepared>;
-          try { parsed = parsePrepared(output, selected, audioActive); }
-          catch { throw new NativeRecordingPreparationError({ phase: 'validation', ...(attempt === 1 ? { salvageAttempted: true as const } : {}) }); }
+          try {
+            parsed = parsePrepared(output, selected, audioActive);
+            await validateExternalRecording(context, output, selected, plan, audioActive);
+          } catch (error) { throw new NativeRecordingPreparationError({ phase: 'validation',
+            ...(error instanceof ExternalRecordingError ? { workerCode: error.code } : {}), ...(attempt === 1 ? { salvageAttempted: true as const } : {}) }); }
           const bytes = output.length, preparedSha256 = createHash('sha256').update(output).digest('hex');
           const owned = output;
           let disposed = false;
           const prepared: PreparedNativeRecording = Object.freeze({ ...parsed, fragments: Object.freeze(parsed.fragments), configuration: selected,
-            ...(recoveryFlags || attempt === 1 ? { recovery: Object.freeze({ flags: recoveryFlags, attempts: (attempt === 1 ? 2 : 1) as 1 | 2,
+            ...(attempt === 1 ? { recovery: Object.freeze({ flags: 2, attempts: 2 as const,
               ...(initialWorkerCode ? { initialWorkerCode } : {}) }) } : {}),
             audioActive, bytes, sourceSha256: source.expectedSha256, preparedSha256,
             get disposed() { return disposed; },
@@ -364,9 +367,8 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
           });
           retained = true; return prepared;
         } catch (error) {
-          if (attempt !== 0 || owner.aborted || !(error instanceof NativeRecordingPreparationError) ||
-              !error.diagnostic.workerCode || !['AUDIO_CODEC', 'AUDIO_DECODE', 'AUDIO_DISCONTINUITY', 'AUDIO_INPUT',
-                'AUDIO_MISSING', 'AUDIO_RESAMPLE', 'AUDIO_TIMESTAMP', 'FRAGMENT_LIMIT'].includes(error.diagnostic.workerCode)) throw error;
+          if (attempt !== 0 || !audioActive || owner.aborted || !(error instanceof NativeRecordingPreparationError) ||
+              !error.diagnostic.workerCode || !['AUDIO_DISCONTINUITY', 'AUDIO_MISSING', 'FRAGMENT_LIMIT'].includes(error.diagnostic.workerCode)) throw error;
           initialWorkerCode = error.diagnostic.workerCode;
         } finally {
           if (chunks.length) { for (const chunk of chunks) chunk.fill(0); memory.release(collected); chunks.length = 0; }
@@ -376,9 +378,21 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       }
       throw new Error('Recording recovery exhausted');
     } finally {
-      await file.close();
-      if (chunks.length) { for (const chunk of chunks) chunk.fill(0); memory.release(collected); }
-      if (output && !retained) { output.fill(0); memory.release(output.length); }
+      let cleanupSucceeded = false;
+      try {
+        try { await file.close(); }
+        finally {
+          if (snapshotOwned && snapshotPath) await fs.rm(snapshotPath, { force: true })
+            .catch(() => { throw new Error('Recording temporary cleanup failed'); });
+        }
+        cleanupSucceeded = true;
+      } finally {
+        // A return value is not transferred to its caller until awaited cleanup
+        // succeeds. A close/unlink failure must erase that provisional output.
+        if (!cleanupSucceeded) retained = false;
+        if (chunks.length) { for (const chunk of chunks) chunk.fill(0); memory.release(collected); }
+        if (output && !retained) { output.fill(0); memory.release(output.length); }
+      }
     }
   }, owner));
   try { return await Promise.race([pending, queuedAbort]); }

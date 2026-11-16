@@ -116,7 +116,8 @@ Add a platform entry to your Homebridge `config.json`:
 | `earlyNotificationMode` | No | `unmanaged` | `on`, `off` or `unmanaged`: force Early Notification on/off or leave unchanged; module and camera overrides apply |
 | `nativeRecording` | No | See below | Bounded timing, matching and local storage policy for optional HomeKit recording |
 | `exposeTemperature` | No | `false` | Expose reported temperature for supported traditional cameras; see [camera temperature](#camera-temperature) |
-| `enableStreaming` | No | `true` | Enable HomeKit live streaming with the packaged private worker |
+| `enableStreaming` | No | `true` | Enable HomeKit live streaming using externally installed FFmpeg |
+| `ffmpegPath` | No | `ffmpeg` | External FFmpeg executable name from the Homebridge service PATH or an absolute path. Applies to live viewing and HomeKit recording; see [requirements](streaming.md#packaged-codec-requirements). |
 | `syncModuleFeedLimits` | No | `[]` | Optional live-view `{ syncModuleId, maxFeeds }` entries for actual discovered modules; positive whole numbers, bounded by associated included cameras. Omit an entry to use its discovered default. These do not govern native clip acquisition. |
 | `syncModuleSettingOverrides` | No | `[]` | Optional `{ syncModuleId, earlyNotificationMode }` entries; omit the mode to inherit the plugin setting |
 | `mediaDebug` | No | `false` | Enable bounded, redacted streaming diagnostics; packet/NAL traces are omitted |
@@ -297,7 +298,7 @@ legacy keys from the saved file. Explicit canonical choices win. The conversion
 backs up original bytes before replacement and is a no-op once complete; runtime
 and settings code accept canonical values only. Opening the editor or testing
 connections does not migrate, stage or save config. For installation targeting,
-explicit preview/apply commands when lifecycle scripts are unavailable, and
+explicit preview/apply commands for legacy settings, and
 rollback considerations, see [configuration migration](native-recording-config-migration.md).
 
 Immediate eligibility keeps the same FIFO, missing-clip retries, command admission
@@ -387,9 +388,9 @@ to request or retain them. Delayed offers cannot establish pre-event recording,
 historic timeline insertion or successful iCloud retention.
 
 For earlier configuration, use the
-[one-off configuration migration](native-recording-config-migration.md). Supported
-POSIX installations run it when the installer supplies `UIX_STORAGE_PATH`.
-Otherwise, review the explicit dry run and backup before applying it yourself.
+[one-off configuration migration](native-recording-config-migration.md).
+Installation leaves configuration untouched. Review the explicit preview and
+backup procedure before applying the conversion yourself.
 
 ## Camera temperature
 

@@ -7,6 +7,33 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.0-alpha.0] - 2026-11-16
+
+Unpublished preparation for 2.0.0. Version 1.1.0 remains immutable. The new
+external FFmpeg installation prerequisite makes this a major release; complete
+candidate, installed-package and physical acceptance before stable promotion.
+
+### Changed
+- Require a separately installed FFmpeg 6.1+ executable for live video/audio and
+  HomeKit recording. Resolve it from the Homebridge service PATH or `ffmpegPath`;
+  preserve that setting during upgrade conversion. Missing versions or required
+  capabilities produce setup errors without clearing authentication or pairing.
+- Remove bundled FFmpeg, x264 and Opus codec libraries and source archives. Keep
+  the smaller libSRTP protection/launch helper and its corresponding source.
+  Vendor transport and HomeKit output remain owned by the plugin; no provider
+  URL or SRTP key is passed to the external executable.
+- Require fresh installed-artifact, media and physical acceptance for this
+  backend. Earlier RC codec qualification does not qualify this implementation.
+- Remove the npm `postinstall` configuration writer and declare `supports-hap`.
+  Installation leaves Homebridge configuration untouched. For legacy settings,
+  preview the explicit migration command and use `--apply` after review; retain
+  its guarded replacement, private exact-byte backup and unchanged-file behavior.
+  Already-canonical 1.1.0 configurations need no conversion for unbundling.
+- Preserve the 1.1.0 removal of the unsupported uninstall hook and unused
+  dependencies. Update the maintained guides and documentation site for the
+  external backend and explicit migration. Verification remains pending the
+  corrected published stable package and its acceptance evidence.
+
 ## [1.1.0] - 2026-11-16
 
 ### HomeKit recording and settings
