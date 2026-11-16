@@ -118,6 +118,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
   try {
     const trials = [...selected.map(name => ({ name })), { name: 'low-fps-source', fps: 7, fragment: 4000 },
       { name: '25fps-source-15fps-output', fragment: 4000 }, { name: 'recovery-metadata', hd: true, fragment: 4000 },
+      { name: 'recovery-metadata', audioFirst: true }, { name: 'audio-disabled', sar: 2 },
       { name: 'recovery-metadata', count: 1026, metadataEvery: 2, tiny: true },
       { name: 'recovery-metadata', count: 1028, metadataEvery: 2, tiny: true, rejectMetadata: true }];
     for (const trial of trials) {
@@ -128,13 +129,21 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       const width = long || trial.tiny ? 16 : 320, height = long || trial.tiny ? 16 : 180, fps = trial.fps ?? (long ? 30 : low ? 5 : odd ? 25 : 15);
       const outputWidth = trial.hd ? 1920 : width, outputHeight = trial.hd ? 1080 : height, fragmentMs = trial.fragment ?? 1000;
       const count = trial.count ?? (long ? 1800 : low ? fps * 9 : odd ? 225 : metadata || corrupt || missing || name === 'audio-clock-repair' ? 90 : 33);
-      const label = trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name;
+      const label = trial.audioFirst ? `${name}-audio-first` : trial.sar ? `${name}-sar-${trial.sar}` : trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name;
       const source = join(scratch, label + '-generated.mp4'), path = join(scratch, label + '.mp4');
-      execute(['-y', '-f', 'lavfi', '-i', `testsrc2=size=${width}x${height}:rate=${metadata ? fps * 1000 + '/1001' : fps}`,
+      execute(['-y', '-f', 'lavfi', '-i', `${trial.sar ? 'color=c=white:' : 'testsrc2='}size=${width}x${height}:rate=${metadata ? fps * 1000 + '/1001' : fps}`,
         ...(!missing ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000'] : []), '-frames:v', String(count),
+        ...(trial.audioFirst ? ['-map', '1:a:0', '-map', '0:v:0'] : []), ...(trial.sar ? ['-vf', `setsar=${trial.sar}`] : []),
         '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-g', String(fps * 4), '-pix_fmt', 'yuv420p',
         ...(!missing ? ['-c:a', 'aac', '-ar', '16000', '-ac', '1', '-b:a', '24k', '-shortest'] : []), '-f', 'mp4', source]);
       let bytes = readFileSync(source);
+      if (trial.audioFirst) {
+        const movie = boxes(bytes).find(box => box.type === 'moov'); assert(movie);
+        const handlers = boxes(bytes, movie.payload, movie.end).filter(box => box.type === 'trak').map(track => {
+          const handler = child(bytes, child(bytes, track, 'mdia'), 'hdlr'); return bytes.toString('ascii', handler.payload + 8, handler.payload + 12);
+        });
+        assert.deepEqual(handlers, ['soun', 'vide'], 'Audio-first fixture must select input video stream 1');
+      }
       if (metadata || corrupt || name === 'audio-clock-repair') bytes = mutateRecordingFixture(bytes, { metadataEvery: metadata ? trial.metadataEvery ?? fps * 4 : 0, corruptAudio: corrupt, audioGap: name === 'audio-clock-repair' });
       assert(bytes.indexOf(Buffer.from('moov')) > bytes.indexOf(Buffer.from('mdat'))); writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
       const active = !['audio-disabled', 'damaged-audio-disabled', '30fps-source-15fps-output'].includes(name), rate = name === 'audio-24khz' || odd || name === 'corrupt-audio-recovery' ? 24000 : 16000;
@@ -164,6 +173,17 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
         const pixels = execute([...pixelOptions, ...(trial.hd ? ['-frames:v', '1'] : []), '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'], decodedPath ? undefined : output);
         assert.equal(pixels.length, outputWidth * outputHeight * (trial.hd ? 1 : expectedFrames), `${name}: independent decoded pixel count`);
         assert(pixels.some(byte => byte > 32));
+        if (trial.sar) {
+          const frames = execute([...pixelOptions, '-frames:v', '1', '-c:v', 'rawvideo', '-f', 'framecrc', 'pipe:1'], output).toString('ascii');
+          assert(frames.includes('#sar 0: 1/1'));
+          const dark = row => pixels.subarray(row * outputWidth, (row + 1) * outputWidth).every(value => value < 32);
+          let top = 0, bottom = 0;
+          while (top < outputHeight && dark(top)) top++; while (bottom < outputHeight && dark(outputHeight - 1 - bottom)) bottom++;
+          assert.equal(top + bottom, outputHeight / 2, 'SAR=2 must preserve the exact half-height content area');
+          // YUV420 padding aligns to chroma rows: an ideal odd offset can move
+          // by one luma pixel without changing the required display shape.
+          assert(Math.abs(top - bottom) <= 2, 'Content must remain centered within one luma pixel');
+        }
         if (trial.hd) {
           const frames = execute([...pixelOptions, '-c:v', 'rawvideo', '-f', 'framecrc', 'pipe:1']).toString('ascii');
           assert.equal(frames.split('\n').filter(line => /^0,/.test(line)).length, expectedFrames, 'HD decode must preserve every picture');

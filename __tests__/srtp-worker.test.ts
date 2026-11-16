@@ -35,7 +35,7 @@ it('rejects unsolicited or oversized protocol output and never exposes arbitrary
   for (const bytes of [Buffer.from('not-a-private-header'), output(1, Buffer.alloc(0)), output(11, Buffer.alloc(2071))]) {
     const f = fixture(), worker = new PrivateProtectionWorker('/verified/protection', f.launch);
     f.child.stderr.write('private credentials'); const pending = worker.initialize(1, 7, Buffer.alloc(16), Buffer.alloc(14));
-    const result = expect(pending).rejects.toThrow('Media protection failed'); f.child.stdout.write(bytes);
+    const result = expect(pending).rejects.toThrow(/^Media protection failed$/); f.child.stdout.write(bytes);
     await result; await worker.whenClosed; expect(worker.failed).toBe(true);
   }
 });

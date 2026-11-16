@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import type { CameraRecordingConfiguration } from 'homebridge';
 import { spawnExternalFfmpeg } from './external-ffmpeg';
 import { FfmpegByteQueue, parseFrameCrcPacket, packetAdler32 } from './ffmpeg-packets';
+import { squarePixelLetterboxFilter } from './ffmpeg-video-filter';
 
 const codes = ['MEDIA', 'DECODE', 'VIDEO_FRAME_COUNT', 'VIDEO_DISCONTINUITY', 'VIDEO_TIMESTAMP', 'AUDIO_MISSING',
   'AUDIO_DISCONTINUITY', 'OUTPUT_LIMIT', 'FRAGMENT_LIMIT', 'TIME_LIMIT', 'EXTERNAL_FFMPEG'] as const;
@@ -23,6 +24,8 @@ export interface ExternalRecordingContext {
 /** Microseconds: corrected PTS relative to the first corrected video picture, and positive picture duration. */
 interface Picture { pts: number; duration: number; }
 export interface ExternalRecordingPlan {
+  /** First video track's input stream index, derived from the verified ordinary MP4 track inventory. */
+  videoStreamIndex: number;
   pictures: readonly Picture[]; selected: readonly Picture[];
   /** Corrected video end relative to originUs; selection does not change the source duration. */
   durationUs: number;
@@ -115,8 +118,85 @@ const MAX_METADATA_DIAGNOSTIC_LINE_BYTES = 1024;
 // no-frame line and one decoder-submission line, each including its newline.
 const MAX_METADATA_DIAGNOSTIC_BYTES = MAX_METADATA_SAMPLES * 4 * (MAX_METADATA_DIAGNOSTIC_LINE_BYTES + 1);
 
+/** MOV creates one input stream per trak, in encounter order. Read only bounded
+ * box headers/handler types; never infer stream identity from decoder errors. */
+async function sourceVideoStreamIndex(context: ExternalRecordingContext, input: FileHandle): Promise<number> {
+  const check = () => { context.signal.throwIfAborted(); if (Date.now() >= context.deadline) failure('TIME_LIMIT'); };
+  check(); const stat = await input.stat(); check();
+  if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 8 || stat.size > 32 * 1024 * 1024) failure('MEDIA');
+  const read = async (position: number, length: number): Promise<Buffer> => {
+    const bytes = Buffer.alloc(length);
+    for (let used = 0; used < length;) {
+      check(); const result = await input.read(bytes, used, length - used, position + used); check();
+      if (!result.bytesRead) failure('MEDIA'); used += result.bytesRead;
+    }
+    return bytes;
+  };
+  interface Box { type: string; payload: number; end: number; }
+  let count = 0;
+  const boxes = async (from: number, end: number): Promise<Box[]> => {
+    const result: Box[] = [];
+    for (let at = from; at < end;) {
+      if (++count > 2048 || end - at < 8) failure('MEDIA');
+      const header = await read(at, 8), type = header.toString('latin1', 4, 8); let size = header.readUInt32BE(0), length = 8;
+      if (size === 1) {
+        if (end - at < 16) failure('MEDIA');
+        const large = (await read(at + 8, 8)).readBigUInt64BE();
+        if (large > BigInt(Number.MAX_SAFE_INTEGER)) failure('MEDIA'); size = Number(large); length = 16;
+      } else if (!size) size = end - at;
+      if (size < length || size > end - at) failure('MEDIA');
+      result.push({ type, payload: at + length, end: at + size }); at += size;
+    }
+    return result;
+  };
+  const inventory = new Map<Box, Box[]>();
+  const children = async (box: Box): Promise<Box[]> => {
+    const cached = inventory.get(box); if (cached) return cached;
+    const start = box.payload + (box.type === 'meta' ? 4 : 0); if (start > box.end) failure('MEDIA');
+    const value = await boxes(start, box.end); inventory.set(box, value); return value;
+  };
+  const single = (values: Box[], type: string): Box => {
+    const matches = values.filter(box => box.type === type); if (matches.length !== 1) failure('MEDIA'); return matches[0];
+  };
+  const roots = await boxes(0, stat.size), movie = single(roots, 'moov');
+  // Compressed/cover-art layouts can add streams outside the ordinary trak
+  // inventory. Refuse them explicitly rather than accepting the wrong index.
+  if (roots.some(box => ['meta', 'cmov', 'covr'].includes(box.type))) failure('MEDIA');
+  const inspectMetadata = async (values: Box[], depth: number): Promise<void> => {
+    if (depth > 8) failure('MEDIA');
+    for (const box of values) {
+      if (['cmov', 'covr'].includes(box.type) || (box.type === 'trak' && depth !== 1)) failure('MEDIA');
+      if (box.type === 'keys') {
+        if (box.end - box.payload < 8) failure('MEDIA');
+        const entries = (await read(box.payload + 4, 4)).readUInt32BE(); if (entries > 2048) failure('MEDIA');
+        let at = box.payload + 8;
+        for (let index = 0; index < entries; index++) {
+          if (++count > 2048 || box.end - at < 8) failure('MEDIA');
+          const entry = await read(at, 8), size = entry.readUInt32BE(); if (size < 8 || size > box.end - at) failure('MEDIA');
+          const artwork = 'com.apple.quicktime.artwork';
+          if (entry.toString('latin1', 4, 8) === 'mdta' && size - 8 === artwork.length &&
+              (await read(at + 8, artwork.length)).toString('latin1') === artwork) failure('MEDIA');
+          at += size;
+        }
+        if (at !== box.end) failure('MEDIA');
+      }
+      if (['moov', 'trak', 'mdia', 'minf', 'stbl', 'udta', 'meta', 'ilst'].includes(box.type)) await inspectMetadata(await children(box), depth + 1);
+    }
+  };
+  await inspectMetadata([movie], 0);
+  const tracks = (await children(movie)).filter(box => box.type === 'trak'); if (!tracks.length || tracks.length > 8) failure('MEDIA');
+  for (const [index, track] of tracks.entries()) {
+    const media = single(await children(track), 'mdia'), handler = single(await children(media), 'hdlr');
+    if (handler.end - handler.payload < 12) failure('MEDIA');
+    if ((await read(handler.payload + 8, 4)).toString('latin1') === 'vide') return index;
+  }
+  return failure('MEDIA');
+}
+
 /** Only these fixed decoder errors are tolerated, and only for prevalidated empty SEI access units. */
-function observeMetadataErrors(stream: Readable, expected: () => number): () => boolean {
+function observeMetadataErrors(stream: Readable, expected: () => number, videoStreamIndex: number): () => boolean {
+  if (!Number.isInteger(videoStreamIndex) || videoStreamIndex < 0 || videoStreamIndex > 7) failure('MEDIA');
+  const submitted = new RegExp(`^\\[vist#0:${videoStreamIndex}/h264 @ (?:0x)?[0-9a-fA-F]+\\](?: \\[dec:h264 @ (?:0x)?[0-9a-fA-F]+\\])? Error submitting packet to decoder: Invalid data found when processing input$`);
   let tail = '', invalid = false, noFrame = 0, submission = 0, missing = 0, total = 0;
   stream.on('data', (bytes: Buffer) => {
     if ((total += bytes.length) > MAX_METADATA_DIAGNOSTIC_BYTES) { invalid = true; return; }
@@ -126,7 +206,7 @@ function observeMetadataErrors(stream: Readable, expected: () => number): () => 
       if (line.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = true; continue; }
       if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] missing picture in access unit with size \d+$/.test(line)) missing++;
       else if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] no frame!$/.test(line)) noFrame++;
-      else if (/^\[vist#0:0\/h264 @ (?:0x)?[0-9a-fA-F]+\](?: \[dec:h264 @ (?:0x)?[0-9a-fA-F]+\])? Error submitting packet to decoder: Invalid data found when processing input$/.test(line)) submission++;
+      else if (submitted.test(line)) submission++;
       else invalid = true;
     }
     if (tail.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) invalid = true;
@@ -175,9 +255,10 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
   let closure: Promise<number | null> | undefined;
   let numerator = 0n, denominator = 0n, header = false, dimensions = false;
   try {
+    const videoStreamIndex = await sourceVideoStreamIndex(context, input);
     const child = launch({ ...context, signal: controller.signal }, [...inputArguments, '-map', '0:v:0', '-an', '-c:v', 'copy',
       '-bsf:v', 'h264_mp4toannexb', '-f', 'tee', '[f=data:flush_packets=1]pipe:1|[f=framecrc:flush_packets=1]pipe:3'], [input.fd, 'pipe', 'pipe', 'pipe']);
-    const okay = observeMetadataErrors(readable(child.stderr), () => metadata);
+    const okay = observeMetadataErrors(readable(child.stderr), () => metadata, videoStreamIndex);
     const closed = closure = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
     const raw = async () => { for await (const value of readable(child.stdout)) {
       const part: Buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
@@ -231,7 +312,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     const durationUs = last.pts + Math.max(last.duration, Math.round(1000000 / fps));
     if (durationUs < 1 || durationUs > 90000000) failure('VIDEO_TIMESTAMP');
     const audioOriginUs = audioActive ? await inspectAudioOrigin(context) : undefined;
-    return { pictures, selected, durationUs, originUs: origin, audioOriginUs, metadata, corrections };
+    return { pictures, selected, durationUs, originUs: origin, audioOriginUs, metadata, corrections, videoStreamIndex };
   } finally { controller.abort(); await closure; queue.dispose(); context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
@@ -251,7 +332,7 @@ export function recordingFfmpegArguments(configuration: CameraRecordingConfigura
   // would erase a real A/V offset and invert it after AAC encoder priming.
   const filter = `settb=1/1000000,setpts='PTS-(${correction})',` +
     `select='isnan(prev_selected_t)+gt(floor((t-start_t)*${fps}+0.0001),floor((prev_selected_t-start_t)*${fps}+0.0001))',` +
-    `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+    squarePixelLetterboxFilter(width, height);
   const interval = Math.max(0.1, (Math.min(configuration.mediaContainerConfiguration.fragmentLength, v.parameters.iFrameInterval) - 200) / 1000);
   const sourceArguments = [...inputArguments.slice(0, -2), ...(!audioActive || silence ? ['-an'] : []), ...inputArguments.slice(-2)];
   return [...sourceArguments.slice(0, 6), ...(plan.metadata ? ['-err_detect', 'explode'] : ['-xerror', '-err_detect', 'explode']),
@@ -276,7 +357,7 @@ export async function convertExternalRecording(context: ExternalRecordingContext
   let closure: Promise<number | null> | undefined;
   try {
     const child = launch({ ...context, signal: controller.signal }, recordingFfmpegArguments(configuration, plan, audioActive, silence), [input.fd, 'pipe', 'pipe']);
-    const okay = observeMetadataErrors(readable(child.stderr), () => plan.metadata);
+    const okay = observeMetadataErrors(readable(child.stderr), () => plan.metadata, plan.videoStreamIndex);
     const closed = closure = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
     let bytes = 0, failed = false;
     child.stdout?.on('data', (value: Buffer) => {

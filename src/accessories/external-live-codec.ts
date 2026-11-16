@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import { withinRequestBudget } from '../operation-budget';
 import { EXTERNAL_FFMPEG_LIMITS, probeExternalFfmpeg, spawnExternalFfmpeg, type ExternalFfmpegProcessOptions } from './external-ffmpeg';
 import { readFfmpegPackets, type CodecPacket, type SourceVideoInfo } from './ffmpeg-packets';
+import { squarePixelLetterboxFilter } from './ffmpeg-video-filter';
 
 export interface ExternalLiveCodecOptions {
   ffmpegPath: string; protectionPath: string;
@@ -30,7 +31,7 @@ export function liveFfmpegArguments(options: ExternalLiveCodecOptions): string[]
   const { video: v, audio: a } = options;
   // Select at most one source frame per anchored output interval; gaps never accrue frame credit.
   const filter = `showinfo@blink_source=checksum=0,select='isnan(prev_selected_t)+gt(floor((t-start_t)*${v.fps}+0.0001),floor((prev_selected_t-start_t)*${v.fps}+0.0001))',` +
-    `scale=${v.width}:${v.height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+    squarePixelLetterboxFilter(v.width, v.height);
   return ['-hide_banner', '-nostdin', '-loglevel', 'info', '-xerror', '-max_alloc', '67108864', '-copyts', '-threads', '1', '-filter_threads', '1',
     '-protocol_whitelist', 'pipe', '-format_whitelist', 'mpegts', '-codec_whitelist', 'h264,aac,aac_latm',
     '-probesize', '65536', '-analyzeduration', '1000000', '-max_probe_packets', '32', '-max_streams', '8', '-max_pixels', '8388608', '-f', 'mpegts', '-i', 'pipe:0',
@@ -43,7 +44,9 @@ export function liveFfmpegArguments(options: ExternalLiveCodecOptions): string[]
     ...(a ? ['-c:a', { opus: 'libopus', pcma: 'pcm_alaw', pcmu: 'pcm_mulaw' }[a.codec], '-threads:a', '1', '-ar', String(a.rate), '-ac', '1',
       '-b:a', String(a.bitrate), '-af', `aresample=${a.rate}:async=0${a.codec === 'opus' ? '' : `,asetnsamples=n=${a.rate / 50}:p=0`}`,
       ...(a.codec === 'opus' ? ['-frame_duration', String(a.packetTime ?? 20), ...(v.softwarePreset === 'ultrafast' ? ['-compression_level', '3'] : [])] : [])] : []),
-    '-f', 'tee', `[select=v:f=data:flush_packets=1]pipe:3|${a ? '[select=a:f=data:flush_packets=1]pipe:4|' : ''}[f=framecrc:flush_packets=1]pipe:5`];
+    // Release prior packet metadata before writing the next payload. A positive
+    // one-microsecond interleave bound retains at most one packet per stream.
+    '-f', 'tee', `[f=framecrc:flush_packets=1:max_interleave_delta=1]pipe:5|[select=v:f=data:flush_packets=1]pipe:3${a ? '|[select=a:f=data:flush_packets=1]pipe:4' : ''}`];
 }
 
 class LiveCodec implements ExternalLiveCodec {

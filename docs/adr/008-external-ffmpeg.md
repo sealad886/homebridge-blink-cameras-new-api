@@ -44,6 +44,11 @@ The recording plan owns the meanings shared by inspection, conversion and
 independent output validation. Times are microseconds unless a stream's rational
 time base is explicitly being converted.
 
+The plan also carries the selected input video stream index, derived from the
+verified ordinary MP4 track inventory. Diagnostic allowances match that exact
+index and the existing message/count grammar. Audio-first track order is valid;
+layouts whose stream identity cannot be established are refused at inspection.
+
 | Quantity | Meaning |
 | --- | --- |
 | `corrections.at` / `offset` | Raw input timestamp / cumulative metadata duration removed from video. |
@@ -59,9 +64,20 @@ Packet duration and the gap between packets are different quantities; live
 timestamp gaps remain subject to monotonicity, pacing and the session lifetime.
 The live and finite paths retain their distinct discontinuity and repair rules.
 
+Source display aspect ratio includes sample aspect ratio. Live and finite
+conversion use the same bounded letterbox filter to preserve that display shape
+before emitting square pixels; pre-scale source observations remain unchanged.
+
 A pipe chunk is not a packet. Bounded queues admit a fitting prefix when a
 chunk straddles a near-limit packet, preserving exact bytes, cancellation and
 backpressure without raising the queue bound.
+
+The live tee emits its metadata branch before payload branches and gives that
+branch a positive one-microsecond interleave bound. Buffered metadata for prior
+packets can then drain before the next payload write. Flushing output bytes alone
+does not flush the muxer's packet interleaver; a small interleave bound alone also
+leaves a cycle when two individually valid payloads exceed the queue together.
+Sparse-audio and delayed-audio, near-limit-packet cases qualify this ordering.
 
 Admission limits must compose through execution. Up to 512 metadata corrections
 must fit the generated expression's parser depth and the actual platform-quoted

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import process from 'node:process';
 import { createExternalLiveCodec, type ExternalLiveCodecOptions } from '../src/accessories/external-live-codec';
 import { resolveExternalFfmpegPath, type ExternalFfmpegProcessOptions } from '../src/accessories/external-ffmpeg';
-import type { CodecPacket } from '../src/accessories/ffmpeg-packets';
+import type { CodecPacket, SourceVideoInfo } from '../src/accessories/ffmpeg-packets';
 
 const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK_FFMPEG_TEST_PATH ?? (existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg')); } catch { return undefined; } })();
 const media = ffmpeg ? test : test.skip;
@@ -12,11 +12,11 @@ const direct: ExternalFfmpegProcessOptions['launch'] = (_command, args, options)
 const execute = (args: string[], input?: Buffer) => execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', ...args],
   { input, timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
 
-async function convert(input: Buffer, width: number, height: number): Promise<CodecPacket[]> {
+async function convert(input: Buffer, width: number, height: number, sourceInfo?: (info: SourceVideoInfo) => void): Promise<CodecPacket[]> {
   const packets: CodecPacket[] = [];
   const options: ExternalLiveCodecOptions = { ffmpegPath: ffmpeg!, protectionPath: process.execPath,
     video: { width, height, fps: 15, bitrate: 300000, maxFrames: 100, profile: 0, level: 0, softwarePreset: 'ultrafast' } };
-  const session = await createExternalLiveCodec(options, { packet: async value => { packets.push({ ...value, data: Buffer.from(value.data) }); } },
+  const session = await createExternalLiveCodec(options, { packet: async value => { packets.push({ ...value, data: Buffer.from(value.data) }); }, sourceInfo },
     new globalThis.AbortController().signal, { launch: direct, probe: async () => ({ version: 'fixture' }) });
   try {
     for (let offset = 0; offset < input.length; offset += 65536) await session.write(input.subarray(offset, offset + 65536));
@@ -54,11 +54,15 @@ media.each([
   }
 }, 15000);
 
-media.each([['622x342', '1'], ['640x360', '2']] as const)(
+media.each([['622x342', '1'], ['640x360', '2'], ['640x360', '1/2']] as const)(
   'emits square pixels for %s input SAR %s and keeps padding centered', async (size, sar) => {
     const input = execute(['-f', 'lavfi', '-i', `color=c=white:size=${size}:rate=5:duration=0.4`, '-vf', `setsar=${sar}`,
       '-an', '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-f', 'mpegts', 'pipe:1']);
-    const packets = await convert(input, 640, 360), encoded = Buffer.concat(packets.map(packet => packet.data));
+    const sources: SourceVideoInfo[] = [];
+    const packets = await convert(input, 640, 360, info => { sources.push(info); }), encoded = Buffer.concat(packets.map(packet => packet.data));
+    const [sourceWidth, sourceHeight] = size.split('x').map(Number);
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every(info => info.width === sourceWidth && info.height === sourceHeight)).toBe(true);
     const metadata = execute(['-f', 'h264', '-i', 'pipe:0', '-frames:v', '1', '-c:v', 'rawvideo', '-f', 'framecrc', 'pipe:1'], encoded).toString();
     expect(metadata).toMatch(/^#sar 0: 1\/1$/m);
     const pixels = execute(['-f', 'h264', '-i', 'pipe:0', '-frames:v', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'], encoded);
@@ -69,5 +73,13 @@ media.each([['622x342', '1'], ['640x360', '2']] as const)(
     while (bottom < 180 && dark(359 - bottom)) bottom++;
     expect(Math.abs(top - bottom)).toBeLessThanOrEqual(1);
     if (size === '622x342') expect(top).toBeGreaterThan(0);
-    expect(pixels.subarray(180 * 640, 181 * 640).every(value => value > 220)).toBe(true);
+    if (sar === '2') { expect(top).toBe(90); expect(bottom).toBe(90); }
+    const middle = pixels.subarray(180 * 640, 181 * 640);
+    if (sar === '1/2') {
+      let left = 0, right = 0;
+      while (left < 320 && middle[left] < 32) left++;
+      while (right < 320 && middle[639 - right] < 32) right++;
+      expect(left).toBe(160); expect(right).toBe(160);
+      expect(middle.subarray(left, 640 - right).every(value => value > 220)).toBe(true);
+    } else expect(middle.every(value => value > 220)).toBe(true);
   }, 15000);

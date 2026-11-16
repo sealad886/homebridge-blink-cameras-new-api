@@ -64,6 +64,60 @@ export function opusOgg(packets, rate) {
     page.writeUInt32LE(crc(page), 22); return page;
   }));
 }
+/** Exercise bounded metadata/data progress without retaining or decoding large pictures. */
+export async function exerciseExternalLiveBackpressure(packageRoot, protectionPath, ffmpegPath) {
+  const requireInstalled = createRequire(join(packageRoot, 'package.json'));
+  const { createExternalLiveCodec } = requireInstalled(join(packageRoot, 'dist/accessories/external-live-codec.js'));
+  const queueBytes = 1024 * 1024, results = [];
+  for (const name of ['continuous-audio', 'sparse-audio', 'delayed-audio-large-packets']) {
+    const large = name === 'delayed-audio-large-packets', sparse = name !== 'continuous-audio';
+    const width = large ? 1920 : 1280, height = large ? 1080 : 720, fps = large ? 1 : 30, duration = large ? 2 : 5;
+    const fixture = execFileSync(protectionPath, ['--exec', ffmpegPath, '-hide_banner', '-nostdin', '-v', 'error',
+      '-f', 'lavfi', '-i', `testsrc2=s=${width}x${height}:r=${fps}:d=${duration},noise=alls=100:allf=t+u:all_seed=42`,
+      '-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=24000:duration=${duration}`,
+      ...(sparse ? ['-af', large ? "aselect='gte(t,1.9)'" : "aselect='not(between(t,0.5,4.5))'"] : []),
+      '-c:v', 'libx264', '-threads:v', '1', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-bf', '0', '-g', '30',
+      ...(large ? ['-qp', '0'] : ['-b:v', '8000000', '-minrate:v', '8000000', '-maxrate:v', '8000000', '-bufsize:v', '16000000',
+        '-x264-params', 'nal-hrd=cbr:force-cfr=1']),
+      '-c:a', 'aac', '-ar', '24000', '-ac', '1', '-b:a', '32000', '-f', 'mpegts', 'pipe:1'],
+    { env: {}, timeout: 30000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    const video = [], audio = [], owner = new globalThis.AbortController(); let session;
+    try {
+      session = await createExternalLiveCodec({ ffmpegPath, protectionPath,
+        video: { width, height, fps, bitrate: 8000000, maxFrames: 300, profile: 0, level: large ? 2 : 0, softwarePreset: 'ultrafast' },
+        audio: { codec: 'opus', rate: 24000, bitrate: 32000, mtu: 1200, packetTime: 20 } }, {
+        packet: async packet => { if (packet.stream === 1) video.push({ pts: packet.pts, bytes: packet.data.length }); else audio.push(packet.pts); },
+      }, owner.signal);
+      let closed = false; session.whenClosed.then(() => { closed = true; });
+      for (let offset = 0; offset < fixture.length; offset += 65536) await session.write(fixture.subarray(offset, offset + 65536));
+      await session.end();
+      assert.equal(session.failed, false, `${name}: valid media must complete`); assert(closed, `${name}: actual child closure required`);
+      assert.equal(video.length, fps * duration, `${name}: every source picture must be retained`); assert(audio.length > 0, `${name}: audio packets required`);
+      for (let index = 1; index < video.length; index++) assert(video[index].pts > video[index - 1].pts, `${name}: video PTS must advance`);
+      let maximumAudioStep = 0n;
+      for (let index = 1; index < audio.length; index++) {
+        assert(audio[index] > audio[index - 1], `${name}: audio PTS must advance`);
+        if (audio[index] - audio[index - 1] > maximumAudioStep) maximumAudioStep = audio[index] - audio[index - 1];
+      }
+      const totalVideoBytes = video.reduce((sum, packet) => sum + packet.bytes, 0);
+      let gapVideoBytes = 0;
+      if (large) {
+        assert(video.every(packet => packet.bytes <= queueBytes - 48), `${name}: witness packets must fit the admitted bound`);
+        assert(totalVideoBytes > queueBytes + 256 * 1024, `${name}: witness must exceed the byte queue plus pipe headroom`);
+        assert(audio[0] - video[0].pts > 1500000n, `${name}: delayed first audio must remain on its source timeline`);
+      } else if (sparse) {
+        gapVideoBytes = video.filter(packet => packet.pts - video[0].pts >= 500000n && packet.pts - video[0].pts < 4500000n)
+          .reduce((sum, packet) => sum + packet.bytes, 0);
+        assert(gapVideoBytes > queueBytes, `${name}: gap must contain more video than the byte queue`);
+        assert(maximumAudioStep > 3900000n, `${name}: fixture must retain a real audio timestamp gap`);
+      }
+      results.push({ name, videoPackets: video.length, audioPackets: audio.length, totalVideoBytes, gapVideoBytes,
+        maximumVideoPacketBytes: Math.max(...video.map(packet => packet.bytes)), maximumAudioStepUs: Number(maximumAudioStep), closed });
+    } catch (error) { throw new Error(`External live backpressure qualification (${name}) failed`, { cause: error }); }
+    finally { owner.abort(); await session?.stop(); fixture.fill(0); }
+  }
+  return results;
+}
 export async function exerciseExternalLive(packageRoot, protectionPath, ffmpegPath, validationRoot) {
   const requireInstalled = createRequire(join(packageRoot, 'package.json'));
   const { createOwnedMediaSession } = requireInstalled(join(packageRoot, 'dist/accessories/media-session.js'));
@@ -122,5 +176,6 @@ export async function exerciseExternalLive(packageRoot, protectionPath, ffmpegPa
       assert.throws(() => receive(forged), 'Independent receiver must refuse forged SRTP'); selections.push(selection);
     } finally { await session.stop(); fixture.fill(0); }
   }
+  await exerciseExternalLiveBackpressure(packageRoot, protectionPath, ffmpegPath);
   return selections;
 }

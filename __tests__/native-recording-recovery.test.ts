@@ -25,7 +25,7 @@ beforeEach(async () => {
   jest.mocked(validateExternalRecording).mockReset();
   jest.mocked(resolveExternalFfmpegPath).mockReset().mockReturnValue('/verified/ffmpeg');
   jest.mocked(inspectExternalRecording).mockResolvedValue({ pictures: [{ pts: 0, duration: 100000 }],
-    selected: [{ pts: 0, duration: 100000 }], durationUs: 100000, originUs: 0, metadata: 0, corrections: [] });
+    selected: [{ pts: 0, duration: 100000 }], durationUs: 100000, originUs: 0, metadata: 0, corrections: [], videoStreamIndex: 0 });
 });
 afterEach(async () => { await fs.rm(directory, { recursive: true, force: true }); });
 async function input() {
