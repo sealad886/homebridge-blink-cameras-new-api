@@ -77,7 +77,7 @@ export function resolveNativeRecordingConfig(input: NativeRecordingConfigInput |
     catalogRefreshMs: number('catalogRefreshSeconds') * 1000, maxQueuedJobs: number('maxQueuedJobs'),
     maxJobAgeMs: number('maxJobAgeSeconds') * 1000, maxCachedBytes: number('maxCachedBytes'),
   };
-  if (result.maxJobAgeMs < result.initialDelayMs) throw new Error('nativeRecording.maxJobAgeSeconds must cover the initial delay');
+  if (result.maxJobAgeMs <= result.initialDelayMs) throw new Error('nativeRecording.maxJobAgeSeconds must exceed the initial delay');
   return result;
 }
 

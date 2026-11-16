@@ -13,7 +13,15 @@ describePosix('explicit secure media configuration migration', () => {
   let file: string;
   beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'blink-config-migration-')); file = join(directory, 'config.json'); });
   afterEach(() => rmSync(directory, { recursive: true, force: true }));
-  const run = (path: string) => spawnSync(process.execPath, [script, path], { encoding: 'utf8' });
+  const run = (path: string) => spawnSync(process.execPath, [script, path, '--apply'], { encoding: 'utf8' });
+
+  it('previews by default without changing config or creating a backup', () => {
+    const bytes = JSON.stringify({ platforms: [{ platform: 'BlinkCameras', ffmpegPath: 'ffmpeg', enableMotionPolling: true }] });
+    writeFileSync(file, bytes);
+    const result = spawnSync(process.execPath, [script, file], { encoding: 'utf8' });
+    expect(result.status).toBe(0); expect(JSON.parse(result.stdout).action).toBe('Preview');
+    expect(readFileSync(file, 'utf8')).toBe(bytes); expect(readdirSync(directory)).toEqual(['config.json']);
+  });
 
   it('backs up exact original bytes privately and rewrites only Blink settings', () => {
     const other = { platform: 'OtherPlugin', ffmpegDebug: true, username: 'secret-user', audioCodec: 'aac-eld' };
@@ -28,13 +36,13 @@ describePosix('explicit secure media configuration migration', () => {
     const before = statSync(file);
     const result = run(file);
     expect(result.status).toBe(0);
-    const backups = readdirSync(directory).filter(name => name.includes('.secure-media-backup-'));
+    const backups = readdirSync(directory).filter(name => name.includes('.native-recording-backup-'));
     expect(backups).toHaveLength(1);
     const backup = join(directory, backups[0]);
     expect(readFileSync(backup, 'utf8')).toBe(bytes);
     for (const path of [backup, file]) {
       const stat = statSync(path);
-      expect(stat.mode & 0o777).toBe(0o600);
+      expect(stat.mode & 0o777).toBe(path === backup ? 0o600 : 0o640);
       expect([stat.uid, stat.gid]).toEqual([before.uid, before.gid]);
     }
     const migrated = JSON.parse(readFileSync(file, 'utf8'));
@@ -46,7 +54,7 @@ describePosix('explicit secure media configuration migration', () => {
       custom: { preserve: true } });
     expect(result.stdout + result.stderr).not.toMatch(/secret-(?:pin|user|password)/);
     expect(run(file).status).toBe(0);
-    expect(readdirSync(directory).filter(name => name.includes('.secure-media-backup-'))).toEqual(backups);
+    expect(readdirSync(directory).filter(name => name.includes('.native-recording-backup-'))).toEqual(backups);
   });
 
   it('preserves an explicit new diagnostics choice and creates unique backups on separate migrations', () => {
@@ -56,7 +64,7 @@ describePosix('explicit secure media configuration migration', () => {
     expect(JSON.parse(readFileSync(file, 'utf8')).platforms[0].mediaDebug).toBe(false);
     writeFileSync(file, bytes);
     expect(run(file).status).toBe(0);
-    expect(readdirSync(directory).filter(name => name.includes('.secure-media-backup-'))).toHaveLength(2);
+    expect(readdirSync(directory).filter(name => name.includes('.native-recording-backup-'))).toHaveLength(2);
   });
 
   it('leaves unrelated-only configuration byte-identical and creates no backup', () => {

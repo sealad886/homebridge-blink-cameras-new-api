@@ -2,7 +2,7 @@
 import { Buffer } from 'node:buffer';
 import type { CameraRecordingConfiguration, CameraRecordingDelegate, HDSProtocolSpecificErrorReason, RecordingPacket } from 'homebridge';
 import { prepareNativeRecording, snapshotNativeRecordingConfiguration, NativeRecordingPreparationError,
-  type NativeRecordingPreparationDiagnostic, type NativeRecordingPreparationOptions,
+  type NativeRecordingPreparationDiagnostic, type NativeRecordingPreparationOptions, type NativeRecordingRecovery,
   type NativeRecordingSource, type PreparedNativeRecording } from './native-recording-preparation';
 
 export interface NativeRecordingDeliveryMetadata {
@@ -22,7 +22,7 @@ export interface NativeRecordingPolicy {
   configured: boolean;
   allowed: boolean;
 }
-export type NativeRecordingOfferResult = { status: 'ready' } | { status: 'uncertain'; reason: 'motion-publication-failed' | 'policy-changed-after-offer' } |
+export type NativeRecordingOfferResult = { status: 'ready'; recovery?: NativeRecordingRecovery } | { status: 'uncertain'; reason: 'motion-publication-failed' | 'policy-changed-after-offer'; recovery?: NativeRecordingRecovery } |
   { status: 'not-offered'; reason: 'disabled' | 'busy' | 'duplicate' | 'policy-changed' | 'preparation-failed'; diagnostic?: NativeRecordingPreparationDiagnostic };
 export type NativeRecordingDeliveryOutcome = 'request-rejected' | 'requested' | 'transfer-finished' | 'transport-acknowledged' | 'closed' | 'cancelled' | 'not-requested' | 'uncertain';
 export interface NativeRecordingDeliveryEvent { metadata?: NativeRecordingDeliveryMetadata; outcome: NativeRecordingDeliveryOutcome; }
@@ -162,13 +162,13 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
           const offer = this.ready; this.ready = undefined;
           if (offer) { offer.prepared.dispose(); this.report(offer, 'uncertain'); }
           this.setMotionSafely(false);
-          return { status: 'uncertain', reason: 'motion-publication-failed' };
+          return { status: 'uncertain', reason: 'motion-publication-failed', ...(prepared.recovery ? { recovery: prepared.recovery } : {}) };
         }
         if (!this.isCurrent(current)) {
           this.cancelPending(); this.cancelStream();
-          return { status: 'uncertain', reason: 'policy-changed-after-offer' };
+          return { status: 'uncertain', reason: 'policy-changed-after-offer', ...(prepared.recovery ? { recovery: prepared.recovery } : {}) };
         }
-        if (this.ready !== offered && this.stream?.prepared !== prepared) return { status: 'uncertain', reason: 'policy-changed-after-offer' };
+        if (this.ready !== offered && this.stream?.prepared !== prepared) return { status: 'uncertain', reason: 'policy-changed-after-offer', ...(prepared.recovery ? { recovery: prepared.recovery } : {}) };
         if (this.ready === offered) {
           const timer = globalThis.setTimeout(() => {
             if (this.offerTimer === timer) this.offerTimer = undefined;
@@ -177,7 +177,7 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
           }, this.offerTimeout);
           this.offerTimer = timer;
         }
-        return { status: 'ready' };
+        return { status: 'ready', ...(prepared.recovery ? { recovery: prepared.recovery } : {}) };
       } catch (error) {
         prepared?.dispose();
         return { status: 'not-offered', reason: owner.signal.aborted ? 'policy-changed' : 'preparation-failed',

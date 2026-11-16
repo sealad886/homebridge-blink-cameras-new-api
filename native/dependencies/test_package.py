@@ -42,7 +42,7 @@ class PackageTests(unittest.TestCase):
         self.recipe_hash = hashlib.sha256(self.recipe).hexdigest()
         self.snapshot = {
             'native/worker.c': b'synthetic owned C',
-            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 4u\n',
+            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 5u\n',
             'native/Makefile': b'synthetic make',
             'native/COPYING': b'synthetic license',
             'native/dependencies/prepare.py': self.recipe,
@@ -73,7 +73,7 @@ class PackageTests(unittest.TestCase):
     def candidate(self, target, *, receipt_change=None, members=None):
         worker = ('synthetic ' + target).encode()
         receipt = {'target': target, 'source_sha': SHA, 'sha256': hashlib.sha256(worker).hexdigest(),
-                   'protocolVersion': 4,
+                   'protocolVersion': 5,
                    'dependencies': {'recipe_sha256': self.recipe_hash, 'source_inputs': self.pins,
                                     'prototype_assembly_disabled': False},
                    'dynamic_dependencies': 'synthetic system import evidence', 'distribution_ready': False,
@@ -99,7 +99,7 @@ class PackageTests(unittest.TestCase):
         runtime = self.root / 'native/runtime'
         manifest = json.loads((runtime / 'manifest.json').read_text())
         self.assertEqual(manifest['schemaVersion'], 1)
-        self.assertEqual(manifest['protocolVersion'], 4)
+        self.assertEqual(manifest['protocolVersion'], 5)
         self.assertEqual(set(manifest['targets']), set(TARGETS))
         for target in TARGETS:
             item = manifest['targets'][target]
@@ -202,7 +202,7 @@ class PackageTests(unittest.TestCase):
 
     def test_rejects_old_or_missing_candidate_protocol_and_source_mismatch(self):
         for mutate in (lambda row: row.update(protocolVersion=3), lambda row: row.pop('protocolVersion'),
-                       lambda row: row.update(protocolVersion=4.0)):
+                       lambda row: row.update(protocolVersion=5.0)):
             with self.subTest(mutate=mutate):
                 self.candidate('linux-x64', receipt_change=mutate)
                 with self.assertRaises(ValueError):
@@ -338,7 +338,7 @@ class SourceSnapshotTests(unittest.TestCase):
         root = Path('/synthetic/project')
         expected = {
             'native/worker.c': b'committed C', 'native/Makefile': b'committed make', 'native/COPYING': b'license',
-            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 4u\n', 'native/audio.inc': b'audio',
+            'native/protocol.h': b'#define BLINK_PROTOCOL_VERSION 5u\n', 'native/audio.inc': b'audio',
             'native/recording.inc': b'recording', 'native/output.inc': b'output', 'native/protection.inc': b'protection',
             'native/tests/check-recording.c': b'checker',
             'native/dependencies/prepare.py': b'recipe', 'native/dependencies/package.py': b'packager',

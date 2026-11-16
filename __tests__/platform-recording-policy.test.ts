@@ -136,6 +136,23 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(JSON.stringify(log.warn.mock.calls)).not.toContain('private-');
   });
 
+  it('logs recovery at normal levels, warns on degraded audio and excludes arbitrary recovery data', async () => {
+    const platform = await launch(emptyHomescreen());
+    const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
+    const report = createRuntime.mock.calls[0][0].report;
+    log.info.mockClear(); log.warn.mockClear(); log.debug.mockClear();
+    report('prepared', { recovery: { flags: 1, attempts: 1 } });
+    expect(log.info).toHaveBeenLastCalledWith('[NativeRecording] prepared conversion-attempts=1 recovery=audio-clock');
+    report('prepared', { recovery: { flags: 6, attempts: 2, initialWorkerCode: 'AUDIO_DECODE' } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] prepared conversion-attempts=2 recovery=audio-silence,fragments initial-worker=AUDIO_DECODE');
+    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'AUDIO_DECODE', salvageAttempted: true } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=AUDIO_DECODE recovery=exhausted');
+    report('prepared', { recovery: { flags: 3, attempts: 2, initialWorkerCode: 'private-token' } } as never);
+    expect(log.info).toHaveBeenLastCalledWith('[NativeRecording] prepared');
+    expect(log.debug).not.toHaveBeenCalled();
+    expect(JSON.stringify([...log.info.mock.calls, ...log.warn.mock.calls])).not.toContain('private-token');
+  });
+
   it.each(['rtsp', 'rtsps', 'immis'])('redacts %s capability URLs from normal camera-context logs', async scheme => {
     const platform = await launch(emptyHomescreen());
     const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;

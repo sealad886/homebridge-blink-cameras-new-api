@@ -3,7 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const manualMigration = 'Set UIX_STORAGE_PATH to the active Homebridge storage, or follow docs/native-recording-config-migration.md to convert the explicit config before starting with legacy settings.';
+const manualMigration = 'Set UIX_STORAGE_PATH to the active Homebridge storage, or follow docs/native-recording-config-migration.md to preview and apply the combined secure-media, motion and recording conversion before starting with legacy settings.';
 
 function run(environment = process.env, packageRoot = path.resolve(__dirname, '..')) {
   const scope = path.dirname(packageRoot), modules = path.dirname(scope);
@@ -24,7 +24,7 @@ function run(environment = process.env, packageRoot = path.resolve(__dirname, '.
     }
     if (process.platform === 'win32') {
       return { action: 'Skipped', code: 'windows-manual-migration-required',
-        message: 'Automatic configuration migration is unavailable on Windows. Convert legacy choices to canonical JSON before starting Homebridge.' };
+        message: 'Automatic configuration migration is unavailable on Windows. Follow docs/native-recording-config-migration.md to convert secure-media, motion and recording choices to canonical JSON before starting Homebridge.' };
     }
     migration = require('./migrate-native-recording-config.cjs');
     const plan = migration.inspect(config);

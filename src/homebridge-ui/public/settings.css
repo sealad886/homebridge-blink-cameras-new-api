@@ -56,3 +56,13 @@ body.dark #successStatusBadge[data-state="failed"], [data-bs-theme="dark"] #succ
 .log-container { display: none; max-height: 15rem; overflow: auto; font-family: monospace; font-size: .8rem; }.log-container.visible { display: block; }
 @media (max-width: 480px) { .blink-nav-button { flex: 1 1 45%; text-align: start; }.blink-camera,.blink-details,.blink-system { padding: .7rem; } }
 @media (prefers-reduced-motion: reduce) { .blink-ui *, .blink-ui *::before, .blink-ui *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+.blink-setup-notice { padding: .8rem 1rem; margin: .8rem 0 1rem; border: 1px solid currentColor; border-inline-start-width: 4px; border-radius: .4rem; background: #eaf4ff; color: #153d66; font-size: .9rem; line-height: 1.5; }
+.blink-setup-notice-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+.blink-setup-notice h3 { margin: 0; }
+.blink-setup-notice p { margin: .55rem 0 0; }
+.blink-setup-notice a { color: inherit; text-decoration: underline; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .blink-setup-notice { background: #142e46; color: #d8eaff; } }
+body.dark .blink-setup-notice, [data-bs-theme="dark"] .blink-setup-notice { background: #142e46; color: #d8eaff; }
+
+.blink-setup-notice a:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }

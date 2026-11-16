@@ -61,6 +61,8 @@ it('keeps preparation diagnostics detached, fixed and free of arbitrary error da
   expect(Object.isFrozen(error.diagnostic)).toBe(true);
   expect(() => new NativeRecordingPreparationError({ phase: 'private-source' } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(() => new NativeRecordingPreparationError({ phase: 'output', workerCode: 'private-source' } as never)).toThrow('Invalid recording preparation diagnostic');
+  expect(() => new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: false } as never)).toThrow('Invalid recording preparation diagnostic');
+  expect(new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: true }).diagnostic).toEqual({ phase: 'output', salvageAttempted: true });
 });
 
 it('bounds and accounts owned media allocations', () => {
@@ -127,6 +129,7 @@ mediaTest.each([1, 2] as const)('prepares finite MP4 with negotiated audio rate 
   const file = await fixture(), memory = new NativeRecordingMemoryBudget(), selected = configuration();
   selected.audioCodec.samplerate = samplerate;
   const prepared = await prepareNativeRecording(file, selected, true, new globalThis.AbortController().signal, { admit, memory });
+  expect(prepared.recovery).toBeUndefined();
   expect(prepared.initialization.toString('ascii', 4, 8)).toBe('ftyp');
   expect(prepared.fragments.length).toBeGreaterThan(1);
   expect(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= 1000.01)).toBe(true);
@@ -211,5 +214,30 @@ mediaTest('stops output when the shared owned-media budget is exhausted', async 
   const memory = new NativeRecordingMemoryBudget(100);
   await expect(prepareNativeRecording(await fixture(), configuration(), false, new globalThis.AbortController().signal,
     { admit, memory })).rejects.toThrow('output exhausted');
+  expect(memory.bytes).toBe(0);
+});
+
+mediaTest.each(['video-mp4', 'audio-mp4-bad-audio'])('salvages real video with negotiated silent AAC when original audio is unusable: %s', async mode => {
+  const bytes = spawnSync(fixturePath, [mode, '320', '180', '15', '90'], { maxBuffer: 32 * 1024 * 1024 });
+  expect(bytes.status).toBe(0);
+  const original = await source(bytes.stdout), memory = new NativeRecordingMemoryBudget(), admission = jest.fn(work => work());
+  const result = await prepareNativeRecording(original, configuration(), true, new globalThis.AbortController().signal, { memory, admit: admission });
+  try {
+    expect(result.recovery).toMatchObject({ attempts: 2 }); expect(result.recovery!.flags & 2).toBe(2);
+    expect(admission).toHaveBeenCalledTimes(1); expect(await fs.readFile(original.filePath)).toEqual(bytes.stdout);
+    const output = Buffer.concat([result.initialization, ...result.fragments.map(fragment => fragment.data)]);
+    const decoded = JSON.parse(spawnSync(checkerPath, [], { input: output, maxBuffer: 65536 }).stdout.toString());
+    expect(decoded).toMatchObject({ videoFrames: 90, audioTracks: 1, audioSampleRate: 16000, audioChannels: 1 });
+    expect(decoded.audioSamples / 16000).toBeCloseTo(6, 0); expect(decoded.audioPeak).toBeLessThan(1e-7); output.fill(0);
+  } finally { result.dispose(); }
+  expect(memory.bytes).toBe(0);
+});
+mediaTest('repairs finite audio clock jitter in the initial conversion without salvage', async () => {
+  const bytes = spawnSync(fixturePath, ['audio-mp4-jitter', '320', '180', '15', '90'], { maxBuffer: 32 * 1024 * 1024 });
+  expect(bytes.status).toBe(0);
+  const original = await source(bytes.stdout), memory = new NativeRecordingMemoryBudget();
+  const result = await prepareNativeRecording(original, configuration(), true, new globalThis.AbortController().signal, { memory, admit });
+  try { expect(result.recovery).toMatchObject({ attempts: 1, flags: 1 }); expect(await fs.readFile(original.filePath)).toEqual(bytes.stdout); }
+  finally { result.dispose(); }
   expect(memory.bytes).toBe(0);
 });

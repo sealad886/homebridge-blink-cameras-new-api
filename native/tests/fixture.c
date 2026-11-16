@@ -30,8 +30,13 @@ int main(int argc,char **argv){
     int sei_corrupt=argc>1 && !strcmp(argv[1],"audio-mp4-sei-corrupt");
     int sei_terminal=argc>1 && !strcmp(argv[1],"audio-mp4-sei-terminal");
     int sei=sei_overlap || sei_corrupt || sei_terminal || (argc>1 && !strcmp(argv[1],"audio-mp4-sei"));
-    int mp4=sei || (argc>1 && (!strcmp(argv[1],"video-mp4") || !strcmp(argv[1],"audio-mp4")));
-    int with_audio=sei || latm || (argc>1 && (!strcmp(argv[1],"audio") || !strcmp(argv[1],"audio-mp4")));
+    int jitter=argc>1 && !strcmp(argv[1],"audio-mp4-jitter");
+    int gap=argc>1 && !strcmp(argv[1],"audio-mp4-gap");
+    int overlap=argc>1 && !strcmp(argv[1],"audio-mp4-overlap");
+    int bad_audio=argc>1 && !strcmp(argv[1],"audio-mp4-bad-audio");
+    int altered_audio=jitter || gap || overlap || bad_audio;
+    int mp4=sei || altered_audio || (argc>1 && (!strcmp(argv[1],"video-mp4") || !strcmp(argv[1],"audio-mp4")));
+    int with_audio=sei || altered_audio || latm || (argc>1 && (!strcmp(argv[1],"audio") || !strcmp(argv[1],"audio-mp4")));
     int width=16,height=16,fps=15,count=4,offset=0;
     if(bundled)count=30;
     if(argc>2 || (argc>1 && !with_audio)) {
@@ -118,7 +123,12 @@ int main(int argc,char **argv){
             }
             if(avcodec_send_frame(audio,i<count?audio_frame:NULL)<0)return 2;
             while(avcodec_receive_packet(audio,packet)>=0){
-                packet->stream_index=audio_stream->index;av_packet_rescale_ts(packet,audio->time_base,audio_stream->time_base);
+                packet->stream_index=audio_stream->index;
+                int64_t shift=jitter && packet->pts>=0 && (packet->pts/1024)%2?64:0;
+                if(packet->pts>=(int64_t)count*16000/fps/2)shift+=gap?512:overlap?-512:0;
+                packet->pts+=shift;packet->dts+=shift;
+                if(bad_audio && packet->pts>=(int64_t)count*16000/fps*3/4)memset(packet->data,0xff,(size_t)packet->size);
+                av_packet_rescale_ts(packet,audio->time_base,audio_stream->time_base);
                 if(av_interleaved_write_frame(format,packet)<0)return 2;
             }
             if(i==count)break;

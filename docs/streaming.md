@@ -1,7 +1,7 @@
 # Live streaming and quality
 
-Last reviewed: 26 October 2026. Secure runtime implementation is under review;
-beta publication remains blocked until its security and release gates pass.
+Last reviewed: 15 November 2026. Exact package qualification and physical runtime
+acceptance are tracked separately in the release evidence.
 
 This guide owns packaged codec requirements, transport, quality and talkback.
 See [configuration](configuration.md) for saving settings and
@@ -34,22 +34,28 @@ Retired settings fail validation with migration guidance: `ffmpegPath`,
 `videoEncoder`. `audioCodec: aac-eld` also needs migration.
 The private worker uses software x264; hardware encoder selection is removed.
 
-Before the operator restarts Homebridge, run the installed migration script against
-an explicit configuration path on a POSIX host:
+Use the [one-time upgrade procedure](native-recording-config-migration.md#upgrade-from-0100)
+for stable 0.10.0 and the separate intermediate-beta mappings in the same guide.
+On supported POSIX installations with explicit `UIX_STORAGE_PATH`, postinstall
+runs the combined conversion. Otherwise preview the installed converter against
+an explicit complete Homebridge configuration path, then apply after review:
 
 ```sh
-node /absolute/plugin/path/scripts/migrate-secure-media-config.cjs /absolute/homebridge/config.json
+node "/absolute/plugin/path/scripts/migrate-native-recording-config.cjs" "/absolute/homebridge/config.json"
+node "/absolute/plugin/path/scripts/migrate-native-recording-config.cjs" "/absolute/homebridge/config.json" --apply
 ```
 
-It writes an owner-only backup beside the file before replacing it atomically,
-removes retired Blink settings, maps AAC-ELD to Opus and renames `ffmpegDebug` to
-`mediaDebug`. An existing `mediaDebug` value wins. It also removes legacy nested
-`audio.aacEldEncoder`, `audio.twoWay` and `video.encoder` fields, and maps nested
-`audio.codec: aac-eld` to Opus when present. It preserves other platforms.
-Keep the backup private: it contains the original configuration. Windows operators
-must back up their configuration using their normal private storage and remove the
-listed keys manually; the script refuses hosts without POSIX permission semantics.
-Publication does not run this script or restart an installed bridge.
+The historical secure-media script name delegates to this same converter and
+also requires `--apply`; an explicit path alone is now read-only preview. One
+private exact-byte backup covers all conversions. Replacement preserves config
+mode, owner and group, other platforms and explicit canonical choices. Windows
+uses the documented manual conversion; neither script contacts Blink or restarts
+Homebridge. Preserve authentication/accessory state and existing pairing.
+
+For saved recordings, follow the [per-camera recording setup](configuration.md#recording-setup-checklist).
+Live viewing, Blink native clip availability and Apple Home recording permission
+are separate controls. Saved USB clips use each camera’s existing Home accessory
+after local preparation; they do not replace its live feed.
 
 ## Encoding and transport
 

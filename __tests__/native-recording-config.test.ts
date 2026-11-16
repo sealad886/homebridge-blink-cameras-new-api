@@ -20,6 +20,11 @@ describe('native recording configuration', () => {
       expect(() => resolveNativeRecordingConfig(invalid)).toThrow();
     }
   });
+  it('requires a nonempty ordinary acquisition window before job expiry', () => {
+    expect(() => resolveNativeRecordingConfig({ initialDelaySeconds: 1, maxJobAgeSeconds: 1 })).toThrow(/maxJobAgeSeconds/);
+    expect(resolveNativeRecordingConfig({ initialDelaySeconds: 1, maxJobAgeSeconds: 2 }).maxJobAgeMs).toBe(2000);
+    expect(resolveNativeRecordingConfig({ initialDelaySeconds: 0, maxJobAgeSeconds: 1 }).initialDelayMs).toBe(0);
+  });
   it('defaults motion exposure on and HSV off, with independent per-device OR demand', () => {
     expect(nativeRecordingDevicePolicy(undefined, { id: 1 })).toEqual({ exposeMotionDetected: true, homeKitSecureVideo: false, earlyNotificationMode: 'unmanaged' });
     expect(nativeRecordingDevicePolicy({ exposeMotionDetected: false,

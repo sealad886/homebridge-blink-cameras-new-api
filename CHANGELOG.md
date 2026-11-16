@@ -7,6 +7,58 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [1.1.0-rc.0] - 2026-11-15
+
+### HomeKit Secure Video setup
+- Deliver completed native Blink USB clips through each camera's existing Home
+  accessory. Actual saved playback is confirmed for both tested cameras on beta.7;
+  this changed candidate still requires its own physical qualification.
+- Add a temporary settings notice and a complete per-camera setup checklist:
+  playable Blink Local Storage clips, plugin recording enabled, connected Apple
+  home hub and eligible iCloud+, and separate When Home/When Away recording
+  permission. Use Any Motion for the first recording test and review Record Audio.
+- Explain delayed delivery, Home timeline timestamps, independent live viewing,
+  and checking playback rather than relying on thumbnails or transport logs.
+
+### Fixed
+- Schedule recording keyframes by source time and preserve finite picture duration
+  when source frame rate differs from the negotiated rate. Valid low-frame-rate
+  clips no longer fail fragment bounds or the demonstrated audio-tail check.
+  Preserve actual selected-picture intervals when downsampling and reserve AAC
+  headroom before short-fragment boundaries. Existing media guards and preparation
+  deadlines remain enforced.
+- Reject a maximum recording-job age equal to its initial discovery delay, which
+  otherwise expires before its first ordinary attempt. Existing defaults remain
+  unchanged. Document the conservative matching tolerance and its measured limits.
+- Convert actual 0.10.0 retired media and motion settings together during supported
+  installation, preserving explicit canonical values, other plugins, ownership and
+  config access mode, with a private exact-byte backup. No ongoing legacy setting
+  interpretation is added to the runtime or editor.
+
+### Recovery-first delivery
+- Repair finite audio timing and allow one salvage conversion within the same
+  preparation deadline and resource budget. Preserve usable video and original
+  audio where recoverable; explicitly warn when an AAC silence track replaces
+  irreparable sound. Home audio-off permission remains authoritative.
+- Keep source media only as a transient processing copy. No failed-media archive,
+  persistent retry queue or repeated Home offer is introduced. Terminal failure
+  is explicit and does not renew the deadline.
+- Rebuild all native targets for private protocol version 5, with strict recovery
+  result validation and installed-package coverage required before promotion.
+
+### Upgrade and qualification
+- Close settings/config editors before upgrading. POSIX automatic migration needs
+  the installer's explicit storage path; otherwise preview the installed converter
+  and apply with `--apply`. Windows users follow the manual conversion guide.
+  Both migration entrypoints now preview by default, including the historical
+  secure-media script. Existing pairing and camera identities are preserved.
+- Settings notice dismissal changes only the current editor, never configuration.
+  Remove the temporary notice in the first maintenance release after 1.1.0.
+- Earlier intermittent Pi preparation failures remain under investigation; the
+  local low-frame-rate reproduction does not establish their individual causes.
+  Stable promotion requires exact candidate artifacts and physical acceptance,
+  critical paths and natural token refreshes under the release guide.
+
 ## [1.1.0-beta.7] - 2026-11-15
 
 ### Fixed

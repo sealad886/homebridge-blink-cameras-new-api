@@ -28,7 +28,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const cameras = [{ key: 'camera:1', kind: 'camera', id: '1', name: 'Same', networkId: '10', status: 'online', enabled: true, moduleAssociation: { state: 'unique', source: 'network_id', candidateIds: ['100'] } },
   { key: 'owl:1', kind: 'owl', id: '1', name: 'Same', networkId: '10', status: 'offline', enabled: true, moduleAssociation: { state: 'noneReported', source: 'network_id', candidateIds: [] } }];
 function mount(config: Record<string, unknown>, validate?: (payload: unknown) => unknown) {
-  const elements = new Map(['settingsNavigation', 'sectionFields', 'connectionFlow', 'accountMaintenance', 'sectionTitle', 'draftStatus', 'settingsErrors', 'inventoryStatus', 'retrySettings', 'accountDraftWarning', 'settingsWarnings'].map(id => [id, new Element()]));
+  const elements = new Map(['hsvSetupNotice', 'dismissHsvSetupNotice', 'settingsNavigation', 'sectionFields', 'connectionFlow', 'accountMaintenance', 'sectionTitle', 'draftStatus', 'settingsErrors', 'inventoryStatus', 'retrySettings', 'accountDraftWarning', 'settingsWarnings'].map(id => [id, new Element()]));
   const document = { createElement: (tag: string) => new Element(tag), getElementById: (id: string) => elements.get(id) };
   const context: any = { window: {}, document, structuredClone, setTimeout, clearTimeout };
   runInNewContext(source('settings-state.js'), context);
@@ -65,6 +65,21 @@ it('opens, discovers cameras and retries validation without notifying Homebridge
   expect(homebridge.updatePluginConfig).toHaveBeenCalledTimes(2);
   expect(editor.draft.state.dirty).toBe(false);
   expect(elements.get('draftStatus')!.dataset.state).toBe('clean');
+});
+
+it('dismisses the setup notice without staging or changing settings, and shows it on a new editor', async () => {
+  const { editor, homebridge, elements } = mount({ extension: { keep: true } });
+  await editor.draft.flush();
+  const baseline = structuredClone(editor.blocks);
+  elements.get('dismissHsvSetupNotice')!.handlers.click();
+  editor.showSection(2); await editor.draft.flush();
+  expect(elements.get('hsvSetupNotice')!.hidden).toBe(true);
+  expect(editor.blocks).toEqual(baseline);
+  expect(editor.draft.state.dirty).toBe(false);
+  expect(homebridge.updatePluginConfig).not.toHaveBeenCalled();
+  expect(homebridge.enableSaveButton).not.toHaveBeenCalled();
+  const reopened = mount({}); await reopened.editor.draft.flush();
+  expect(reopened.elements.get('hsvSetupNotice')!.hidden).toBe(false);
 });
 
 it('identifies every blocking field and stages only after canonical validation succeeds', async () => {

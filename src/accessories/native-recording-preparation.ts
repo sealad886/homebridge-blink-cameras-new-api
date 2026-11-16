@@ -11,17 +11,25 @@ import { loadPackagedMediaWorker } from './media-worker-artifact';
 export interface NativeRecordingPreparationDiagnostic {
   phase: 'configuration' | 'input' | 'output' | 'closure' | 'validation';
   workerCode?: MediaWorkerFailureCode;
+  salvageAttempted?: true;
+}
+export interface NativeRecordingRecovery {
+  readonly flags: number;
+  readonly attempts: 1 | 2;
+  readonly initialWorkerCode?: MediaWorkerFailureCode;
 }
 export class NativeRecordingPreparationError extends Error {
   readonly diagnostic: Readonly<NativeRecordingPreparationDiagnostic>;
   constructor(diagnostic: NativeRecordingPreparationDiagnostic) {
     if (!['configuration', 'input', 'output', 'closure', 'validation'].includes(diagnostic.phase) ||
-        (diagnostic.workerCode !== undefined && !isMediaWorkerFailureCode(diagnostic.workerCode))) {
+        (diagnostic.workerCode !== undefined && !isMediaWorkerFailureCode(diagnostic.workerCode)) ||
+        (diagnostic.salvageAttempted !== undefined && diagnostic.salvageAttempted !== true)) {
       throw new Error('Invalid recording preparation diagnostic');
     }
     super(`Recording conversion failed during ${diagnostic.phase}`);
     this.diagnostic = Object.freeze({ phase: diagnostic.phase,
-      ...(diagnostic.workerCode ? { workerCode: diagnostic.workerCode } : {}) });
+      ...(diagnostic.workerCode ? { workerCode: diagnostic.workerCode } : {}),
+      ...(diagnostic.salvageAttempted ? { salvageAttempted: true } : {}) });
   }
 }
 
@@ -49,6 +57,7 @@ export interface PreparedNativeRecording {
   readonly sourceSha256: string;
   readonly preparedSha256: string;
   readonly disposed: boolean;
+  readonly recovery?: Readonly<NativeRecordingRecovery>;
   dispose(): void;
 }
 
@@ -265,80 +274,107 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       // no file paths, provider capabilities, URLs or inherited environment.
       // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
       const workerPath = loadPackagedMediaWorker(path.resolve(__dirname, '../..'));
-      let outputFailure: Error | undefined;
-      const collect = async (value: Buffer): Promise<void> => {
-        owner.throwIfAborted();
-        try {
-          if (collected + value.length > NATIVE_RECORDING_MEDIA_LIMITS.outputBytes) throw new Error();
-          memory.reserve(value.length);
-        } catch { outputFailure = new Error('Recording output exhausted'); throw outputFailure; }
-        let copy: Buffer;
-        try { copy = Buffer.from(value); } catch (error) { memory.release(value.length); throw error; }
-        chunks.push(copy); collected += copy.length;
+      const unchanged = async (): Promise<void> => {
+        const current = await file.stat(), named = await fs.lstat(source.filePath);
+        if (!named.isFile() || named.dev !== before.dev || named.ino !== before.ino ||
+            (['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'uid', 'gid'] as const).some(key => current[key] !== before[key])) {
+          throw new Error('Recording source integrity mismatch');
+        }
       };
-      const worker = new PrivateMediaWorker(workerPath, {
-        recordingInit: collect,
-        recordingFragment: fragment => collect(fragment.data),
-      });
-      const abort = () => { void worker.stop(); };
-      owner.addEventListener('abort', abort, { once: true });
-      let phase: 'configuration' | 'input' | 'output' | 'closure' = 'configuration';
-      try {
-        owner.throwIfAborted();
-        const video = selected.videoCodec, [width, height, fps] = video.resolution;
-        await worker.configureRecording({ width, height, fps, bitrate: video.parameters.bitRate * 1000,
-          // This is a decoded-source budget, independent of HomeKit output fps.
-          maxFrames: 9000, preset: 0,
-          profile: video.parameters.profile, level: video.parameters.level, inputFormat: 'mp4',
-          audioCodec: audioActive ? 4 : 0, audioRate: audioActive ? audio.samplerate === 1 ? 16000 : 24000 : 0,
-          audioBitrate: audioActive ? audio.bitrate * 1000 : 0,
-          fragmentMs: selected.mediaContainerConfiguration.fragmentLength,
-          iFrameIntervalMs: Math.min(video.parameters.iFrameInterval, selected.mediaContainerConfiguration.fragmentLength) });
-        await worker.whenReady;
-        phase = 'input';
-        const actual = createHash('sha256'), block = Buffer.allocUnsafe(MEDIA_WORKER_LIMITS.inputBytes);
+      let initialWorkerCode: MediaWorkerFailureCode | undefined;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        owner.throwIfAborted(); await unchanged();
         try {
-          for (let position = 0; position < before.size;) {
+          let outputFailure: Error | undefined, recoveryFlags = 0;
+          const collect = async (value: Buffer): Promise<void> => {
             owner.throwIfAborted();
-            const { bytesRead } = await file.read(block, 0, Math.min(block.length, before.size - position), position);
-            if (!bytesRead) throw new Error('Recording source changed');
-            const bytes = block.subarray(0, bytesRead); actual.update(bytes);
-            await worker.media(bytes); position += bytesRead;
+            try {
+              if (collected + value.length > NATIVE_RECORDING_MEDIA_LIMITS.outputBytes) throw new Error();
+              memory.reserve(value.length);
+            } catch { outputFailure = new Error('Recording output exhausted'); throw outputFailure; }
+            let copy: Buffer;
+            try { copy = Buffer.from(value); } catch (error) { memory.release(value.length); throw error; }
+            chunks.push(copy); collected += copy.length;
+          };
+          const worker = new PrivateMediaWorker(workerPath, {
+            recordingRecovery: flags => { recoveryFlags = flags; },
+            recordingInit: collect,
+            recordingFragment: fragment => collect(fragment.data),
+          });
+          const abort = () => { void worker.stop(); };
+          owner.addEventListener('abort', abort, { once: true });
+          let phase: 'configuration' | 'input' | 'output' | 'closure' = 'configuration';
+          try {
+            owner.throwIfAborted();
+            const video = selected.videoCodec, [width, height, fps] = video.resolution;
+            await worker.configureRecording({ width, height, fps, bitrate: video.parameters.bitRate * 1000,
+              // This is a decoded-source budget, independent of HomeKit output fps.
+              maxFrames: 9000, preset: 0,
+              profile: video.parameters.profile, level: video.parameters.level, inputFormat: 'mp4', salvage: attempt === 1,
+              audioCodec: audioActive ? 4 : 0, audioRate: audioActive ? audio.samplerate === 1 ? 16000 : 24000 : 0,
+              audioBitrate: audioActive ? audio.bitrate * 1000 : 0,
+              fragmentMs: selected.mediaContainerConfiguration.fragmentLength,
+              iFrameIntervalMs: Math.min(video.parameters.iFrameInterval, selected.mediaContainerConfiguration.fragmentLength) });
+            await worker.whenReady;
+            phase = 'input';
+            const actual = createHash('sha256'), block = Buffer.allocUnsafe(MEDIA_WORKER_LIMITS.inputBytes);
+            try {
+              for (let position = 0; position < before.size;) {
+                owner.throwIfAborted();
+                const { bytesRead } = await file.read(block, 0, Math.min(block.length, before.size - position), position);
+                if (!bytesRead) throw new Error('Recording source changed');
+                const bytes = block.subarray(0, bytesRead); actual.update(bytes);
+                await worker.media(bytes); position += bytesRead;
+              }
+            } finally { block.fill(0); }
+            const consumed = await file.stat();
+            if (actual.digest('hex') !== source.expectedSha256 || before.size !== consumed.size ||
+                before.mtimeMs !== consumed.mtimeMs || before.ctimeMs !== consumed.ctimeMs) throw new Error('Recording source integrity mismatch');
+            await unchanged(); owner.throwIfAborted(); phase = 'output'; await worker.endMedia(); await worker.whenMediaDrained;
+            phase = 'closure'; await worker.finishInput();
+            if (worker.failed) throw new Error('Recording conversion failed');
+          } catch (error) {
+            if (owner.aborted) throw new Error('Recording conversion cancelled');
+            if (outputFailure) throw outputFailure;
+            if (error instanceof Error && /Recording (?:output exhausted|source)/.test(error.message)) throw error;
+            await worker.stop();
+            throw new NativeRecordingPreparationError({ phase, ...(worker.failureCode ? { workerCode: worker.failureCode } : {}),
+              ...(attempt === 1 ? { salvageAttempted: true as const } : {}) });
+          } finally {
+            owner.removeEventListener('abort', abort); await worker.stop();
           }
-        } finally { block.fill(0); }
-        const consumed = await file.stat();
-        if (actual.digest('hex') !== source.expectedSha256 || before.size !== consumed.size ||
-            before.mtimeMs !== consumed.mtimeMs || before.ctimeMs !== consumed.ctimeMs) throw new Error('Recording source integrity mismatch');
-        owner.throwIfAborted(); phase = 'output'; await worker.endMedia(); await worker.whenMediaDrained;
-        phase = 'closure'; await worker.finishInput();
-        if (worker.failed) throw new Error('Recording conversion failed');
-      } catch (error) {
-        if (owner.aborted) throw new Error('Recording conversion cancelled');
-        if (outputFailure) throw outputFailure;
-        if (error instanceof Error && /Recording (?:output exhausted|source)/.test(error.message)) throw error;
-        await worker.stop();
-        throw new NativeRecordingPreparationError({ phase, ...(worker.failureCode ? { workerCode: worker.failureCode } : {}) });
-      } finally {
-        owner.removeEventListener('abort', abort); await worker.stop();
+          owner.throwIfAborted();
+          if (!collected) throw new Error('Recording worker produced no media');
+          memory.reserve(collected);
+          try { output = Buffer.concat(chunks, collected); } catch (error) { memory.release(collected); throw error; }
+          for (const chunk of chunks) chunk.fill(0);
+          chunks.length = 0; memory.release(collected);
+          let parsed: ReturnType<typeof parsePrepared>;
+          try { parsed = parsePrepared(output, selected, audioActive); }
+          catch { throw new NativeRecordingPreparationError({ phase: 'validation', ...(attempt === 1 ? { salvageAttempted: true as const } : {}) }); }
+          const bytes = output.length, preparedSha256 = createHash('sha256').update(output).digest('hex');
+          const owned = output;
+          let disposed = false;
+          const prepared: PreparedNativeRecording = Object.freeze({ ...parsed, fragments: Object.freeze(parsed.fragments), configuration: selected,
+            ...(recoveryFlags || attempt === 1 ? { recovery: Object.freeze({ flags: recoveryFlags, attempts: (attempt === 1 ? 2 : 1) as 1 | 2,
+              ...(initialWorkerCode ? { initialWorkerCode } : {}) }) } : {}),
+            audioActive, bytes, sourceSha256: source.expectedSha256, preparedSha256,
+            get disposed() { return disposed; },
+            dispose() { if (disposed) return; disposed = true; owned.fill(0); memory.release(bytes); },
+          });
+          retained = true; return prepared;
+        } catch (error) {
+          if (attempt !== 0 || owner.aborted || !(error instanceof NativeRecordingPreparationError) ||
+              !error.diagnostic.workerCode || !['AUDIO_CODEC', 'AUDIO_DECODE', 'AUDIO_DISCONTINUITY', 'AUDIO_INPUT',
+                'AUDIO_MISSING', 'AUDIO_RESAMPLE', 'AUDIO_TIMESTAMP', 'FRAGMENT_LIMIT'].includes(error.diagnostic.workerCode)) throw error;
+          initialWorkerCode = error.diagnostic.workerCode;
+        } finally {
+          if (chunks.length) { for (const chunk of chunks) chunk.fill(0); memory.release(collected); chunks.length = 0; }
+          collected = 0;
+          if (output && !retained) { output.fill(0); memory.release(output.length); output = undefined; }
+        }
       }
-      owner.throwIfAborted();
-      if (!collected) throw new Error('Recording worker produced no media');
-      memory.reserve(collected);
-      try { output = Buffer.concat(chunks, collected); } catch (error) { memory.release(collected); throw error; }
-      for (const chunk of chunks) chunk.fill(0);
-      chunks.length = 0; memory.release(collected);
-      let parsed: ReturnType<typeof parsePrepared>;
-      try { parsed = parsePrepared(output, selected, audioActive); }
-      catch { throw new NativeRecordingPreparationError({ phase: 'validation' }); }
-      const bytes = output.length, preparedSha256 = createHash('sha256').update(output).digest('hex');
-      const owned = output;
-      let disposed = false;
-      const prepared: PreparedNativeRecording = Object.freeze({ ...parsed, fragments: Object.freeze(parsed.fragments), configuration: selected,
-        audioActive, bytes, sourceSha256: source.expectedSha256, preparedSha256,
-        get disposed() { return disposed; },
-        dispose() { if (disposed) return; disposed = true; owned.fill(0); memory.release(bytes); },
-      });
-      retained = true; return prepared;
+      throw new Error('Recording recovery exhausted');
     } finally {
       await file.close();
       if (chunks.length) { for (const chunk of chunks) chunk.fill(0); memory.release(collected); }

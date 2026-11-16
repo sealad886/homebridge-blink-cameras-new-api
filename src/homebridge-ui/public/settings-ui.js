@@ -11,6 +11,10 @@
   const numberValue = value => value === '' ? undefined : /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
 
   function mount(homebridge, schema, blocks) {
+    // Dismissal lasts only for this editor instance; it is never a configuration edit.
+    document.getElementById('dismissHsvSetupNotice')?.addEventListener('click', () => {
+      document.getElementById('hsvSetupNotice').hidden = true;
+    });
     const properties = schema.schema.properties;
     const sections = schema.layout;
     const nav = document.getElementById('settingsNavigation');
@@ -210,7 +214,7 @@
     function renderRecording(parent) {
       parent.append(el('p', 'Offer completed Blink USB motion clips to HomeKit Secure Video. Apple Home manages recording permission, audio and iCloud retention.'));
       const checklist = el('ol', undefined, 'blink-checklist');
-      ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home, allow Stream & Allow Recording and choose recording-audio permission.', 'Keep native Blink motion recording enabled and the associated Sync Module USB storage available.'].forEach(text => checklist.append(el('li', text)));
+      ['Select cameras here, then Save and restart the Blink child bridge.', 'In Apple Home → camera Settings → Recording Options, check When Home and When Away separately. Choose Stream & Allow Recording for each mode you want; use Any Motion for the first test and review Record Audio.', 'Keep Blink armed, camera motion enabled and native Sync Module USB clips playable. A connected Apple home hub and eligible iCloud+ plan are required.'].forEach(text => checklist.append(el('li', text)));
       parent.append(checklist, el('p', 'Motion notifications schedule a clip check using the timing below. No continuous camera feed or idle storage preparation is started. Home receives each saved clip after it is downloaded and prepared, so its timeline time can differ from native capture time.', 'blink-help'));
       scalar('earlyNotificationMode', parent, { property: { ...properties.earlyNotificationMode, default: 'unmanaged' },
         value: draft.config.earlyNotificationMode, change: value => write('earlyNotificationMode', value) });

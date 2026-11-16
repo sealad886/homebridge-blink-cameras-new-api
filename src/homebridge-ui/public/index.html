@@ -15,6 +15,12 @@
   </section>
   <button type="button" class="btn btn-outline-secondary" id="retryLoad" hidden>Retry loading settings</button>
   <p class="blink-eyebrow">BLINK CAMERAS · HOMEKIT</p>
+  <!-- 1.1.0 release-window notice: remove in the first maintenance release after 1.1.0. -->
+  <aside id="hsvSetupNotice" class="blink-setup-notice" aria-labelledby="hsvSetupNoticeTitle">
+    <div class="blink-setup-notice-heading"><h3 id="hsvSetupNoticeTitle">New: HomeKit Secure Video setup</h3><button type="button" id="dismissHsvSetupNotice" class="btn btn-sm btn-outline-secondary" aria-label="Dismiss HomeKit Secure Video setup notice">Dismiss</button></div>
+    <p>For each camera, keep Blink motion and native USB recording enabled, enable HomeKit recording here, then allow <strong>Stream &amp; Allow Recording</strong> in Apple Home for <strong>When Home</strong> and <strong>When Away</strong>. A connected home hub and an eligible iCloud+ plan are required.</p>
+    <p>Completed Blink clips arrive after download and preparation in that camera’s Home timeline. <a href="https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/README.md#homekit-secure-video" target="_blank" rel="noopener noreferrer">Follow the recording setup checklist</a>.</p>
+  </aside>
   <nav id="settingsNavigation" class="blink-navigation" aria-label="Blink settings sections"></nav>
   <p id="draftStatus" class="blink-draft-status" role="status" aria-live="polite">Loading settings…</p>
   <h2 id="sectionTitle" tabindex="-1">Overview &amp; connection</h2>
