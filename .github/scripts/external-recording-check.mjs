@@ -119,6 +119,8 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
     const trials = [...selected.map(name => ({ name })), { name: 'low-fps-source', fps: 7, fragment: 4000 },
       { name: '25fps-source-15fps-output', fragment: 4000 }, { name: 'recovery-metadata', hd: true, fragment: 4000 },
       { name: 'recovery-metadata', audioFirst: true }, { name: 'audio-disabled', sar: 2 },
+      { name: 'audio-disabled', label: '90s-24fps-source-15fps-output', fps: 24, count: 2160, tiny: true, outputFps: 15, expectedFrames: 1350 },
+      { name: 'audio-disabled', label: '90s-24fps-source-24fps-output', fps: 24, count: 2160, tiny: true, outputFps: 24, expectedFrames: 2160 },
       { name: 'recovery-metadata', count: 1026, metadataEvery: 2, tiny: true },
       { name: 'recovery-metadata', count: 1028, metadataEvery: 2, tiny: true, rejectMetadata: true }];
     for (const trial of trials) {
@@ -129,7 +131,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       const width = long || trial.tiny ? 16 : 320, height = long || trial.tiny ? 16 : 180, fps = trial.fps ?? (long ? 30 : low ? 5 : odd ? 25 : 15);
       const outputWidth = trial.hd ? 1920 : width, outputHeight = trial.hd ? 1080 : height, fragmentMs = trial.fragment ?? 1000;
       const count = trial.count ?? (long ? 1800 : low ? fps * 9 : odd ? 225 : metadata || corrupt || missing || name === 'audio-clock-repair' ? 90 : 33);
-      const label = trial.audioFirst ? `${name}-audio-first` : trial.sar ? `${name}-sar-${trial.sar}` : trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name;
+      const label = trial.label ?? (trial.audioFirst ? `${name}-audio-first` : trial.sar ? `${name}-sar-${trial.sar}` : trial.tiny ? `${name}-dense-${count}` : trial.fps || trial.fragment || trial.hd ? `${name}-${fps}-${fragmentMs}-${outputWidth}` : name);
       const source = join(scratch, label + '-generated.mp4'), path = join(scratch, label + '.mp4');
       execute(['-y', '-f', 'lavfi', '-i', `${trial.sar ? 'color=c=white:' : 'testsrc2='}size=${width}x${height}:rate=${metadata ? fps * 1000 + '/1001' : fps}`,
         ...(!missing ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000'] : []), '-frames:v', String(count),
@@ -148,7 +150,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       assert(bytes.indexOf(Buffer.from('moov')) > bytes.indexOf(Buffer.from('mdat'))); writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
       const active = !['audio-disabled', 'damaged-audio-disabled', '30fps-source-15fps-output'].includes(name), rate = name === 'audio-24khz' || odd || name === 'corrupt-audio-recovery' ? 24000 : 16000;
       const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: fragmentMs },
-        videoCodec: { type: 0, resolution: [outputWidth, outputHeight, low || name === 'recovery-metadata' ? 30 : 15], parameters: { profile: 0, level: trial.hd ? 2 : 0, bitRate: trial.hd ? 2000 : 300, iFrameInterval: fragmentMs } },
+        videoCodec: { type: 0, resolution: [outputWidth, outputHeight, trial.outputFps ?? (low || name === 'recovery-metadata' ? 30 : 15)], parameters: { profile: 0, level: trial.hd ? 2 : 0, bitRate: trial.hd ? 2000 : 300, iFrameInterval: fragmentMs } },
         audioCodec: { type: 0, samplerate: rate === 16000 ? 1 : 2, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
       const memory = new NativeRecordingMemoryBudget();
       const prepare = () => prepareNativeRecording({ filePath: path, expectedBytes: bytes.length, expectedSha256: hash(bytes) }, configuration, active,
@@ -164,7 +166,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       try {
         const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
         assert.equal(hash(output), prepared.preparedSha256); assert.equal(hash(readFileSync(path)), hash(bytes));
-        const expectedFrames = long ? 900 : odd ? 135 : count;
+        const expectedFrames = trial.expectedFrames ?? (long ? 900 : odd ? 135 : count);
         // The intentional one-frame HD decoder exits before consuming a whole
         // stdin pipe. An owned file avoids mistaking that normal early exit for EPIPE.
         const decodedPath = trial.hd ? join(scratch, `${label}-qualified.mp4`) : undefined;
@@ -190,6 +192,8 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
           assert(frames.includes(`#dimensions 0: ${outputWidth}x${outputHeight}`));
         }
         assert(prepared.durationMs > (metadata ? count * 1001 / fps : count * 1000 / fps) - 100 && prepared.durationMs <= (metadata ? count * 1001 / fps : count * 1000 / fps) + 100);
+        if (trial.outputFps) assert(Math.abs(prepared.durationMs - count * 1000 / fps) <= 0.01,
+          'Frame selection must preserve the source end at the 90-second admission boundary');
         assert(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= fragmentMs + 0.1));
         for (let i = 1; i < prepared.fragments.length; i++) assert(Math.abs(prepared.fragments[i - 1].startMs + prepared.fragments[i - 1].durationMs - prepared.fragments[i].startMs) < 0.1);
         if (active) {

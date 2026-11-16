@@ -308,8 +308,10 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     const selected: Picture[] = []; let bucket = -1;
     for (const picture of pictures) { const next = Math.floor(picture.pts * fps / 1000000 + 0.0001);
       if (next > bucket) { selected.push(picture); bucket = next; } }
-    const last = selected.at(-1)!;
-    const durationUs = last.pts + Math.max(last.duration, Math.round(1000000 / fps));
+    // Selection changes cadence, never the corrected source end. Retain the
+    // complete picture inventory so a dropped tail cannot shorten the clip or
+    // an output interval extend it beyond the finite-source limit.
+    const durationUs = pictures.reduce((end, picture) => Math.max(end, picture.pts + picture.duration), 0);
     if (durationUs < 1 || durationUs > 90000000) failure('VIDEO_TIMESTAMP');
     const audioOriginUs = audioActive ? await inspectAudioOrigin(context) : undefined;
     return { pictures, selected, durationUs, originUs: origin, audioOriginUs, metadata, corrections, videoStreamIndex };

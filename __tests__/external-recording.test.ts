@@ -125,6 +125,44 @@ async function recording(source: Buffer, audio: boolean, rate = 16000, silence =
     return { plan, output };
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }
+media.each([[1, 24], [90, 24], [1, 30]])('keeps a %s-second %s-fps source end independent of output frame selection', async (seconds, sourceFps) => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-source-end-')), file = join(directory, 'source.mp4');
+  try {
+    execute(['-f', 'lavfi', '-i', `testsrc2=size=16x16:rate=${sourceFps}:duration=${seconds}`, '-an', '-c:v', 'libx264',
+      '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-f', 'mp4', file]);
+    jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+    const context = { ffmpegPath: ffmpeg!, protectionPath: protection, signal: new globalThis.AbortController().signal,
+      deadline: Date.now() + 15000, open: () => fs.open(file, 'r') };
+    for (const fps of [15, 24]) {
+      const plan = await inspectExternalRecording(context, fps), selected = configuration(), chunks: Buffer[] = [];
+      selected.videoCodec.resolution = [16, 16, fps];
+      expect(plan.durationUs).toBe(seconds * 1000000);
+      await convertExternalRecording(context, selected, plan, false, false, bytes => chunks.push(Buffer.from(bytes)));
+      const output = Buffer.concat(chunks);
+      try {
+        await validateExternalRecording(context, output, selected, plan, false);
+        const metadata = execute(['-i', 'pipe:0', '-map', '0:v:0', '-c:v', 'copy', '-f', 'framecrc', 'pipe:1'], output).toString();
+        const base = /^#tb 0: (\d+)\/(\d+)$/m.exec(metadata)!;
+        const packets = metadata.split('\n').filter(line => /^0,/.test(line)).map(line => line.split(',').map(Number));
+        const last = packets.at(-1)!;
+        expect(packets).toHaveLength(plan.selected.length);
+        expect((last[2] + last[3] - packets[0][2]) * Number(base[1]) * 1000000 / Number(base[2]))
+          .toBeCloseTo(seconds * 1000000, 0);
+      } finally { output.fill(0); }
+    }
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}, 20000);
+media('refuses a source beyond 90 seconds even when output frame selection drops its final picture', async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-source-limit-')), file = join(directory, 'source.mp4');
+  try {
+    execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=24', '-frames:v', '2162', '-an', '-c:v', 'libx264',
+      '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-f', 'mp4', file]);
+    jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+    await expect(inspectExternalRecording({ ffmpegPath: ffmpeg!, protectionPath: protection,
+      signal: new globalThis.AbortController().signal, deadline: Date.now() + 15000, open: () => fs.open(file, 'r') }, 15))
+      .rejects.toMatchObject({ code: 'VIDEO_TIMESTAMP' });
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}, 20000);
 media('prepares audio-first metadata without depending on a packaged helper manifest', async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-audio-first-')), file = join(directory, 'source.mp4');
   try {
