@@ -122,6 +122,95 @@ class ProtectionTests(unittest.TestCase):
                         self.assertEqual(result.stdout,b'')
                         self.assertEqual(result.stderr.splitlines(),[b'BLINK_PROTECTION_ARGUMENTS'])
 
+    @unittest.skipUnless(os.name=='nt','Windows atomic child job admission')
+    def test_windows_cancellation_at_child_creation_closes_child_and_pipes(self):
+        import ctypes
+        from ctypes import wintypes
+
+        class ExceptionRecord(ctypes.Structure):
+            _fields_=[('code',wintypes.DWORD),('flags',wintypes.DWORD),('record',ctypes.c_void_p),
+                      ('address',ctypes.c_void_p),('count',wintypes.DWORD),('parameters',ctypes.c_size_t*15)]
+        class ExceptionInfo(ctypes.Structure):
+            _fields_=[('record',ExceptionRecord),('first_chance',wintypes.DWORD)]
+        class CreateInfo(ctypes.Structure):
+            _fields_=[('file',wintypes.HANDLE),('process',wintypes.HANDLE),('thread',wintypes.HANDLE),
+                      ('base',ctypes.c_void_p),('offset',wintypes.DWORD),('size',wintypes.DWORD),
+                      ('tls',ctypes.c_void_p),('start',ctypes.c_void_p),('name',ctypes.c_void_p),('unicode',wintypes.WORD)]
+        class DllInfo(ctypes.Structure):
+            _fields_=[('file',wintypes.HANDLE),('base',ctypes.c_void_p),('offset',wintypes.DWORD),
+                      ('size',wintypes.DWORD),('name',ctypes.c_void_p),('unicode',wintypes.WORD)]
+        class EventInfo(ctypes.Union):
+            _fields_=[('exception',ExceptionInfo),('create',CreateInfo),('dll',DllInfo)]
+        class DebugEvent(ctypes.Structure):
+            _fields_=[('kind',wintypes.DWORD),('pid',wintypes.DWORD),('tid',wintypes.DWORD),('info',EventInfo)]
+
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.WaitForDebugEvent.argtypes=[ctypes.POINTER(DebugEvent),wintypes.DWORD]
+        kernel.WaitForDebugEvent.restype=wintypes.BOOL
+        kernel.ContinueDebugEvent.argtypes=[wintypes.DWORD,wintypes.DWORD,wintypes.DWORD]
+        kernel.ContinueDebugEvent.restype=wintypes.BOOL
+        kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+        kernel.OpenProcess.restype=wintypes.HANDLE
+        kernel.TerminateProcess.argtypes=[wintypes.HANDLE,wintypes.UINT]
+        kernel.TerminateProcess.restype=wintypes.BOOL
+        kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
+        kernel.WaitForSingleObject.restype=wintypes.DWORD
+        kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+        kernel.CloseHandle.restype=wintypes.BOOL
+
+        # DEBUG_PROCESS reports descendants too. The child's create event blocks
+        # the supervisor's CreateProcessW return, before any assign/resume code.
+        # No test hook or timing race is needed in the production executable.
+        process=subprocess.Popen([WORKER,'--exec',sys.executable,'-c','raise SystemExit("child ran")'],
+                                 stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                 creationflags=0x00000001)  # DEBUG_PROCESS
+        child=None;child_handle=None;exited=set()
+        def advance(cleanup=False):
+            nonlocal child,child_handle
+            event=DebugEvent()
+            if not kernel.WaitForDebugEvent(ctypes.byref(event),100):
+                if ctypes.get_last_error()!=121:  # ERROR_SEM_TIMEOUT
+                    raise ctypes.WinError(ctypes.get_last_error())
+                return
+            status=0x00010002  # DBG_CONTINUE
+            try:
+                if event.kind==3:  # CREATE_PROCESS_DEBUG_EVENT
+                    if event.info.create.file: kernel.CloseHandle(event.info.create.file)
+                    if event.pid!=process.pid:
+                        self.assertIsNone(child,'Only one owned external child is expected')
+                        child=event.pid
+                        # Separate observer handle survives the debugger's automatic
+                        # process/thread handle closure on EXIT_PROCESS_DEBUG_EVENT.
+                        child_handle=kernel.OpenProcess(0x00100001,False,child)
+                        self.assertTrue(child_handle)
+                        process.terminate()
+                        if cleanup: kernel.TerminateProcess(child_handle,2)
+                elif event.kind==5: exited.add(event.pid)  # EXIT_PROCESS_DEBUG_EVENT
+                elif event.kind==6 and event.info.dll.file: kernel.CloseHandle(event.info.dll.file)
+                elif event.kind==1 and event.info.exception.record.code!=0x80000003:
+                    status=0x80010001  # DBG_EXCEPTION_NOT_HANDLED, except initial breakpoint.
+            finally:
+                self.assertTrue(kernel.ContinueDebugEvent(event.pid,event.tid,status))
+        try:
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline and (child is None or not {process.pid,child}<=exited): advance()
+            self.assertIsNotNone(child,'The actual external child must reach its creation boundary')
+            self.assertIn(process.pid,exited,'Cancelled supervisor must exit')
+            self.assertIn(child,exited,'Creation-boundary cancellation must terminate its suspended child')
+            self.assertEqual(kernel.WaitForSingleObject(child_handle,0),0)
+            stdout,stderr=process.communicate(timeout=5)
+            self.assertEqual(stdout,b'');self.assertEqual(stderr,b'')
+        finally:
+            if process.poll() is None:
+                try: process.kill()
+                except OSError: pass  # An exit debug event may still require continuation.
+            if child_handle and kernel.WaitForSingleObject(child_handle,0)!=0: kernel.TerminateProcess(child_handle,2)
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline and (process.poll() is None or (child_handle and kernel.WaitForSingleObject(child_handle,0)!=0)):
+                advance(cleanup=True)
+            if child_handle: kernel.CloseHandle(child_handle)
+            process.wait(timeout=5);process.stdout.close();process.stderr.close()
+
     def test_owner_cancellation_does_not_leave_external_process(self):
         script='import os,time;print(os.getpid(),flush=True);time.sleep(60)'
         process=subprocess.Popen([WORKER,'--exec',sys.executable,'-c',script],stdout=subprocess.PIPE,stderr=subprocess.PIPE)

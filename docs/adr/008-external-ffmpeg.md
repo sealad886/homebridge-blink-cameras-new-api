@@ -32,6 +32,8 @@ restrictions before invoking FFmpeg; its protection mode receives keys and
 validated RTP/RTCP only through private IPC. A retained helper does not imply
 bundled FFmpeg. Corresponding source and applicable helper/libSRTP notices remain
 part of the package, with explicit rejection of FFmpeg/x264/Opus artifacts.
+On Windows, job membership is part of suspended process creation, so supervisor
+cancellation cannot leave an unassigned child holding inherited private pipes.
 
 Finite conversion retains source identity/hash validation, bounded memory,
 deadlines, one bounded salvage attempt, audio/privacy permissions and terminal
@@ -78,6 +80,14 @@ packets can then drain before the next payload write. Flushing output bytes alon
 does not flush the muxer's packet interleaver; a small interleave bound alone also
 leaves a cycle when two individually valid payloads exceed the queue together.
 Sparse-audio and delayed-audio, near-limit-packet cases qualify this ordering.
+Requested live audio describes controller negotiation, not source inventory.
+A video-only source still produces video without synthetic audio packets or
+reports. Any actual audio metadata retains exact payload and checksum admission;
+missing or corrupt encoded audio cannot be silently discarded.
+Finite conversion classifies failure before selecting recovery. Expired deadlines
+remain time limits; hard video and unknown diagnostics do not trigger an audio
+retry. Bounded audio-specific failure evidence can authorize the existing single
+silence retry, but cannot make failed output acceptable or override another fault.
 
 Admission limits must compose through execution. Up to 512 metadata corrections
 must fit the generated expression's parser depth and the actual platform-quoted

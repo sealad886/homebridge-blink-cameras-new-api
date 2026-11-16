@@ -25,7 +25,7 @@ function runs(values) { const result = []; for (const value of values) { if (res
 function sampleTable(type, rows) { const payload = Buffer.alloc(8 + rows.length * 8); payload.writeUInt32BE(rows.length, 4); rows.forEach((row, i) => { payload.writeUInt32BE(row[0], 8 + i * 8); payload.writeUInt32BE(row[1], 12 + i * 8); }); return packed(type, payload); }
 /** Rebuild only bounded sample tables; source codecs are still generated externally.
  * SEI samples reserve real MP4 clock slots, matching Blink metadata-only access units. */
-export function mutateRecordingFixture(original, { metadataEvery = 0, audioGap = false, corruptAudio = false, corruptVideo = false, overlapMetadata = false } = {}) {
+export function mutateRecordingFixture(original, { metadataEvery = 0, audioGap = false, corruptAudio = false, corruptVideo = false, corruptVideoPayload = false, overlapMetadata = false } = {}) {
   const data = Buffer.from(original), top = boxes(data), moov = top.find(b => b.type === 'moov'), mdat = top.find(b => b.type === 'mdat');
   assert(moov && mdat && moov.start > mdat.end - 1, 'Fixture must retain tail moov');
   const tracks = boxes(data, moov.payload, moov.end).filter(b => b.type === 'trak').map(trak => {
@@ -60,6 +60,20 @@ export function mutateRecordingFixture(original, { metadataEvery = 0, audioGap =
         at += 4 + length;
       }
       assert(changed, 'A real synthetic VCL sample is required');
+    }
+    if (track.video && corruptVideoPayload) {
+      let changed = false;
+      for (let at = track.offsets.at(-1), end = at + track.sizes.at(-1); at < end;) {
+        const length = data.readUInt32BE(at); assert(length > 0 && at + 4 + length <= end);
+        const type = data[at + 4] & 31;
+        if (type >= 1 && type <= 5 && length > 8) {
+          // Preserve packet framing and the slice prefix so inspection succeeds;
+          // the actual decoder must classify the damaged picture during output.
+          data.fill(0, at + 4 + 8, at + 4 + length); changed = true;
+        }
+        at += 4 + length;
+      }
+      assert(changed, 'A real final VCL payload is required');
     }
   }
   const movieTimescale = data.readUInt32BE(child(data, moov, 'mvhd').payload + 12);
@@ -211,10 +225,16 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
         output.fill(0);
       } finally { prepared.dispose(); assert.equal(memory.bytes, 0); bytes.fill(0); }
     }
-    for (const defect of ['overlap', 'malformed-sei', 'corrupt-picture']) {
-      const base = readFileSync(join(scratch, 'recovery-metadata-generated.mp4'));
-      const bytes = mutateRecordingFixture(base, { metadataEvery: defect === 'corrupt-picture' ? 0 : 60,
-        overlapMetadata: defect === 'overlap', corruptVideo: defect === 'corrupt-picture' });
+    const latePicture = join(scratch, 'late-picture-generated.mp4');
+    execute(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=15:duration=2',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=2',
+      '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-g', '1', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-ar', '16000', '-ac', '1', '-b:a', '24k', '-shortest', '-f', 'mp4', latePicture]);
+    for (const defect of ['overlap', 'malformed-sei', 'corrupt-picture', 'corrupt-picture-payload']) {
+      const late = defect === 'corrupt-picture-payload';
+      const base = readFileSync(late ? latePicture : join(scratch, 'recovery-metadata-generated.mp4'));
+      const bytes = mutateRecordingFixture(base, { metadataEvery: defect.startsWith('corrupt-picture') ? 0 : 60,
+        overlapMetadata: defect === 'overlap', corruptVideo: defect === 'corrupt-picture', corruptVideoPayload: late });
       if (defect === 'malformed-sei') {
         const at = bytes.indexOf(Buffer.from([0, 0, 0, 5, 6, 6, 1, 0xc0, 0x80])); assert(at >= 0); bytes[at + 6] = 31;
       }
@@ -224,7 +244,9 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
         videoCodec: { type: 0, resolution: [320, 180, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
         audioCodec: { type: 0, samplerate: 1, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
       await assert.rejects(() => prepareNativeRecording({ filePath: source, expectedBytes: bytes.length, expectedSha256: hash(bytes) }, configuration, true,
-        new globalThis.AbortController().signal, { ffmpegPath, memory, admit: work => work() }), `${defect} must not offer a recording`);
+        new globalThis.AbortController().signal, { ffmpegPath, memory, admit: work => work() }),
+      error => !late || (error.diagnostic?.phase === 'output' && error.diagnostic?.workerCode === 'DECODE' &&
+        error.diagnostic?.salvageAttempted === undefined), `${defect} must not offer a recording or retry a hard video defect`);
       assert.equal(memory.bytes, 0); assert.equal(hash(readFileSync(source)), hash(bytes));
       assert.equal(readdirSync(scratch).some(name => name.startsWith('.native-')), false, 'Rejected media must not retain a working snapshot'); bytes.fill(0);
     }

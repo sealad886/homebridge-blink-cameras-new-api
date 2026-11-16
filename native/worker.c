@@ -12,6 +12,10 @@
 #include <io.h>
 #include <fcntl.h>
 #include <wchar.h>
+/* MinGW-w64 exposes the attribute number but omits this Windows SDK macro. */
+#ifndef PROC_THREAD_ATTRIBUTE_JOB_LIST
+#define PROC_THREAD_ATTRIBUTE_JOB_LIST ProcThreadAttributeValue(13,FALSE,TRUE,FALSE)
+#endif
 #else
 #include <sys/resource.h>
 #include <unistd.h>
@@ -53,7 +57,8 @@ static int run_protection(void) {
 }
 #ifdef _WIN32
 /* Keep the supervisor alive: killing its process closes the job and therefore
- * kills FFmpeg and descendants. Suspended creation closes the assign-job race.
+ * kills FFmpeg and descendants. Assign the job during creation so termination
+ * cannot orphan a suspended child between creation and job admission.
  * CRT descriptor inheritance preserves a regular fd0 and optional pipe3/4/5. */
 static void command_character(wchar_t *target,size_t *used,wchar_t character) {
     if(*used>=32767)fatal("ARGUMENTS");
@@ -102,11 +107,16 @@ static int execute_external(int argc,wchar_t **argv) {
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;memset(&limits,0,sizeof(limits));
     limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     if(!SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))fatal("JOB");
-    STARTUPINFOW info;PROCESS_INFORMATION child;memset(&info,0,sizeof(info));memset(&child,0,sizeof(child));info.cb=sizeof(info);
-    info.dwFlags=STARTF_USESTDHANDLES;info.hStdInput=GetStdHandle(STD_INPUT_HANDLE);info.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);info.hStdError=GetStdHandle(STD_ERROR_HANDLE);
-    info.cbReserved2=(WORD)bytes;info.lpReserved2=table;
-    if(!CreateProcessW(executable,command,NULL,NULL,TRUE,CREATE_SUSPENDED|CREATE_NO_WINDOW,NULL,NULL,&info,&child))fatal("EXEC");
-    if(!AssignProcessToJobObject(job,child.hProcess)) { TerminateProcess(child.hProcess,2);fatal("JOB"); }
+    SIZE_T attribute_bytes=0;
+    if(InitializeProcThreadAttributeList(NULL,1,0,&attribute_bytes) || GetLastError()!=ERROR_INSUFFICIENT_BUFFER || !attribute_bytes)fatal("JOB");
+    LPPROC_THREAD_ATTRIBUTE_LIST attributes=calloc(1,attribute_bytes);if(!attributes)fatal("MEMORY");
+    if(!InitializeProcThreadAttributeList(attributes,1,0,&attribute_bytes) ||
+       !UpdateProcThreadAttribute(attributes,0,PROC_THREAD_ATTRIBUTE_JOB_LIST,&job,sizeof(job),NULL,NULL))fatal("JOB");
+    STARTUPINFOEXW info;PROCESS_INFORMATION child;memset(&info,0,sizeof(info));memset(&child,0,sizeof(child));info.StartupInfo.cb=sizeof(info);
+    info.StartupInfo.dwFlags=STARTF_USESTDHANDLES;info.StartupInfo.hStdInput=GetStdHandle(STD_INPUT_HANDLE);info.StartupInfo.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);info.StartupInfo.hStdError=GetStdHandle(STD_ERROR_HANDLE);
+    info.StartupInfo.cbReserved2=(WORD)bytes;info.StartupInfo.lpReserved2=table;info.lpAttributeList=attributes;
+    BOOL created=CreateProcessW(executable,command,NULL,NULL,TRUE,CREATE_SUSPENDED|CREATE_NO_WINDOW|EXTENDED_STARTUPINFO_PRESENT,NULL,NULL,&info.StartupInfo,&child);
+    DeleteProcThreadAttributeList(attributes);free(attributes);if(!created)fatal("EXEC");
     if(ResumeThread(child.hThread)==(DWORD)-1) { TerminateProcess(child.hProcess,2);fatal("EXEC"); }
     free(command);free(table);CloseHandle(child.hThread);
     if(WaitForSingleObject(child.hProcess,INFINITE)!=WAIT_OBJECT_0)fatal("EXEC");

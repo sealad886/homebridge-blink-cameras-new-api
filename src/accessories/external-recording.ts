@@ -193,25 +193,47 @@ async function sourceVideoStreamIndex(context: ExternalRecordingContext, input: 
   return failure('MEDIA');
 }
 
+/** Classify failed operations by component; no diagnostic here can make output acceptable. */
+function audioConversionDiagnostic(line: string): 'audio' | 'related' | undefined {
+  const address = '(?:0x)?[0-9a-fA-F]+', error = '(?:Invalid data found when processing input|Error number -[0-9]+ occurred)';
+  const decoder = `\\[aist#0:[0-7]/aac @ ${address}\\](?: \\[dec:aac @ ${address}\\])? `;
+  if (new RegExp(`^${decoder}(?:Error (?:submitting (?:packet|EOF) to decoder|processing packet in decoder)|Decoding error): ${error}$`).test(line) ||
+      line === "Stream map '0:a:0' matches no streams." ||
+      line === "Failed to set value '0:a:0' for option 'map': Invalid argument") return 'audio';
+  // AAC codec detail text varies by damaged bitstream. Its bounded component
+  // prefix is related evidence, but a failed operation above must still prove
+  // the audio cause. Unknown components and all video errors remain terminal.
+  if (new RegExp(`^\\[aac @ ${address}\\] [\\x20-\\x7e]+$`).test(line) ||
+      new RegExp(`^${decoder}(?:Task finished with error code: -[0-9]+|Terminating thread with return code -[0-9]+) \\(${error}\\)$`).test(line) ||
+      ["Stream map '' matches no streams.", "To ignore this, add a trailing '?' to the map.",
+        'Error parsing options for output file pipe:1.', 'Error opening output files: Invalid argument', 'Conversion failed!'].includes(line)) return 'related';
+  return undefined;
+}
+
 /** Only these fixed decoder errors are tolerated, and only for prevalidated empty SEI access units. */
-function observeMetadataErrors(stream: Readable, expected: () => number, videoStreamIndex: number): () => boolean {
+function observeMetadataErrors(stream: Readable, expected: () => number, videoStreamIndex: number, classifyAudio = false) {
   if (!Number.isInteger(videoStreamIndex) || videoStreamIndex < 0 || videoStreamIndex > 7) failure('MEDIA');
   const submitted = new RegExp(`^\\[vist#0:${videoStreamIndex}/h264 @ (?:0x)?[0-9a-fA-F]+\\](?: \\[dec:h264 @ (?:0x)?[0-9a-fA-F]+\\])? Error submitting packet to decoder: Invalid data found when processing input$`);
-  let tail = '', invalid = false, noFrame = 0, submission = 0, missing = 0, total = 0;
+  let tail = '', invalid = false, otherFailure = false, audioFailure = false, noFrame = 0, submission = 0, missing = 0, total = 0;
   stream.on('data', (bytes: Buffer) => {
-    if ((total += bytes.length) > MAX_METADATA_DIAGNOSTIC_BYTES) { invalid = true; return; }
+    if ((total += bytes.length) > MAX_METADATA_DIAGNOSTIC_BYTES) { invalid = otherFailure = true; return; }
     const all = (tail + bytes.toString('utf8')).split('\n'); tail = all.pop()!;
     for (const line of all) {
       if (!line) continue;
-      if (line.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = true; continue; }
+      if (line.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = otherFailure = true; continue; }
       if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] missing picture in access unit with size \d+$/.test(line)) missing++;
       else if (/^\[h264 @ (?:0x)?[0-9a-fA-F]+\] no frame!$/.test(line)) noFrame++;
       else if (submitted.test(line)) submission++;
-      else invalid = true;
+      else {
+        invalid = true;
+        const category = classifyAudio ? audioConversionDiagnostic(line) : undefined;
+        if (category === 'audio') audioFailure = true; else if (category !== 'related') otherFailure = true;
+      }
     }
-    if (tail.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) invalid = true;
+    if (tail.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) invalid = otherFailure = true;
   });
-  return () => !invalid && !tail && missing <= expected() * 2 && noFrame <= expected() && submission <= expected();
+  const metadataValid = () => !tail && missing <= expected() * 2 && noFrame <= expected() && submission <= expected();
+  return { valid: () => !invalid && metadataValid(), audioFailed: () => audioFailure && !otherFailure && metadataValid() };
 }
 
 /** Decode only the first audio frame so AAC priming/edit lists do not become a false A/V offset. */
@@ -299,7 +321,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     });
     const guard = async (work: Promise<unknown>) => { try { await work; } catch (error) { controller.abort(); throw error; } };
     await Promise.all([guard(raw()), guard(meta), guard(closed.then(code => { if (code !== 0) failure('MEDIA'); }))]);
-    await queue.finish(); context.signal.throwIfAborted(); if (!okay() || !pictures.length || pictures.length > 9000) failure();
+    await queue.finish(); context.signal.throwIfAborted(); if (!okay.valid() || !pictures.length || pictures.length > 9000) failure();
     pictures.sort((a, b) => a.pts - b.pts); const origin = pictures[0].pts;
     for (let i = 0; i < pictures.length; i++) {
       pictures[i].pts -= origin;
@@ -359,7 +381,7 @@ export async function convertExternalRecording(context: ExternalRecordingContext
   let closure: Promise<number | null> | undefined;
   try {
     const child = launch({ ...context, signal: controller.signal }, recordingFfmpegArguments(configuration, plan, audioActive, silence), [input.fd, 'pipe', 'pipe']);
-    const okay = observeMetadataErrors(readable(child.stderr), () => plan.metadata, plan.videoStreamIndex);
+    const okay = observeMetadataErrors(readable(child.stderr), () => plan.metadata, plan.videoStreamIndex, audioActive && !silence);
     const closed = closure = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
     let bytes = 0, failed = false;
     child.stdout?.on('data', (value: Buffer) => {
@@ -367,8 +389,9 @@ export async function convertExternalRecording(context: ExternalRecordingContext
       catch { failed = true; controller.abort(); }
     });
     const code = await closed; context.signal.throwIfAborted();
+    if (Date.now() >= context.deadline) failure('TIME_LIMIT');
     if (failed) failure('OUTPUT_LIMIT');
-    if (code !== 0 || !okay() || !bytes) failure(silence ? 'DECODE' : audioActive ? 'AUDIO_DISCONTINUITY' : 'DECODE');
+    if (code !== 0 || !okay.valid() || !bytes) failure(code !== null && okay.audioFailed() ? 'AUDIO_DISCONTINUITY' : 'DECODE');
   } finally { controller.abort(); await closure; context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 

@@ -125,10 +125,13 @@ export async function exerciseExternalLive(packageRoot, protectionPath, ffmpegPa
     { input, env: {}, timeout: 30000, maxBuffer: 8 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
   const checker = join(validationRoot, 'check-protection' + (process.platform === 'win32' ? '.exe' : ''));
   const selections = [];
-  for (const selection of EXTERNAL_LIVE_SELECTIONS) {
+  for (const { selection, videoOnly = false } of [...EXTERNAL_LIVE_SELECTIONS.map(selection => ({ selection })),
+    { selection: 'aac:opus:16000', videoOnly: true }]) {
     const [format, codec, rawRate] = selection.split(':'), rate = Number(rawRate);
-    const fixture = execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=24000', '-t', '0.6',
-      '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-g', '15', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '1', '-ar', '24000', '-b:a', '24k',
+    const fixture = execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15',
+      ...(!videoOnly ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=24000'] : []), '-t', '0.6',
+      '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-g', '15', '-pix_fmt', 'yuv420p',
+      ...(videoOnly ? ['-an'] : ['-c:a', 'aac', '-ac', '1', '-ar', '24000', '-b:a', '24k']),
       ...(format === 'latm' ? ['-mpegts_flags', 'latm'] : []), '-f', 'mpegts', 'pipe:1']);
     const output = (ssrc, pt) => ({ address: '192.168.1.5', addressVersion: 'ipv4', port: 5000 + ssrc,
       suite: 'AES_CM_128_HMAC_SHA1_80', key: Buffer.alloc(16, 9), salt: Buffer.alloc(14, 8), ssrc,
@@ -149,31 +152,41 @@ export async function exerciseExternalLive(packageRoot, protectionPath, ffmpegPa
       const receive = input => execFileSync(checker, ['--framed'], { input: Buffer.concat(input), env: {}, timeout: 5000, maxBuffer: 8 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
       const reports = [];
       const plain = readRtpFrames(receive(records), reports), video = plain.filter(p => p.stream === 1), audio = plain.filter(p => p.stream === 2);
-      assert(video.length && audio.length, 'Both authenticated streams required');
-      const lastReports = [1, 2].map(stream => reports.filter(row => row.stream === stream).at(-1));
-      assert(lastReports.every(Boolean), 'Both streams must send authenticated RTCP sender reports');
-      assert.equal(lastReports[0].ntpSeconds, lastReports[1].ntpSeconds); assert.equal(lastReports[0].ntpFraction, lastReports[1].ntpFraction);
-      for (const [i, packets] of [video, audio].entries()) {
+      assert(video.length, 'Authenticated video required');
+      if (videoOnly) {
+        assert.equal(audio.length, 0, 'Absent source audio must not synthesize RTP');
+        assert.equal(reports.some(row => row.stream === 2), false, 'Absent source audio must not synthesize RTCP');
+      } else assert(audio.length, 'Authenticated source audio required');
+      const streams = videoOnly ? [video] : [video, audio];
+      const lastReports = (videoOnly ? [1] : [1, 2]).map(stream => reports.filter(row => row.stream === stream).at(-1));
+      assert(lastReports.every(Boolean), 'Every active stream must send an authenticated RTCP sender report');
+      if (!videoOnly) {
+        assert.equal(lastReports[0].ntpSeconds, lastReports[1].ntpSeconds); assert.equal(lastReports[0].ntpFraction, lastReports[1].ntpFraction);
+        const videoClockMs = ((lastReports[0].timestamp - video[0].timestamp) >>> 0) / 90;
+        const audioClockMs = ((lastReports[1].timestamp - audio[0].timestamp) >>> 0) / (codec === 'opus' ? 48 : 8);
+        assert(Math.abs(videoClockMs - audioClockMs) <= 200, 'A/V RTP clocks must correlate to the same RTCP wall-clock anchor');
+      }
+      for (const [i, packets] of streams.entries()) {
         assert.equal(lastReports[i].packets, packets.length, 'RTCP packet count must match actual authenticated RTP');
         assert.equal(lastReports[i].octets, packets.reduce((sum, packet) => sum + packet.data.length, 0), 'RTCP octet count must match actual payloads');
       }
-      const videoClockMs = ((lastReports[0].timestamp - video[0].timestamp) >>> 0) / 90;
-      const audioClockMs = ((lastReports[1].timestamp - audio[0].timestamp) >>> 0) / (codec === 'opus' ? 48 : 8);
-      assert(Math.abs(videoClockMs - audioClockMs) <= 200, 'A/V RTP clocks must correlate to the same RTCP wall-clock anchor');
-      for (const packets of [video, audio]) for (let i = 1; i < packets.length; i++) {
+      for (const packets of streams) for (let i = 1; i < packets.length; i++) {
         assert.equal((packets[i].sequence - packets[i - 1].sequence) & 65535, 1, 'RTP sequence must be continuous');
         assert(((packets[i].timestamp - packets[i - 1].timestamp) >>> 0) <= 180000, 'RTP timestamp must not jump backwards');
       }
       const pixels = execute(['-f', 'h264', '-i', 'pipe:0', '-threads', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'], h264Stream(video));
       assert(pixels.length >= 16 * 16 * 2 && pixels.some(byte => byte > 32), 'Independent external decoder must produce actual video pixels');
-      const audioInput = codec === 'opus' ? opusOgg(audio.map(p => p.data), rate) : Buffer.concat(audio.map(p => p.data));
-      const decoded = execute([...(codec === 'opus' ? ['-f', 'ogg'] : ['-f', codec === 'pcma' ? 'alaw' : 'mulaw', '-ar', '8000', '-ac', '1']),
-        '-i', 'pipe:0', '-ar', String(rate), '-ac', '1', '-f', 'f32le', 'pipe:1'], audioInput);
-      let peak = 0; for (let i = 0; i + 4 <= decoded.length; i += 4) peak = Math.max(peak, Math.abs(decoded.readFloatLE(i)));
-      assert(decoded.length >= rate * 4 / 10 && peak > 0.001, 'Independent audio decoder must produce nonzero samples');
+      if (videoOnly) assert.equal(pixels.length, 16 * 16 * 9, 'Audio-requested video-only media must preserve every picture');
+      else {
+        const audioInput = codec === 'opus' ? opusOgg(audio.map(p => p.data), rate) : Buffer.concat(audio.map(p => p.data));
+        const decoded = execute([...(codec === 'opus' ? ['-f', 'ogg'] : ['-f', codec === 'pcma' ? 'alaw' : 'mulaw', '-ar', '8000', '-ac', '1']),
+          '-i', 'pipe:0', '-ar', String(rate), '-ac', '1', '-f', 'f32le', 'pipe:1'], audioInput);
+        let peak = 0; for (let i = 0; i + 4 <= decoded.length; i += 4) peak = Math.max(peak, Math.abs(decoded.readFloatLE(i)));
+        assert(decoded.length >= rate * 4 / 10 && peak > 0.001, 'Independent audio decoder must produce nonzero samples');
+      }
       const forged = records.map(bytes => Buffer.from(bytes)), index = forged.findIndex(bytes => bytes.readUInt32BE(4) === 11);
       assert(index >= 0); forged[index][forged[index].length - 1] ^= 1;
-      assert.throws(() => receive(forged), 'Independent receiver must refuse forged SRTP'); selections.push(selection);
+      assert.throws(() => receive(forged), 'Independent receiver must refuse forged SRTP'); if (!videoOnly) selections.push(selection);
     } finally { await session.stop(); fixture.fill(0); }
   }
   await exerciseExternalLiveBackpressure(packageRoot, protectionPath, ffmpegPath);

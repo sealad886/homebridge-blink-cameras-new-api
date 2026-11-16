@@ -98,6 +98,55 @@ it.each([['unexpected', 'unexpected decoder error'], ['overlong', `[h264 @ 0x${'
       originUs: 0, metadata: 512, corrections: [], videoStreamIndex: 0 }, false, false, () => undefined)).rejects.toMatchObject({ code: 'DECODE' });
     expect(close).toHaveBeenCalledTimes(1);
   });
+const audioFailureDiagnostic = '[aac @ 0x123] Error decoding AAC frame header.\n' +
+  '[aist#0:1/aac @ 0x456] Error submitting packet to decoder: Invalid data found when processing input\n';
+it.each([
+  ['generic failure', '', 1, 'DECODE'], ['empty output', '', 0, 'DECODE'],
+  ['video failure', '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE'],
+  ['6.1 audio failure', audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY'],
+  ['9 audio failure', '[aac @ 0x123] Error decoding AAC frame header.\n[aist#0:1/aac @ 0x456] [dec:aac @ 0x789] Error submitting packet to decoder: Error number -50531338 occurred\n', 1, 'AUDIO_DISCONTINUITY'],
+  ['AAC channel-element failure', '[aac @ 0x123] channel element 0.0 is not allocated\n[aist#0:1/aac @ 0x456] Error submitting packet to decoder: Invalid data found when processing input\n', 1, 'AUDIO_DISCONTINUITY'],
+  ['missing audio map', "Stream map '0:a:0' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", 1, 'AUDIO_DISCONTINUITY'],
+  ['AAC detail with proved decoder failure', '[aac @ 0x123] private decoder diagnostic\n' + audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY'],
+  ['audio plus generic failure', audioFailureDiagnostic + 'private unknown failure\n', 1, 'DECODE'],
+  ['unknown AAC diagnostic', '[aac @ 0x123] private unknown failure\n', 1, 'DECODE'],
+  ['audio plus video failure', audioFailureDiagnostic + '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE'],
+  ['audio plus excess metadata errors', audioFailureDiagnostic + '[h264 @ 0x123] no frame!\n', 1, 'DECODE'],
+  ['audio plus overlong diagnostic', audioFailureDiagnostic + 'x'.repeat(1025) + '\n', 1, 'DECODE'],
+  ['audio plus abnormal termination', audioFailureDiagnostic, null, 'DECODE'],
+  ['unterminated audio failure', '[aac @ 0x123] Error decoding AAC frame header.', 1, 'DECODE'],
+] as const)('classifies %s from evidence rather than the audio permission', async (_kind, diagnostic, code, expected) => {
+  const child = new EventEmitter() as ChildProcess, stdout = new PassThrough(), stderr = new PassThrough();
+  Object.assign(child, { stdout, stderr });
+  const close = jest.fn(async () => undefined), input = { fd: 42, close } as unknown as FileHandle;
+  jest.mocked(spawnExternalFfmpeg).mockImplementation(() => {
+    globalThis.setImmediate(() => { stdout.end(); stderr.end(diagnostic); child.emit('close', code); }); return child;
+  });
+  const pending = convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
+    signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input }, configuration(),
+  { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
+    originUs: 0, audioOriginUs: 0, metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined);
+  await expect(pending).rejects.toMatchObject({ code: expected, message: 'External recording conversion failed' });
+  expect(close).toHaveBeenCalledTimes(1);
+});
+it('reports an expired conversion deadline before classifying an audio failure', async () => {
+  const child = new EventEmitter() as ChildProcess, stdout = new PassThrough(), stderr = new PassThrough();
+  Object.assign(child, { stdout, stderr });
+  const input = { fd: 42, close: jest.fn(async () => undefined) } as unknown as FileHandle, deadline = Date.now() + 1000;
+  let clock: jest.SpyInstance | undefined;
+  jest.mocked(spawnExternalFfmpeg).mockImplementation(() => {
+    globalThis.setImmediate(() => {
+      stdout.end(); stderr.end('[aac @ 0x123] Error decoding AAC frame header.\n');
+      clock = jest.spyOn(Date, 'now').mockReturnValue(deadline); child.emit('close', null);
+    }); return child;
+  });
+  try {
+    await expect(convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
+      signal: new globalThis.AbortController().signal, deadline, open: async () => input }, configuration(),
+    { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
+      originUs: 0, metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined)).rejects.toMatchObject({ code: 'TIME_LIMIT' });
+  } finally { clock?.mockRestore(); }
+});
 
 const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK_FFMPEG_TEST_PATH ??
   (existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg')); } catch { return undefined; } })();
@@ -242,21 +291,59 @@ media.each([512, 513])('enforces the %s-metadata source boundary through complet
     expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 30000);
-media.each(['missing', 'corrupt'])('keeps %s source audio eligible for silence recovery after origin inspection', async defect => {
+media.each(['missing', 'corrupt', 'zero-corrupt'])('keeps %s source audio eligible for silence recovery after origin inspection', async defect => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-audio-')), file = join(directory, 'source.mp4');
   try {
     execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', ...(defect === 'missing' ? [] :
       ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=2']), '-c:v', 'libx264', '-threads', '1',
     '-preset', 'ultrafast', '-bf', '0', ...(defect === 'missing' ? ['-an'] : ['-c:a', 'aac', '-ar', '16000', '-ac', '1']), '-f', 'mp4', file]);
     const mutator = pathToFileURL(join(process.cwd(), '.github/scripts/external-recording-check.mjs')).href;
-    const source = defect === 'missing' ? await fs.readFile(file) : execFileSync(process.execPath, ['--input-type=module', '-e',
+    const original = await fs.readFile(file);
+    const source = defect === 'missing' ? Buffer.from(original) : execFileSync(process.execPath, ['--input-type=module', '-e',
       `import { readFileSync } from 'node:fs'; import { mutateRecordingFixture } from ${JSON.stringify(mutator)};` +
       'process.stdout.write(mutateRecordingFixture(readFileSync(0), { corruptAudio: true }));'],
-    { input: await fs.readFile(file), timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+    { input: original, timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+    if (defect === 'zero-corrupt') for (let at = 0; at < source.length; at++) if (source[at] !== original[at]) source[at] = 0;
+    original.fill(0);
     await expect(recording(source, true)).rejects.toMatchObject({ code: 'AUDIO_DISCONTINUITY' });
     const { output } = await recording(source, true, 16000, true);
     const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
-    expect(pcm.every(byte => byte === 0)).toBe(true); output.fill(0); source.fill(0);
+    expect(pcm.every(byte => byte === 0)).toBe(true); output.fill(0);
+    await fs.writeFile(file, source); await fs.chmod(file, 0o600);
+    const expectedSha256 = createHash('sha256').update(source).digest('hex'), memory = new NativeRecordingMemoryBudget();
+    const prepared = await prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, configuration(), true,
+      new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
+    try { expect(prepared.recovery).toMatchObject({ attempts: 2, initialWorkerCode: 'AUDIO_DISCONTINUITY' }); }
+    finally { prepared.dispose(); }
+    expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+    expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}, 20000);
+media('does not retry a late video decode failure as audio recovery', async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-video-error-')), file = join(directory, 'source.mp4');
+  try {
+    execute(['-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=15:duration=2', '-f', 'lavfi', '-i',
+      'sine=frequency=440:sample_rate=16000:duration=2', '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast',
+      '-bf', '0', '-g', '1', '-c:a', 'aac', '-ar', '16000', '-ac', '1', '-f', 'mp4', file]);
+    const mutator = pathToFileURL(join(process.cwd(), '.github/scripts/external-recording-check.mjs')).href;
+    const source = execFileSync(process.execPath, ['--input-type=module', '-e',
+      `import { readFileSync } from 'node:fs'; import { mutateRecordingFixture } from ${JSON.stringify(mutator)};` +
+      'process.stdout.write(mutateRecordingFixture(readFileSync(0), { corruptVideoPayload: true }));'],
+    { input: await fs.readFile(file), timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+    await fs.writeFile(file, source); await fs.chmod(file, 0o600);
+    jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+    const expectedSha256 = createHash('sha256').update(source).digest('hex'), memory = new NativeRecordingMemoryBudget();
+    let failure: unknown;
+    try {
+      const prepared = await prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, configuration(), true,
+        new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
+      prepared.dispose();
+    } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ diagnostic: { phase: 'output', workerCode: 'DECODE' } });
+    expect(failure).not.toHaveProperty('diagnostic.salvageAttempted');
+    expect(jest.mocked(spawnExternalFfmpeg).mock.calls.filter(([, args]) => args.includes('libx264'))).toHaveLength(1);
+    expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+    expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 20000);
 media.each([16000, 24000])('preserves an audio-leading source offset at %s Hz without silence recovery', async rate => {

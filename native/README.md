@@ -14,9 +14,11 @@ The parent owns request deadlines, lifetime, backpressure and termination.
 `--exec /absolute/path/to/ffmpeg ...` applies crash-output suppression and
 executes an external installation. POSIX uses the same PID and inherited file
 descriptors, with core dumps and file writes disabled and a CPU time limit.
-Windows creates a suspended process, assigns it to a kill-on-close Job Object,
-then resumes it while preserving inherited CRT descriptors. Killing the owning
-supervisor closes the job and terminates FFmpeg and its descendants.
+Windows creates the suspended process inside a kill-on-close Job Object in one
+operation, then resumes it while preserving inherited CRT descriptors. Job
+membership is established before the child exists outside the creation call;
+killing the owning supervisor closes the job and terminates FFmpeg and its
+descendants, including during launch.
 
 Build from a native host with Python 3.12+, CMake, make and a C compiler:
 

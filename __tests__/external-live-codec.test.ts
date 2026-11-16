@@ -13,8 +13,8 @@ function options(codec?: 'opus' | 'pcma' | 'pcmu', rate: 8000 | 16000 | 24000 = 
   return { ffmpegPath: ffmpeg!, protectionPath: process.execPath, video: { width: 16, height: 16, fps: 15, bitrate: 100000, maxFrames: 100, profile: 0, level: 0 },
     ...(codec ? { audio: { codec, rate, bitrate: 24000, mtu: 1200, packetTime: codec === 'opus' ? 20 as const : undefined } } : {}) };
 }
-const fixture = (latm: boolean) => execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=32x16:rate=5:duration=0.4',
-  '-f', 'lavfi', '-i', 'sine=sample_rate=16000:duration=0.4', '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '0', '-c:a', 'aac',
+const fixture = (latm: boolean, audio = true) => execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=32x16:rate=5:duration=0.4',
+  ...(audio ? ['-f', 'lavfi', '-i', 'sine=sample_rate=16000:duration=0.4'] : []), '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '0', ...(audio ? ['-c:a', 'aac'] : ['-an']),
   ...(latm ? ['-mpegts_flags', 'latm'] : []), '-f', 'mpegts', 'pipe:1'], { timeout: 5000, maxBuffer: 1024 * 1024 });
 function oggPage(packet: Buffer, serial: number, sequence: number, flags: number, granule: bigint): Buffer {
   const laces = [...Array(Math.floor(packet.length / 255)).fill(255), packet.length % 255], page = Buffer.alloc(27 + laces.length + packet.length);
@@ -72,6 +72,45 @@ test('missing installation produces actionable fixed setup error without exposin
       expect(Number(difference < 0n ? -difference : difference)).toBeLessThanOrEqual(1);
     } finally { await session.stop(); }
   }, 10000);
+(ffmpeg ? test : test.skip).each([['opus', 16000], ['opus', 24000], ['pcma', 8000], ['pcmu', 8000]] as const)(
+  'preserves video-only sources when %s/%d audio is requested', async (codec, rate) => {
+    const packets: CodecPacket[] = [], owner = new globalThis.AbortController();
+    const session = await createExternalLiveCodec(options(codec, rate), { packet: async value => { packets.push({ ...value, data: Buffer.from(value.data) }); } }, owner.signal,
+      { launch: direct, probe: async () => ({ version: 'test' }) });
+    try {
+      const input = fixture(false, false); for (let at = 0; at < input.length; at += 4096) await session.write(input.subarray(at, at + 4096)); await session.end();
+      expect(session.failed).toBe(false); expect(packets.filter(packet => packet.stream === 1)).toHaveLength(2);
+      expect(packets.some(packet => packet.stream === 2)).toBe(false);
+      const pixels = execFileSync(ffmpeg!, ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'h264', '-i', 'pipe:0', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+        { input: Buffer.concat(packets.map(packet => packet.data)), timeout: 5000, maxBuffer: 65536 });
+      expect(pixels).toHaveLength(2 * 16 * 16 * 3); expect(pixels.some(byte => byte > 32)).toBe(true);
+    } finally { await session.stop(); for (const packet of packets) packet.data.fill(0); }
+  }, 10000);
+(ffmpeg ? test : test.skip)('refuses missing audio payload even when its tee output failure is ignored', async () => {
+  const owner = new globalThis.AbortController();
+  const session = await createExternalLiveCodec(options('opus'), { packet: async () => {} }, owner.signal,
+    { launch: (command, args, value) => direct(command, args.map(argument => argument.replace(']pipe:4', ']pipe:99')), value), probe: async () => ({ version: 'test' }) });
+  try {
+    await session.write(fixture(false)); await expect(session.end()).rejects.toThrow('External live codec unavailable');
+    expect(session.failed).toBe(true);
+  } finally { await session.stop(); }
+}, 10000);
+(ffmpeg ? test : test.skip)('refuses corrupt source audio instead of degrading a present audio stream', async () => {
+  const input = fixture(false); let corrupt = 0;
+  for (let at = 0; at + 188 <= input.length; at += 188) {
+    expect(input[at]).toBe(0x47); if (((input[at + 1] & 31) << 8 | input[at + 2]) !== 257) continue;
+    const adaptation = (input[at + 3] >> 4) & 3; if (!(adaptation & 1)) continue;
+    let payload = at + (adaptation === 3 ? 5 + input[at + 4] : 4);
+    if (input[at + 1] & 64) { expect(input.subarray(payload, payload + 3)).toEqual(Buffer.from([0, 0, 1])); payload += 9 + input[payload + 8]; }
+    if (payload < at + 188) { input.fill(0, payload, at + 188); corrupt++; }
+  }
+  expect(corrupt).toBeGreaterThan(0);
+  const session = await createExternalLiveCodec(options('opus'), { packet: async () => {} }, new globalThis.AbortController().signal,
+    { launch: direct, probe: async () => ({ version: 'test' }) });
+  try {
+    await session.write(input); await expect(session.end()).rejects.toThrow('External live codec unavailable'); expect(session.failed).toBe(true);
+  } finally { await session.stop(); input.fill(0); }
+}, 10000);
 (ffmpeg ? test : test.skip)('STOP interrupts an input-starved real codec and waits for actual child closure', async () => {
   let child: ReturnType<typeof spawn> | undefined;
   const session = await createExternalLiveCodec(options(), { packet: async () => {} }, new globalThis.AbortController().signal,

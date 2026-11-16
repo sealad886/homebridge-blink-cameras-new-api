@@ -35,7 +35,7 @@ export function liveFfmpegArguments(options: ExternalLiveCodecOptions): string[]
   return ['-hide_banner', '-nostdin', '-loglevel', 'info', '-xerror', '-max_alloc', '67108864', '-copyts', '-threads', '1', '-filter_threads', '1',
     '-protocol_whitelist', 'pipe', '-format_whitelist', 'mpegts', '-codec_whitelist', 'h264,aac,aac_latm',
     '-probesize', '65536', '-analyzeduration', '1000000', '-max_probe_packets', '32', '-max_streams', '8', '-max_pixels', '8388608', '-f', 'mpegts', '-i', 'pipe:0',
-    '-map', '0:v:0', ...(a ? ['-map', '0:a:0'] : ['-an']), '-vf', filter,
+    '-map', '0:v:0', ...(a ? ['-map', '0:a:0?'] : ['-an']), '-vf', filter,
     '-c:v', 'libx264', '-threads:v', '1', '-preset', v.softwarePreset ?? 'veryfast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-bf', '0',
     '-profile:v', ['baseline', 'main', 'high'][v.profile], '-level:v', ['3.1', '3.2', '4.0'][v.level],
     '-b:v', String(v.bitrate), '-maxrate:v', String(v.bitrate), '-bufsize:v', String(v.bitrate * 2),
@@ -46,7 +46,10 @@ export function liveFfmpegArguments(options: ExternalLiveCodecOptions): string[]
       ...(a.codec === 'opus' ? ['-frame_duration', String(a.packetTime ?? 20), ...(v.softwarePreset === 'ultrafast' ? ['-compression_level', '3'] : [])] : [])] : []),
     // Release prior packet metadata before writing the next payload. A positive
     // one-microsecond interleave bound retains at most one packet per stream.
-    '-f', 'tee', `[f=framecrc:flush_packets=1:max_interleave_delta=1]pipe:5|[select=v:f=data:flush_packets=1]pipe:3${a ? '|[select=a:f=data:flush_packets=1]pipe:4' : ''}`];
+    // No source audio means an empty audio-only slave, which FFmpeg cannot open.
+    // Actual audio records still require matching payload/checksum in the parent;
+    // ignoring this slave's error cannot turn missing audio bytes into success.
+    '-f', 'tee', `[f=framecrc:flush_packets=1:max_interleave_delta=1]pipe:5|[select=v:f=data:flush_packets=1]pipe:3${a ? '|[select=a:f=data:flush_packets=1:onfail=ignore]pipe:4' : ''}`];
 }
 
 class LiveCodec implements ExternalLiveCodec {
