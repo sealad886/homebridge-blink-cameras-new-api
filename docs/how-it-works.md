@@ -2,7 +2,7 @@
 
 [Documentation home](README.md) · [Illustrated setup](../output/articles/set-up-blink-cameras-in-apple-home/index.md) · [Recording checklist](configuration.md#recording-setup-checklist)
 
-Last reviewed: 16 November 2026 · Source edition: `1.1.0-rc.0`.
+Last reviewed: 16 November 2026 · Source edition: `1.1.0`.
 
 Homebridge connects your Blink account to Apple Home. This plugin discovers
 devices, publishes HomeKit accessories, and translates controls and media.
@@ -110,7 +110,7 @@ permission remains respected.
 
 - Two-way talk and automatic Blink doorbell ring delivery remain unavailable.
 - Saved Home playback has been observed for two tested cameras. That does not
-  qualify every Blink model or the current release candidate's installed runtime.
+  qualify every Blink model or clip; verify your own installed package and settings.
 - Native capture/retrigger gaps, matching failures, expiry, resource limits and
   Home's retention decisions can prevent a saved Home copy.
 - Blink's private interfaces can change. Current live-account evidence is limited

@@ -5,7 +5,7 @@
 Connect Blink to Apple Home, verify live viewing, and test a native recording
 in the camera's saved timeline.
 
-**Source edition:** `1.1.0-rc.0` · **Last reviewed:** 16 November 2026
+**Source edition:** `1.1.0` · **Last reviewed:** 16 November 2026
 
 Select the intended published version when installing; an unversioned installation
 does not select a prerelease automatically. Screenshots use the actual UI with
@@ -180,8 +180,8 @@ Recoverable media faults may use one bounded salvage pass. If usable video is
 recovered with replacement silence, logs identify degraded audio; Home audio-off
 permission still produces no audio track.
 
-Saved Home playback was observed for two tested cameras. Verify your own RC
-installation: that evidence does not qualify every camera or clip.
+Saved Home playback was observed for two tested cameras. Verify your own
+installation after setup or upgrade: that evidence does not qualify every camera or clip.
 
 ## If a step does not work
 
