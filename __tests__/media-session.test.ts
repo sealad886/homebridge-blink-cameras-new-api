@@ -25,8 +25,9 @@ function fixture() {
   };
   const sockets: Array<{ whenClosed: Promise<void>; close: jest.Mock; send: jest.Mock }> = [];
   const socketClosures: ReturnType<typeof deferred>[] = [];
+  const protectionStop = jest.fn(async () => { protectionClosed.resolve(); });
   const createProtection = jest.fn(() => ({ initialize: worker.initialize, whenClosed: protectionClosed.promise,
-    get failed() { return worker.failed; }, stop: async () => { await worker.stop(); protectionClosed.resolve(); } }));
+    get failed() { return worker.failed; }, stop: protectionStop }));
   const createCodec = jest.fn(async (_options: ExternalLiveCodecOptions, value: ExternalLiveCodecCallbacks) => {
     callbacks = value; return { whenClosed: worker.whenClosed, get failed() { return worker.failed; }, write: worker.media,
       end: worker.finishInput, stop: worker.stop };
@@ -35,7 +36,8 @@ function fixture() {
     const closure = deferred(); const socket = { whenClosed: closure.promise, close: jest.fn(() => { closure.resolve(); }), send: jest.fn(async () => {}) };
     sockets.push(socket); socketClosures.push(closure); return socket;
   });
-  return { worker, plain, sockets, socketClosures, callbacks: () => callbacks, dependencies: { createProtection, createCodec, openSocket }, closed };
+  return { worker, protectionStop, protectionClosed, plain, sockets, socketClosures, callbacks: () => callbacks,
+    dependencies: { createProtection, createCodec, openSocket }, closed };
 }
 const packet = (stream: 1 | 2, pts: bigint, data: Buffer): CodecPacket => ({ stream, pts, dts: pts, duration: 20000n,
   keyframe: stream === 1, data });
@@ -54,6 +56,19 @@ test('owns configured worker and numeric output before chunking one admitted ven
     expect(f.worker.media.mock.calls[1][0]).toHaveLength(7);
   } finally { await session.stop(); }
   expect(f.worker.stop).toHaveBeenCalled(); expect(f.sockets[0].close).toHaveBeenCalled();
+});
+test.each(['codec', 'protection'] as const)('shutdown waits for both independent process closures when %s closes first', async first => {
+  const f = fixture();
+  f.worker.stop.mockImplementation(async () => {}); f.protectionStop.mockImplementation(async () => {});
+  const session = await createOwnedMediaSession(options(), new globalThis.AbortController().signal, f.dependencies);
+  let closed = false; session.whenClosed.then(() => { closed = true; });
+  try {
+    const stopped = session.stop(); await tick();
+    expect(f.worker.stop).toHaveBeenCalled(); expect(f.protectionStop).toHaveBeenCalled(); expect(closed).toBe(false);
+    const closures = first === 'codec' ? [f.closed, f.protectionClosed] : [f.protectionClosed, f.closed];
+    closures[0].resolve(); await tick(); expect(closed).toBe(false);
+    closures[1].resolve(); await stopped; expect(closed).toBe(true);
+  } finally { f.closed.resolve(); f.protectionClosed.resolve(); await session.stop(); }
 });
 test('existing 8 Mbps video setting is admitted and values above it start no capability', async () => {
   const f = fixture(); const owner = new globalThis.AbortController();
