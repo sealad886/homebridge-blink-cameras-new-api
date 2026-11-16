@@ -1,6 +1,6 @@
 # Contributing
 
-Last reviewed: 23 October 2026.
+Last reviewed: 16 November 2026.
 
 This guide owns contributor setup, local checks, and the pull-request workflow.
 For installation and operation, start with the [README](README.md). See the
@@ -8,7 +8,8 @@ For installation and operation, start with the [README](README.md). See the
 
 ## Development setup
 
-Use Node.js **20, 22, or 24**, matching `package.json` and the CI matrix, and npm.
+Use Node.js **20.3+ (20.x), 22, 24, or 26**, matching `package.json` and the CI
+matrix, and npm.
 A Blink account is unnecessary for unit tests; real-provider and Home testing
 require a separately configured test environment.
 

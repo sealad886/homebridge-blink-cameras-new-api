@@ -1,9 +1,0 @@
-# Legacy Travis CI file retained without deploy credentials.
-# Publishing is handled by GitHub Actions in `.github/workflows/publish.yml`.
-language: node_js
-node_js:
-  - lts/*
-install:
-  - npm install
-script:
-  - npm test

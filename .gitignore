@@ -71,10 +71,8 @@ homebridge-ui/server.js.map
 !/scripts/migrate-secure-media-config.cjs
 !/scripts/check-rtsp-network.cjs
 !/scripts/measure-secure-media.cjs
-!/scripts/preuninstall.js
 !/scripts/postinstall.cjs
 !/scripts/migrate-native-recording-config.cjs
-!/scripts/deploy-to-pi.sh
 !/scripts/blink-api-contract/
 !/scripts/blink-api-contract/**
 # IDE and tracking files
