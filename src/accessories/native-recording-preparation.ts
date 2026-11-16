@@ -317,7 +317,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
         }
       };
       let plan: Awaited<ReturnType<typeof inspectExternalRecording>>;
-      try { plan = await inspectExternalRecording(context, selected.videoCodec.resolution[2], audioActive); }
+      try { plan = await inspectExternalRecording(context, selected, audioActive); }
       catch (error) { if (owner.aborted) throw new Error('Recording conversion cancelled');
         throw new NativeRecordingPreparationError({ phase: 'input', workerCode: error instanceof ExternalRecordingError ? error.code : 'MEDIA' }); }
       let initialWorkerCode: RecordingFailureCode | undefined;
@@ -355,7 +355,8 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
           try {
             parsed = parsePrepared(output, selected, audioActive);
             await validateExternalRecording(context, output, selected, plan, audioActive, attempt === 1);
-          } catch (error) { throw new NativeRecordingPreparationError({ phase: 'validation',
+          } catch (error) { if (owner.aborted) throw new Error('Recording conversion cancelled');
+            throw new NativeRecordingPreparationError({ phase: 'validation',
             ...(error instanceof ExternalRecordingError ? { workerCode: error.code } : {}), ...(attempt === 1 ? { salvageAttempted: true as const } : {}) }); }
           const bytes = output.length, preparedSha256 = createHash('sha256').update(output).digest('hex');
           const owned = output;
@@ -370,7 +371,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
           retained = true; return prepared;
         } catch (error) {
           if (attempt !== 0 || !audioActive || owner.aborted || !(error instanceof NativeRecordingPreparationError) ||
-              !error.diagnostic.workerCode || !['AUDIO_DISCONTINUITY', 'AUDIO_MISSING', 'FRAGMENT_LIMIT'].includes(error.diagnostic.workerCode)) throw error;
+              error.diagnostic.workerCode !== 'AUDIO_DISCONTINUITY') throw error;
           initialWorkerCode = error.diagnostic.workerCode;
         } finally {
           if (chunks.length) { for (const chunk of chunks) chunk.fill(0); memory.release(collected); chunks.length = 0; }

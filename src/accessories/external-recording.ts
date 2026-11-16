@@ -7,7 +7,7 @@ import { spawnExternalFfmpeg } from './external-ffmpeg';
 import { FfmpegByteQueue, parseFrameCrcPacket, packetAdler32 } from './ffmpeg-packets';
 import { squarePixelLetterboxFilter } from './ffmpeg-video-filter';
 
-const codes = ['MEDIA', 'DECODE', 'VIDEO_FRAME_COUNT', 'VIDEO_DISCONTINUITY', 'VIDEO_TIMESTAMP', 'AUDIO_MISSING',
+const codes = ['MEDIA', 'DECODE', 'VIDEO_FRAME_COUNT', 'VIDEO_DISCONTINUITY', 'VIDEO_TIMESTAMP',
   'AUDIO_DISCONTINUITY', 'OUTPUT_LIMIT', 'FRAGMENT_LIMIT', 'TIME_LIMIT', 'EXTERNAL_FFMPEG'] as const;
 export type RecordingFailureCode = typeof codes[number];
 export function isRecordingFailureCode(value: unknown): value is RecordingFailureCode {
@@ -122,9 +122,12 @@ const MAX_METADATA_DIAGNOSTIC_LINE_BYTES = 1024;
 // no-frame line and one decoder-submission line, each including its newline.
 const MAX_METADATA_DIAGNOSTIC_BYTES = MAX_METADATA_SAMPLES * 4 * (MAX_METADATA_DIAGNOSTIC_LINE_BYTES + 1);
 
-/** MOV creates one input stream per trak, in encounter order. Read only bounded
- * box headers/handler types; never infer stream identity from decoder errors. */
-async function sourceVideoStreamIndex(context: ExternalRecordingContext, input: FileHandle): Promise<number> {
+interface SourceVideoInventory {
+  streamIndex: number; timescale: bigint; durations: readonly bigint[]; terminalCorrection: boolean;
+}
+/** MOV creates one input stream per trak, in encounter order. Bind only bounded
+ * stream/sample tables; never infer identity or source duration from decoder errors. */
+async function sourceVideoInventory(context: ExternalRecordingContext, input: FileHandle): Promise<SourceVideoInventory> {
   const check = () => { context.signal.throwIfAborted(); if (Date.now() >= context.deadline) failure('TIME_LIMIT'); };
   check(); const stat = await input.stat(); check();
   if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 8 || stat.size > 32 * 1024 * 1024) failure('MEDIA');
@@ -190,9 +193,87 @@ async function sourceVideoStreamIndex(context: ExternalRecordingContext, input: 
   await inspectMetadata([movie], 0);
   const tracks = (await children(movie)).filter(box => box.type === 'trak'); if (!tracks.length || tracks.length > 8) failure('MEDIA');
   for (const [index, track] of tracks.entries()) {
-    const media = single(await children(track), 'mdia'), handler = single(await children(media), 'hdlr');
+    const trackBoxes = await children(track), media = single(trackBoxes, 'mdia'), mediaBoxes = await children(media);
+    const handler = single(mediaBoxes, 'hdlr');
     if (handler.end - handler.payload < 12) failure('MEDIA');
-    if ((await read(handler.payload + 8, 4)).toString('latin1') === 'vide') return index;
+    if ((await read(handler.payload + 8, 4)).toString('latin1') !== 'vide') continue;
+    const timescaleOf = async (box: Box): Promise<bigint> => {
+      if (box.end - box.payload < 4) failure('MEDIA');
+      const version = (await read(box.payload, 4))[0], offset = version === 0 ? 12 : version === 1 ? 20 : 0;
+      if (!offset || box.end - box.payload < offset + 4) failure('MEDIA');
+      const value = (await read(box.payload + offset, 4)).readUInt32BE();
+      if (!value || value > 1000000000) failure('MEDIA'); return BigInt(value);
+    };
+    const mediaHeader = single(mediaBoxes, 'mdhd'), timescale = await timescaleOf(mediaHeader);
+    const mediaVersion = (await read(mediaHeader.payload, 4))[0], durationOffset = mediaVersion === 0 ? 16 : 24;
+    const durationWidth = mediaVersion === 0 ? 4 : 8;
+    if (mediaHeader.end - mediaHeader.payload < durationOffset + durationWidth) failure('MEDIA');
+    const durationBytes = await read(mediaHeader.payload + durationOffset, durationWidth);
+    const declaredDuration = mediaVersion === 0 ? BigInt(durationBytes.readUInt32BE()) : durationBytes.readBigUInt64BE();
+    const tableBoxes = await children(single(await children(single(mediaBoxes, 'minf')), 'stbl'));
+    const stts = single(tableBoxes, 'stts'), stsz = single(tableBoxes, 'stsz');
+    if (stts.end - stts.payload < 8 || stsz.end - stsz.payload < 12) failure('MEDIA');
+    const sizeHeader = await read(stsz.payload, 12), samples = sizeHeader.readUInt32BE(8);
+    if (sizeHeader.readUInt32BE() || !samples || samples > 10000 ||
+        stsz.end - stsz.payload !== 12 + (sizeHeader.readUInt32BE(4) ? 0 : samples * 4)) failure('MEDIA');
+    const timeHeader = await read(stts.payload, 8), entries = timeHeader.readUInt32BE(4);
+    if (timeHeader.readUInt32BE() || !entries || entries > samples || stts.end - stts.payload !== 8 + entries * 8) failure('MEDIA');
+    const durations: bigint[] = []; let total = 0n;
+    for (let entry = 0; entry < entries; entry++) {
+      const value = await read(stts.payload + 8 + entry * 8, 8), count = value.readUInt32BE(), duration = BigInt(value.readUInt32BE(4));
+      if (!count || !duration || count > samples - durations.length) failure('MEDIA');
+      for (let sample = 0; sample < count; sample++) durations.push(duration);
+      total += BigInt(count) * duration;
+    }
+    if (durations.length !== samples) failure('MEDIA');
+    if (declaredDuration !== total) failure('VIDEO_TIMESTAMP');
+    const composition = tableBoxes.filter(box => box.type === 'ctts'); if (composition.length > 1) failure('MEDIA');
+    const offsets: bigint[] = [];
+    if (composition.length) {
+      const ctts = composition[0]; if (ctts.end - ctts.payload < 8) failure('MEDIA');
+      const header = await read(ctts.payload, 8), version = header[0], count = header.readUInt32BE(4);
+      if (version > 1 || (header.readUInt32BE() & 0x00ffffff) || !count || count > samples ||
+          ctts.end - ctts.payload !== 8 + count * 8) failure('MEDIA');
+      for (let entry = 0; entry < count; entry++) {
+        const value = await read(ctts.payload + 8 + entry * 8, 8), count = value.readUInt32BE();
+        const offset = BigInt(version === 0 ? value.readUInt32BE(4) : value.readInt32BE(4));
+        if (!count || count > samples - offsets.length) failure('MEDIA');
+        for (let sample = 0; sample < count; sample++) offsets.push(offset);
+      }
+      if (offsets.length !== samples) failure('MEDIA');
+    }
+    let decodeTime = 0n, firstPts: bigint | undefined, endPts: bigint | undefined;
+    for (const [sample, duration] of durations.entries()) {
+      const pts = decodeTime + (offsets[sample] ?? 0n), end = pts + duration;
+      if (firstPts === undefined || pts < firstPts) firstPts = pts;
+      if (endPts === undefined || end > endPts) endPts = end;
+      decodeTime += duration;
+    }
+    // Only an uncropped, unreordered complete media edit can justify replacing
+    // a demuxer's terminal-duration guess. Other layouts retain strict matching.
+    let terminalCorrection = !composition.length;
+    const edits = trackBoxes.filter(box => box.type === 'edts');
+    if (edits.length > 1) failure('MEDIA');
+    if (edits.length) {
+      const elst = single(await children(edits[0]), 'elst');
+      if (elst.end - elst.payload < 8) failure('MEDIA');
+      const header = await read(elst.payload, 8), version = header[0], count = header.readUInt32BE(4);
+      const width = version === 0 ? 12 : version === 1 ? 20 : 0;
+      if (!width || elst.end - elst.payload !== 8 + count * width) failure('MEDIA');
+      if (count !== 1 && count !== 2) failure('VIDEO_TIMESTAMP');
+      const movieTimescale = await timescaleOf(single(await children(movie), 'mvhd'));
+      const extent = (endPts! - firstPts!) * movieTimescale, movieDuration = (extent + timescale - 1n) / timescale;
+      for (let entry = 0; entry < count; entry++) {
+        const value = await read(elst.payload + 8 + entry * width, width);
+        const segment = version === 0 ? BigInt(value.readUInt32BE()) : value.readBigUInt64BE();
+        const mediaTime = version === 0 ? BigInt(value.readInt32BE(4)) : value.readBigInt64BE(8);
+        const rate = value.readUInt32BE(width - 4);
+        if (rate !== 0x00010000 || (entry === count - 1
+          ? mediaTime !== firstPts || segment !== movieDuration : mediaTime !== -1n)) failure('VIDEO_TIMESTAMP');
+        if (entry === count - 1) terminalCorrection &&= segment * timescale === extent;
+      }
+    }
+    return { streamIndex: index, timescale, durations, terminalCorrection };
   }
   return failure('MEDIA');
 }
@@ -283,7 +364,28 @@ async function inspectSourceAudio(context: ExternalRecordingContext, videoStream
   } finally { controller.abort(); await closed; context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
-export async function inspectExternalRecording(context: ExternalRecordingContext, fps: number, audioActive = false): Promise<ExternalRecordingPlan> {
+/** Place IDRs on existing selected pictures before the next picture would exceed
+ * the fragment/keyframe budget. The final interval includes the full source end. */
+function recordingKeyframeIndices(configuration: CameraRecordingConfiguration,
+  plan: Pick<ExternalRecordingPlan, 'selected' | 'durationUs'>): number[] {
+  const { selected, durationUs } = plan;
+  const budgetUs = Math.max(100000, (Math.min(configuration.mediaContainerConfiguration.fragmentLength,
+    configuration.videoCodec.parameters.iFrameInterval) - 200) * 1000);
+  if (!selected.length || selected[0].pts !== 0) failure('VIDEO_TIMESTAMP');
+  const indices = [0]; let start = 0;
+  for (let next = 1; next <= selected.length; next++) {
+    const end = next === selected.length ? durationUs : selected[next].pts;
+    if (end - selected[start].pts <= budgetUs) continue;
+    const previous = next - 1;
+    if (previous === start || end - selected[previous].pts > budgetUs || indices.length === 512) failure('FRAGMENT_LIMIT');
+    indices.push(previous); start = previous;
+  }
+  return indices;
+}
+
+export async function inspectExternalRecording(context: ExternalRecordingContext,
+  configuration: CameraRecordingConfiguration, audioActive = false): Promise<ExternalRecordingPlan> {
+  const fps = configuration.videoCodec.resolution[2];
   const input = await context.open(), controller = new globalThis.AbortController();
   const abort = () => controller.abort(); context.signal.addEventListener('abort', abort, { once: true });
   // Opening the regular snapshot can yield; replay revocation that preceded
@@ -294,7 +396,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
   let closure: Promise<number | null> | undefined;
   let numerator = 0n, denominator = 0n, header = false, dimensions = false;
   try {
-    const videoStreamIndex = await sourceVideoStreamIndex(context, input);
+    const source = await sourceVideoInventory(context, input), videoStreamIndex = source.streamIndex;
     const child = launch({ ...context, signal: controller.signal }, [...inputArguments, '-map', '0:v:0', '-an', '-c:v', 'copy',
       '-bsf:v', 'h264_mp4toannexb', '-f', 'tee', '[f=data:flush_packets=1]pipe:1|[f=framecrc:flush_packets=1]pipe:3'], [input.fd, 'pipe', 'pipe', 'pipe']);
     const okay = observeMetadataErrors(readable(child.stderr), () => metadata, videoStreamIndex);
@@ -303,6 +405,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
       const part: Buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
       if ((bytes += part.length) > 34 * 1024 * 1024) failure('OUTPUT_LIMIT'); await queue.push(part);
     } queue.end(); };
+    let previousSourceDts: bigint | undefined, reordered = false;
     const meta = lines(readable(child.stdio[3]), async line => {
       if (line.startsWith('#')) {
         if (frames) failure();
@@ -318,6 +421,15 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
       const row = parseFrameCrcPacket(line); if (!row) return;
       if (!header || !dimensions || !numerator || !denominator || row.streamIndex !== 0 || ++frames > 10000 ||
           row.duration <= 0n || row.pts < -(1n << 62n) || row.pts > (1n << 62n)) failure();
+      const duration = source.durations[frames - 1]; if (duration === undefined) failure('VIDEO_TIMESTAMP');
+      if (previousSourceDts !== undefined && (row.dts - previousSourceDts) * numerator * source.timescale !==
+          source.durations[frames - 2] * denominator) failure('VIDEO_TIMESTAMP');
+      previousSourceDts = row.dts; reordered ||= row.pts !== row.dts;
+      if (row.duration * numerator * source.timescale !== duration * denominator) {
+        const divisor = numerator * source.timescale, expected = duration * denominator;
+        if (frames !== source.durations.length || reordered || !source.terminalCorrection || expected % divisor) failure('VIDEO_TIMESTAMP');
+        row.duration = expected / divisor;
+      }
       const data = await queue.take(row.size);
       try {
         if (packetAdler32(data) !== row.checksum) failure();
@@ -339,6 +451,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     const guard = async (work: Promise<unknown>) => { try { await work; } catch (error) { controller.abort(); throw error; } };
     await Promise.all([guard(raw()), guard(meta), guard(closed.then(code => { if (code !== 0) failure('MEDIA'); }))]);
     await queue.finish(); context.signal.throwIfAborted(); if (!okay.valid() || !pictures.length || pictures.length > 9000) failure();
+    if (frames !== source.durations.length) failure('VIDEO_TIMESTAMP');
     pictures.sort((a, b) => a.pts - b.pts); const origin = pictures[0].pts;
     for (let i = 0; i < pictures.length; i++) {
       pictures[i].pts -= origin;
@@ -352,6 +465,7 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     // an output interval extend it beyond the finite-source limit.
     const durationUs = pictures.reduce((end, picture) => Math.max(end, picture.pts + picture.duration), 0);
     if (durationUs < 1 || durationUs > 90000000) failure('VIDEO_TIMESTAMP');
+    recordingKeyframeIndices(configuration, { selected, durationUs });
     const audio = audioActive ? await inspectSourceAudio(context, videoStreamIndex, origin + durationUs) : undefined;
     return { pictures, selected, durationUs, originUs: origin,
       ...(audio?.kind === 'decoded' ? { audioOriginUs: audio.originUs } : {}),
@@ -376,7 +490,14 @@ export function recordingFfmpegArguments(configuration: CameraRecordingConfigura
   const filter = `settb=1/1000000,setpts='PTS-(${correction})',` +
     `select='isnan(prev_selected_t)+gt(floor((t-start_t)*${fps}+0.0001),floor((prev_selected_t-start_t)*${fps}+0.0001))',` +
     squarePixelLetterboxFilter(width, height);
-  const interval = Math.max(0.1, (Math.min(configuration.mediaContainerConfiguration.fragmentLength, v.parameters.iFrameInterval) - 200) / 1000);
+  const keyframes = recordingKeyframeIndices(configuration, plan);
+  // Encoder n counts filtered output pictures from zero. Frame indices avoid
+  // rounding a requested timestamp onto the picture after a source gap.
+  const forceKeyframe = (from: number, to: number): string => {
+    if (to - from === 1) return `eq(n,${keyframes[from]})`;
+    const middle = Math.floor((from + to) / 2);
+    return `(${forceKeyframe(from, middle)}+${forceKeyframe(middle, to)})`;
+  };
   const sourceArguments = [...inputArguments.slice(0, -2), ...(!audioActive || silence ? ['-an'] : []), ...inputArguments.slice(-2)];
   return [...sourceArguments.slice(0, 6), ...(plan.metadata ? ['-err_detect', 'explode'] : ['-xerror', '-err_detect', 'explode']),
     ...sourceArguments.slice(6), ...(silence ? ['-f', 'lavfi', '-i', `anullsrc=r=${rate}:cl=mono`] : []),
@@ -385,7 +506,7 @@ export function recordingFfmpegArguments(configuration: CameraRecordingConfigura
     '-preset', 'veryfast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-bf', '0',
     '-profile:v', ['baseline', 'main', 'high'][v.parameters.profile], '-level:v', ['3.1', '3.2', '4.0'][v.parameters.level],
     '-b:v', String(v.parameters.bitRate * 1000), '-maxrate:v', String(v.parameters.bitRate * 1000), '-bufsize:v', String(v.parameters.bitRate * 1000),
-    '-sc_threshold', '0', '-force_key_frames', `expr:gte(t,n_forced*${interval})`,
+    '-sc_threshold', '0', '-force_key_frames', `expr:${forceKeyframe(0, keyframes.length)}`,
     '-bsf:v', `setts=duration='if(eq(N,${plan.selected.length - 1}),${plan.durationUs - plan.selected.at(-1)!.pts},DURATION)'`,
     ...(audioActive ? ['-c:a', 'aac', '-profile:a', 'aac_low', '-threads:a', '1', '-ar', String(rate), '-ac', '1',
       '-b:a', String(configuration.audioCodec.bitrate * 1000), '-af', 'aresample=async=1:min_comp=0.002:min_hard_comp=0.002'] : []),

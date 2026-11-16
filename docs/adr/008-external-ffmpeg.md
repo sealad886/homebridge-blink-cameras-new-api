@@ -98,6 +98,24 @@ extent, retaining only bounded frame metadata and the first decoded audio origin
 Proven decoder damage can enter the existing silence retry before video encoding.
 Disabled audio never participates in this preflight.
 
+Finite keyframe placement uses the inspected selected picture timeline, including
+the complete source end. Choose existing pictures before the fragment boundary
+instead of waiting for a delayed picture to cross a periodic time threshold.
+Retain the 200 ms audio and muxing margin within the smaller fragment/IDR interval;
+reject an impossible picture span during input inspection. Do not fabricate
+pictures, shorten source time, or retry a fragment failure with silent audio.
+The bounded keyframe plan and the metadata correction plan must both fit the
+actual platform command limit.
+
+Bind inspected video packets to the selected track's bounded sample counts and
+decode-time table. FFmpeg 6.1 can omit the final duration after an empty edit and
+substitute an average-frame-rate estimate. Use the stored terminal duration only
+after exact packet/sample timing correspondence proves an unreordered complete
+media edit; retain the actual demuxed origin, PTS, and DTS. Ambiguous timing must
+fail input admission before audio inspection or encoding. Qualify the original
+nonzero-origin variable-cadence source and a changed-terminal-duration control;
+a balanced-cadence fixture alone does not clear the source-end contract.
+
 Admission limits must compose through execution. Up to 512 metadata corrections
 must fit the generated expression's parser depth and the actual platform-quoted
 command length. Allocation estimates are not command-length limits. Keep source,

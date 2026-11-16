@@ -57,7 +57,7 @@ it('admits at most one sequential silence fallback and erases partial output wit
   expect(mock.modes).toEqual([false, true]); expect(admit).toHaveBeenCalledTimes(1); expect(mock.active()).toBe(0);
   expect(memory.bytes).toBe(0); expect(await fs.readFile(file.filePath)).toEqual(original); await cleaned();
 });
-it.each(['TIME_LIMIT', 'OUTPUT_LIMIT', 'DECODE', 'MEDIA', 'EXTERNAL_FFMPEG', 'VIDEO_DISCONTINUITY', undefined] as const)(
+it.each(['TIME_LIMIT', 'OUTPUT_LIMIT', 'DECODE', 'MEDIA', 'EXTERNAL_FFMPEG', 'VIDEO_DISCONTINUITY', 'FRAGMENT_LIMIT', undefined] as const)(
   'does not repeat hard or unclassified failure %s', async code => {
     const file = await input(), memory = new NativeRecordingMemoryBudget(), mock = failures([code], memory);
     await expect(prepareNativeRecording(file, selected(), true, new globalThis.AbortController().signal,
@@ -141,6 +141,33 @@ function preparedVideo(): Buffer {
     box('moof', Buffer.concat([box('mfhd', field(8, 4, 1)), box('traf', Buffer.concat([
       box('tfhd', field(8, 4, 1)), box('tfdt', Buffer.alloc(8)), box('trun', field(8, 4, 1))]))])), box('mdat', Buffer.from([0]))]);
 }
+
+it.each(['privacy', 'deadline', 'decode'] as const)('reports %s during validation without losing output ownership', async reason => {
+  const file = await input(), original = await fs.readFile(file.filePath), memory = new NativeRecordingMemoryBudget();
+  const owner = new globalThis.AbortController(), media = preparedVideo();
+  let validated: Buffer | undefined, enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  jest.mocked(convertExternalRecording).mockImplementation(async (_context, _configuration, _plan, _audio, _silence, collect) => { collect(media); });
+  jest.mocked(validateExternalRecording).mockImplementation(async (context, output) => {
+    validated = output; enter();
+    if (reason === 'decode') throw new ExternalRecordingError('DECODE');
+    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), { once: true }));
+    context.signal.throwIfAborted();
+  });
+  const pending = prepareNativeRecording(file, selected(), false, owner.signal,
+    { memory, timeoutMs: 1000, admit: work => work() }).then(value => { value.dispose(); return undefined; }, error => error);
+  await entered;
+  if (reason === 'privacy') owner.abort();
+  const error = await pending;
+  if (reason === 'decode') expect(error).toMatchObject({ diagnostic: { phase: 'validation', workerCode: 'DECODE' } });
+  else {
+    expect(error).toMatchObject({ message: 'Recording conversion cancelled' });
+    expect(error).not.toHaveProperty('diagnostic');
+  }
+  expect(convertExternalRecording).toHaveBeenCalledTimes(1); expect(validateExternalRecording).toHaveBeenCalledTimes(1);
+  expect(validated?.every(byte => byte === 0)).toBe(true); expect(memory.bytes).toBe(0);
+  expect(await fs.readFile(file.filePath)).toEqual(original); await cleaned();
+});
 
 it('erases provisional prepared output when final snapshot removal refuses cleanup', async () => {
   const media = preparedVideo();

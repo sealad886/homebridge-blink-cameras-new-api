@@ -301,10 +301,12 @@ This delayed offer does not establish pre-event recording or insert a clip at an
 arbitrary historical point in Home's timeline. The home hub decides whether to
 request and retain it. Apple requires a compatible home hub and an eligible
 iCloud+ plan; see [Apple's HomeKit Secure Video guide](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud).
-Saved Home recordings from both tested cameras have been played on the physical
-installation. That is bounded evidence for those cameras and settings, not every
-Blink model or clip. Verify your own camera after setup or upgrade; unsupported
-or malformed media can still be rejected with a bounded preparation diagnostic.
+Historical physical-installation evidence for version 1.1.0's bundled native codec
+backend includes saved Home recordings played from both tested cameras. That
+evidence covers those cameras and settings; it does not qualify the current
+external FFmpeg recording backend or every Blink model or clip. Verify your own
+camera after setup or upgrade; unsupported or malformed media can still be
+rejected with a bounded preparation diagnostic.
 Home controls retention and playback. Clip length comes from the completed Blink
 recording, not the plugin motion-sensor timeout. A saved entry’s Home timeline
 time can reflect delayed delivery rather than the original Blink capture time.

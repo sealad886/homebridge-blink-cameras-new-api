@@ -31,7 +31,7 @@ it('does not launch a codec when privacy is revoked during the asynchronous sour
   const input = { fd: 42, close } as unknown as FileHandle;
   const opening = async () => { await Promise.resolve(); owner.abort(); return input; };
   await expect(inspectExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
-    signal: owner.signal, deadline: Date.now() + 1000, open: opening }, 15)).rejects.toThrow();
+    signal: owner.signal, deadline: Date.now() + 1000, open: opening }, configuration())).rejects.toThrow();
   expect(spawnExternalFfmpeg).not.toHaveBeenCalled(); expect(close).toHaveBeenCalledTimes(1);
 });
 it.each(['compressed', 'cover-art', 'artwork-key', 'too-many-streams', 'truncated', 'oversized-header'])(
@@ -58,7 +58,7 @@ it.each(['compressed', 'cover-art', 'artwork-key', 'too-many-streams', 'truncate
     try {
       await fs.writeFile(path, source, { mode: 0o600 }); input = await fs.open(path, 'r');
       await expect(inspectExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
-        signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input! }, 15))
+        signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input! }, configuration()))
         .rejects.toMatchObject({ code: 'MEDIA' });
       expect(spawnExternalFfmpeg).not.toHaveBeenCalled(); await expect(input.stat()).rejects.toThrow();
     } finally { await input?.close(); await fs.rm(directory, { recursive: true, force: true }); }
@@ -76,7 +76,7 @@ it.each(['privacy', 'deadline'])('rechecks %s after an asynchronous identity rea
       return result;
     });
     const pending = inspectExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
-      signal: owner.signal, deadline, open: async () => input! }, 15);
+      signal: owner.signal, deadline, open: async () => input! }, configuration());
     if (reason === 'privacy') await expect(pending).rejects.toThrow();
     else await expect(pending).rejects.toMatchObject({ code: 'TIME_LIMIT' });
     expect(spawnExternalFfmpeg).not.toHaveBeenCalled(); await expect(input.stat()).rejects.toThrow();
@@ -177,7 +177,8 @@ async function recording(source: Buffer, audio: boolean, rate = 16000, silence =
     await fs.writeFile(file, source, { mode: 0o600 });
     const context = { ffmpegPath: ffmpeg!, protectionPath: protection, signal: new globalThis.AbortController().signal,
       deadline: Date.now() + 15000, open: () => fs.open(file, 'r') };
-    const plan = await inspectExternalRecording(context, 15, audio), selected = configuration(rate), chunks: Buffer[] = [];
+    const selected = configuration(rate), chunks: Buffer[] = [];
+    const plan = await inspectExternalRecording(context, selected, audio);
     if (dimensions) selected.videoCodec.resolution = [...dimensions, 15];
     await convertExternalRecording(context, selected, plan, audio, silence, bytes => chunks.push(Buffer.from(bytes)));
     const output = Buffer.concat(chunks);
@@ -196,8 +197,9 @@ media.each([[1, 24], [90, 24], [1, 30]])('keeps a %s-second %s-fps source end in
     const context = { ffmpegPath: ffmpeg!, protectionPath: protection, signal: new globalThis.AbortController().signal,
       deadline: Date.now() + 15000, open: () => fs.open(file, 'r') };
     for (const fps of [15, 24]) {
-      const plan = await inspectExternalRecording(context, fps), selected = configuration(), memory = new NativeRecordingMemoryBudget();
+      const selected = configuration(), memory = new NativeRecordingMemoryBudget();
       selected.videoCodec.resolution = [16, 16, fps];
+      const plan = await inspectExternalRecording(context, selected);
       expect(plan.durationUs).toBe(seconds * 1000000);
       const prepared = await prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, selected, false,
         new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
@@ -227,7 +229,7 @@ media('refuses a source beyond 90 seconds even when output frame selection drops
       '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-f', 'mp4', file]);
     jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
     await expect(inspectExternalRecording({ ffmpegPath: ffmpeg!, protectionPath: protection,
-      signal: new globalThis.AbortController().signal, deadline: Date.now() + 15000, open: () => fs.open(file, 'r') }, 15))
+      signal: new globalThis.AbortController().signal, deadline: Date.now() + 15000, open: () => fs.open(file, 'r') }, configuration()))
       .rejects.toMatchObject({ code: 'VIDEO_TIMESTAMP' });
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 20000);
@@ -420,5 +422,142 @@ media.each([16000, 24000])('preserves an audio-leading source offset at %s Hz wi
     const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ar', String(rate), '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
     expect(Array.from({ length: pcm.length / 4 }, (_, index) => Math.abs(pcm.readFloatLE(index * 4))).some(value => value > 0.01)).toBe(true);
     output.fill(0);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}, 20000);
+
+media.each([...([500000, 700000, 1000000].flatMap(gapUs => [false, true].map(audio => ({ gapUs, audio, balanced: false })))),
+  ...[false, true].map(audio => ({ gapUs: 700000, audio, balanced: true }))])(
+  'bounds fragments around a $gapUs-us picture gap with audio $audio and balanced cadence $balanced', async ({ gapUs, audio, balanced }) => {
+    const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-picture-gap-')), file = join(directory, 'source.mp4');
+    const originUs = gapUs === 700000 ? 200000 : 0;
+    try {
+      execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=10:duration=3', '-f', 'lavfi', '-i',
+        'sine=frequency=440:sample_rate=16000:duration=5', '-vf',
+        `settb=1/1000000,setpts=PTS+if(gte(N\\,8)\\,${gapUs - 100000}\\,0)+${originUs}` +
+          (balanced ? '-if(gte(N\\,9)\\,min((N-8)*30000\\,600000)\\,0)' : ''),
+        '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast',
+        '-bf', '0', '-c:a', 'aac', '-ar', '16000', '-ac', '1', '-shortest', '-f', 'mp4', file]);
+      await fs.chmod(file, 0o600);
+      const source = await fs.readFile(file), expectedSha256 = createHash('sha256').update(source).digest('hex');
+      const memory = new NativeRecordingMemoryBudget();
+      jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+      const pending = prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, configuration(), audio,
+        new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
+      if (gapUs === 1000000) {
+        await expect(pending).rejects.toMatchObject({ diagnostic: { phase: 'input', workerCode: 'FRAGMENT_LIMIT' } });
+        expect(jest.mocked(spawnExternalFfmpeg).mock.calls.some(([, args]) => args.includes('libx264') || args.includes('0:a:0?'))).toBe(false);
+      } else {
+        const prepared = await pending;
+        try {
+          expect(prepared.recovery).toBeUndefined(); expect(prepared.durationMs).toBe(balanced ? 3000 : (3000000 + gapUs - 100000) / 1000);
+          expect(prepared.fragments[0].durationMs).toBe(700);
+          expect(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= 1000)).toBe(true);
+          const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
+          try {
+            const metadata = execute(['-i', 'pipe:0', '-map', '0:v:0', '-an', '-c:v', 'rawvideo', '-threads:v', '1',
+              '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-f', 'framecrc', 'pipe:1'], output).toString();
+            const base = /^#tb 0: (\d+)\/(\d+)$/m.exec(metadata)!;
+            const packets = metadata.split('\n').filter(line => /^0,/.test(line)).map(line => line.split(',').map(Number));
+            expect(packets).toHaveLength(30);
+            for (const [index, packet] of packets.entries()) {
+              const expectedPts = index * 100000 + (index >= 8 ? gapUs - 100000 : 0) -
+                (balanced && index >= 9 ? Math.min((index - 8) * 30000, 600000) : 0);
+              expect((packet[2] - packets[0][2]) * Number(base[1]) * 1000000 / Number(base[2])).toBe(expectedPts);
+            }
+            if (audio) {
+              const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
+              expect(Array.from({ length: pcm.length / 4 }, (_, index) => Math.abs(pcm.readFloatLE(index * 4))).some(value => value > 0.01)).toBe(true);
+            }
+          } finally { output.fill(0); }
+          expect(jest.mocked(spawnExternalFfmpeg).mock.calls.filter(([, args]) => args.includes('libx264'))).toHaveLength(1);
+        } finally { prepared.dispose(); }
+      }
+      expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+      expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
+    } finally { await fs.rm(directory, { recursive: true, force: true }); }
+  }, 20000);
+
+media.each(['terminal', 'crop', 'crop-one-tick', 'leading-crop', 'repeat', 'sample-count', 'timing-count', 'media-duration'] as const)(
+  'binds source timing to ordinary MP4 sample tables under %s control', async control => {
+    const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-source-timing-')), file = join(directory, 'source.mp4');
+    try {
+      execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=10:duration=3', '-f', 'lavfi', '-i',
+        'sine=frequency=440:sample_rate=16000:duration=5', '-vf',
+        'settb=1/1000000,setpts=PTS+if(gte(N\\,8)\\,600000\\,0)+200000',
+        '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast',
+        '-bf', '0', '-bsf:v', `setts=duration='if(eq(N,29),${control === 'crop-one-tick' ? 90001 : 90000},DURATION)'`,
+        '-c:a', 'aac', '-ar', '16000', '-ac', '1',
+        '-shortest', '-f', 'mp4', file]);
+      const source = await fs.readFile(file);
+      // These trusted generated fixtures use ordinary 32-bit boxes. Alter only
+      // the declared field under test; public preparation owns all validation.
+      interface Box { type: string; payload: number; end: number; }
+      const boxes = (from = 0, end = source.length): Box[] => {
+        const result: Box[] = [];
+        for (let at = from; at < end;) {
+          const size = source.readUInt32BE(at); if (size < 8 || at + size > end) throw new Error('Invalid synthetic box');
+          result.push({ type: source.toString('ascii', at + 4, at + 8), payload: at + 8, end: at + size }); at += size;
+        }
+        return result;
+      };
+      const child = (box: Box, type: string): Box => boxes(box.payload, box.end).find(value => value.type === type)!;
+      const movie = boxes().find(box => box.type === 'moov')!;
+      const track = boxes(movie.payload, movie.end).find(box => box.type === 'trak' &&
+        source.toString('ascii', child(child(box, 'mdia'), 'hdlr').payload + 8, child(child(box, 'mdia'), 'hdlr').payload + 12) === 'vide')!;
+      const table = child(child(child(track, 'mdia'), 'minf'), 'stbl');
+      if (control === 'crop' || control === 'crop-one-tick' || control === 'leading-crop' || control === 'repeat') {
+        const edit = child(child(track, 'edts'), 'elst'); expect(source[edit.payload]).toBe(0);
+        const last = edit.payload + 8 + (source.readUInt32BE(edit.payload + 4) - 1) * 12;
+        const movieTimescale = source.readUInt32BE(child(movie, 'mvhd').payload + 12), segment = source.readUInt32BE(last);
+        if (control === 'crop-one-tick') {
+          // One movie tick below the integer ceiling cannot cover the exact
+          // source extent, even when it differs by less than one microsecond.
+          const whole = (3590001n * BigInt(movieTimescale) + 999999n) / 1000000n;
+          source.writeUInt32BE(Number(whole) - 1, last);
+        } else if (control === 'repeat') { expect(segment * 1000 / movieTimescale).toBe(3590); source.writeInt32BE(0, edit.payload + 12); }
+        else {
+          expect(segment * 1000 / movieTimescale).toBe(3590);
+          source.writeUInt32BE(segment - movieTimescale / 10, last);
+          if (control === 'leading-crop') source.writeInt32BE(100000, last + 4);
+        }
+      } else if (control === 'sample-count') {
+        const sizes = child(table, 'stsz'); expect(source.readUInt32BE(sizes.payload + 8)).toBe(30); source.writeUInt32BE(31, sizes.payload + 8);
+      } else if (control === 'timing-count') {
+        const timing = child(table, 'stts'), last = timing.payload + 8 + (source.readUInt32BE(timing.payload + 4) - 1) * 8;
+        source.writeUInt32BE(source.readUInt32BE(last) + 1, last);
+      } else if (control === 'media-duration') {
+        const header = child(child(track, 'mdia'), 'mdhd'); expect(source[header.payload]).toBe(0);
+        const timescale = source.readUInt32BE(header.payload + 12), duration = source.readUInt32BE(header.payload + 16);
+        expect(duration * 1000 / timescale).toBe(3590); source.writeUInt32BE(duration - timescale / 100, header.payload + 16);
+      }
+      await fs.writeFile(file, source); await fs.chmod(file, 0o600);
+      const expectedSha256 = createHash('sha256').update(source).digest('hex'), memory = new NativeRecordingMemoryBudget();
+      jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+      const pending = prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256 }, configuration(), true,
+        new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, memory, admit: work => work() });
+      if (control === 'terminal') {
+        const prepared = await pending;
+        try { expect(prepared.durationMs).toBe(3590); expect(prepared.recovery).toBeUndefined(); }
+        finally { prepared.dispose(); }
+      } else {
+        await expect(pending).rejects.toMatchObject({ diagnostic: { phase: 'input',
+          workerCode: control === 'sample-count' || control === 'timing-count' ? 'MEDIA' : 'VIDEO_TIMESTAMP' } });
+        expect(jest.mocked(spawnExternalFfmpeg).mock.calls.some(([, args]) => args.includes('libx264') || args.includes('0:a:0?'))).toBe(false);
+      }
+      expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+      expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
+    } finally { await fs.rm(directory, { recursive: true, force: true }); }
+  }, 20000);
+
+media.each([false, true])('preserves reordered source pictures with signed offsets %s without terminal substitution', async signed => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-reordered-')), file = join(directory, 'source.mp4');
+  try {
+    execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', '-f', 'lavfi', '-i',
+      'sine=frequency=440:sample_rate=16000:duration=3', '-vf', 'setpts=PTS+0.2/TB', '-fps_mode:v', 'passthrough',
+      '-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast', '-bf', '2', '-c:a', 'aac', '-ar', '16000', '-ac', '1',
+      ...(signed ? ['-movflags', '+negative_cts_offsets'] : []), '-shortest', '-f', 'mp4', file]);
+    const { plan, output } = await recording(await fs.readFile(file), true);
+    try { expect(plan.pictures).toHaveLength(30); expect(plan.originUs).toBe(200000); expect(plan.durationUs).toBe(2000000); }
+    finally { output.fill(0); }
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 20000);

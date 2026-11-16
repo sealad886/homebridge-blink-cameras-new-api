@@ -256,6 +256,50 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       assert.equal(memory.bytes, 0); assert.equal(hash(readFileSync(source)), hash(bytes));
       assert.equal(readdirSync(scratch).some(name => name.startsWith('.native-')), false, 'Rejected media must not retain a working snapshot'); bytes.fill(0);
     }
+    // A delayed picture must not make a time-threshold IDR arrive after the
+    // fragment bound. Exercise existing-picture keyframe placement through the
+    // installed API, including refusal before conversion when no plan can fit.
+    const gapTrials = [...[500, 700, 1000].map(gapMs => ({ gapMs, originUs: 0, lastSampleUs: 100000 })),
+      { gapMs: 700, originUs: 200000, lastSampleUs: 100000 },
+      { gapMs: 700, originUs: 200000, lastSampleUs: 90000 }];
+    for (const { gapMs, originUs, lastSampleUs } of gapTrials) for (const active of [false, true]) {
+      const source = join(scratch, `picture-gap-${gapMs}-${originUs}-${lastSampleUs}-${active}.mp4`);
+      execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=10:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=4',
+        '-vf', `settb=1/1000000,setpts=PTS+if(gte(N\\,8)\\,${(gapMs - 100) * 1000}\\,0)+${originUs}`,
+        '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-c:v', 'libx264', '-threads:v', '1', '-preset', 'ultrafast', '-bf', '0',
+        '-g', '1', ...(lastSampleUs === 100000 ? [] : ['-bsf:v', `setts=duration='if(eq(N,29),${lastSampleUs},DURATION)'`]),
+        '-c:a', 'aac', '-ar', '16000', '-ac', '1', '-b:a', '24k', '-shortest', '-f', 'mp4', source]);
+      chmodSync(source, 0o600); const bytes = readFileSync(source), sourceHash = hash(bytes), memory = new NativeRecordingMemoryBudget();
+      const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
+        videoCodec: { type: 0, resolution: [16, 16, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
+        audioCodec: { type: 0, samplerate: 1, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
+      const prepare = () => prepareNativeRecording({ filePath: source, expectedBytes: bytes.length, expectedSha256: sourceHash }, configuration, active,
+        new globalThis.AbortController().signal, { ffmpegPath, memory, admit: work => work() });
+      if (gapMs === 1000) {
+        await assert.rejects(prepare, error => error.diagnostic?.phase === 'input' && error.diagnostic?.workerCode === 'FRAGMENT_LIMIT',
+          'An impossible picture span must be refused before conversion, preserving the fragment margin');
+      } else {
+        const prepared = await prepare();
+        try {
+          assert.equal(prepared.recovery, undefined, 'Keyframe placement must not require a recovery pass');
+          assert.equal(prepared.durationMs, 3000 + gapMs - 100 + (lastSampleUs - 100000) / 1000,
+            'Picture gaps and a changed terminal sample must preserve the exact source end');
+          assert(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= 1000));
+          for (let i = 1; i < prepared.fragments.length; i++) assert(Math.abs(prepared.fragments[i - 1].startMs + prepared.fragments[i - 1].durationMs - prepared.fragments[i].startMs) < 0.01);
+          const output = Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]);
+          try {
+            const clock = execute(['-xerror', '-copyts', '-i', 'pipe:0', '-map', '0:v:0', '-c:v', 'rawvideo', '-threads:v', '1',
+              '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-f', 'framecrc', 'pipe:1'], output).toString('ascii');
+            assert(clock.includes('#tb 0: 1/1000000'));
+            const pts = clock.split('\n').filter(line => /^0,/.test(line)).map(line => Number(line.split(',')[2]));
+            assert.deepEqual(pts, Array.from({ length: 30 }, (_, i) => originUs + i * 100000 + (i >= 8 ? (gapMs - 100) * 1000 : 0)),
+              'Independent decoding must retain every actual picture timestamp without filling or shortening the gap');
+          } finally { output.fill(0); }
+        } finally { prepared.dispose(); }
+      }
+      assert.equal(memory.bytes, 0); assert.equal(hash(readFileSync(source)), sourceHash);
+      assert.equal(readdirSync(scratch).some(name => name.startsWith('.native-')), false, 'Gap trials must release the private snapshot'); bytes.fill(0);
+    }
     // These content tests run inside canonical installed qualification,
     // independently of source Jest jobs that do not build a native helper.
     for (const offset of [0, 64000, 200000]) for (const rate of [16000, 24000]) {

@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import process from 'node:process';
 import { withinRequestBudget } from '../src/operation-budget';
-import { createExternalLiveCodec } from '../src/accessories/external-live-codec';
+import { createExternalLiveCodec, type ExternalLiveCodec } from '../src/accessories/external-live-codec';
 import { resolveExternalFfmpegPath, type ExternalFfmpegProcessOptions } from '../src/accessories/external-ffmpeg';
 import type { CodecPacket } from '../src/accessories/ffmpeg-packets';
 import { SharedCameraFeed, SHARED_FEED_LIMITS, type FeedHandle, type FeedSink } from '../src/accessories/shared-feed';
@@ -42,13 +42,18 @@ const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK
   const launch: ExternalFfmpegProcessOptions['launch'] = (_command, args, options) => spawn(args[1], args.slice(2), options);
   let firstPacket!: () => void;
   const firstOutput = new Promise<void>(resolve => { firstPacket = resolve; });
-  const codecs = await Promise.all(packets.map(async (output, index) => createExternalLiveCodec({ ffmpegPath: ffmpeg!, protectionPath: process.execPath,
-    video: { width: 16, height: 16, fps: 10, bitrate: 100000, maxFrames: 120, profile: 0, level: 0 },
-    audio: { codec: 'opus', rate: 16000, bitrate: 24000, mtu: 1200, packetTime: 20 } },
-  { packet: async packet => { output.push({ ...packet, data: Buffer.from(packet.data) }); if (!index && packet.stream === 1) firstPacket(); } }, new AbortController().signal,
-  { launch, probe: async () => ({ version: 'test' }) })));
-  const sinks = codecs.map((codec, index) => ({ write: (input: Buffer) => codec.write(input), end: () => codec.end(), fail: failures[index] }));
+  const codecs: ExternalLiveCodec[] = [];
   try {
+    const created = await Promise.allSettled(packets.map(async (output, index) => createExternalLiveCodec({ ffmpegPath: ffmpeg!, protectionPath: process.execPath,
+      video: { width: 16, height: 16, fps: 10, bitrate: 100000, maxFrames: 120, profile: 0, level: 0 },
+      audio: { codec: 'opus', rate: 16000, bitrate: 24000, mtu: 1200, packetTime: 20 } },
+    { packet: async packet => { output.push({ ...packet, data: Buffer.from(packet.data) }); if (!index && packet.stream === 1) firstPacket(); } }, new AbortController().signal,
+    { launch, probe: async () => ({ version: 'test' }) })));
+    // Settle both attempts before cleanup so a later success cannot escape ownership.
+    for (const result of created) if (result.status === 'fulfilled') codecs.push(result.value);
+    const rejected = created.find(result => result.status === 'rejected');
+    if (rejected) throw rejected.reason;
+    const sinks = codecs.map((codec, index) => ({ write: (input: Buffer) => codec.write(input), end: () => codec.end(), fail: failures[index] }));
     await f.feed.subscribe(sinks[0], new AbortController().signal);
     for (const frame of frames.slice(0, 62)) await f.input().write(frame);
     await withinRequestBudget(firstOutput, { deadline: Date.now() + 2000 });
