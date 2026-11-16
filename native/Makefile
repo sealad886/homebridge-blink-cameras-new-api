@@ -9,7 +9,7 @@ CFLAGS += -std=c11 -O2 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L
 LDLIBS += "$(SRTP_PREFIX)/lib/libsrtp2.a"
 ifeq ($(OS),Windows_NT)
 EXEEXT = .exe
-LDFLAGS += -municode
+override LDFLAGS += -municode
 LDLIBS += -lws2_32
 endif
 .PHONY: all test

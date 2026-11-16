@@ -5,6 +5,7 @@ import json
 import shlex
 from pathlib import Path
 import ssl
+import subprocess
 import tempfile
 import tarfile
 import unittest
@@ -154,6 +155,29 @@ class DownloadTests(unittest.TestCase):
 
 
 class BuildHostTests(unittest.TestCase):
+    def test_windows_worker_keeps_unicode_entrypoint_with_caller_linker_flags(self):
+        with tempfile.TemporaryDirectory(prefix='blink-make-link-') as directory:
+            prefix = Path(directory) / 'prefix'
+            (prefix / 'lib').mkdir(parents=True)
+            (prefix / 'lib' / 'libsrtp2.a').touch()
+            make_prefix = prepare.unix_path(prefix) if prepare.platform.system() == 'Windows' else prefix.as_posix()
+            result = subprocess.run(['make', '-n', '-B', 'all', 'OS=Windows_NT', 'CC=build-contract-cc',
+                'SRTP_PREFIX=' + make_prefix, 'LDFLAGS=-static -static-libgcc'],
+                cwd=prepare.HERE.parent, env={**prepare.os.environ, 'MAKEFLAGS': '', 'MFLAGS': ''},
+                check=True, capture_output=True, text=True)
+        commands = [shlex.split(line) for line in result.stdout.splitlines()
+                    if line.startswith('build-contract-cc ')]
+        self.assertEqual(len(commands), 2)
+        outputs = {command[command.index('-o') + 1]: command for command in commands}
+        worker = outputs['build/blink-protection-worker.exe']
+        receiver = outputs['build/check-protection.exe']
+        self.assertEqual(worker.count('-municode'), 1)
+        self.assertNotIn('-municode', receiver)
+        for command in (worker, receiver):
+            self.assertIn('-static', command)
+            self.assertIn('-static-libgcc', command)
+            self.assertIn('-Werror', command)
+
     def test_windows_libsrtp_uses_ucrt_format_checks_without_relaxing_warnings(self):
         class Configured(Exception):
             pass
