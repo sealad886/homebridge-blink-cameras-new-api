@@ -1,3 +1,5 @@
+![Blink for Homebridge — Outdoor 4, Video Doorbell and Mini cameras](../../../docs/assets/header-editorial-brand-wordmarks.png)
+
 # Set up Blink cameras in Apple Home
 
 [Documentation home](../../../docs/README.md) · [How it works](../../../docs/how-it-works.md) · [Troubleshooting](../../../docs/troubleshooting.md)
