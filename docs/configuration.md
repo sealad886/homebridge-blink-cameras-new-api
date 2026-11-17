@@ -128,7 +128,6 @@ Add a platform entry to your Homebridge `config.json`:
 | `outputQuality` | No | `auto` | System-wide output profile; see [quality profiles](streaming.md#input-and-output-quality) |
 | `softwareEncodingPreset` | No | `veryfast` | Balanced or optional `ultrafast` software encoding |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
-| `debugStreamPath` | No | - | Save raw IMMIS MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging; RTSPS recording is not implemented |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` requests fresh snapshots, subject to capture coalescing, failure backoff and provider busy fallback |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |
@@ -136,13 +135,17 @@ Add a platform entry to your Homebridge `config.json`:
 | `deviceSettingOverrides` | No | - | Per-device `motionTimeout`, `inputQuality`, `exposeTemperature`, `exposeMotionDetected`, `homeKitSecureVideo` and `earlyNotificationMode`; see below and [input quality](streaming.md#input-and-output-quality) |
 
 For an existing configuration, follow the [secure media migration](streaming.md#upgrade-configuration)
-before restarting; retired CLI and AAC-ELD settings are rejected. Upgrading from
+before restarting; retired CLI, raw capture (`debugStreamPath`, even when blank)
+and AAC-ELD settings are rejected. Optional raw diagnostic file capture has been
+removed. Existing captures are untouched; `mediaDebug` provides bounded, redacted
+logs. Upgrading from
 0.10.0 also requires reviewing the
-[native recording migration](native-recording-config-migration.md). Run the secure
-media converter first against the explicit complete Homebridge config path; it
-creates a private backup before replacement. Then preview the native recording
-converter, review its report and apply it only when ready. Neither tool contacts
-Blink or restarts Homebridge.
+[native recording migration](native-recording-config-migration.md). Both converter
+entrypoints use the same combined conversion. Preview either against the explicit
+complete Homebridge config path, review its report, then supply `--apply` when
+ready; application creates a private exact-byte backup before replacement.
+Windows uses the guide's manual conversion. Installation never runs conversion.
+Neither tool contacts Blink, restarts Homebridge or accesses existing captures.
 
 Use **Cameras in Home** to select systems this instance should expose. Save and
 restart the Blink child bridge. Including a system restores it on discovery.

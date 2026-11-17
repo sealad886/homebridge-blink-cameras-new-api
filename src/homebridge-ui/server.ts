@@ -68,7 +68,7 @@ export class BlinkUiServer extends HomebridgePluginUiServer {
 
     this.debugEnabled = this.resolveDebugEnabled();
     this.hostedAuthService = new HostedAuthService({
-      storageRoot: this.homebridgeStoragePath ?? '.',
+      storageRoot: this.homebridgeStoragePath,
       logger: new UiLogger(this),
     });
 

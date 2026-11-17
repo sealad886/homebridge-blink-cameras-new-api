@@ -90,7 +90,7 @@ export class HostedAuthServiceError extends Error {
 }
 
 interface HostedAuthServiceOptions {
-  storageRoot: string;
+  storageRoot: string | undefined;
   logger: BlinkLogger;
   apiFactory?: (config: BlinkConfig) => BlinkApi;
 }
@@ -420,7 +420,7 @@ export class HostedAuthService {
   async testConnection(payload: { deviceId?: string }): Promise<{ success: boolean; message: string }> {
     const request = this.requirePayload(payload, ['deviceId']);
     const deviceId = request.deviceId === undefined ? undefined : normalizeHardwareId(request.deviceId, false);
-    const key = path.resolve(this.options.storageRoot), pending = connectionTestsByRoot.get(key);
+    const key = path.resolve(this.storageRoot), pending = connectionTestsByRoot.get(key);
     if (pending) {
       // Never borrow an earlier scope's result across queued sign-in/logout work,
       // or let retries accumulate behind a test whose caller already timed out.
@@ -566,7 +566,7 @@ export class HostedAuthService {
   }
 
   private enqueueAuthOperation<T>(operation: () => Promise<T>): Promise<T> {
-    const key = path.resolve(this.options.storageRoot);
+    const key = path.resolve(this.storageRoot);
     const previous = authOperationsByRoot.get(key) ?? Promise.resolve();
     const result = previous.then(operation);
     const settled = result.then(() => undefined, () => undefined);
@@ -749,15 +749,24 @@ export class HostedAuthService {
     };
   }
 
+  private get storageRoot(): string {
+    const root = this.options.storageRoot;
+    if (typeof root !== 'string' || !path.isAbsolute(root)) {
+      this.options.logger.error('[Hosted Auth] Homebridge storage path is unavailable. Sign-in is disabled until the UI provides an absolute storage path.');
+      throw new HostedAuthServiceError('Homebridge storage is unavailable. Restart the Homebridge UI and try again.', 'storage', 500);
+    }
+    return root;
+  }
+
   private get authStoragePath(): string {
-    return path.join(this.options.storageRoot, '.blink-auth.json');
+    return path.join(this.storageRoot, '.blink-auth.json');
   }
 
   private get pendingStoragePath(): string {
-    return path.join(this.options.storageRoot, '.blink-auth-pending.json');
+    return path.join(this.storageRoot, '.blink-auth-pending.json');
   }
 
   private get legacyAuthStoragePath(): string {
-    return path.join(this.options.storageRoot, 'blink-auth', 'auth-state.json');
+    return path.join(this.storageRoot, 'blink-auth', 'auth-state.json');
   }
 }

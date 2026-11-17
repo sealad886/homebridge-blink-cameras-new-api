@@ -3,7 +3,7 @@
 
 // Pure persisted-settings conversion. Both CLIs use the guarded native migration writer.
 const process = require('node:process');
-const retired = ['rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
+const retired = ['rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls', 'debugStreamPath'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function convertSecureMediaSettings(entry) {

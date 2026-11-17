@@ -26,18 +26,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { OperationTimeoutError, withResponseBudget } from '../../src/operation-budget';
 
-let mockUiStorageRoot = '.';
+let mockUiStorageRoot: string | undefined = '.';
 const mockUiHandlers = new Map<string, (payload: unknown) => Promise<unknown>>();
 const mockUiEvents: Array<{ event: string; data: unknown }> = [];
 
 jest.mock('@homebridge/plugin-ui-utils', () => {
   class MockHomebridgePluginUiServer {
-    get homebridgeStoragePath(): string {
+    get homebridgeStoragePath(): string | undefined {
       return mockUiStorageRoot;
     }
 
-    get homebridgeConfigPath(): string {
-      return path.join(mockUiStorageRoot, 'config.json');
+    get homebridgeConfigPath(): string | undefined {
+      return mockUiStorageRoot === undefined ? undefined : path.join(mockUiStorageRoot, 'config.json');
     }
 
     onRequest(route: string, handler: (payload: unknown) => Promise<unknown>): void {
@@ -1642,6 +1642,24 @@ describe('BlinkUiServer hosted authentication routes', () => {
       process.env.HOMEBRIDGE_DEBUG = previousHomebridgeDebug;
     }
     await fs.rm(serverStorageRoot, { recursive: true, force: true });
+  });
+
+  it.each([undefined, '', '.', 'relative-storage'])('refuses authentication without an absolute host storage root (%s)', async (root) => {
+    mockUiStorageRoot = root;
+    const begin = jest.spyOn(BlinkApi.prototype, 'beginHostedLogin').mockResolvedValue({
+      authorizationUrl: 'https://api.oauth.blink.com/oauth/v2/authorize',
+      flowId: 'synthetic-flow',
+      expiresAt: '2026-11-17T12:15:00.000Z',
+    });
+    const errorLog = jest.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    new BlinkUiServer();
+
+    await expect(mockUiHandlers.get('/auth/start')!({})).rejects.toMatchObject({
+      requestError: { status: 500, category: 'storage' },
+    });
+    expect(begin).not.toHaveBeenCalled();
+    expect(errorLog).toHaveBeenCalled();
+    expect(await fs.readdir(serverStorageRoot)).toEqual([]);
   });
 
   it('writes redacted warnings and errors to process logs without enabling debug output', () => {

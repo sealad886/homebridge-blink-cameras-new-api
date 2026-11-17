@@ -320,6 +320,13 @@ export class BlinkHostedReauthenticationRequiredError extends Error {
   }
 }
 
+export class BlinkSignInRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BlinkSignInRequiredError';
+  }
+}
+
 export class BlinkTokenRefreshError extends Error {
   constructor(public readonly category: 'temporary' | 'response' | 'storage') {
     super(category === 'storage'
@@ -1181,7 +1188,7 @@ export class BlinkAuth {
 
   private async loginUnlocked(): Promise<void> {
     if (this.config.authLocked) {
-      throw new Error(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+      throw this.legacyLoginUnavailableError();
     }
 
     // Establish the durable baseline before the first network request. A clear or
@@ -1193,11 +1200,8 @@ export class BlinkAuth {
         if (!(error instanceof InvalidAuthStateError)) throw error;
       }
     }
-    if (!this.config.email || !this.config.password) {
-      throw new Error(
-        'No credentials available for OAuth login. '
-        + 'Authenticate via the plugin Custom UI or add username/password to config.',
-      );
+    if (!this.hasLegacyCredentials()) {
+      throw this.legacyLoginUnavailableError();
     }
 
     this.logDebug('Starting OAuth 2.0 Authorization Code Flow with PKCE...');
@@ -1577,9 +1581,9 @@ export class BlinkAuth {
       && resolveOAuthProfile(this.oauthClientId).clientId === 'ios';
   }
 
-  private legacyLoginUnavailableError(): Error {
-    if (this.config.authLocked) return new Error(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
-    return new Error(
+  private legacyLoginUnavailableError(): BlinkSignInRequiredError {
+    if (this.config.authLocked) return new BlinkSignInRequiredError(AUTH_LOCKED_REAUTHENTICATION_REQUIRED);
+    return new BlinkSignInRequiredError(
       'No credentials available for OAuth login. '
       + 'Authenticate via the plugin Custom UI or add username/password to config.',
     );

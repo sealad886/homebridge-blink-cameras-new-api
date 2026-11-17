@@ -1,7 +1,7 @@
 # Homebridge verification preparation
 
-Research snapshot: 16 November 2026. Submission target: stable **2.0.0**.
-Status: **local preparation only; submission held**.
+Evidence snapshot: 17 November 2026, 04:18 UTC. Submission target: stable **2.0.0**.
+Status: **2.0.0-alpha.0 publication independently accepted; stable and submission held**.
 
 ## Decision and current phase
 
@@ -9,39 +9,28 @@ Homebridge's current application is a verification-request **issue** in
 [`homebridge/plugins`](https://github.com/homebridge/plugins#how-to-request-verification).
 The published process does not require the applicant to open a registry PR.
 The [submission draft](submission-draft.md) supplies the issue-form answers and
-reviewer explanation. Do not open an issue or PR from this preparation until
-the corrected follow-up version has been properly released and accepted, and
-submission is authorized. The original 1.1.0 publication hold has cleared, but
-that published artifact does not contain these implementation changes.
+reviewer explanation. Submission and feedback follow-up are already conditionally
+authorized after stable **2.0.0** has been properly released and accepted. That
+condition remains unmet; the accepted alpha does not clear it.
 
 - [x] Research the official process and earlier request.
 - [x] Inspect current source and identify preparation gaps.
 - [x] Draft the application and release-evidence checklist locally.
-- [ ] Publish and accept the corrected follow-up package; attach final 2.0.0 evidence.
-- [ ] After release acceptance and authorization, submit a fresh request.
+- [x] Publish and independently accept the corrected 2.0.0-alpha.0 package.
+- [ ] Complete the existing prerelease/physical acceptance and final stable 2.0.0 gates.
+- [ ] After stable acceptance, submit a fresh request and follow review feedback.
 
 No source, package, migration or release changes are implemented by these files.
-The next phase belongs with the release owner; this preparation does not dispatch
-release workflows or alter the existing RC.
+The next phase belongs with the release owner; these documents do not dispatch
+release workflows, install the package on Homebridge or submit an issue.
 
-Scope update, 16 November: the maintainer subsequently requested replacing the
-bundled FFmpeg dependency with an externally installed executable. Track that
-implementation in the [external FFmpeg plan](../plans/2026-11-16-external-ffmpeg.md).
-Bundling is not a verification requirement. The RC observations below remain a
-dated baseline; refresh distribution, licensing and qualification claims after
-the replacement. Do not submit the existing application draft as if that change
-were already implemented or verified.
-
-The approved replacement is implemented and independently reviewed locally on
-`codex/external-ffmpeg` in `.worktrees/external-ffmpeg`. It requires externally installed FFmpeg, preserves
-`ffmpegPath` and retains a smaller libSRTP-only protection/launch helper. The
-application draft now describes that target distribution, while the source table
-below remains the original pinned RC audit. All final-publication, qualification
-and physical-acceptance evidence remains pending. Local checks and their bounded
-results are recorded in the implementation plan; they do not qualify a published
-stable artifact. The separately authorized packaging correction removes the
-automatic migration hook and declares `supports-hap` locally; final package
-verification and publication must establish those corrections externally.
+The [external FFmpeg replacement](../plans/2026-11-16-external-ffmpeg.md) is now
+published in the accepted alpha: externally installed FFmpeg 6.1+, preserved
+`ffmpegPath`, a smaller libSRTP-only protection/launch helper, explicit migration,
+`supports-hap`, and no automatic install or uninstall hooks. The current artifact
+evidence is recorded below. The original RC audit remains historical; accepted
+alpha packaging and synthetic media qualification do not establish production
+Homebridge or physical recording acceptance for this backend.
 
 ## Earlier application changes what we must explain
 
@@ -62,19 +51,37 @@ about the uninstall script also needs an accurate current explanation.
 
 ### Differentiation supported by current sources
 
-The strongest additional workflow is delivery of completed native Blink USB
-clips into the existing camera's HomeKit Secure Video timeline. Treat this as
-the basis for review, conditional on final-release acceptance, rather than
-claiming the plugin is the only modern Blink integration.
+The principal additional workflow is delivery of completed native Blink Local
+Storage USB clips into the existing camera's saved HomeKit Secure Video timeline.
+The [recording delegate](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/1074a6587542fc6caf3ad8c3a3611004026aaabb/src/accessories/native-recording-delegate.ts#L190-L242)
+delivers prepared video packets; live view, a motion alert, or an exposed recording
+service alone does not establish that capability. This is the basis for review,
+conditional on final-release physical acceptance.
 
 | Verified alternative inspected | What its sources establish | Difference to explain |
 | --- | --- | --- |
-| `@jackietreeh0rn/homebridge-blink-security` v2.1.2 | Its [README](https://github.com/BitWise-0x/homebridge-blink-security/blob/v2.1.2/README.md) documents OAuth/PKCE, live video and one-way audio, security/temperature services, USB-manifest motion detection and optional doorbell-press push. Its [camera setup](https://github.com/BitWise-0x/homebridge-blink-security/blob/v2.1.2/src/accessories/camera.ts) configures streaming without a recording controller option; a separate switch starts a Blink recording. [Local storage code](https://github.com/BitWise-0x/homebridge-blink-security/blob/v2.1.2/src/devices/localStorage.ts) maps catalog entries into motion metadata. | Importing completed native recordings into Home's saved timeline is different from USB motion detection or a switch that starts a Blink clip. Do not claim OAuth, audio, USB integration or all push support are unique. |
+| `@jackietreeh0rn/homebridge-blink-security`, main `84db632d186744fbe26df8324d37025454f9c901` (14 November 2026) | Its [README](https://github.com/BitWise-0x/homebridge-blink-security/blob/84db632d186744fbe26df8324d37025454f9c901/README.md) documents OAuth/PKCE, live video and one-way audio, USB-manifest motion detection and optional doorbell-press push. Its [camera setup](https://github.com/BitWise-0x/homebridge-blink-security/blob/84db632d186744fbe26df8324d37025454f9c901/src/accessories/camera.ts#L145-L215) configures streaming without a recording controller option; a separate switch starts a Blink recording. The [maintainer's HKSV response](https://github.com/BitWise-0x/homebridge-blink-security/issues/35#issuecomment-4464889397) corroborates this distinction. | Importing completed native recordings into Home's saved timeline differs from USB motion detection or a switch that starts a Blink clip. Do not claim OAuth, audio, USB integration or all push support are unique. |
 | `homebridge-blink-for-home-new` 0.2.1, main `0d3c100e462991be8e1849aeefb4bfb999c5681e` | Its [README](https://github.com/Flomentum-Solutions/homebridge-blink-for-home-new/blob/0d3c100e462991be8e1849aeefb4bfb999c5681e/README.md) documents overlapping security/motion/temperature controls but conflicts over live-view support. Its [recording delegate](https://github.com/Flomentum-Solutions/homebridge-blink-for-home-new/blob/0d3c100e462991be8e1849aeefb4bfb999c5681e/src/homebridge/blink-hap.js) returns no recording stream data. | Compare the concrete recording-delivery path. Do not infer complete live-view absence or present current account compatibility as tested. |
 
-Neither competing plugin was run against a device for this comparison. Source
-inspection is bounded to these versions; refresh it when filing. The reviewer
-decides whether the added workflow satisfies the program's functionality rule.
+The historical comparison also covers pre-API-change releases: Colin Bendell's
+[v3.9.0 release](https://github.com/colinbendell/homebridge-blink-for-home/releases/tag/v3.9.0)
+(29 March 2022) described partial HKSC wiring, but its
+[recording callback](https://github.com/colinbendell/homebridge-blink-for-home/blob/v3.9.0/src/homebridge/blink-hap.js#L47-L54)
+returns no media, as does
+[v3.9.2](https://github.com/colinbendell/homebridge-blink-for-home/blob/a4058deeb4e4c281c04115aeec1fa6040a002506/src/homebridge/blink-hap.js#L47-L54)
+(24 October 2022). The examined
+[zidge fork](https://github.com/zidge/homebridge-blink-for-home/blob/edf600439f6bbd9a1cbf5e4ca9e676e6bdbff6d2/src/homebridge/blink-hap.js#L47-L54)
+and [crb2nu fork](https://github.com/crb2nu/homebridge-blink-for-home/blob/69c238d99e0b1cd5b5a85d223539236de1790529/src/homebridge/blink-hap.js#L47-L54)
+retain the same placeholder. These are related implementations, not independent
+confirmations of a working recording path.
+
+Among the public Blink Homebridge implementations examined, no other functional
+delivery of completed clips through HKSV was found. This bounded primary-source
+finding supports novelty relative to both verified alternatives and the examined
+historical predecessors; it does not establish universal uniqueness or “first
+ever” across every fork, private integration or other bridge. No competitor was
+device-tested. Sources were checked on 17 November 2026; refresh them when filing.
+The reviewer decides whether the added workflow satisfies the functionality rule.
 
 ## Current rules and submission mechanics
 
@@ -85,17 +92,19 @@ release notes, a settings GUI, supported Node LTS compatibility, successful
 unconfigured installation, standard non-TTY startup, no system-changing install
 hook, no tracking, storage confined to Homebridge, and contained/logged errors.
 
-The [current form](https://github.com/homebridge/plugins/blob/latest/.github/ISSUE_TEMPLATE/1_verification-request.yml)
+The [form inspected on 17 November](https://github.com/homebridge/plugins/blob/a3f60aa7dc535fa2ab638a1684888c682294379d/.github/ISSUE_TEMPLATE/1_verification-request.yml)
 collects the npm name, GitHub repository, optional icon, six Yes/No declarations
 and additional context. Use the generated form, with the package name first;
-the [request workflow](https://github.com/homebridge/plugins/blob/latest/.github/workflows/plugin-checks-request.yml)
-parses its layout. The form supplies `request-verification` and `pending` labels.
+the [request workflow](https://github.com/homebridge/plugins/blob/a3f60aa7dc535fa2ab638a1684888c682294379d/.github/workflows/plugin-checks-request.yml)
+reads the package name from line 3 of the generated body. The form supplies
+`request-verification` and `pending` labels.
 Do not paste this preparation document as the issue body.
 
-The [checker](https://github.com/homebridge/plugins/blob/latest/src/plugin-checks/workspace/index.ts)
+The [checker](https://github.com/homebridge/plugins/blob/a3f60aa7dc535fa2ab638a1684888c682294379d/src/plugin-checks/workspace/index.ts)
 installs npm `@latest`, compares default-branch metadata, checks schema and
-dependency constraints, exercises startup and HTTP failures, and inspects disk
-writes. Its explicit package rules include a transport keyword and absence of
+dependency constraints, exercises startup, conditionally injects HTTP failures
+when earlier scenarios made requests, and observes disk writes. Its explicit
+package rules include a transport keyword and absence of
 `preinstall`, `install` and `postinstall` scripts. An automated pass is followed
 by [manual review](https://github.com/homebridge/plugins/blob/latest/src/plugin-checks/index.ts).
 Publish any eventual correction before asking for a rerun. The request workflow
@@ -108,6 +117,9 @@ require Node **22, 24 and 26**. The checker currently tests engine coverage for
 [canned review comment](https://github.com/homebridge/plugins/blob/latest/.github/label-commenter-config.yml)
 still lists 20/22. Use the current requirements for readiness. Homebridge 2.5.0
 also requires Node 22.12.0 or newer; use a supported patch release when testing.
+The published alpha's Node 22/24/26 source CI passed with the repository's locked
+Homebridge 1.11.1 development dependency. That is not actual latest-Homebridge
+runtime evidence; those final-package startup checks remain pending.
 
 An icon is optional: approximately 100 by 100 pixels, square PNG, with suitable
 trademark and licensing rights. Omit it initially unless a suitable asset is
@@ -118,6 +130,65 @@ and [post-verification guidance](https://github.com/homebridge/plugins#post-veri
 
 ## Source and publication snapshot
 
+### Accepted 2.0.0-alpha.0 — 17 November 2026
+
+The public, non-draft immutable
+[v2.0.0-alpha.0 prerelease](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v2.0.0-alpha.0)
+and its [release receipt](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/download/v2.0.0-alpha.0/release-receipt.json)
+identify source
+[`1074a6587542fc6caf3ad8c3a3611004026aaabb`](https://github.com/sealad886/homebridge-blink-cameras-new-api/commit/1074a6587542fc6caf3ad8c3a3611004026aaabb).
+Publication and an independent registry-consumer audit were accepted by this
+snapshot. npm `alpha` identifies `2.0.0-alpha.0`; `latest` remains **1.1.0**.
+Stable **2.0.0** has not been released or accepted.
+
+All five installed qualifications in
+[publication run 44013144690](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/44013144690)
+verified the same source, immutable npm tar, packaged worker hashes and source
+bundle recorded in the receipt:
+
+| Qualified target | Actual external FFmpeg | Installed qualification |
+| --- | --- | --- |
+| Linux arm64 | 6.1.1-3ubuntu5 | [Passed](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/44013144690/job/133806533279) |
+| Linux x64 | 6.1.1-3ubuntu5 | [Passed](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/44013144690/job/133806533187) |
+| macOS arm64 | 9.0.2 | [Passed](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/44013144690/job/133806533253) |
+| macOS x64 | 9.0.1 | [Passed](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/44013144690/job/133806533343) |
+| Windows x64 | 9.0.2 essentials | [Passed](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/44013144690/job/133806533239) |
+
+The independent consumer check matched all **318 regular packed files**, loaded
+**67 modules** from the isolated installed package, and recorded installation
+and verification exit codes **0 / 0**. It confirmed the declared platform,
+packaged host helper, migration tools and native/source/license inventory.
+The accepted [manifest](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/1074a6587542fc6caf3ad8c3a3611004026aaabb/package.json)
+declares `supports-hap`, no install/uninstall lifecycle hooks, and
+`(MIT AND GPL-3.0-or-later AND BSD-3-Clause AND ZPL-2.1)`. The explicit migration
+preserves preview, guarded apply, backup and idempotence; npm installation does
+not migrate configuration. Recheck all of these against the final stable bytes.
+
+This qualifies the alpha's package and bounded synthetic media/runtime paths.
+It does not establish production Homebridge installation, latest-Homebridge
+startup, or physical saved Home recording acceptance. Historical **1.1.0**
+two-camera playback used the bundled backend and does not qualify the external
+FFmpeg backend. The existing changed-backend acceptance and stable observation
+requirements in the [release guide](../RELEASE.md) remain open.
+
+### 2.0.0-alpha.1 source correction — publication pending
+
+The next candidate retires optional raw diagnostic video capture and its
+`debugStreamPath` setting. The recorder and its arbitrary-directory write path
+are removed; live viewing, native clip delivery to HomeKit Secure Video, and
+bounded redacted `mediaDebug` logs remain. Existing captures are not inspected,
+moved, or deleted. Configurations containing the retired key use the existing
+[explicit migration](../native-recording-config-migration.md) before startup;
+installation does not run the migration automatically.
+
+The candidate also keeps empty/tokenless setup idle and requires the UI's
+absolute storage root before authentication operations. These source corrections
+still need current review, CI, immutable installed-package qualification and
+runtime acceptance. The accepted alpha.0 receipt above does not qualify alpha.1
+or the eventual stable package.
+
+### Historical publication and initial RC audit
+
 At 15:49 UTC on 16 November 2026, a fresh public npm metadata read confirmed
 `latest: 1.1.0`, source `5df5f0d828ac1b936eb197564108e1a6cbd7912d` and integrity
 matching the published, non-draft
@@ -127,11 +198,14 @@ The published manifest still has `postinstall` and lacks `supports-hap`. Its
 codec workers are bundled, so external-backend claims cannot be attributed to
 that release. The unsupported uninstall hook was removed in 1.1.0.
 
-The maintainer selected **2.0.0** for the combined change: requiring an external
-FFmpeg installation changes the supported installation contract. Prepare
-`2.0.0-alpha.0`, following the existing prerelease sequence, without modifying
-immutable 1.1.0. The checker installs npm latest, so publishing an alpha alone
-will not make it inspect these corrections.
+The maintainer selected **2.0.0** for the combined change because the external
+FFmpeg prerequisite changes the supported installation contract. The first
+[alpha attempt, run 43985984067](https://github.com/sealad886/homebridge-blink-cameras-new-api/actions/runs/43985984067),
+failed installed qualifications and skipped publication. That failed evidence is
+preserved; the later successful run does not retroactively pass it or establish
+the exact cause of its earlier Windows failure. Immutable 1.1.0 is unchanged.
+The checker still installs npm latest, so the accepted alpha does not make it
+inspect the corrections while latest remains 1.1.0.
 
 The following paragraphs and RC findings preserve the initial research baseline;
 they are not the current publication state.
@@ -148,12 +222,9 @@ stable 1.1.0 was absent. These values are a dated snapshot. Recheck before
 submission. Merely publishing an RC will not make the verifier test 1.1.0:
 it installs `@latest`.
 
-The primary checkout is an older `1.0.0-beta4` task branch with unrelated work.
-The existing `hsv-redesign` checkout and pinned remote main were read for the
-initial RC audit. That research did not switch a checkout or create a worktree.
-The subsequent external-FFmpeg implementation uses its separately approved
-checkout; its copy of this preparation remains local and does not change the
-active release checkout.
+The initial RC research used the existing task checkouts and pinned remote main
+without creating or switching a worktree. Those historical checkout observations
+do not describe the accepted alpha's source or publication state.
 
 ## Readiness findings for the RC source
 
@@ -175,13 +246,13 @@ below are pinned to the inspected remote revision.
 | Native packaging | Five worker targets: Linux arm64/x64, macOS arm64/x64 and Windows x64. Corresponding source and notices are part of the release artifact. | Attach exact-artifact qualifications. Do not claim armv7/armhf support, all Raspberry Pi images, or all OS releases. No user-supplied FFmpeg is required for these workers. |
 | License | Package declares `(MIT AND GPL-3.0-or-later AND BSD-3-Clause AND ZPL-2.1)`. | Describe the complete distribution accurately; do not call the entire npm artifact MIT-only. |
 
-The RC table above is historical. The local follow-up now removes the automatic
-install writer, adds `supports-hap`, preserves the released uninstall-hook removal,
-and retains the explicit migration with guarded backups and idempotence. These
-corrections still need publication before the checker can observe them. Stable
-1.1.0 did ship with the install-hook and keyword conflicts, so the application
-targets corrected 2.0.0 rather than claiming 1.1.0 passes. No policy exception or
-modification of a published artifact is assumed.
+The RC table above is historical. The accepted **2.0.0-alpha.0** now publishes the
+automatic install-writer removal, `supports-hap`, retained uninstall-hook removal,
+and explicit migration with guarded backups and idempotence. Stable 1.1.0 shipped
+with the install-hook and keyword conflicts and remains npm latest. Therefore
+the application targets corrected stable 2.0.0; alpha qualification does not
+mean that 1.1.0 or unpublished 2.0.0 passes. No policy exception or modification
+of a published artifact is assumed.
 
 ## Corrected stable 2.0.0: evidence to attach
 
@@ -206,7 +277,8 @@ new install behavior. Do not copy an old dispatch into the release process.
   for demonstrably unchanged paths, stating its limits.
 - [ ] Recheck the official form, current verified alternatives and all six
   declarations against the final published package. Complete the draft's
-  evidence placeholders and obtain submission authorization.
+  evidence placeholders; submit under the existing conditional authorization
+  only after stable acceptance.
 
-This preparation did not run those tests, install anything, change a release,
-create an upstream issue/PR, or grant permission for those actions.
+These documents record preparation and evidence. They do not run those tests,
+install anything, change a release or create an upstream issue/PR.

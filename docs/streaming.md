@@ -42,7 +42,8 @@ preserving accessory identities. Do not reset pairing to recover a refused codec
 
 Retired settings fail validation with migration guidance: `ffmpegDebug`,
 `rtpSsrcMode`, `rtspTransport`, `verifyImmisTls`, `twoWayAudio`,
-`videoEncoder`. `audioCodec: aac-eld` also needs migration.
+`videoEncoder`, `debugStreamPath`. The retired raw capture key is rejected even
+when blank. `audioCodec: aac-eld` also needs migration.
 The external backend uses software libx264; arbitrary hardware encoder selection
 is not exposed. `ffmpegPath` is supported and preserved by migration. Use an
 executable name from PATH or an absolute path; relative directory paths are rejected.
@@ -92,11 +93,15 @@ bounded cleanup remain enforced. A retiring generation keeps its ports reserved
 until actual worker/socket closure. Command polling starts immediately and follows
 the vendor interval independently of Continue timing.
 
-`mediaDebug` enables bounded, redacted diagnostics. IMMIS debug recordings remain
-under `<debugStreamPath>/blink-stream-recordings/`, with hashed camera identifiers
-and owner-only POSIX permissions. They contain sensitive footage. Older recordings
-are not moved or re-permissioned automatically. RTSPS debug recording is not
-implemented. See the [logging specification](debug_logging_spec.md#streaming-diagnostics).
+`mediaDebug` enables bounded, redacted logs. Optional raw diagnostic file capture
+has been removed; live streaming and HomeKit recording retain their normal media
+paths. Remove any saved `debugStreamPath` key through the
+[explicit migration](native-recording-config-migration.md#preview-and-apply-native-recording-settings)
+before restart, including a blank value. Windows requires manual removal using
+the guide's mapping. Installation does not migrate configuration. Neither runtime
+nor migration scans, moves, deletes or changes permissions on existing captures;
+their retention remains the operator's choice. See the
+[logging specification](debug_logging_spec.md#streaming-diagnostics).
 
 ### Two-way talk status
 

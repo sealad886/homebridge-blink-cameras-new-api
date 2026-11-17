@@ -145,7 +145,7 @@ state; do not discard unresolved originals to make a downgrade start.
 ## Upgrade from 0.10.0
 
 The published 0.10.0 configuration includes retired live-view settings such as
-`ffmpegDebug`, `rtspTransport`, `videoEncoder` and `twoWayAudio`, plus
+`ffmpegDebug`, `rtspTransport`, `videoEncoder`, `twoWayAudio` and `debugStreamPath`, plus
 `enableMotionPolling`. The combined converter below removes retired media options,
 maps `ffmpegDebug` to `mediaDebug`, maps `audioCodec: "aac-eld"` to `"opus"`, and
 converts `enableMotionPolling` to `exposeMotionDetected`. Valid explicit canonical
@@ -153,6 +153,14 @@ values win. The supported `ffmpegPath` is preserved; verify that it points to an
 installed FFmpeg meeting the [current requirements](streaming.md#packaged-codec-requirements).
 Unknown fields, other platforms, credentials and current camera
 identities are preserved. It does not enable HSV automatically.
+
+The unpublished 2.0.0-alpha.1 preparation removes optional raw diagnostic file
+capture. Any existing configuration containing `debugStreamPath`, including a
+blank value, requires the explicit preview/`--apply` conversion below before
+restart, or manual removal on Windows. Installation never runs this conversion.
+The converter removes only the setting; it does not scan, move, delete or change
+permissions on existing capture files. Runtime also leaves those files untouched.
+Live streaming, HomeKit recording and bounded, redacted `mediaDebug` logs remain.
 
 1. Make a private Homebridge backup. Keep existing authentication, accessories and
    pairing state. Close settings/JSON editors and stop other configuration writers.
@@ -181,7 +189,8 @@ Preserve other plugins and unknown fields. An already-canonical configuration
 needs no conversion.
 
 - Preserve `ffmpegPath`. Remove `ffmpegDebug`, `rtpSsrcMode`, `rtspTransport`,
-  `verifyImmisTls`, `twoWayAudio` and `videoEncoder`. Before removing
+  `verifyImmisTls`, `twoWayAudio`, `videoEncoder` and `debugStreamPath` (even blank).
+  Leave existing capture files untouched. Before removing
   `ffmpegDebug`, copy its boolean to `mediaDebug` if `mediaDebug` is absent.
 - Map `audioCodec: "aac-eld"` to `"opus"`. For historical nested audio/video
   objects, remove `audio.aacEldEncoder`, `audio.twoWay` and `video.encoder`, and
