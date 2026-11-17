@@ -11,8 +11,14 @@ import type { BlinkHomescreen } from '../src/types';
 import { projectSettingsInventory } from '../src/settings-inventory';
 import { createApi, createLogger } from './helpers/homebridge';
 import { nativeRecordingDevicePolicy } from '../src/native-recording-config';
+import { resolveExternalFfmpegPath, probeExternalFfmpeg } from '../src/accessories/external-ffmpeg';
+import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
 
 jest.mock('../src/blink-api');
+jest.mock('../src/accessories/external-ffmpeg', () => ({ ...jest.requireActual('../src/accessories/external-ffmpeg'),
+  resolveExternalFfmpegPath: jest.fn(), probeExternalFfmpeg: jest.fn(),
+}));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn() }));
 jest.mock('timers', () => ({ ...jest.requireActual('timers'),
   setInterval: (callback: () => void, delay: number) => globalThis.setInterval(callback, delay),
   clearInterval: (timer: ReturnType<typeof globalThis.setInterval>) => globalThis.clearInterval(timer),
@@ -51,6 +57,9 @@ describe('native recording configuration and platform ownership', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    jest.mocked(resolveExternalFfmpegPath).mockReturnValue('/fixture/ffmpeg');
+    jest.mocked(probeExternalFfmpeg).mockResolvedValue({ version: '6.1' });
+    jest.mocked(loadPackagedProtectionWorker).mockReturnValue('/fixture/protection');
     api = createApi(); log = createLogger();
     camera = handler(); doorbell = handler(); owl = handler();
     client = { login: jest.fn().mockResolvedValue(undefined), getHomescreen: jest.fn().mockResolvedValue(homescreen),

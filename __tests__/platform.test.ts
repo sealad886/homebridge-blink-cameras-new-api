@@ -1,5 +1,6 @@
 import { API, Logger, PlatformAccessory, PlatformConfig } from 'homebridge';
 import { BlinkCamerasPlatform } from '../src/platform';
+import * as externalFfmpeg from '../src/accessories/external-ffmpeg';
 import { BlinkApi } from '../src/blink-api';
 import { createApi, createLogger, MockCharacteristic } from './helpers/homebridge';
 import { BlinkHomescreen } from '../src/types';
@@ -132,6 +133,8 @@ describe('BlinkCamerasPlatform', () => {
   });
 
   it('keeps empty tokenless launch and explicit failed retry local, then resumes polling after sign-in', async () => {
+    const executableDiscovery = jest.spyOn(externalFfmpeg, 'resolveExternalFfmpegPath');
+    const executableProbe = jest.spyOn(externalFfmpeg, 'probeExternalFfmpeg');
     jest.spyOn(timers, 'setInterval').mockImplementation(globalThis.setInterval);
     jest.spyOn(timers, 'clearInterval').mockImplementation(globalThis.clearInterval);
     hapApi = createApi() as unknown as MockAPI;
@@ -152,6 +155,8 @@ describe('BlinkCamerasPlatform', () => {
     await jest.advanceTimersByTimeAsync(0);
 
     const expectLocalSetupFailure = (): void => {
+      expect(executableDiscovery).not.toHaveBeenCalled();
+      expect(executableProbe).not.toHaveBeenCalled();
       expect(platform.isOperational()).toBe(false);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(sampleBlinkConnection).not.toHaveBeenCalled();

@@ -111,8 +111,12 @@ The default `ffmpegPath: "ffmpeg"` searches the Homebridge service's PATH. If th
 service cannot find it, set **Advanced & troubleshooting → Media tools and tuning
 → FFmpeg executable** to its absolute path, such as `/usr/bin/ffmpeg` or
 `/opt/homebrew/bin/ffmpeg`. A desktop terminal's PATH may differ from the service.
-The plugin checks the version and required capabilities before opening live
-media; missing dependencies do not require removing authentication or pairing.
+After authenticated discovery, the plugin checks the version and required
+capabilities once at startup. Missing or unsupported FFmpeg produces a startup
+warning and disables live video, snapshots and HomeKit recording. Installation,
+arm/disarm, motion and other settings continue to work. Install or repair FFmpeg,
+update the service PATH or `ffmpegPath`, then restart the Blink child bridge to
+restore media. Authentication and pairing do not need to be removed.
 
 ## Installation
 

@@ -500,7 +500,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Prepare stream - allocate ports and SRTP parameters for HomeKit.
    */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    if (!this.cameraActive || !this.streamingConfig.enabled) {
+    if (!this.cameraActive || !this.isDeviceAvailable() || !this.streamingConfig.enabled) {
       this.log('Stream preparation requested but streaming is disabled');
       callback(new Error('Live streaming disabled'));
       return;
@@ -598,6 +598,10 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
    * Handle generation-owned private media streaming.
    */
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
+    if (request.type !== 'stop' && (!this.cameraActive || !this.isDeviceAvailable())) {
+      callback(new Error('Camera media unavailable'));
+      return;
+    }
     if (!this.streamingConfig.enabled) {
       this.log('Stream request received but streaming is disabled');
       callback();

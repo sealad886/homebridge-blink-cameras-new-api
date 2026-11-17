@@ -16,8 +16,13 @@ Live viewing and HomeKit recording require an externally installed **FFmpeg 6.1
 or later**, available through the Homebridge service's PATH or the `ffmpegPath`
 setting. FFmpeg is not downloaded, installed or bundled by this plugin. Use a
 build with libx264, libopus, AAC, PCMA and PCMU, MPEG-TS/MOV input, MP4/data/framecrc/
-tee output, and the `pipe` and seekable `fd` protocols. The capability check reports
-an actionable setup error when required support is missing. Host development
+tee output, and the `pipe` and seekable `fd` protocols. Authenticated camera discovery checks executable availability, version and
+capabilities once per Blink child-bridge start. Missing or unsupported FFmpeg
+prints an actionable startup warning and disables live video, snapshots and
+HomeKit recording before camera media requests. Arm/disarm, public motion and
+settings continue to work. After installing a compatible build, update the
+Homebridge service PATH or `ffmpegPath` and restart the Blink child bridge.
+An unconfigured bridge does not probe FFmpeg. Host development
 checks used FFmpeg 9.0.2; version declarations do not establish every build or OS.
 
 The package retains a hash-verified protection/launch helper for Linux x64/arm64,

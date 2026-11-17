@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
 import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
+import { resolveExternalFfmpegPath, ExternalFfmpegSetupError } from '../src/accessories/external-ffmpeg';
 import { Characteristic as HapCharacteristic } from 'hap-nodejs';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 
@@ -34,7 +35,7 @@ jest.mock('node:dgram', () => {
 });
 
 type PlatformStub = Pick<BlinkCamerasPlatform,
-  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isNetworkArmed' | 'updateMotionAvailability' | 'acquireCameraFeed'>;
+  'Service' | 'Characteristic' | 'apiClient' | 'log' | 'api' | 'streamingConfig' | 'isOperational' | 'isMediaAvailable' | 'getDeviceInputQuality' | 'isTemperatureEnabled' | 'isNetworkArmed' | 'updateMotionAvailability' | 'acquireCameraFeed'>;
 
 // Capabilities stand in for the native codec and vendor transport. Public HAP
 // callbacks still own preparation, selection, cancellation and reservation.
@@ -419,7 +420,7 @@ describe('Accessory handlers', () => {
       log: log as unknown as BlinkCamerasPlatform['log'],
       api: { hap, updatePlatformAccessories: jest.fn() } as unknown as BlinkCamerasPlatform['api'],
       streamingConfig: resolveStreamingConfig({ enabled: false, ...streamingConfigOverrides }),
-      isOperational: () => true,
+      isOperational: () => true, isMediaAvailable: () => true,
       getDeviceInputQuality: jest.fn().mockReturnValue('auto'),
       isTemperatureEnabled: jest.fn().mockReturnValue(false),
       isNetworkArmed: jest.fn().mockReturnValue(true),
@@ -1206,6 +1207,22 @@ describe('Accessory handlers', () => {
     expect(apiClient.disableOwlMotion).not.toHaveBeenCalled();
     expect(device.enabled).toBe(true);
     expect(handler).toBeInstanceOf(OwlAccessory);
+  });
+
+  it('fails live startup gracefully before requesting vendor media if FFmpeg disappears after qualification', async () => {
+    const hap = createHap(), startCameraLiveview = jest.fn(), log = jest.fn();
+    const source = new BlinkCameraSource({ startCameraLiveview } as unknown as BlinkApi, hap as unknown as HAP,
+      1, 2, 'camera', 'serial', () => undefined, () => true, log);
+    const runtime = streamingRuntime(source);
+    try {
+      await runtime.prepare();
+      jest.mocked(resolveExternalFfmpegPath).mockImplementationOnce(() => { throw new ExternalFfmpegSetupError('missing'); });
+      expect(await runtime.start()).toBeInstanceOf(Error);
+      expect(startCameraLiveview).not.toHaveBeenCalled();
+      expect(createOwnedMediaSession).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Install FFmpeg 6.1 or later'));
+    } finally { await runtime.cleanup(); }
   });
 
   it.each(['veryfast', 'ultrafast'] as const)('carries prepared SSRCs, ports and selected audio into native media with preset %s', async softwarePreset => {

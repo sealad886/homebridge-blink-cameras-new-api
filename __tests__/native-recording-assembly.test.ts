@@ -18,7 +18,7 @@ describe('native recording HomeKit assembly', () => {
       api: { hap, updatePlatformAccessories: jest.fn() }, apiClient,
       log: { info: jest.fn(), debug: jest.fn(), error: jest.fn() },
       streamingConfig: resolveStreamingConfig({ enabled: false, audio: { enabled: enableAudio } }),
-      getDeviceMotionTimeout: () => 1000, getDeviceInputQuality: () => 'auto', isOperational: () => true, isTemperatureEnabled: () => false,
+      getDeviceMotionTimeout: () => 1000, getDeviceInputQuality: () => 'auto', isOperational: () => true, isMediaAvailable: () => true, isTemperatureEnabled: () => false,
       getNativeRecordingPreparation: () => ({ admit: (work: () => Promise<unknown>) => work() }),
       nativeRecordingPolicyChanged: policyChanged, nativeRecordingDeliveryOutcome: jest.fn(),
     };

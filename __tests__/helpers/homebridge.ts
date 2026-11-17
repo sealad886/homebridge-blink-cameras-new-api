@@ -99,6 +99,7 @@ export class MockCharacteristic {
 export class MockService {
   public readonly characteristics = new Map<string, MockCharacteristic>();
   public readonly setCharacteristic = jest.fn(() => this);
+  public readonly setHiddenService = jest.fn(() => this);
   public displayName: string;
 
   constructor(public readonly type: string, public readonly name?: string) {

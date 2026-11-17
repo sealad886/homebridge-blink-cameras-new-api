@@ -57,6 +57,8 @@ import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-a
 import type { NativeMotionDevice } from './blink-api/motion-events';
 import { assertCanonicalEarlyNotificationConfig } from './early-notification-config';
 import { redactDiagnosticText } from './blink-api/redaction';
+import { ExternalFfmpegSetupError, resolveExternalFfmpegPath, probeExternalFfmpeg } from './accessories/external-ffmpeg';
+import { loadPackagedProtectionWorker } from './accessories/protection-worker-artifact';
 
 const DEFAULT_POLL_INTERVAL = 60;
 const DEFAULT_MOTION_TIMEOUT = 30;
@@ -142,6 +144,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private conversionQueue: Promise<void> = Promise.resolve();
   private readonly recordingMemory = new NativeRecordingMemoryBudget();
   private operational = false;
+  private mediaAvailable = false;
+  private mediaQualification?: Promise<void>;
   private monitorActive = true;
   // Startup is unverified until Blink returns a usable homescreen. Keeping the
   // HomeKit surface faulted while recovering also preserves a cached outage
@@ -500,11 +504,39 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     this.nativeRuntime?.deliveryOutcome(outcome, cameraId, event);
   }
 
+  /** Media setup is independent of Blink authentication and control availability. */
+  public isMediaAvailable(): boolean { return this.mediaAvailable; }
+
+  private qualifyMedia(): Promise<void> {
+    return this.mediaQualification ??= (async () => {
+      try {
+        const executable = resolveExternalFfmpegPath(this.streamingConfig.ffmpegPath);
+        // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
+        const protection = loadPackagedProtectionWorker(path.resolve(__dirname, '..'));
+        await probeExternalFfmpeg(executable, protection);
+        this.mediaAvailable = true;
+      } catch (error) {
+        const reason = error instanceof ExternalFfmpegSetupError
+          ? error.code === 'missing'
+            ? this.streamingConfig.ffmpegPath === 'ffmpeg'
+              ? 'FFmpeg was not found on the Homebridge service PATH.'
+              : 'The configured ffmpegPath is unavailable or not executable.'
+            : error.message
+          : 'The packaged media protection helper is unavailable.';
+        this.log.warn(`${reason} Live video, snapshots and HomeKit recording are disabled; arm/disarm, motion and settings remain available. ` +
+          'Install FFmpeg 6.1+ with the required codecs (including libx264 and libopus), add it to the Homebridge service PATH or set ffmpegPath to its absolute executable path, then restart the Blink child bridge.');
+      }
+    })();
+  }
+
   private async prepareNativeRuntime(homescreen: BlinkHomescreen): Promise<void> {
     const candidates = [...homescreen.cameras.map(device => ({ kind: device.type === 'owl' ? 'owl' as const : 'camera' as const,
       inventoryKind: 'camera' as const, map: this.cameraAccessories, device })),
       ...homescreen.doorbells.map(device => ({ kind: 'doorbell' as const, inventoryKind: 'doorbell' as const, map: this.doorbellAccessories, device })),
       ...homescreen.owls.map(device => ({ kind: 'owl' as const, inventoryKind: 'owl' as const, map: this.owlAccessories, device }))];
+    // Defer executable checks until authenticated discovery actually finds a camera.
+    // An unconfigured/tokenless bridge must remain idle.
+    if (candidates.length) await this.qualifyMedia();
     const identity = this.apiClient.getCachedIdentity();
     if (!identity?.accountId || !identity.clientId) { this.log.warn('Push motion waits for a cached authenticated account and client.'); return; }
     const scope = { accountId: identity.accountId, clientId: identity.clientId, tier: identity.tier };
@@ -522,8 +554,9 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       // Exclusions limit consumers, never the identities that can make a clip ambiguous.
       if (nativeStorage) matchingDevices.push({ ...binding, ...nativeStorage });
       if (!networks.has(device.network_id) || this.isDeviceExcluded(device, kind)) continue;
-      const settings = nativeRecordingDevicePolicy(this.config, { ...device, kind,
+      const policy = nativeRecordingDevicePolicy(this.config, { ...device, kind,
         moduleAssociation: associations.get(cameraKey(inventoryKind, device.id)) });
+      const settings = { ...policy, homeKitSecureVideo: policy.homeKitSecureVideo && this.mediaAvailable };
       devices.push({ binding, rawType: 'type' in device && typeof device.type === 'string' ? device.type : undefined,
         settings, ...(nativeStorage ? { nativeStorage } : {}),
       motion: () => map.get(device.id)?.triggerMotion(), recording: () => map.get(device.id)?.getNativeRecordingDelegate() });

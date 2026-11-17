@@ -7,6 +7,27 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.0] - 2026-11-17
+
+### Changed
+- Use separately installed FFmpeg 6.1+ for live video/audio, snapshots and HomeKit
+  recording. Find it on the Homebridge service PATH or use `ffmpegPath` to select
+  an executable. Check required codecs and capabilities as well as its version.
+  The plugin no longer bundles FFmpeg, x264 or Opus; it retains its packaged
+  media protection helper and corresponding source.
+- Keep arm/disarm, motion and settings available when FFmpeg is missing or
+  unsupported. Warn during authenticated camera startup, explain recovery, and
+  disable media operations until FFmpeg is corrected and the Blink child bridge
+  restarts.
+- Keep installation free of automatic configuration changes. Older settings and
+  the retired `debugStreamPath` key require the documented explicit migration;
+  already-canonical 1.1.0 settings need no conversion for unbundling. Existing
+  diagnostic captures remain untouched.
+
+### Fixed
+- Keep unconfigured bridges idle until sign-in, and require the Homebridge UI's
+  absolute storage directory before authentication.
+
 ## [2.0.0-alpha.1] - 2026-11-17
 
 ### Fixed

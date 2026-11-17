@@ -142,7 +142,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       cameraSourceType,
       device.serial ?? `${device.id}`,
       () => this.device.thumbnail,
-      () => this.platform.isOperational() && this.isDeviceAvailable(),
+      () => this.platform.isOperational() && this.platform.isMediaAvailable() && this.isDeviceAvailable(),
       (msg) => this.platform.log.debug(`[${device.name}] ${msg}`),
       { ...this.platform.streamingConfig, passiveSnapshots: nativePolicy.homeKitSecureVideo },
       (msg) => this.platform.log.error(`[${device.name}] ${msg}`),
@@ -225,7 +225,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       bind(management.operatingModeService, this.platform.Characteristic.HomeKitCameraActive, active => {
         this.homeKitCameraActive = active;
         this.cameraSource.setCameraActive(active);
-        recording.updateCameraActive(active && this.platform.isOperational() && this.isDeviceAvailable());
+        recording.updateCameraActive(active && this.platform.isOperational() && this.platform.isMediaAvailable() && this.isDeviceAvailable());
       });
     }
     refreshCameraAudioCapabilities(this.platform.api.hap, this.accessory.services);
@@ -348,7 +348,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
   }
 
   public updateAvailability(): void {
-    this.nativeRecording?.updateCameraActive(this.homeKitCameraActive && this.platform.isOperational() && this.isDeviceAvailable());
+    this.nativeRecording?.updateCameraActive(this.homeKitCameraActive && this.platform.isOperational() && this.platform.isMediaAvailable() && this.isDeviceAvailable());
     if (!this.isMotionServiceActive()) this.clearMotion();
     this.motionService
       ?.getCharacteristic(this.platform.Characteristic.StatusFault)
