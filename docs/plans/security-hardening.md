@@ -254,11 +254,23 @@ unrequested. F05/F06 and physical/runtime acceptance remain open.
 
 ## Review round 1 corrections
 
-Recording admission now uses a filesystem lock and per-capture reservations across
-processes sharing the recording directory. Abandoned locks refuse recording and
-abandoned reservations remain charged; recovery requires deliberate operator
-inspection. Live media continues without recording. Cross-process tests verify
-the 256 MiB admission ceiling and release after confirmed file closure.
+Historical raw diagnostic capture implementation (removed in the unpublished
+2.0.0-alpha.1 preparation): recording admission used a filesystem lock and
+per-capture reservations across processes sharing the recording directory.
+Abandoned locks refused recording and abandoned reservations remained charged;
+recovery required deliberate operator inspection. Live media continued without
+recording. Cross-process tests verified
+the 256 MiB admission ceiling and release after confirmed file closure. These
+receipts describe that earlier implementation, not the current runtime.
+
+Current disposition: optional raw diagnostic file capture is removed, including
+its admission and retention machinery. `debugStreamPath` is a rejected retired
+key; the existing guarded explicit migration removes it from configuration after
+preview and `--apply` (manual removal on Windows). No installation hook runs it.
+Neither runtime nor migration scans, moves, deletes or changes permissions on
+existing captures. Live streaming, HomeKit recording and bounded redacted
+`mediaDebug` logs remain. Historical audit and review evidence stays immutable;
+current release acceptance still requires the release guide's gates.
 
 Diagnostic redirects resolve against the actual response request URL. Evidence
 coverage requires observations within the requested window; PID and kernel origin

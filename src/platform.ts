@@ -122,7 +122,6 @@ interface BlinkPlatformConfig extends PlatformConfig, NativeRecordingPolicyConfi
   softwareEncodingPreset?: 'veryfast' | 'ultrafast';
   debugAuth?: boolean;
   authLocked?: boolean;
-  debugStreamPath?: string;
   snapshotCacheTTL?: number;
   persistSnapshotCache?: boolean;
 }
@@ -189,8 +188,6 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       ffmpegPath: this.config.ffmpegPath,
       mediaDebug: this.config.mediaDebug,
       maxStreams: this.config.maxStreams,
-      storagePath: this.api?.user?.storagePath?.(),
-      debugStreamPath: this.config.debugStreamPath,
       snapshotCacheTTL: this.config.snapshotCacheTTL,
       persistSnapshotCache: this.config.persistSnapshotCache,
       audio: {
@@ -269,7 +266,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     if (nativeRetired.some(key => Object.hasOwn(this.config, key))) {
       throw new Error('Retired motion/recording settings require scripts/migrate-native-recording-config.cjs: preview the explicit config path, then apply with --apply');
     }
-    const retired = ['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
+    const retired = ['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls', 'debugStreamPath'];
     if (retired.some(key => Object.hasOwn(this.config, key))) {
       throw new Error('Retired streaming settings require migration via scripts/migrate-native-recording-config.cjs: preview the explicit full config path, then apply with --apply; on Windows follow the manual conversion guide');
     }

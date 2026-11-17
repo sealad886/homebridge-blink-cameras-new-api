@@ -265,7 +265,6 @@ describe('BlinkCamerasPlatform', () => {
 
   it('keeps native streaming configuration stable during discovery', async () => {
     hapApi = createApi() as unknown as MockAPI;
-    Object.defineProperty(hapApi, 'user', { value: { storagePath: () => '/synthetic-homebridge-storage' } });
     const blinkApi = buildBlinkApi();
     blinkApi.getHomescreen.mockResolvedValue({
       account: { account_id: 1 }, networks: [],
@@ -274,17 +273,16 @@ describe('BlinkCamerasPlatform', () => {
     });
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
-      ...config, mediaDebug: true, debugStreamPath: 'diagnostics', audioCodec: 'pcma', softwareEncodingPreset: 'ultrafast',
+      ...config, mediaDebug: true, audioCodec: 'pcma', softwareEncodingPreset: 'ultrafast',
     }, hapApi);
     await expect((platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices()).resolves.toBe(true);
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
     expect(platform.accessories.length).toBeGreaterThan(0);
     expect(platform.streamingConfig).toMatchObject({ enabled: true, mediaDebug: true,
-      storagePath: '/synthetic-homebridge-storage', debugStreamPath: 'diagnostics',
       audio: { codec: 'pcma' }, video: { softwarePreset: 'ultrafast' } });
   });
 
-  it.each(['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'])(
+  it.each(['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls', 'debugStreamPath'])(
     'rejects retired %s before creating a vendor client', key => {
       hapApi = createApi() as unknown as MockAPI;
       (BlinkApi as jest.Mock).mockImplementation(() => buildBlinkApi());

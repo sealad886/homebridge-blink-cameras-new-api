@@ -86,7 +86,12 @@ not migrate configuration, including when `UIX_STORAGE_PATH` is present. For
 legacy settings, follow the explicit preview/`--apply` procedure in the
 [migration guide](native-recording-config-migration.md) before restart; Windows
 uses its manual mapping. Already-canonical 1.1.0 settings need no conversion for
-unbundling. Install and identify external FFmpeg before qualifying or upgrading.
+unbundling. The unpublished 2.0.0-alpha.1 preparation also retires `debugStreamPath`
+and removes optional raw diagnostic file capture. Any saved key, even blank,
+requires the same explicit conversion before restart (manual removal on Windows).
+Runtime and migration leave all existing captures untouched; live streaming,
+HomeKit recording and redacted `mediaDebug` logs remain. Install and identify
+external FFmpeg before qualifying or upgrading.
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
 build, and package contents. Jest runs serially, matching CI and the contributor

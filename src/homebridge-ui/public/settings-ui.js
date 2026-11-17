@@ -304,7 +304,7 @@
       else if (keys.includes('excludeDevices')) renderCameras(fields);
       else if (active === sections.length - 1) {
         const technical = new Set(['ffmpegPath', 'maxStreams', 'audioCodec', 'audioBitrate', 'videoBitrate', 'softwareEncodingPreset']);
-        const diagnostic = new Set(['debugAuth', 'mediaDebug', 'debugStreamPath']);
+        const diagnostic = new Set(['debugAuth', 'mediaDebug']);
         keys.filter(key => !technical.has(key) && !diagnostic.has(key)).forEach(key => scalar(key, fields));
         for (const [name, members] of [['Media tools and tuning', technical], ['Diagnostics', diagnostic]]) {
           const detail = el('details', undefined, 'blink-details'); detail.append(el('summary', name)); keys.filter(key => members.has(key)).forEach(key => scalar(key, detail)); fields.append(detail);

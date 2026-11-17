@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -65,6 +65,51 @@ describePosix('explicit secure media configuration migration', () => {
     writeFileSync(file, bytes);
     expect(run(file).status).toBe(0);
     expect(readdirSync(directory).filter(name => name.includes('.native-recording-backup-'))).toHaveLength(2);
+  });
+
+  it('retires only the raw capture setting through preview and apply while preserving existing footage', () => {
+    const captures = join(directory, 'old-captures');
+    mkdirSync(captures);
+    const capture = join(captures, 'existing.ts');
+    const footage = Buffer.from([0x47, 0x00, 0xff, 0x01, 0x47]);
+    writeFileSync(capture, footage, { mode: 0o640 });
+    const originalCapture = statSync(capture);
+    const other = { platform: 'OtherPlugin', debugStreamPath: captures, unrelated: true };
+    const canonical = { platform: 'BlinkCameras', name: 'Blink', mediaDebug: true,
+      enableStreaming: true, nativeRecording: { enabled: true }, custom: { preserve: ['value'] } };
+    const bytes = JSON.stringify({ bridge: { name: 'Home' }, platforms: [
+      { ...canonical, debugStreamPath: captures }, other,
+    ] }, null, 4) + '\n';
+    writeFileSync(file, bytes);
+    const assertFootageUnchanged = () => {
+      expect(readdirSync(captures)).toEqual(['existing.ts']);
+      expect(readFileSync(capture)).toEqual(footage);
+      const current = statSync(capture);
+      for (const key of ['ino', 'mode', 'uid', 'gid', 'size', 'mtimeMs', 'ctimeMs'] as const) {
+        expect(current[key]).toBe(originalCapture[key]);
+      }
+    };
+    const preview = spawnSync(process.execPath, [script, file], { encoding: 'utf8' });
+    expect(preview.status).toBe(0);
+    expect(JSON.parse(preview.stdout)).toMatchObject({ action: 'Preview', removedKeys: ['debugStreamPath'] });
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect(readdirSync(directory).sort()).toEqual(['config.json', 'old-captures']);
+    assertFootageUnchanged();
+    const applied = run(file);
+    expect(applied.status).toBe(0);
+    expect(JSON.parse(applied.stdout)).toMatchObject({ action: 'Applied', removedKeys: ['debugStreamPath'] });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ bridge: { name: 'Home' }, platforms: [canonical, other] });
+    const backups = readdirSync(directory).filter(name => name.includes('.native-recording-backup-'));
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(directory, backups[0]), 'utf8')).toBe(bytes);
+    assertFootageUnchanged();
+    const migratedBytes = readFileSync(file, 'utf8');
+    const rerun = run(file);
+    expect(rerun.status).toBe(0);
+    expect(JSON.parse(rerun.stdout).action).toBe('Unchanged');
+    expect(readFileSync(file, 'utf8')).toBe(migratedBytes);
+    expect(readdirSync(directory).filter(name => name.includes('.native-recording-backup-'))).toEqual(backups);
+    assertFootageUnchanged();
   });
 
   it('leaves unrelated-only configuration byte-identical and creates no backup', () => {

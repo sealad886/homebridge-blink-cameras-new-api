@@ -98,7 +98,11 @@ Operator settings, recording locations and codec behavior are owned by the
   lengths and suppression reporting. Operational failure receipts remain visible.
   Input-format observation continues after the detail allowance is exhausted.
 - Streaming logs must not include raw stream tokens, liveview URLs, SRTP keys, or device serials unless redacted.
-- Debug stream recordings must avoid raw camera serials in filenames and use owner-only file permissions.
+- Optional raw diagnostic file capture has been removed. `debugStreamPath` is
+  retired and requires explicit configuration migration, even when blank.
+  Runtime and migration leave existing captures untouched: no scanning, moving,
+  deletion or permission changes. Live streaming and HomeKit recording remain
+  separate media paths; `mediaDebug` emits bounded, redacted logs only.
 - Camera and proxy failures use Homebridge's error level even when debug is off.
   Routine parent traces remain debug output; worker stderr is never logged.
 - Authenticated thumbnails are restricted to HTTPS regional Blink REST hosts,

@@ -16,11 +16,12 @@ owns subsequent acceptance and finding dispositions.
 - Require the Homebridge UI's absolute storage directory before authentication.
   Return a contained storage error instead of using the working directory when
   the host does not supply it.
-- Keep optional raw diagnostic recordings inside Homebridge storage. Resolve
-  relative `debugStreamPath` values there and refuse external paths or symlinked
-  child directories without interrupting normal streaming. Existing captures are
-  not moved or deleted; replace an old external path with an internal child path
-  or leave the setting blank to disable recording.
+- Remove optional raw diagnostic file capture and retire `debugStreamPath`.
+  Existing configurations containing this key, including a blank value, require
+  the explicit preview/`--apply` migration before restart (manual conversion on
+  Windows). Installation does not edit configuration. Existing capture files are
+  untouched; live streaming, HomeKit recording and bounded, redacted `mediaDebug`
+  logs remain available.
 
 This prerelease continues the external FFmpeg 6.1+ requirement. Stable promotion
 and Homebridge verification remain subject to the release guide's acceptance gates.

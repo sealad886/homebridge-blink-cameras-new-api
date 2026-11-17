@@ -18,9 +18,6 @@ import { redactDiagnosticText } from './redaction';
 import { Buffer } from 'node:buffer';
 import { Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { createHash, randomBytes } from 'node:crypto';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as tls from 'node:tls';
 import { IMMIS_VENDOR_CA } from './immis-trust';
 import { describeMediaDestination, resolveMediaDestination, MediaDestination, MediaAddress } from './media-destination';
@@ -51,10 +48,6 @@ export interface ImmisProxyConfig {
   errorLog?: (message: string) => void;
   /** Debug logging enabled */
   debug?: boolean;
-  /** Authoritative Homebridge storage root; recording fails closed when absent. */
-  storagePath?: string;
-  /** Save the raw MPEG-TS stream within Homebridge storage for debugging. */
-  saveStreamPath?: string;
   /** @deprecated Ignored: upstream TLS certificate and hostname verification is mandatory. */
   verifyTls?: boolean;
   /**
@@ -104,25 +97,12 @@ const LOAS_SYNCWORD_VALUE = 0xe0;
 const LOAS_HEADER_LENGTH = 3;
 const MAX_AUDIO_BUFFER_BYTES = 256 * 1024;
 const IDLE_SHUTDOWN_GRACE_MS = 2000;
-let recordingAdmission: Promise<void> = Promise.resolve();
-const DEBUG_RECORDING_DIR = 'blink-stream-recordings';
-const RECORDING_CAPTURE_BYTES = 64 * 1024 * 1024;
-const RECORDING_TOTAL_BYTES = 256 * 1024 * 1024;
-const RECORDING_NAME = /^blink-stream-[a-f0-9]{16}-.+-[a-f0-9]{16}\.ts$/;
-const NO_FOLLOW_FLAG = fs.constants.O_NOFOLLOW ?? 0;
-const DIRECTORY_OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0) | NO_FOLLOW_FLAG;
-type FileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
-type FsStats = Awaited<ReturnType<typeof fs.promises.lstat>>;
 
 export interface LatmParseResult {
   frames: Buffer[];
   remainder: Buffer;
   discardedBytes: number;
 }
-
-const isSameFsEntry = (left: FsStats, right: FsStats): boolean => {
-  return left.dev === right.dev && left.ino === right.ino;
-};
 
 /**
  * Extract LOAS/LATM frames from a buffer.
@@ -174,17 +154,13 @@ const CONN_ID_MAX_LENGTH = 16;
  * ImmisProxyServer owns a private MPEG-TS consumer and upstream TLS session.
  */
 export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
-  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'storagePath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'storagePath' | 'waitForReady'>;
+  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'waitForReady'>;
   private readonly parsedUrl: URL;
 
   private consumer: Writable | null = null;
   private consumerCleanup: (() => void) | null = null;
   private incompleteTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private recordingTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private releaseRecording: (() => Promise<void>) | null = null;
   private readonly clientId: number;
-  private streamFile: fs.WriteStream | null = null;
-  private streamBytesWritten = 0;
   private targetSocket: tls.TLSSocket | null = null;
   private verifiedSocket: tls.TLSSocket | null = null;
   private candidates: readonly MediaAddress[] = [];
@@ -199,7 +175,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private keepAliveSequence = 0;
   private isCommandReady = false;
   private readinessFailed = false;
-  private recordingStart: Promise<void> | null = null;
   private readonly closingHandles = new Set<Promise<void>>();
   private reconnectTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
   private idleShutdownTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -233,8 +208,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       serial: config.serial,
       log: config.log,
       errorLog: config.errorLog,
-      saveStreamPath: config.saveStreamPath,
-      storagePath: config.storagePath,
       debug: config.debug,
       waitForReady: config.waitForReady,
       verifyTls: true,
@@ -288,11 +261,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     if (this.isRunning) throw new Error('Proxy server is already running');
     if (this.readinessFailed) throw new Error('Blink command readiness failed');
     this.isRunning = true;
-    if (this.config.saveStreamPath) {
-      this.recordingStart = this.startStreamRecording();
-      try { await this.recordingStart; } finally { this.recordingStart = null; }
-    }
-    if (!this.isRunning) { this.stopStreamRecording(); throw new Error('Proxy stopped during startup'); }
     this.safeEmit('ready', 'pipe:0');
     return 'pipe:0';
   }
@@ -313,24 +281,22 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.resumeConsumerInput();
   }
 
-  /** After stop(), resolves only after startup and owned transport/file handles close. */
+  /** After stop(), resolves only after owned transport handles close. */
   get whenClosed(): Promise<void> {
     return (async () => {
-      while (this.recordingStart || this.resolving || this.closingHandles.size) {
-        if (this.recordingStart) await this.recordingStart.catch(() => undefined);
+      while (this.resolving || this.closingHandles.size) {
         if (this.resolving) await this.resolving;
         await Promise.all([...this.closingHandles]);
       }
     })();
   }
 
-  private trackClosure(handle: EventEmitter, afterClose?: () => Promise<void>): void {
+  private trackClosure(handle: EventEmitter): void {
     let closed!: Promise<void>;
     closed = new Promise<void>((resolve) => {
       handle.once('close', () => {
-        void (afterClose?.() ?? Promise.resolve()).catch(() => {
-          recordSecurityBoundaryEvent('recorder_refusal');
-        }).finally(() => { this.closingHandles.delete(closed); resolve(); });
+        this.closingHandles.delete(closed);
+        resolve();
       });
     });
     this.closingHandles.add(closed);
@@ -391,197 +357,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     if (this.retiring && data[0] !== ImmisMessageType.TERMINATE) return;
     if (this.isRunning && this.targetSocket && this.targetSocket === this.verifiedSocket) this.boundedWrite(this.targetSocket, data, 1024 * 1024,
       () => this.fail('IMMIS upstream writer exceeded its budget'));
-  }
-
-  /** Resolve the host root first, then create only real child directories within it. */
-  private async resolveRecordingDirectory(): Promise<string> {
-    if (!this.config.storagePath || !path.isAbsolute(this.config.storagePath)) {
-      throw new Error('Absolute Homebridge storage is required for diagnostic recording');
-    }
-    const configuredRoot = path.resolve(this.config.storagePath);
-    const canonicalRoot = await fs.promises.realpath(configuredRoot);
-    if (!(await fs.promises.stat(canonicalRoot)).isDirectory()) throw new Error('Invalid Homebridge storage');
-    const configuredPath = path.resolve(configuredRoot, this.config.saveStreamPath!);
-    const isWithin = (relative: string): boolean => relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-    // Accept both the host's storage alias and its canonical spelling (/var vs /private/var).
-    let relative = path.relative(configuredRoot, configuredPath);
-    if (!isWithin(relative)) relative = path.relative(canonicalRoot, configuredPath);
-    if (!isWithin(relative)) throw new Error('Diagnostic recording must stay within Homebridge storage');
-    let directory = canonicalRoot;
-    for (const component of [...relative.split(path.sep).filter(Boolean), DEBUG_RECORDING_DIR]) {
-      directory = path.join(directory, component);
-      let stat: FsStats;
-      try { stat = await fs.promises.lstat(directory); }
-      catch (error) {
-        if ((error as { code?: string }).code !== 'ENOENT') throw error;
-        await fs.promises.mkdir(directory, { mode: 0o700 });
-        stat = await fs.promises.lstat(directory);
-      }
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Diagnostic recording requires real child directories');
-    }
-    return directory;
-  }
-
-  /**
-   * Start recording the stream to a file
-   */
-  private async startStreamRecording(): Promise<void> {
-    if (!this.config.saveStreamPath) {
-      return;
-    }
-
-    const previousAdmission = recordingAdmission;
-    let releaseAdmission!: () => void;
-    recordingAdmission = new Promise<void>((resolve) => { releaseAdmission = resolve; });
-    await previousAdmission;
-    let recordingDirHandle: FileHandle | null = null;
-    let admissionHandle: FileHandle | null = null;
-    let removeAdmission: (() => Promise<void>) | null = null;
-    try {
-      const recordingDir = await this.resolveRecordingDirectory();
-      const recordingDirPathStats = await fs.promises.lstat(recordingDir);
-      if (recordingDirPathStats.isSymbolicLink() || !recordingDirPathStats.isDirectory()) {
-        throw new Error('Debug stream recording directory must be a real directory');
-      }
-      recordingDirHandle = await fs.promises.open(recordingDir, DIRECTORY_OPEN_FLAGS);
-      const recordingDirStats = await recordingDirHandle.stat();
-      if (!recordingDirStats.isDirectory() || !isSameFsEntry(recordingDirPathStats, recordingDirStats)) {
-        throw new Error('Debug stream recording directory changed while opening');
-      }
-      try {
-        await recordingDirHandle.chmod(0o700);
-      } catch {
-        this.logError('Failed to set debug recording directory permissions.');
-      }
-
-      // Exclusive lock coordinates every process sharing this owned directory.
-      // Busy or crashed locks refuse recording immediately; never steal a lock.
-      const admissionPath = path.join(recordingDir, '.admission.lock');
-      admissionHandle = await fs.promises.open(admissionPath,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW_FLAG, 0o600);
-      const admissionStats = await admissionHandle.stat();
-      const removeOwnedMetadata = async (filename: string, createdStats: FsStats): Promise<void> => {
-        const directory = await fs.promises.lstat(recordingDir);
-        const entry = await fs.promises.lstat(filename);
-        if (!directory.isDirectory() || directory.isSymbolicLink() || !isSameFsEntry(directory, recordingDirStats)
-          || !entry.isFile() || entry.isSymbolicLink() || !isSameFsEntry(entry, createdStats)) {
-          throw new Error('Recording metadata ownership changed');
-        }
-        await fs.promises.unlink(filename);
-      };
-      removeAdmission = () => removeOwnedMetadata(admissionPath, admissionStats);
-      const entries = await fs.promises.readdir(recordingDir);
-      const captures = new Map<string, number>();
-      const reservations = new Set<string>();
-      for (const entry of entries) {
-        const reservation = entry.endsWith('.reserve') && RECORDING_NAME.test(entry.slice(0, -8));
-        if (!RECORDING_NAME.test(entry) && !reservation) continue;
-        const stats = await fs.promises.lstat(path.join(recordingDir, entry));
-        if (!stats.isFile() || stats.isSymbolicLink()) throw new Error('Unsafe recording quota entry');
-        if (reservation) reservations.add(entry.slice(0, -8));
-        else captures.set(entry, stats.size);
-      }
-      let committedBytes = 0;
-      for (const [entry, bytes] of captures) committedBytes += reservations.has(entry)
-        ? Math.max(RECORDING_CAPTURE_BYTES, bytes) : bytes;
-      for (const entry of reservations) if (!captures.has(entry)) committedBytes += RECORDING_CAPTURE_BYTES;
-      if (committedBytes + RECORDING_CAPTURE_BYTES > RECORDING_TOTAL_BYTES) {
-        throw new Error('Debug recording aggregate budget exhausted');
-      }
-      // Reserve the whole permitted capture before opening it. Empty persistent
-      // markers remain charged after crashes; recording cannot exceed that charge.
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const serialHash = createHash('sha256').update(this.config.serial).digest('hex').slice(0, 16);
-      const randomSuffix = randomBytes(8).toString('hex');
-      const filename = path.join(recordingDir, `blink-stream-${serialHash}-${timestamp}-${randomSuffix}.ts`);
-      const reservationPath = `${filename}.reserve`;
-      const reservationHandle = await fs.promises.open(reservationPath,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW_FLAG, 0o600);
-      let reservationStats: FsStats;
-      try { reservationStats = await reservationHandle.stat(); } finally { await reservationHandle.close(); }
-      let released = false;
-      const releaseRecording = async (): Promise<void> => {
-        if (released) return;
-        released = true;
-        await removeOwnedMetadata(reservationPath, reservationStats);
-      };
-      this.releaseRecording = releaseRecording;
-
-      let recordingFd: number | null = null;
-      try {
-        recordingFd = await new Promise<number>((resolve, reject) => {
-          fs.open(
-            filename,
-            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW_FLAG,
-            0o600,
-            (error, fd) => {
-              if (error) {
-                reject(error);
-                return;
-              }
-              resolve(fd);
-            },
-          );
-        });
-        const currentRecordingDirStats = await fs.promises.lstat(recordingDir);
-        if (
-          currentRecordingDirStats.isSymbolicLink() ||
-          !currentRecordingDirStats.isDirectory() ||
-          currentRecordingDirStats.dev !== recordingDirStats.dev ||
-          currentRecordingDirStats.ino !== recordingDirStats.ino
-        ) {
-          throw new Error('Debug stream recording directory changed while opening recording file');
-        }
-
-        this.streamFile = fs.createWriteStream(filename, { fd: recordingFd, autoClose: true });
-        this.trackClosure(this.streamFile, releaseRecording);
-        Object.defineProperty(this.streamFile, 'path', { value: filename });
-        recordingFd = null;
-      } catch (error) {
-        const fdToClose = recordingFd;
-        if (fdToClose !== null) {
-          await new Promise<void>((resolve) => fs.close(fdToClose, () => resolve()));
-        }
-
-        throw error;
-      }
-      this.streamBytesWritten = 0;
-      this.recordingTimer = globalThis.setTimeout(() => this.stopStreamRecording(), 5 * 60 * 1000);
-      this.recordingTimer.unref();
-
-      this.log(`Recording stream to: ${filename}`);
-
-      this.streamFile.on('error', () => {
-        this.logError('Stream recording error.');
-        this.stopStreamRecording();
-      });
-    } catch {
-      await this.releaseRecording?.().catch(() => undefined);
-      this.releaseRecording = null;
-      recordSecurityBoundaryEvent('recorder_refusal');
-      this.logError('Failed to start stream recording.');
-    } finally {
-      await admissionHandle?.close().catch(() => undefined);
-      await removeAdmission?.().catch(() => { recordSecurityBoundaryEvent('recorder_refusal'); });
-      await recordingDirHandle?.close().catch(() => undefined);
-      releaseAdmission();
-    }
-  }
-
-  /**
-   * Stop recording the stream
-   */
-  private stopStreamRecording(): void {
-    if (this.recordingTimer) globalThis.clearTimeout(this.recordingTimer);
-    this.recordingTimer = null;
-    if (this.streamFile) {
-      const stream = this.streamFile;
-      this.releaseRecording = null;
-      this.blockedWriters.get(stream)?.();
-      stream.destroy();
-      this.log(`Stream recording stopped. Total bytes written: ${this.streamBytesWritten}`);
-      this.streamFile = null;
-    }
   }
 
   /**
@@ -897,23 +672,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   }
 
   /**
-   * Forward MPEG-TS data to the private child and optional bounded recorder
+   * Forward MPEG-TS data to the private child
    */
   private forwardToClients(data: Buffer): void {
     this.safeEmit('data', data);
-    if (this.streamFile && !this.streamFile.destroyed) {
-      if (this.streamBytesWritten + data.length > 64 * 1024 * 1024) {
-        recordSecurityBoundaryEvent('recorder_refusal');
-        this.stopStreamRecording();
-      }
-      else {
-        this.boundedWrite(this.streamFile, data, 256 * 1024, () => {
-          recordSecurityBoundaryEvent('recorder_refusal');
-          this.stopStreamRecording();
-        });
-        this.streamBytesWritten += data.length;
-      }
-    }
     const consumer = this.consumer;
     if (consumer) {
       this.boundedWrite(consumer, data, 1024 * 1024,
@@ -1095,7 +857,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.keepAliveInterval = null;
     if (this.reconnectTimeout) globalThis.clearTimeout(this.reconnectTimeout);
     this.reconnectTimeout = null;
-    this.stopStreamRecording();
     this.audioCleanup?.();
     this.audioInput = null;
     this.audioBuffer = Buffer.alloc(0);
@@ -1136,9 +897,6 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.candidates = [];
     this.verifiedSocket = null;
     this.log('Stopping proxy server');
-
-    // Stop stream recording
-    this.stopStreamRecording();
 
     // Stop keep-alive timer
     if (this.keepAliveInterval) {

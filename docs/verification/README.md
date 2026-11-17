@@ -171,6 +171,22 @@ two-camera playback used the bundled backend and does not qualify the external
 FFmpeg backend. The existing changed-backend acceptance and stable observation
 requirements in the [release guide](../RELEASE.md) remain open.
 
+### 2.0.0-alpha.1 source correction — publication pending
+
+The next candidate retires optional raw diagnostic video capture and its
+`debugStreamPath` setting. The recorder and its arbitrary-directory write path
+are removed; live viewing, native clip delivery to HomeKit Secure Video, and
+bounded redacted `mediaDebug` logs remain. Existing captures are not inspected,
+moved, or deleted. Configurations containing the retired key use the existing
+[explicit migration](../native-recording-config-migration.md) before startup;
+installation does not run the migration automatically.
+
+The candidate also keeps empty/tokenless setup idle and requires the UI's
+absolute storage root before authentication operations. These source corrections
+still need current review, CI, immutable installed-package qualification and
+runtime acceptance. The accepted alpha.0 receipt above does not qualify alpha.1
+or the eventual stable package.
+
 ### Historical publication and initial RC audit
 
 At 15:49 UTC on 16 November 2026, a fresh public npm metadata read confirmed

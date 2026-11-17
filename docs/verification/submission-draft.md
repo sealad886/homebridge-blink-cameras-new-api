@@ -180,6 +180,7 @@ for plugin operation. The latter delivers functional device events; it should
 not be mistaken for a Blink-only network footprint.
 
 [PENDING: summarize final no-tracking and storage-boundary review, including
+confirmation that raw diagnostic capture is retired, retained redacted logs,
 native temporary media and migration backups. Provide the evidence supporting
 the corresponding form declarations. Do not include credentials, device IDs,
 private endpoints, raw event payloads or camera footage.]

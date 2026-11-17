@@ -15,6 +15,11 @@
       "anyOf": [
         {
           "required": [
+            "debugStreamPath"
+          ]
+        },
+        {
+          "required": [
             "ffmpegDebug"
           ]
         },
@@ -141,12 +146,6 @@
         "description": "Enable bounded, redacted streaming diagnostics. Per-packet and NAL traces are omitted.",
         "type": "boolean",
         "default": false
-      },
-      "debugStreamPath": {
-        "title": "Save raw diagnostic video locally",
-        "description": "Optional folder within Homebridge storage for raw IMMIS .ts diagnostic video. Relative paths resolve under Homebridge storage; absolute paths must remain inside it. Uses local disk and can contain private footage. Not an HSV or iCloud destination. Leave blank to disable.",
-        "type": "string",
-        "placeholder": "blink-streams"
       },
       "maxStreams": {
         "title": "Simultaneous live viewers per camera",
@@ -579,8 +578,7 @@
         "deviceName",
         "trustDevice",
         "debugAuth",
-        "mediaDebug",
-        "debugStreamPath"
+        "mediaDebug"
       ]
     }
   ]
