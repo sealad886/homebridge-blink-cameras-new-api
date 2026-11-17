@@ -101,15 +101,53 @@ it.each([['unexpected', 'unexpected decoder error'], ['NULL decoder error', '[NU
   });
 const audioFailureDiagnostic = '[aac @ 0x123] Error decoding AAC frame header.\n' +
   '[aist#0:1/aac @ 0x456] Error submitting packet to decoder: Invalid data found when processing input\n';
+const metadataDiagnostic = '[NULL @ 000001ABCDEF1234] missing picture in access unit with size 9\n' +
+  '[h264 @ 000001ABCDEF1234] no frame!\n' +
+  '[vist#0:0/h264 @ 000001ABCDEF1234] Error submitting packet to decoder: Invalid data found when processing input\n';
+const maximumMetadataLine = `[h264 @ ${'a'.repeat(1024 - '[h264 @ ] no frame!'.length)}] no frame!`;
+it.each([
+  ['LF', metadataDiagnostic, false, true], ['CRLF', metadataDiagnostic.replaceAll('\n', '\r\n'), false, true],
+  ['split CRLF', metadataDiagnostic.replaceAll('\n', '\r\n'), true, true],
+  ['bare CR', metadataDiagnostic.replaceAll('\n', '\r'), false, false],
+  ['embedded CR', metadataDiagnostic.replace('no frame!', 'no\r frame!'), false, false],
+  ['double CR', metadataDiagnostic.replaceAll('\n', '\r\r\n'), false, false],
+  ['unknown CRLF', metadataDiagnostic.replaceAll('\n', '\r\n') + 'unknown diagnostic\r\n', false, false],
+  ['excess CRLF', metadataDiagnostic.replaceAll('\n', '\r\n').repeat(2), false, false],
+  ['maximum LF line', maximumMetadataLine + '\n', false, true],
+  ['overlong CRLF wire line', maximumMetadataLine + '\r\n', false, false],
+] as const)('checks exact metadata diagnostics with %s framing through conversion', async (_name, diagnostic, split, accepted) => {
+  const child = new EventEmitter() as ChildProcess, stdout = new PassThrough(), stderr = new PassThrough();
+  Object.assign(child, { stdout, stderr });
+  const close = jest.fn(async () => undefined), input = { fd: 42, close } as unknown as FileHandle;
+  jest.mocked(spawnExternalFfmpeg).mockImplementation(() => {
+    globalThis.setImmediate(() => {
+      stdout.end(Buffer.from([1]));
+      if (split) { for (const byte of Buffer.from(diagnostic)) stderr.write(Buffer.from([byte])); stderr.end(); }
+      else stderr.end(diagnostic);
+      child.emit('close', 0);
+    });
+    return child;
+  });
+  const pending = convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
+    signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input }, configuration(),
+  { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
+    originUs: 0, metadata: 1, corrections: [], videoStreamIndex: 0 }, false, false, () => undefined);
+  if (accepted) await expect(pending).resolves.toBeUndefined();
+  else await expect(pending).rejects.toMatchObject({ code: 'DECODE' });
+  expect(close).toHaveBeenCalledTimes(1);
+});
 it.each([
   ['generic failure', '', 1, 'DECODE'], ['empty output', '', 0, 'DECODE'],
   ['video failure', '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE'],
   ['6.1 audio failure', audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY'],
+  ['CRLF audio failure', audioFailureDiagnostic.replaceAll('\n', '\r\n'), 1, 'AUDIO_DISCONTINUITY'],
   ['9 audio failure', '[aac @ 0x123] Error decoding AAC frame header.\n[aist#0:1/aac @ 0x456] [dec:aac @ 0x789] Error submitting packet to decoder: Error number -50531338 occurred\n', 1, 'AUDIO_DISCONTINUITY'],
   ['AAC channel-element failure', '[aac @ 0x123] channel element 0.0 is not allocated\n[aist#0:1/aac @ 0x456] Error submitting packet to decoder: Invalid data found when processing input\n', 1, 'AUDIO_DISCONTINUITY'],
   ['missing audio map', "Stream map '0:a:0' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", 1, 'AUDIO_DISCONTINUITY'],
+  ['CRLF missing audio map', "Stream map '0:a:0' matches no streams.\r\nTo ignore this, add a trailing '?' to the map.\r\n", 1, 'AUDIO_DISCONTINUITY'],
   ['AAC detail with proved decoder failure', '[aac @ 0x123] private decoder diagnostic\n' + audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY'],
   ['audio plus generic failure', audioFailureDiagnostic + 'private unknown failure\n', 1, 'DECODE'],
+  ['CRLF audio plus generic failure', audioFailureDiagnostic.replaceAll('\n', '\r\n') + 'private unknown failure\r\n', 1, 'DECODE'],
   ['unknown AAC diagnostic', '[aac @ 0x123] private unknown failure\n', 1, 'DECODE'],
   ['audio plus video failure', audioFailureDiagnostic + '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE'],
   ['audio plus excess metadata errors', audioFailureDiagnostic + '[h264 @ 0x123] no frame!\n', 1, 'DECODE'],

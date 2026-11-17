@@ -303,9 +303,11 @@ function observeMetadataErrors(stream: Readable, expected: () => number, videoSt
   stream.on('data', (bytes: Buffer) => {
     if ((total += bytes.length) > MAX_METADATA_DIAGNOSTIC_BYTES) { invalid = otherFailure = true; return; }
     const all = (tail + bytes.toString('utf8')).split('\n'); tail = all.pop()!;
-    for (const line of all) {
+    for (const rawLine of all) {
+      if (rawLine.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = otherFailure = true; continue; }
+      // Normalize only a CR that immediately preceded this LF; retain raw byte/line bounds.
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
       if (!line) continue;
-      if (line.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) { invalid = otherFailure = true; continue; }
       // Without stream-info decoding, the H.264 parser can retain its NULL
       // codec context label. Only the same fixed missing-picture text is allowed.
       if (/^\[(?:h264|NULL) @ (?:0x)?[0-9a-fA-F]+\] missing picture in access unit with size \d+$/.test(line)) missing++;
