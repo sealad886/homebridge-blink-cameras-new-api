@@ -15,3 +15,4 @@ revision and environment.
 | [005: Media network feasibility](005-secure-media-network-feasibility.md) | Destination authority, native boundary and closure gates |
 | [006: Stream quality](006-stream-quality-authority.md) | Per-camera input and system-wide output authority |
 | [007: Event-driven native recording](007-event-driven-native-recording.md) | Provider observations, bounded acquisition ownership and finite HomeKit delivery |
+| [008: External FFmpeg](008-external-ffmpeg.md) | External codec dependency, private media pipes and protection-only helper |

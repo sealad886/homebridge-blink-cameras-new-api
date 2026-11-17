@@ -131,9 +131,12 @@ alone is not proof of changing video or audible audio. Battery depletion and
 provider outages need separate evidence; a disconnect message alone does not
 identify their cause.
 
-Check the installed package's verified worker and negotiated codec in bounded
-startup receipts. A missing or modified worker needs a verified package reinstall,
-not an executable-path override. See [packaged codec requirements](streaming.md#packaged-codec-requirements)
+Check the external FFmpeg installation, service PATH or configured `ffmpegPath`,
+and negotiated codec in bounded startup receipts. Install FFmpeg 6.1+ with the
+required capabilities if the setup check reports it missing or incomplete.
+The separate packaged protection helper still requires verified package bytes;
+an external FFmpeg path cannot replace a missing or modified protection helper.
+See [media requirements](streaming.md#packaged-codec-requirements)
 and the [upgrade migration](streaming.md#upgrade-configuration). AAC-ELD is no longer
 offered; Home receives the supported codec update through normal HAP metadata.
 Do not reset pairing or disable certificate verification to bypass a refused stream.
@@ -208,8 +211,8 @@ It handles retired media options and motion settings in one guarded replacement.
 Early Notification and legacy HSV mappings apply separately to intermediate beta
 users. Both migration script names now default to preview; an explicit `--apply`
 is required to replace the file with a private backup. Do not assume the old
-secure-media command still writes when given only a path. POSIX postinstall needs
-the explicit installer storage path; Windows uses the guide’s manual conversion.
+secure-media command still writes when given only a path. Installation does not
+run the migration, even with an installer storage path. Windows uses the guide’s manual conversion.
 Neither path changes Blink settings or pairing. Existing `syncModuleFeedLimits`
 live-view settings remain valid.
 

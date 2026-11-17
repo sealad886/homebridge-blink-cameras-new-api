@@ -17,7 +17,7 @@ describe('secure media public configuration', () => {
     expect(validate({ name: 'Blink', audioCodec })).toBe(false);
   });
 
-  it.each(['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'])(
+  it.each(['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'])(
     'requires one-off migration of retired setting %s', key => {
       expect(validate({ name: 'Blink', [key]: false })).toBe(false);
     });
@@ -25,5 +25,12 @@ describe('secure media public configuration', () => {
   it('validates native diagnostics and bounded software preset choices', () => {
     expect(validate({ name: 'Blink', mediaDebug: 'true' })).toBe(false);
     expect(validate({ name: 'Blink', softwareEncodingPreset: 'placebo' })).toBe(false);
+  });
+
+  it('accepts external FFmpeg configuration without requiring a local executable during schema validation', () => {
+    expect(validate({ name: 'Blink', ffmpegPath: 'ffmpeg' })).toBe(true);
+    expect(validate({ name: 'Blink', ffmpegPath: '/opt/media tools/ffmpeg' })).toBe(true);
+    expect(validate({ name: 'Blink', ffmpegPath: false })).toBe(false);
+    expect(validate({ name: 'Blink', ffmpegPath: '' })).toBe(false);
   });
 });

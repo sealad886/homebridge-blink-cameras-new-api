@@ -7,8 +7,10 @@ import { beforeAll, test } from '@jest/globals';
 import type { HAP, PrepareStreamRequest, StreamingRequest } from 'homebridge';
 import { BlinkCameraSource } from '../src/accessories/camera-source';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
-import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifact';
-import { PrivateMediaWorker, type WorkerSpawner } from '../src/accessories/media-worker';
+import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
+import { PrivateProtectionWorker, type ProtectionSpawner } from '../src/accessories/srtp-worker';
+import { createExternalLiveCodec } from '../src/accessories/external-live-codec';
+import { resolveExternalFfmpegPath, type ExternalFfmpegProcessOptions } from '../src/accessories/external-ffmpeg';
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import type { BlinkApi } from '../src/blink-api';
 import { createHap } from './helpers/homebridge';
@@ -19,7 +21,7 @@ jest.mock('../src/accessories/media-session', () => {
   const actual = jest.requireActual<typeof import('../src/accessories/media-session')>('../src/accessories/media-session');
   return { ...actual, createOwnedMediaSession: jest.fn(actual.createOwnedMediaSession) };
 });
-jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: jest.fn() }));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn() }));
 jest.mock('../src/blink-api/immis-proxy', () => ({ ImmisProxyServer: jest.fn() }));
 jest.mock('node:dgram', () => {
   let port = 41000;
@@ -28,7 +30,7 @@ jest.mock('node:dgram', () => {
 });
 
 const realSession = jest.requireActual<typeof import('../src/accessories/media-session')>('../src/accessories/media-session').createOwnedMediaSession;
-const configuredWorker = process.env.BLINK_MEDIA_TEST_WORKER_PATH;
+const configuredWorker = process.env.BLINK_PROTECTION_TEST_WORKER_PATH;
 beforeAll(() => {
   if (!configuredWorker || process.platform !== 'win32') return;
   const windowsRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
@@ -89,7 +91,7 @@ test.each(['video-key', 'video-salt', 'audio-key', 'audio-salt'] as const)(
   },
 );
 
-function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): Buffer {
+function childMetadata(child: ChildProcessWithoutNullStreams, worker: string, executableOnly = true): Buffer {
   const pid = child.pid;
   if (!Number.isSafeInteger(pid) || !pid || pid < 1) throw new Error('Native child PID unavailable');
   if (process.platform === 'win32') {
@@ -102,13 +104,13 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
     const metadata = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, '')) as { ProcessId: number; ExecutablePath: string; CommandLine: string };
     expect(metadata.ProcessId === pid).toBe(true);
     expect(resolve(metadata.ExecutablePath).toLowerCase() === resolve(worker).toLowerCase()).toBe(true);
-    expect([worker, `"${worker}"`].includes(metadata.CommandLine.trim())).toBe(true);
+    if (executableOnly) expect([worker, `"${worker}"`].includes(metadata.CommandLine.trim())).toBe(true);
     // CIM exposes argv/executable, not environment. The real launch env is also
     // asserted below; no Windows process-memory/environment inspection is claimed.
     return bytes;
   }
   const command = execFileSync('/bin/ps', ['-ww', '-p', String(pid), '-o', 'command='], { timeout: 5000, maxBuffer: 65536 });
-  expect(command.toString('utf8').trim() === worker).toBe(true);
+  expect(executableOnly ? command.toString('utf8').trim() === worker : command.toString('utf8').startsWith(worker)).toBe(true);
   const environment = execFileSync('/bin/ps', ['eww', '-p', String(pid), '-o', 'command='], { timeout: 5000, maxBuffer: 65536 });
   return Buffer.concat([command, environment]);
 }
@@ -116,15 +118,16 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
 (configuredWorker ? test : test.skip).each(['vendor-start-error', 'vendor-event-error', 'malformed-media', 'unexpected-exit'] as const)(
   'real camera/native private-pipe path withholds secrets through %s', async failure => {
     const worker = resolve(configuredWorker!);
+    const ffmpeg = resolveExternalFfmpegPath(process.env.BLINK_FFMPEG_TEST_PATH);
     const inherited = process.env.BLINK_MEDIA_INHERITED_SECRET_CANARY;
     process.env.BLINK_MEDIA_INHERITED_SECRET_CANARY = vendorUrl;
     const pipes: Buffer[] = []; const diagnostics: Buffer[] = []; const publicErrors: string[] = [];
-    let child: ChildProcessWithoutNullStreams | undefined; let session: OwnedMediaSession | undefined;
+    let child: ChildProcessWithoutNullStreams | undefined; let codecChild: ChildProcessWithoutNullStreams | undefined; let session: OwnedMediaSession | undefined;
     let bytesSeen = 0; let metadataInspected = false; let closeTransport!: () => void;
     let metadataFailure: { reason: 'timeout' | 'inspection-failed'; elapsedMs: number; status: number | null } | undefined;
     const transport = Object.assign(new EventEmitter(), { whenClosed: new Promise<void>(done => { closeTransport = done; }),
       start: async () => 'pipe:0', attachConsumer: jest.fn(), retire: () => closeTransport(), stop: () => closeTransport() });
-    const launch: WorkerSpawner = (path, args, options) => {
+    const launch: ProtectionSpawner = (path, args, options) => {
       expect(path === worker).toBe(true); expect(args.length).toBe(0); expect(options.env).toEqual({}); expect(options.shell).toBe(false);
       const launched = spawn(path, args, options); child = launched;
       expect(launched.spawnargs.length).toBe(1);
@@ -139,11 +142,21 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
       child.stdout.on('data', capture); child.stderr.on('data', capture);
       return child;
     };
-    jest.mocked(loadPackagedMediaWorker).mockReturnValue(worker);
+    const launchCodec: ExternalFfmpegProcessOptions['launch'] = (path, args, options) => {
+      expect(path === worker).toBe(true); expect(args[0]).toBe('--exec'); expect(args[1] === ffmpeg).toBe(true);
+      expect(options.env).toEqual({}); expect(options.shell).toBe(false);
+      assertSecretFree(Buffer.from(JSON.stringify({ args, env: options.env })));
+      const launched = spawn(path, args, options);
+      if (Array.isArray(options.stdio) && options.stdio[0] === 'pipe') codecChild = launched as ChildProcessWithoutNullStreams;
+      launched.stderr?.on('data', (bytes: Buffer) => { bytesSeen += bytes.length; if (bytesSeen <= 65536) diagnostics.push(Buffer.from(bytes)); });
+      return launched;
+    };
+    jest.mocked(loadPackagedProtectionWorker).mockReturnValue(worker);
     (ImmisProxyServer as unknown as jest.Mock).mockImplementation(() => transport);
     jest.mocked(createOwnedMediaSession).mockImplementation(async (options, signal) => {
       session = await realSession(options, signal, {
-        createWorker: (path, callbacks) => new PrivateMediaWorker(path, callbacks, launch),
+        createProtection: path => new PrivateProtectionWorker(path, launch),
+        createCodec: (options, callbacks, signal) => createExternalLiveCodec(options, callbacks, signal, { launch: launchCodec }),
         openSocket: async () => {
           let close!: () => void; const whenClosed = new Promise<void>(done => { close = done; });
           return { whenClosed, close, send: async () => {} };
@@ -153,7 +166,10 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
     });
     const metadata = (): void => {
       const started = globalThis.performance.now();
-      try { diagnostics.push(childMetadata(child!, worker)); metadataInspected = true; }
+      try { diagnostics.push(childMetadata(child!, worker));
+        if (!codecChild) throw new Error('External codec process missing');
+        diagnostics.push(childMetadata(codecChild, process.platform === 'win32' ? worker : ffmpeg, false));
+        metadataInspected = true; }
       catch (error) {
         // The vendor-start-error path intentionally absorbs provider exceptions.
         // Retain only fixed categories and numbers so an inspection failure is
@@ -173,7 +189,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
     const log = (text: string) => diagnostics.push(Buffer.from(text));
     const source = new BlinkCameraSource(api as unknown as BlinkApi, createHap() as unknown as HAP,
       1, 2, 'camera', 'synthetic-serial', () => undefined, () => true, log,
-      { audio: { enabled: true } }, log);
+      { ffmpegPath: ffmpeg, audio: { enabled: true } }, log);
     const prepare = { sessionID: 'secrecy-canary', targetAddress: '192.168.1.5', addressVersion: 'ipv4',
       video: { port: 5000, srtpCryptoSuite: 0, srtp_key: videoKey, srtp_salt: videoSalt },
       audio: { port: 5002, srtpCryptoSuite: 0, srtp_key: audioKey, srtp_salt: audioSalt } } as unknown as PrepareStreamRequest;
@@ -210,7 +226,7 @@ function childMetadata(child: ChildProcessWithoutNullStreams, worker: string): B
       expect(metadataInspected).toBe(true);
       assertSecretFree(Buffer.concat([...diagnostics, Buffer.from(publicErrors.join('\n'))]));
     } finally {
-      await stop(); await session?.stop(); child?.kill('SIGKILL');
+      await stop(); await session?.stop(); child?.kill('SIGKILL'); codecChild?.kill('SIGKILL');
       if (inherited === undefined) delete process.env.BLINK_MEDIA_INHERITED_SECRET_CANARY;
       else process.env.BLINK_MEDIA_INHERITED_SECRET_CANARY = inherited;
       for (const bytes of [...pipes, ...diagnostics]) bytes.fill(0);

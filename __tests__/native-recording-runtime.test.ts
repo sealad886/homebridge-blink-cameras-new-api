@@ -1523,7 +1523,7 @@ describe('native recording runtime composition', () => {
     const f = await setup(); f.delegate.updateRecordingAudioActive(true);
     let finishRepair!: () => void;
     const repairing = new Promise<void>(resolve => { finishRepair = resolve; });
-    const recovery = { flags: 2, attempts: 2 as const, initialWorkerCode: 'AUDIO_DECODE' as const };
+    const recovery = { flags: 2, attempts: 2 as const, initialWorkerCode: 'AUDIO_DISCONTINUITY' as const };
     f.prepare.mockImplementationOnce(async (_source, selected, audio) => {
       await repairing; return { ...prepared(selected, audio), recovery };
     });

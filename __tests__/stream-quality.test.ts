@@ -5,7 +5,8 @@ import { decode, decodeWithLists } from 'hap-nodejs/dist/lib/util/tlv';
 import { BlinkApi } from '../src/blink-api';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig } from '../src/accessories/camera-source';
 import { effectiveOutputFps, isSupportedOutputVideo, outputResolutions, OutputQualityProfile } from '../src/accessories/stream-quality';
-jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: () => '/verified/worker' }));
+jest.mock('../src/accessories/external-ffmpeg', () => ({ ...jest.requireActual('../src/accessories/external-ffmpeg'), resolveExternalFfmpegPath: jest.fn(() => '/external/ffmpeg') }));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: () => '/verified/worker' }));
 jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn(async () => {
   let closed!: () => void;
   const whenClosed = new Promise<void>(resolve => { closed = resolve; });

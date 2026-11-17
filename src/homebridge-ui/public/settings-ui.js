@@ -303,10 +303,10 @@
       if (keys.includes('nativeRecording')) renderRecording(fields);
       else if (keys.includes('excludeDevices')) renderCameras(fields);
       else if (active === sections.length - 1) {
-        const technical = new Set(['maxStreams', 'audioCodec', 'audioBitrate', 'videoBitrate', 'softwareEncodingPreset']);
+        const technical = new Set(['ffmpegPath', 'maxStreams', 'audioCodec', 'audioBitrate', 'videoBitrate', 'softwareEncodingPreset']);
         const diagnostic = new Set(['debugAuth', 'mediaDebug', 'debugStreamPath']);
         keys.filter(key => !technical.has(key) && !diagnostic.has(key)).forEach(key => scalar(key, fields));
-        for (const [name, members] of [['Live-view tuning', technical], ['Diagnostics', diagnostic]]) {
+        for (const [name, members] of [['Media tools and tuning', technical], ['Diagnostics', diagnostic]]) {
           const detail = el('details', undefined, 'blink-details'); detail.append(el('summary', name)); keys.filter(key => members.has(key)).forEach(key => scalar(key, detail)); fields.append(detail);
         }
       } else keys.forEach(key => scalar(key, fields));

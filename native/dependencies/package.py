@@ -86,7 +86,7 @@ def source_files(root: Path, source_sha: str) -> dict[str, bytes]:
         part = PurePosixPath(path)
         selected = (path == '.github/workflows/test.yml' or path.startswith('native/dependencies/licenses/') or
                     part.suffix in ('.c', '.h', '.inc', '.py', '.md') or part.name in ('Makefile', 'COPYING', 'source-inputs.json'))
-        if not selected:
+        if not selected or path.startswith('native/receipts/'):
             continue
         mode, kind, _, size = metadata.split()
         if mode not in (b'100644', b'100755') or kind != b'blob' or any(
@@ -99,12 +99,10 @@ def source_files(root: Path, source_sha: str) -> dict[str, bytes]:
         if len(data) != int(size):
             raise ValueError('Source blob size mismatch')
         result[path] = data
-    required = {'native/worker.c', 'native/protocol.h', 'native/audio.inc', 'native/recording.inc',
-                'native/output.inc', 'native/protection.inc', 'native/tests/check-recording.c',
+    required = {'native/worker.c', 'native/protocol.h', 'native/protection.inc', 'native/tests/check-protection.c',
                 'native/Makefile', 'native/COPYING', 'native/dependencies/prepare.py',
                 'native/dependencies/package.py', 'native/dependencies/source-inputs.json', '.github/workflows/test.yml',
-                'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/libsrtp-LICENSE',
-                'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING',
+                'native/dependencies/licenses/libsrtp-LICENSE',
                 'native/dependencies/licenses/mingw-w64-runtime-COPYING', 'native/dependencies/licenses/gcc-COPYING.RUNTIME'}
     if not required.issubset(result):
         raise ValueError('Required corresponding source missing from exact commit')
@@ -115,7 +113,7 @@ def read_candidate(path: Path, target: str, source_sha: str, recipe: str, pins: 
     """Read bounded regular members without extracting any archive-controlled path."""
     if path.is_symlink() or not path.is_file() or path.stat().st_size > ARCHIVE_LIMIT:
         raise ValueError('Invalid candidate archive')
-    expected_worker = 'blink-codec-worker' + ('.exe' if target == 'win32-x64' else '')
+    expected_worker = 'blink-protection-worker' + ('.exe' if target == 'win32-x64' else '')
     members = {}
     with path.open('rb') as raw, gzip.GzipFile(fileobj=raw, mode='rb') as compressed:
         with tarfile.open(fileobj=TarBudget(compressed), mode='r|') as archive:
@@ -140,7 +138,7 @@ def read_candidate(path: Path, target: str, source_sha: str, recipe: str, pins: 
             not isinstance(receipt.get('limitations'), list) or len(receipt['limitations']) > 32 or
             any(not isinstance(value, str) or len(value) > 4096 for value in receipt['limitations'])):
         raise ValueError('Invalid candidate receipt')
-    if type(receipt.get('protocolVersion')) is not int or receipt['protocolVersion'] != 5:
+    if type(receipt.get('protocolVersion')) is not int or receipt['protocolVersion'] != 1:
         raise ValueError('Candidate protocol mismatch')
     if receipt.get('target') != target or receipt.get('source_sha') != source_sha:
         raise ValueError('Candidate source or target mismatch')
@@ -148,8 +146,6 @@ def read_candidate(path: Path, target: str, source_sha: str, recipe: str, pins: 
     if (receipt.get('sha256') != digest(members[expected_worker]) or not isinstance(dependency, dict) or
             dependency.get('recipe_sha256') != recipe or json_bytes(dependency.get('source_inputs')) != json_bytes(pins)):
         raise ValueError('Candidate binary or dependency identity mismatch')
-    if dependency.get('prototype_assembly_disabled') is not False:
-        raise ValueError('Native package requires assembly-enabled codec libraries')
     return members[expected_worker], receipt
 
 
@@ -173,23 +169,17 @@ def source_bundle(bundle: Path, sources: dict[str, bytes], pins: dict, downloads
                 if digest(data) != pinned['sha256']:
                     raise ValueError('Dependency source changed after verification')
                 add_bytes(archive, 'dependencies/' + pinned['filename'], data)
-            for name in ('ffmpeg-9.0.2.tar.xz.asc', 'ffmpeg-devel.asc'):
-                path = downloads / name
-                limit = prepare.KEY_LIMIT if name == 'ffmpeg-devel.asc' else prepare.SIGNATURE_LIMIT
-                if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= limit:
-                    raise ValueError('Invalid signature verification input')
-                add_bytes(archive, 'dependencies/' + name, path.read_bytes())
             for target, receipt in receipts.items():
                 add_bytes(archive, f'receipts/{target}.json', json_bytes(receipt))
             add_bytes(archive, 'README.md', b'Native worker source and rebuild instructions\n\n'
                       b'Use a native host matching the target; this recipe does not cross-compile.\n'
-                      b'Install Python3.12+, CMake, make, pkg-config, GnuPG and the recorded compiler/toolchain; x86 hosts also require NASM.\n'
+                      b'Install Python3.12+, CMake, make and the recorded compiler/toolchain.\n'
                       b'Copy dependencies/* into project/native/build/deps/downloads/, then work from project/.\n'
                       b'Run: python native/dependencies/prepare.py --build-local --jobs 3 --prefix-file native/build/deps/rebuild-prefix.txt\n'
-                      b'Read that prefix and pass it as both FFMPEG_PREFIX and SRTP_PREFIX to make -C native test PYTHON=python.\n'
+                      b'Read that prefix and pass it as SRTP_PREFIX to make -C native test PYTHON=python.\n'
                       b'Darwin uses CC=/usr/bin/clang and MACOSX_DEPLOYMENT_TARGET=13.0; Windows uses UCRT64, CC=gcc and LDFLAGS="-static -static-libgcc".\n'
                       b'Exact target commands/configurations/compiler identities are in receipts/ and project/.github/workflows/test.yml.\n'
-                      b'Dependency archives are unmodified authenticated source inputs.\n'
+                      b'Only the unmodified hash-pinned libSRTP archive is included; FFmpeg is external and absent.\n'
                       b'All final clean-target, npm, linked-runtime license and physical acceptance gates remain open.\n')
 
 
@@ -225,27 +215,27 @@ def stage_package(root: Path, artifacts: Path, source_sha: str) -> dict:
     if artifacts.is_symlink() or {item.name for item in artifacts.iterdir()} != names:
         raise ValueError('Exactly five candidate archives required')
     sources = source_files(root, source_sha)
-    if not re.search(rb'^#define BLINK_PROTOCOL_VERSION 5u\s*$', sources.get('native/protocol.h', b''), re.MULTILINE):
+    if not re.search(rb'^#define BLINK_PROTOCOL_VERSION 1u\s*$', sources.get('native/protocol.h', b''), re.MULTILINE):
         raise ValueError('Corresponding source protocol mismatch')
     recipe = digest(sources['native/dependencies/prepare.py'])
     pins = strict_json(sources['native/dependencies/source-inputs.json'])
     if (json_bytes(pins) != json_bytes(prepare.MANIFEST) or recipe != prepare.RECIPE_SHA256 or
             digest(sources['native/dependencies/package.py']) != PACKAGER_SHA256):
         raise ValueError('Packaging verifier differs from exact source recipe, pins or packager')
-    if len(pins['sources']) != 4 or {item['name'] for item in pins['sources']} != {'ffmpeg', 'opus', 'x264', 'libsrtp'}:
-        raise ValueError('Exactly four pinned dependency sources required')
+    if len(pins['sources']) != 1 or {item['name'] for item in pins['sources']} != {'libsrtp'}:
+        raise ValueError('Only pinned libSRTP source is permitted')
     candidates = {target: read_candidate(artifacts / f'native-{target}.tar.gz', target, source_sha, recipe, pins)
                   for target in TARGETS}
-    downloads = prepare.fetch()  # Existing checksum and pinned GPG fingerprint verification remains mandatory.
-    manifest = {'schemaVersion': 1, 'protocolVersion': 5, 'targets': {}}
+    downloads = prepare.fetch()  # Verify the pinned libSRTP archive before source distribution.
+    manifest = {'schemaVersion': 1, 'protocolVersion': 1, 'targets': {}}
     target_receipts = {}
     for target, (worker, receipt) in candidates.items():
         path = f'native/runtime/{target}/worker' + ('.exe' if target == 'win32-x64' else '')
         manifest['targets'][target] = {'path': path, 'sha256': digest(worker)}
         target_receipts[target] = {**receipt, 'artifact_sha256': file_hash(artifacts / f'native-{target}.tar.gz')}
     notice = (f'Native workers: GPL-3.0-or-later; source revision {source_sha}.\n'
-              'Selected FFmpeg configuration: GPL-3.0-or-later; x264: GPL-2.0-or-later.\n'
-              'Opus and libSRTP: BSD-3-Clause. Full notices and source inputs accompany this\n'
+              'libSRTP: BSD-3-Clause. No FFmpeg libraries, programs or source archives are bundled.\n'
+              'Full notices and libSRTP source inputs accompany this\n'
               'package in corresponding-source.tar.gz; GPLv3 text is in COPYING.\n'
               'Windows MinGW-w64 CRT: ZPL-2.1 and third-party notices in\n'
               'project/native/dependencies/licenses/mingw-w64-runtime-COPYING inside that source bundle.\n'

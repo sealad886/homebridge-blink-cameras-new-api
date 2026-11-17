@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveNativeRecordingConfig, validateSyncModuleSettingOverrides } from '../native-recording-config';
 import { assertCanonicalEarlyNotificationConfig } from '../early-notification-config';
+import { configuredFfmpegPath } from '../accessories/ffmpeg-config';
 import { deriveFeedCapacity, matchesCameraIdentifier, SettingsConstraintError,
   validateModuleFeedLimits, type FeedCapacity, type SettingsInventory } from '../settings-inventory';
 
@@ -60,7 +61,12 @@ export class SettingsValidator {
           message: 'Use valid native recording limits; maximum job age must exceed the initial delay.' });
       }
     }
-    const retired = ['ffmpegPath', 'ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
+    try { configuredFfmpegPath(config.ffmpegPath); }
+    catch {
+      result.errors.push({ path: '/ffmpegPath', code: 'ffmpeg_path',
+        message: 'Use an FFmpeg executable name from PATH or an absolute executable path.' });
+    }
+    const retired = ['ffmpegDebug', 'rtpSsrcMode', 'rtspTransport', 'videoEncoder', 'twoWayAudio', 'verifyImmisTls'];
     for (const key of retired) if (Object.hasOwn(config, key)) {
       result.errors.push({ path: `/${key}`, code: 'retired', message: 'Preview scripts/migrate-native-recording-config.cjs with the explicit full config path, then use --apply after review. Windows requires manual conversion; see docs/native-recording-config-migration.md.' });
     }

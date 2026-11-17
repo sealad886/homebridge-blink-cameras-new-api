@@ -2,7 +2,7 @@
  * Blink Camera Source
  *
  * Implements CameraStreamingDelegate for HomeKit camera snapshot + live streaming support.
- * Live streaming uses owned vendor transports and a private codec worker for HomeKit SRTP.
+ * Live streaming uses owned vendor transports, external FFmpeg and private HomeKit SRTP protection.
  *
  * Source: API Dossier Sections 3.3, 3.4, 3.5 (Thumbnail endpoints)
  * Source: API Dossier Section 4.2 (LiveVideoResponse)
@@ -38,7 +38,9 @@ import { StreamDiagnosticBudget } from '../blink-api/stream-diagnostics';
 import { ImmisProxyServer } from '../blink-api/immis-proxy';
 import { effectiveOutputFps, isSupportedOutputVideo, outputH264Levels, outputResolutions, OutputQualityProfile, resolveOutputQuality } from './stream-quality';
 import { createOwnedMediaSession, type OwnedMediaSession, type MediaSessionOptions } from './media-session';
-import { loadPackagedMediaWorker } from './media-worker-artifact';
+import { loadPackagedProtectionWorker } from './protection-worker-artifact';
+import { resolveExternalFfmpegPath, ExternalFfmpegSetupError } from './external-ffmpeg';
+import { configuredFfmpegPath } from './ffmpeg-config';
 import { OwnedRtspBroker } from '../blink-api/rtsp-broker';
 import { Writable } from 'node:stream';
 import { resolve } from 'node:path';
@@ -54,6 +56,7 @@ export type AudioCodecPreference = 'opus' | 'pcma' | 'pcmu';
 export interface InputVideoObservation { width: number; height: number; fps?: number; }
 export interface BlinkCameraStreamingConfig {
   enabled: boolean;
+  ffmpegPath: string;
   mediaDebug: boolean;
   maxStreams: number;
   audio: {
@@ -87,6 +90,7 @@ export type BlinkCameraStreamingConfigInput = Omit<
 
 const DEFAULT_STREAMING_CONFIG: BlinkCameraStreamingConfig = {
   enabled: true,
+  ffmpegPath: 'ffmpeg',
   mediaDebug: false,
   maxStreams: 1,
   audio: {
@@ -114,6 +118,7 @@ export const resolveStreamingConfig = (
 
   return {
     enabled: config?.enabled ?? DEFAULT_STREAMING_CONFIG.enabled,
+    ffmpegPath: configuredFfmpegPath(config?.ffmpegPath),
     mediaDebug: config?.mediaDebug ?? DEFAULT_STREAMING_CONFIG.mediaDebug,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
@@ -716,11 +721,11 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (!this.ownsSession(sessionId, active)) throw new Error('Streaming startup cancelled');
       active.readyNotified = true; owner.phase = 'RUNNING'; callback();
 
-    } catch {
+    } catch (error) {
       // Home may immediately resubmit START after a refusal. Keep remote POSTs bounded
       // while the previous vendor command retires; STOP cancellation is not a failure.
       this.markStreamFailure(sessionId, active);
-      this.logError('Private streaming startup failed');
+      this.logError(error instanceof ExternalFfmpegSetupError ? error.message : 'Private streaming startup failed');
       await this.stopStream(sessionId, owner);
       callback(new Error('Private streaming startup failed'));
     }
@@ -926,7 +931,8 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
 
   private buildNativeMediaOptions(request: Extract<StreamingRequest, { type: 'start' }>, active: ActiveStreamSession): MediaSessionOptions {
     // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
-    const workerPath = loadPackagedMediaWorker(resolve(__dirname, '../..'));
+    const protectionPath = loadPackagedProtectionWorker(resolve(__dirname, '../..'));
+    const ffmpegPath = resolveExternalFfmpegPath(this.streamingConfig.ffmpegPath);
     if (active.videoCryptoSuite !== this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80 || active.videoSRTP.length !== 30) {
       throw new Error('Unsupported media cryptography');
     }
@@ -935,7 +941,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       suite: 'AES_CM_128_HMAC_SHA1_80' as const, key: material.subarray(0, 16), salt: material.subarray(16),
       mtu: request.video.mtu, fps: effectiveOutputFps(this.streamingConfig.video.outputQuality, request.video.fps), rtcpInterval,
     });
-    const options: MediaSessionOptions = { workerPath, video: {
+    const options: MediaSessionOptions = { ffmpegPath, protectionPath, video: {
       output: output(active.videoPort, active.videoSSRC, active.videoSRTP, request.video.pt, request.video.rtcp_interval),
       localPort: active.localVideoPort, width: request.video.width, height: request.video.height,
       bitrate: this.getVideoBitrate(request.video.max_bit_rate) * 1000, maxFrames: 9000,

@@ -75,6 +75,7 @@ export function collectSourceProof(root, sourceSha) {
   const sources = {}; let total = 0; let pins; let recipeSha;
   for (const row of listing.split('\0').filter(Boolean)) {
     const [metadata, path] = row.split('\t');
+    if (path.startsWith('native/receipts/')) continue;
     if (!(path === '.github/workflows/test.yml' || path.startsWith('native/dependencies/licenses/') || ['.c', '.h', '.inc', '.py', '.md'].includes(extname(path)) || ['Makefile', 'COPYING', 'source-inputs.json'].includes(basename(path)))) continue;
     safePath(path); const [mode, kind, , size] = metadata.split(/\s+/);
     assert(['100644', '100755'].includes(mode) && kind === 'blob' && (total += Number(size)) <= 16 * 1024 * 1024 && Object.keys(sources).length < 256);
@@ -83,11 +84,11 @@ export function collectSourceProof(root, sourceSha) {
     if (path === 'native/dependencies/prepare.py') recipeSha = sha256(data);
     if (path === 'native/dependencies/source-inputs.json') pins = JSON.parse(data);
   }
-  for (const path of ['native/worker.c', 'native/protocol.h', 'native/recording.inc', 'native/tests/check-recording.c',
+  for (const path of ['native/worker.c', 'native/protocol.h', 'native/protection.inc', 'native/tests/check-protection.c',
     'native/Makefile', 'native/COPYING', 'native/dependencies/package.py', '.github/workflows/test.yml',
-    'native/dependencies/licenses/ffmpeg-LICENSE.md', 'native/dependencies/licenses/opus-COPYING', 'native/dependencies/licenses/x264-COPYING', 'native/dependencies/licenses/libsrtp-LICENSE',
+    'native/dependencies/licenses/libsrtp-LICENSE',
     ...WINDOWS_RUNTIME_NOTICES]) assert(sources[path], 'Missing exact corresponding source');
-  assert(recipeSha && pins?.sources?.length === 4); return { sourceSha, recipeSha, pins, sources };
+  assert(recipeSha && pins?.sources?.length === 1 && pins.sources[0].name === 'libsrtp'); return { sourceSha, recipeSha, pins, sources };
 }
 
 export function verifyNativePackage(root, proof) {
@@ -96,7 +97,7 @@ export function verifyNativePackage(root, proof) {
   const manifestBytes = read('native/runtime/manifest.json', 65536); const manifest = JSON.parse(manifestBytes);
   const distribution = JSON.parse(read('native/runtime/distribution-receipt.json', 2 * 1024 * 1024));
   keys(manifest, ['schemaVersion', 'protocolVersion', 'targets']); assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.protocolVersion, 5, 'Native protocol mismatch'); keys(manifest.targets, TARGETS);
+  assert.equal(manifest.protocolVersion, 1, 'Native protocol mismatch'); keys(manifest.targets, TARGETS);
   keys(distribution, ['schemaVersion', 'source_sha', 'targets', 'manifest_sha256', 'source_bundle_sha256', 'distribution_ready']);
   assert.equal(distribution.schemaVersion, 1); assert.equal(distribution.source_sha, proof.sourceSha, 'Native source mismatch');
   assert.equal(distribution.distribution_ready, false, 'Build receipts cannot declare distribution acceptance'); keys(distribution.targets, TARGETS);
@@ -110,10 +111,9 @@ export function verifyNativePackage(root, proof) {
     if (process.platform !== 'win32') assert(lstatSync(join(root, entry.path)).mode & 0o111, 'Native executable mode missing');
     const receipt = distribution.targets[target];
     keys(receipt, ['target', 'protocolVersion', 'source_sha', 'sha256', 'dependencies', 'dynamic_dependencies', 'distribution_ready', 'limitations', 'artifact_sha256']);
-    assert.equal(receipt.protocolVersion, 5, 'Native target protocol mismatch');
+    assert.equal(receipt.protocolVersion, 1, 'Native target protocol mismatch');
     assert.equal(receipt.target, target); assert.equal(receipt.source_sha, proof.sourceSha); assert.equal(receipt.sha256, entry.sha256); hash(receipt.artifact_sha256);
     assert.equal(receipt.distribution_ready, false); assert.equal(receipt.dependencies.recipe_sha256, proof.recipeSha, 'Native dependency recipe mismatch');
-    assert.equal(receipt.dependencies.prototype_assembly_disabled, false, 'Native package requires assembly-enabled codec libraries');
     assert.deepEqual(receipt.dependencies.source_inputs, proof.pins, 'Native pinned inputs mismatch');
     assert(typeof receipt.dynamic_dependencies === 'string' && receipt.dynamic_dependencies.length > 0 && Array.isArray(receipt.limitations));
   }
@@ -127,11 +127,11 @@ export function verifyNativePackage(root, proof) {
   assert.deepEqual(readdirSync(join(root, 'native')).sort(), ['COPYING', 'NOTICE', 'corresponding-source.tar.gz', 'runtime'].sort(), 'Unexpected packaged native content');
   assert.equal(sha256(read('native/COPYING', 128 * 1024)), proof.sources['native/COPYING'], 'Native license mismatch'); read('native/NOTICE', 65536);
   const bundle = read('native/corresponding-source.tar.gz', 160 * 1024 * 1024); assert.equal(sha256(bundle), distribution.source_bundle_sha256, 'Source bundle hash mismatch');
-  const files = readSourceArchive(bundle); const expected = new Set(['README.md', 'dependencies/ffmpeg-9.0.2.tar.xz.asc', 'dependencies/ffmpeg-devel.asc']);
+  const files = readSourceArchive(bundle); const expected = new Set(['README.md']);
   for (const [path, digest] of Object.entries(proof.sources)) { expected.add('project/' + path); assert.equal(sha256(files.get('project/' + path) ?? Buffer.alloc(0)), digest, 'Corresponding project source mismatch'); }
   for (const input of proof.pins.sources) { expected.add('dependencies/' + input.filename); assert.equal(sha256(files.get('dependencies/' + input.filename) ?? Buffer.alloc(0)), input.sha256, 'Corresponding dependency archive mismatch'); }
   for (const target of TARGETS) { const path = `receipts/${target}.json`; expected.add(path); assert.deepEqual(JSON.parse(files.get(path)), distribution.targets[target], 'Bundled target receipt mismatch'); }
   assert.deepEqual(new Set(files.keys()), expected, 'Corresponding source inventory mismatch');
-  for (const name of ['README.md', 'dependencies/ffmpeg-9.0.2.tar.xz.asc', 'dependencies/ffmpeg-devel.asc']) assert(files.get(name)?.length > 0, 'Missing source rebuild/signature input');
+  for (const name of ['README.md']) assert(files.get(name)?.length > 0, 'Missing source rebuild input');
   return distribution;
 }

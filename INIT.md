@@ -12,7 +12,7 @@
 
 - TypeScript / JavaScript: Node 20/22/24/26, Homebridge, HAP, Jest and the native media pipeline.
 - Python: bounded Pi evidence collection/reporting and repository checks.
-- C: packaged native media worker and offline protocol/codec checks; target qualification and physical acceptance are recorded separately.
+- C: packaged libSRTP-only protection and launch helper; FFmpeg 6.1+ is installed separately. Target qualification and physical acceptance are recorded separately.
 - Build: npm, TypeScript, GitHub Actions; npm trusted publishing.
 - Persistence: existing configuration and authentication stores; no SQL database.
 

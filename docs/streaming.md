@@ -3,25 +3,33 @@
 [Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
 
 
-Last reviewed: 15 November 2026. Exact package qualification and physical runtime
+Last reviewed: 16 November 2026. Exact package qualification and physical runtime
 acceptance are tracked separately in the release evidence.
 
-This guide owns packaged codec requirements, transport, quality and talkback.
+This guide owns external codec requirements, transport, quality and talkback.
 See [configuration](configuration.md) for saving settings and
 [diagnostics](debug_logging_spec.md) for the logging policy.
 
 ## Packaged codec requirements
 
-Core HomeKit features and live streaming use the installed npm package. Streaming
-requires its matching, hash-verified private worker for Linux x64/arm64, macOS
-x64/arm64 or Windows x64. Missing, unsupported or modified workers refuse streaming
-before requesting vendor media. There is no startup download or executable-path
-fallback. Final tested OS baselines and package evidence belong in the
-[release guide](RELEASE.md); source compilation does not establish them.
+Live viewing and HomeKit recording require an externally installed **FFmpeg 6.1
+or later**, available through the Homebridge service's PATH or the `ffmpegPath`
+setting. FFmpeg is not downloaded, installed or bundled by this plugin. Use a
+build with libx264, libopus, AAC, PCMA and PCMU, MPEG-TS/MOV input, MP4/data/framecrc/
+tee output, and the `pipe` and seekable `fd` protocols. The capability check reports
+an actionable setup error when required support is missing. Host development
+checks used FFmpeg 9.0.2; version declarations do not establish every build or OS.
 
-The worker directly calls pinned codec libraries through private pipes. Session
-URLs, credentials and SRTP keys are never worker command-line options or environment
-variables. The parent owns vendor TLS and HomeKit output sockets. Keys and media
+The package retains a hash-verified protection/launch helper for Linux x64/arm64,
+macOS x64/arm64 and Windows x64. It links libsrtp, not FFmpeg. Missing, unsupported
+or modified helpers refuse streaming before requesting vendor media. Final tested
+OS baselines and installed-package evidence belong in the [release guide](RELEASE.md).
+
+FFmpeg receives validated media through private pipes or an already-open read-only
+descriptor. Session URLs, credentials and SRTP keys are never its command-line
+options or environment variables. The parent owns vendor TLS and HomeKit output
+sockets; only the protection helper receives SRTP keys through private IPC. Child
+diagnostics are bounded and never copied directly into user logs. Keys and media
 still exist in process memory; this does not isolate a compromised Homebridge host.
 
 Audio supports mono Opus at 16/24 kHz, PCMA and PCMU at 8 kHz. Opus uses
@@ -32,16 +40,18 @@ preserving accessory identities. Do not reset pairing to recover a refused codec
 
 ### Upgrade configuration
 
-Retired settings fail validation with migration guidance: `ffmpegPath`,
-`ffmpegDebug`, `rtpSsrcMode`, `rtspTransport`, `verifyImmisTls`, `twoWayAudio`,
+Retired settings fail validation with migration guidance: `ffmpegDebug`,
+`rtpSsrcMode`, `rtspTransport`, `verifyImmisTls`, `twoWayAudio`,
 `videoEncoder`. `audioCodec: aac-eld` also needs migration.
-The private worker uses software x264; hardware encoder selection is removed.
+The external backend uses software libx264; arbitrary hardware encoder selection
+is not exposed. `ffmpegPath` is supported and preserved by migration. Use an
+executable name from PATH or an absolute path; relative directory paths are rejected.
 
 Use the [one-time upgrade procedure](native-recording-config-migration.md#upgrade-from-0100)
 for stable 0.10.0 and the separate intermediate-beta mappings in the same guide.
-On supported POSIX installations with explicit `UIX_STORAGE_PATH`, postinstall
-runs the combined conversion. Otherwise preview the installed converter against
-an explicit complete Homebridge configuration path, then apply after review:
+Installation leaves Homebridge configuration untouched. For legacy settings,
+preview the installed converter against an explicit complete Homebridge
+configuration path, then apply after review:
 
 ```sh
 node "/absolute/plugin/path/scripts/migrate-native-recording-config.cjs" "/absolute/homebridge/config.json"
@@ -77,7 +87,7 @@ trust anchors apply only to these media transports. No setting bypasses TLS.
 Provider endpoint completeness and physical playback remain operator acceptance;
 synthetic protocol tests do not prove every live camera is supported.
 
-Queues, input/output byte ceilings, consumption credits, independent STOP and
+Queues, input/output byte ceilings, bounded backpressure, independent STOP and
 bounded cleanup remain enforced. A retiring generation keeps its ports reserved
 until actual worker/socket closure. Command polling starts immediately and follows
 the vendor interval independently of Continue timing.

@@ -2,8 +2,10 @@
 import importlib.util
 import io
 import json
+import shlex
 from pathlib import Path
 import ssl
+import subprocess
 import tempfile
 import tarfile
 import unittest
@@ -138,7 +140,7 @@ class DownloadTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'HTTPS redirect required'):
             prepare.HTTPSOnlyRedirects().redirect_request(request, None, 302, 'Found', {}, 'http://example.test/source')
 
-    def test_cached_tampered_archive_refused_before_signature_or_build(self):
+    def test_cached_tampered_archive_refused_before_build(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             downloads = root / 'downloads'
@@ -146,58 +148,36 @@ class DownloadTests(unittest.TestCase):
             first = prepare.MANIFEST['sources'][0]
             (downloads / first['filename']).write_bytes(b'tampered')
             with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'download'), patch.object(prepare, 'run') as run:
-                with self.assertRaisesRegex(ValueError, 'Checksum mismatch: ffmpeg'):
+                with self.assertRaisesRegex(ValueError, 'Checksum mismatch: libsrtp'):
                     prepare.fetch()
                 run.assert_not_called()
 
-    def test_signature_verification_converts_all_gpg_paths_only_for_windows(self):
-        temporary_directory = tempfile.TemporaryDirectory
-        for system in ('Windows', 'Linux'):
-            with self.subTest(system=system), temporary_directory() as directory:
-                root = Path(directory)
-                downloads = root / 'downloads'
-                downloads.mkdir()
-                archive = downloads / 'ffmpeg-9.0.2.tar.xz'
-                archive.write_bytes(b'authenticated source fixture')
-                fingerprint = 'A' * 40
-                manifest = {'sources': [{'name': 'ffmpeg', 'filename': archive.name,
-                    'url': 'https://example.test/source',
-                    'sha256': prepare.hashlib.sha256(archive.read_bytes()).hexdigest()}],
-                    'ffmpeg_signature': {'url': 'https://example.test/signature',
-                        'key_url': 'https://example.test/key', 'fingerprint': fingerprint}}
-                convert = lambda value: '/msys/' + Path(value).name
-
-                def isolated_keyring(**arguments):
-                    return temporary_directory(prefix=arguments['prefix'], dir=root)
-
-                with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'MANIFEST', manifest), \
-                        patch.object(prepare, 'download'), patch.object(prepare.platform, 'system', return_value=system), \
-                        patch.object(prepare.tempfile, 'TemporaryDirectory', side_effect=isolated_keyring), \
-                        patch.object(prepare, 'unix_path', side_effect=convert) as unix_path, \
-                        patch.object(prepare, 'run') as imported, \
-                        patch.object(prepare.subprocess, 'run', return_value=Mock(
-                            stdout=f'[GNUPG:] VALIDSIG {fingerprint}\n')) as verified:
-                    prepare.fetch()
-                import_args = [prepare.argument(value) for value in imported.call_args.args[0]]
-                verify_args = [prepare.argument(value) for value in verified.call_args.args[0]]
-                expected_prefix = ['gpg', '--batch', '--no-options', '--no-autostart', '--homedir']
-                self.assertEqual(import_args[:5], expected_prefix)
-                self.assertEqual(verify_args[:6], import_args[:6])
-                home = import_args[5]
-                self.assertIn('blink-gpg-', home)
-                self.assertFalse(Path(home).exists())
-                self.assertEqual(import_args[6:], ['--import', convert(downloads / 'ffmpeg-devel.asc')]
-                    if system == 'Windows' else ['--import', (downloads / 'ffmpeg-devel.asc').as_posix()])
-                expected_files = [downloads / 'ffmpeg-9.0.2.tar.xz.asc', archive]
-                self.assertEqual(verify_args[6:], ['--status-fd', '1', '--verify',
-                    *(convert(value) if system == 'Windows' else value.as_posix() for value in expected_files)])
-                if system == 'Windows':
-                    self.assertTrue(home.startswith('/msys/blink-gpg-'))
-                else:
-                    unix_path.assert_not_called()
 
 
 class BuildHostTests(unittest.TestCase):
+    def test_windows_worker_keeps_unicode_entrypoint_with_caller_linker_flags(self):
+        with tempfile.TemporaryDirectory(prefix='blink-make-link-') as directory:
+            prefix = Path(directory) / 'prefix'
+            (prefix / 'lib').mkdir(parents=True)
+            (prefix / 'lib' / 'libsrtp2.a').touch()
+            make_prefix = prepare.unix_path(prefix) if prepare.platform.system() == 'Windows' else prefix.as_posix()
+            result = subprocess.run(['make', '-n', '-B', 'all', 'OS=Windows_NT', 'CC=build-contract-cc',
+                'SRTP_PREFIX=' + make_prefix, 'LDFLAGS=-static -static-libgcc'],
+                cwd=prepare.HERE.parent, env={**prepare.os.environ, 'MAKEFLAGS': '', 'MFLAGS': ''},
+                check=True, capture_output=True, text=True)
+        commands = [shlex.split(line) for line in result.stdout.splitlines()
+                    if line.startswith('build-contract-cc ')]
+        self.assertEqual(len(commands), 2)
+        outputs = {command[command.index('-o') + 1]: command for command in commands}
+        worker = outputs['build/blink-protection-worker.exe']
+        receiver = outputs['build/check-protection.exe']
+        self.assertEqual(worker.count('-municode'), 1)
+        self.assertNotIn('-municode', receiver)
+        for command in (worker, receiver):
+            self.assertIn('-static', command)
+            self.assertIn('-static-libgcc', command)
+            self.assertIn('-Werror', command)
+
     def test_windows_libsrtp_uses_ucrt_format_checks_without_relaxing_warnings(self):
         class Configured(Exception):
             pass
@@ -208,7 +188,7 @@ class BuildHostTests(unittest.TestCase):
                 downloads = root / 'downloads'
                 downloads.mkdir()
                 sources = [{'name': name, 'filename': name + '.tar.gz', 'root': name}
-                    for name in ('opus', 'libsrtp')]
+                    for name in ('libsrtp',)]
                 for source in sources:
                     with tarfile.open(downloads / source['filename'], 'w:gz') as archive:
                         entry = tarfile.TarInfo(source['root'])
@@ -230,18 +210,17 @@ class BuildHostTests(unittest.TestCase):
                         patch.object(prepare, 'run', side_effect=capture):
                     with self.assertRaises(Configured):
                         prepare.build(downloads, 1)
-                opus, libsrtp = commands
+                libsrtp, = commands
                 flags = [argument.split('=', 1)[1] for argument in libsrtp
                     if argument.startswith('-DCMAKE_C_FLAGS=')]
                 if system == 'Windows':
                     self.assertEqual(len(flags), 1)
-                    effective = prepare.shlex.split(flags[0])
+                    effective = shlex.split(flags[0])
                     self.assertIn('-O2', effective)
                     self.assertIn('-D__printf__=__gnu_printf__', effective)
                     self.assertFalse(any(value.startswith('-Wno') for value in effective))
                 else:
                     self.assertEqual(flags, [])
-                self.assertFalse(any('__printf__' in value for value in opus))
                 self.assertNotIn('-DENABLE_WARNINGS=OFF', libsrtp)
                 self.assertNotIn('-DENABLE_WARNINGS_AS_ERRORS=OFF', libsrtp)
 
@@ -276,36 +255,9 @@ class BuildHostTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Unsupported native build host'):
             prepare.build_environment(Path('/private/prefix'), 'FreeBSD')
 
-    def test_windows_configure_uses_bash_and_converted_script_path(self):
-        with patch.object(prepare.subprocess, 'check_output', side_effect=[
-                'C:/msys64/usr/bin/bash.exe\n', '/c/work/configure\n']):
-            command = prepare.configure_command(Path('C:/work/configure'), ['--disable-network'], 'Windows')
-        self.assertEqual(command, ['C:/msys64/usr/bin/bash.exe', '/c/work/configure', '--disable-network'])
-
-    def test_posix_configure_needs_no_shell(self):
-        self.assertEqual(prepare.configure_command(Path('/work/configure'), ['--disable-network'], 'Linux'),
-                         ['/work/configure', '--disable-network'])
 
 
-class AssemblyConfigurationTests(unittest.TestCase):
-    def test_requires_native_assembly_in_both_codec_configurations(self):
-        for machine, ffmpeg, x264 in [('arm64', 'HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
-                                      ('aarch64', 'HAVE_NEON_EXTERNAL', 'HAVE_AARCH64'),
-                                      ('x86_64', 'HAVE_X86ASM', 'HAVE_MMX'),
-                                      ('AMD64', 'HAVE_X86ASM', 'HAVE_MMX')]:
-            with self.subTest(machine=machine):
-                configurations = [f'#define {ffmpeg} 1\n', f'#define {x264} 1\n']
-                prepare.verify_assembly_configuration(*configurations, machine)
-                for index in (0, 1):
-                    for value in ('', configurations[index].replace(' 1', ' 0')):
-                        changed = configurations.copy()
-                        changed[index] = value
-                        with self.assertRaisesRegex(ValueError, 'Required codec assembly unavailable'):
-                            prepare.verify_assembly_configuration(*changed, machine)
 
-    def test_rejects_unverified_architecture(self):
-        with self.assertRaisesRegex(ValueError, 'Unsupported assembly architecture'):
-            prepare.verify_assembly_configuration('', '', 'unknown')
 
 
 class WorkerArtifactTests(unittest.TestCase):
@@ -317,7 +269,7 @@ class WorkerArtifactTests(unittest.TestCase):
             dependency = {'recipe_sha256': prepare.RECIPE_SHA256, 'distribution_ready': False,
                           'source_inputs': prepare.MANIFEST}
             (prefix.parent / 'normalized-build-receipt.json').write_text(json.dumps(dependency))
-            worker = build / 'blink-codec-worker'
+            worker = build / 'blink-protection-worker'
             worker.write_bytes(b'synthetic worker, never executed')
             output = build / 'worker.tar.gz'
             with patch.object(prepare, 'ROOT', build / 'deps'), patch.object(prepare.platform, 'system', return_value='Linux'), \
@@ -333,9 +285,9 @@ class WorkerArtifactTests(unittest.TestCase):
                 self.assertEqual(receipt['sha256'], prepare.hashlib.sha256(worker.read_bytes()).hexdigest())
                 self.assertEqual(receipt['dependencies'], dependency)
                 self.assertFalse(receipt['distribution_ready'])
-                self.assertEqual(receipt['protocolVersion'], 5)
-                self.assertEqual(archive.extractfile('blink-codec-worker').read(), worker.read_bytes())
-                self.assertEqual(archive.getmember('blink-codec-worker').mode, 0o755)
+                self.assertEqual(receipt['protocolVersion'], 1)
+                self.assertEqual(archive.extractfile('blink-protection-worker').read(), worker.read_bytes())
+                self.assertEqual(archive.getmember('blink-protection-worker').mode, 0o755)
 
     def test_windows_import_audit_rejects_toolchain_runtime_dlls(self):
         with patch.object(prepare.subprocess, 'check_output', return_value='DLL Name: libwinpthread-1.dll\n'):

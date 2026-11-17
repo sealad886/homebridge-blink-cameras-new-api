@@ -17,28 +17,28 @@ test('built package runtime qualification completes its owned synthetic download
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'blink-validation-test-')); const build = join(root, 'build'); mkdirSync(build);
   const target = process.platform + '-' + process.arch; const suffix = target === 'win32-x64' ? '.exe' : '';
-  for (const name of ['fixture', 'check-rtp', 'check-recording', 'blink-codec-worker']) writeFileSync(join(build, name + suffix), name, { mode: 0o755 });
+  for (const name of ['check-protection', 'blink-protection-worker']) writeFileSync(join(build, name + suffix), name, { mode: 0o755 });
   const output = join(root, 'validation'); return { root, build, target, output, suffix, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 test('validation preparation creates closed synthetic helpers and a source/worker-bound receipt without replacing roots', () => {
   const f = fixture(); try {
     prepareValidation(f.build, f.output, f.target, source);
-    const result = verifyValidation(f.output, f.target, source, sha256(Buffer.from('blink-codec-worker')));
-    assert.deepEqual(Object.keys(result.files).sort(), [`check-recording${f.suffix}`, `check-rtp${f.suffix}`, `fixture${f.suffix}`]);
+    const result = verifyValidation(f.output, f.target, source, sha256(Buffer.from('blink-protection-worker')));
+    assert.deepEqual(Object.keys(result.files).sort(), [`check-protection${f.suffix}`]);
     assert.throws(() => prepareValidation(f.build, f.output, f.target, source));
   } finally { f.cleanup(); }
 });
 for (const change of ['source', 'worker', 'helper', 'extra']) test(`validation refuses ${change} identity mismatch`, () => {
   const f = fixture(); try {
     prepareValidation(f.build, f.output, f.target, source);
-    if (change === 'helper') writeFileSync(join(f.output, 'fixture' + f.suffix), 'modified');
+    if (change === 'helper') writeFileSync(join(f.output, 'check-protection' + f.suffix), 'modified');
     if (change === 'extra') writeFileSync(join(f.output, 'unknown'), 'extra');
     assert.throws(() => verifyValidation(f.output, f.target, change === 'source' ? 'b'.repeat(40) : source,
-      change === 'worker' ? 'b'.repeat(64) : sha256(Buffer.from('blink-codec-worker'))));
+      change === 'worker' ? 'b'.repeat(64) : sha256(Buffer.from('blink-protection-worker'))));
   } finally { f.cleanup(); }
 });
 test('publication aggregation requires exactly five successful qualifications for the same immutable tar', () => {
-  const base = { schemaVersion: 1, source_sha: source, package_integrity: 'sha512-synthetic', source_bundle_sha256: 'e'.repeat(64), codec_receiver_verified: true,
+  const base = { schemaVersion: 1, source_sha: source, package_integrity: 'sha512-synthetic', source_bundle_sha256: 'e'.repeat(64), external_ffmpeg: { version: 'ffmpeg version synthetic', sha256: 'f'.repeat(64) }, codec_receiver_verified: true,
     selections: [...QUALIFICATION_SELECTIONS], finite_recording_verified: true, finite_selections: [...FINITE_RECORDING_SELECTIONS],
     runtime_bootstrap: { ...RUNTIME_BOOTSTRAP_EXPECTATION } };
   const rows = TARGETS.map(target => ({ ...base, target, worker_sha256: 'c'.repeat(64), validation_receipt_sha256: 'd'.repeat(64) }));

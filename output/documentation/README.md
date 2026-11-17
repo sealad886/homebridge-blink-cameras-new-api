@@ -44,7 +44,7 @@ source. The workflow checks that configuration; it never enables Pages from a
 pull request. Repository administrators manage any environment protection rules.
 Ongoing publishing is automatic after normal source review and merge.
 
-Documentation publication does not build native workers, run application install
+Documentation publication does not build native protection helpers, run application install
 scripts, change an installed Homebridge instance, or publish an npm package. The
 plugin's separate release procedure remains in [the release guide](../../docs/RELEASE.md).
 

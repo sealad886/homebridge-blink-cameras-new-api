@@ -48,7 +48,7 @@ describePosix('explicit secure media configuration migration', () => {
     const migrated = JSON.parse(readFileSync(file, 'utf8'));
     expect(migrated.bridge).toEqual(original.bridge);
     expect(migrated.platforms[0]).toEqual(other);
-    expect(migrated.platforms[1]).toEqual({ platform: 'BlinkCameras', password: 'secret-password', mediaDebug: true,
+    expect(migrated.platforms[1]).toEqual({ platform: 'BlinkCameras', password: 'secret-password', mediaDebug: true, ffmpegPath: '/old/ffmpeg',
       audioCodec: 'opus', softwareEncodingPreset: 'ultrafast',
       audio: { codec: 'opus', enabled: true, bitrate: 24 }, video: { outputQuality: '720p15', maxBitrate: 4000 },
       custom: { preserve: true } });

@@ -76,16 +76,23 @@ the resulting squash commit. Wrap body prose to 100 characters or fewer.
 
 ## Gates and publication
 
-Before installing an upgrade that migrates saved configuration, close all settings
-and JSON Config editors and stop other configuration writers until installation
-completes. Migration's final check and atomic replacement do not lock Homebridge's
+Before migrating saved configuration, close all settings and JSON Config editors
+and stop other configuration writers until conversion completes. The final check
+and atomic replacement do not lock Homebridge's
 settings service against concurrent saves.
+
+The 2.0.0 preparation removes the automatic npm install hook. Installation does
+not migrate configuration, including when `UIX_STORAGE_PATH` is present. For
+legacy settings, follow the explicit preview/`--apply` procedure in the
+[migration guide](native-recording-config-migration.md) before restart; Windows
+uses its manual mapping. Already-canonical 1.1.0 settings need no conversion for
+unbundling. Install and identify external FFmpeg before qualifying or upgrading.
 
 Local preflight is `npm run release`: it checks a clean checkout, lint, tests,
 build, and package contents. Jest runs serially, matching CI and the contributor
 validation workflow while preserving every assertion and deadline.
 Full native package verification requires all five
-verified workers and corresponding sources staged by the canonical package job;
+verified protection/launch helpers and corresponding sources staged by the canonical package job;
 an ordinary source checkout cannot substitute JavaScript-only smoke for it. Use a dedicated clean clone when the working checkout
 contains unrelated user files; never stash or delete those files to satisfy it.
 
@@ -131,21 +138,23 @@ automated, security, performance and operator gates have supporting evidence.
 Adding these jobs does not supply a pass or authorize workflow dispatch.
 
 The reusable source gates build Linux x64/arm64, macOS arm64/x64 and Windows x64
-candidates. Each `native-candidate-TARGET-SHA` artifact contains one worker and its
-receipt. A separate `native-validation-TARGET-SHA` artifact contains the synthetic
-fixture generator, independent SRTP receiver and a receipt binding their hashes
-to the same source SHA and worker hash. The helper binaries are validation tools;
-they are excluded from the product tarball. Their dependency audit must pass before
-the source job uploads them.
+protection/launch helpers, without FFmpeg linkage. Each
+`native-candidate-TARGET-SHA` artifact contains one helper and its receipt. A
+separate `native-validation-TARGET-SHA` artifact contains the independent libSRTP
+receiver and a receipt binding its hash to the same source/helper identity.
+Validation tools are excluded from the product tarball. Fixture generation and
+codec validation use an explicitly installed external FFmpeg executable.
 
 The read-only package job downloads all five candidates from the same workflow
 run. `native/dependencies/package.py` rejects incomplete or mismatched inputs and
 uses the exact committed native source, build scripts, tests, full license notices
-and four authenticated pinned dependency archives. It stages
+and the authenticated pinned libSRTP source archive. It stages
 `native/runtime/TARGET/worker[.exe]`, the closed five-target manifest and distribution
 receipt, `native/corresponding-source.tar.gz`, `native/COPYING` and `native/NOTICE`
-before npm packing. Existing output roots are refused. Source download verification
-includes the pinned FFmpeg GPG fingerprint; a URL-only source offer is insufficient.
+before npm packing. Existing output roots are refused. FFmpeg, x264 and Opus
+libraries, executables and source archives are excluded; helper/libSRTP source
+and license obligations remain. Protocol version 1 now describes the smaller
+protection-only IPC, not the former codec worker's protocol 5.
 
 `.github/scripts/verify-package.mjs` checks the final package's complete native
 inventory, every worker hash, manifest and distribution hashes, recipe/pinned-input
@@ -155,31 +164,36 @@ and records the final immutable npm integrity. Ordinary JavaScript matrix smoke
 may explicitly set `VERIFY_PACKAGE_JAVASCRIPT_ONLY=1` before native artifacts exist;
 this mode refuses release output and supplies no native acceptance evidence.
 
-Native candidate jobs also retain separate worker-hash-bound resource receipts:
-per-worker OS memory observations, native consumption high water, and actual
-recorder byte/queue bounds. Missing observations fail their job. These receipts
-are evidence for bounded synthetic workloads, not universal memory budgets.
+Resource checks retain recorder byte/queue bounds, external codec pipe pressure,
+cancellation and actual process closure. Old codec-worker consumption-credit
+receipts do not describe the external backend. Synthetic bounds are not universal
+FFmpeg memory budgets; report the executable/build and workload actually tested.
 
 Five separate clean-host jobs download that same npm tarball and their matching
 validation artifact. They install the exact tarball into a fresh temporary npm
 prefix with lifecycle scripts disabled, without a source dependency installation,
-native build, compiler setup, MSYS2 setup or private dependency prefix. They verify
-the installed native inventory and resolve the installed worker using the shipped
-resolver. The installed media-session implementation launches that worker and
+native build, compiler setup, MSYS2 setup or private dependency prefix. Install
+and identify the external FFmpeg dependency separately. They verify the installed
+helper inventory and resolve it using the shipped resolver. The installed
+media-session implementation launches external FFmpeg through that helper and
 exercises Opus at 16/24 kHz, PCMA and PCMU against both short and bundled LATM
 fixtures. The independent receiver must authenticate/decrypt SRTP/SRTCP, decode
-video pixels and nonzero audio energy, verify shared timing/counters and refuse forged
+video pixels and nonzero audio energy, verify shared timing and refuse forged
 SRTP. Protected output is captured through an isolated owned output; this proof
 does not substitute for the separate actual UDP, performance, security or physical
 camera/HomeKit gates.
 
-Qualification runner baselines are Ubuntu 22.04 (x64/arm64), macOS 15 (arm64/x64)
+Qualification runner baselines are Ubuntu 24.04 (x64/arm64), macOS 15 (arm64/x64)
 and Windows Server 2022 (x64). A pass establishes only its observed runner/runtime
 baseline. A macOS deployment target of 13 does not prove macOS 13 acceptance;
 Windows Server 2022 does not establish Windows 10 acceptance. Every release needs
 a successful run for its exact final source and npm integrity. The
 [26 October beta checkpoint](plans/security-hardening.md#26-october-2026-secure-media-beta-publication)
 records the observed five-host qualification for `0.11.0-beta.0`.
+
+That historical codec qualification does not qualify the external backend.
+Every changed helper/package and the external tool combination needs fresh
+qualification, followed by the normal physical Home acceptance below.
 
 The privileged main-only OIDC job requires all five jobs and independently checks
 their receipts against the exact publication tarball, source SHA, source-bundle

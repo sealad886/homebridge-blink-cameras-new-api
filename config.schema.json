@@ -15,11 +15,6 @@
       "anyOf": [
         {
           "required": [
-            "ffmpegPath"
-          ]
-        },
-        {
-          "required": [
             "ffmpegDebug"
           ]
         },
@@ -516,6 +511,14 @@
           "Force off",
           "Leave unchanged"
         ]
+      },
+      "ffmpegPath": {
+        "title": "FFmpeg executable",
+        "description": "Install FFmpeg separately on the Homebridge host. Leave the default to find ffmpeg on the service PATH, or enter an absolute executable path. Used for live video and HomeKit recordings.",
+        "type": "string",
+        "default": "ffmpeg",
+        "minLength": 1,
+        "maxLength": 4096
       }
     }
   },
@@ -562,6 +565,7 @@
       "type": "fieldset",
       "title": "Advanced & troubleshooting",
       "items": [
+        "ffmpegPath",
         "maxStreams",
         "audioCodec",
         "audioBitrate",

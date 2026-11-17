@@ -84,6 +84,18 @@ describe('platform native recording and ordinary command ownership', () => {
       .getCharacteristic(platform.Characteristic.On) as unknown as MockCharacteristic;
   }
 
+  it('gives fixed external-FFmpeg setup guidance without logging the configured executable path', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const privatePath = '/private/EXECUTABLE_PATH_CANARY';
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', exposeMotionDetected: true, ffmpegPath: privatePath });
+    createRuntime.mock.calls[0][0].report('delivery-not-offered-preparation-failed', {
+      preparation: { phase: 'configuration', workerCode: 'EXTERNAL_FFMPEG' },
+    });
+    expect(platform.log.warn).toHaveBeenCalledWith(expect.stringContaining('Install FFmpeg 6.1+'));
+    expect(JSON.stringify(jest.mocked(platform.log.warn).mock.calls)).not.toContain(privatePath);
+  });
+
   async function refresh(platform: BlinkCamerasPlatform, homescreen: BlinkHomescreen): Promise<void> {
     jest.mocked(client.getHomescreen).mockResolvedValue(homescreen);
     await expect(retryControl(platform).onSetHandler!(true)).resolves.toBeUndefined();
@@ -143,10 +155,10 @@ describe('platform native recording and ordinary command ownership', () => {
     log.info.mockClear(); log.warn.mockClear(); log.debug.mockClear();
     report('prepared', { recovery: { flags: 1, attempts: 1 } });
     expect(log.info).toHaveBeenLastCalledWith('[NativeRecording] prepared conversion-attempts=1 recovery=audio-clock');
-    report('prepared', { recovery: { flags: 6, attempts: 2, initialWorkerCode: 'AUDIO_DECODE' } });
-    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] prepared conversion-attempts=2 recovery=audio-silence,fragments initial-worker=AUDIO_DECODE');
-    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'AUDIO_DECODE', salvageAttempted: true } });
-    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=AUDIO_DECODE recovery=exhausted');
+    report('prepared', { recovery: { flags: 6, attempts: 2, initialWorkerCode: 'AUDIO_DISCONTINUITY' } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] prepared conversion-attempts=2 recovery=audio-silence,fragments initial-worker=AUDIO_DISCONTINUITY');
+    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'AUDIO_DISCONTINUITY', salvageAttempted: true } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=AUDIO_DISCONTINUITY recovery=exhausted');
     report('prepared', { recovery: { flags: 3, attempts: 2, initialWorkerCode: 'private-token' } } as never);
     expect(log.info).toHaveBeenLastCalledWith('[NativeRecording] prepared');
     expect(log.debug).not.toHaveBeenCalled();

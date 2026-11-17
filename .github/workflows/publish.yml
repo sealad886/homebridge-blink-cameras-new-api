@@ -67,7 +67,7 @@ jobs:
           overwrite: true
           retention-days: 7
   qualify:
-    name: Installed npm native qualification (${{ matrix.target }})
+    name: Installed protection and external FFmpeg qualification (${{ matrix.target }})
     if: github.ref == 'refs/heads/main'
     needs: package
     runs-on: ${{ matrix.runner }}
@@ -81,9 +81,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04
+          - runner: ubuntu-24.04
             target: linux-x64
-          - runner: ubuntu-22.04-arm
+          - runner: ubuntu-24.04-arm
             target: linux-arm64
           - runner: macos-15
             target: darwin-arm64
@@ -108,7 +108,29 @@ jobs:
         with:
           name: native-validation-${{ matrix.target }}-${{ github.sha }}
           path: ${{ runner.temp }}/native-validation
-      - name: Install exact tar and prove actual codec and independent SRTP receiver
+      - name: Install external FFmpeg
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            command -v ffmpeg || brew install ffmpeg
+          else
+            choco install ffmpeg --no-progress --yes
+          fi
+          command -v ffmpeg
+          ffmpeg -hide_banner -version
+          ffmpeg_path="$(command -v ffmpeg)"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Chocolatey's shim may drop inherited CRT descriptors 3/4/5.
+            choco_root="$(cygpath -u "${ChocolateyInstall:-C:/ProgramData/chocolatey}")"
+            ffmpeg_path="$(find "$choco_root/lib/ffmpeg/tools" -type f -iname ffmpeg.exe -print -quit)"
+            test -n "$ffmpeg_path"
+            ffmpeg_path="$(cygpath -m "$ffmpeg_path")"
+          fi
+          echo "QUALIFICATION_FFMPEG=$ffmpeg_path" >> "$GITHUB_ENV"
+      - name: Install exact tar and verify external codecs plus independent SRTP receiver
         env:
           ARTIFACT_DIR: ${{ runner.temp }}/release-artifact
           VALIDATION_DIR: ${{ runner.temp }}/native-validation
@@ -117,7 +139,7 @@ jobs:
           node .github/scripts/native-qualification.mjs run
           --artifact-directory "$ARTIFACT_DIR" --validation "$VALIDATION_DIR"
           --source-root "$GITHUB_WORKSPACE" --source-sha "$GITHUB_SHA"
-          --receipt "$QUALIFICATION_RECEIPT"
+          --receipt "$QUALIFICATION_RECEIPT" --ffmpeg "$QUALIFICATION_FFMPEG"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-qualification-${{ matrix.target }}-${{ github.sha }}

@@ -6,7 +6,7 @@ import type { HAP, PrepareStreamRequest, PrepareStreamResponse, StreamingRequest
 import type { BlinkApi } from '../src/blink-api';
 import { BlinkCameraSource, type BlinkCameraStreamingConfigInput } from '../src/accessories/camera-source';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
-import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifact';
+import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { OwnedRtspBroker } from '../src/blink-api/rtsp-broker';
 import { createHap } from './helpers/homebridge';
@@ -14,7 +14,8 @@ import { CameraFeedAdmission } from '../src/accessories/feed-admission';
 import { cameraKey, projectSettingsInventory } from '../src/settings-inventory';
 
 jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn() }));
-jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: jest.fn(() => '/verified/worker') }));
+jest.mock('../src/accessories/external-ffmpeg', () => ({ ...jest.requireActual('../src/accessories/external-ffmpeg'), resolveExternalFfmpegPath: jest.fn(() => '/external/ffmpeg') }));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn(() => '/verified/worker') }));
 jest.mock('../src/blink-api/immis-proxy', () => ({ ImmisProxyServer: jest.fn() }));
 jest.mock('../src/blink-api/rtsp-broker', () => ({ OwnedRtspBroker: jest.fn() }));
 let mockPort = 40000;
@@ -32,7 +33,6 @@ const fakeTime = () => jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextT
 function ownedMedia(autoClose: () => boolean) {
   let close!: () => void; let failed = false;
   const session: OwnedMediaSession = { whenClosed: new Promise<void>(resolve => { close = resolve; }), get failed() { return failed; },
-    audioTiming: { initialPaddingSamples: 0, skipStartSamples: 0, skipEndSamples: 0 },
     write: jest.fn(async () => {}), end: jest.fn(async () => {}), stop: jest.fn(async () => { if (autoClose()) close(); }) };
   return { session, close: () => close(), fail: () => { failed = true; close(); } };
 }
@@ -53,7 +53,7 @@ function fixture(config: BlinkCameraStreamingConfigInput = {}, acquireFeed?: () 
   const natives: ReturnType<typeof ownedMedia>[] = []; const transports: ReturnType<typeof ownedTransport>[] = [];
   const preparationCallbacks: jest.Mock[] = [];
   const ids = new Set<string>(); const log = jest.fn(); const errorLog = jest.fn(); const observed = jest.fn();
-  (loadPackagedMediaWorker as jest.Mock).mockReturnValue('/verified/worker');
+  (loadPackagedProtectionWorker as jest.Mock).mockReturnValue('/verified/worker');
   jest.mocked(createOwnedMediaSession).mockImplementation(async () => {
     const native = ownedMedia(() => state.closeMedia); natives.push(native); return native.session;
   });

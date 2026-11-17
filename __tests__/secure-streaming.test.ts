@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { test } from '@jest/globals';
 import { BlinkCameraSource, createCameraControllerOptions, resolveStreamingConfig, type BlinkCameraStreamingConfigInput } from '../src/accessories/camera-source';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
-import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifact';
+import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
 import { ImmisProxyServer } from '../src/blink-api/immis-proxy';
 import { OwnedRtspBroker } from '../src/blink-api/rtsp-broker';
 import type { BlinkApi } from '../src/blink-api';
@@ -13,7 +13,8 @@ import { createHap } from './helpers/homebridge';
 import type { OutputQualityProfile } from '../src/accessories/stream-quality';
 
 jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn() }));
-jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: jest.fn(() => '/verified/worker') }));
+jest.mock('../src/accessories/external-ffmpeg', () => ({ ...jest.requireActual('../src/accessories/external-ffmpeg'), resolveExternalFfmpegPath: jest.fn(() => '/external/ffmpeg') }));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn(() => '/verified/worker') }));
 jest.mock('node:child_process', () => ({ spawn: jest.fn(() => { throw new Error('Unexpected media CLI'); }) }));
 jest.mock('../src/blink-api/immis-proxy', () => ({ ImmisProxyServer: jest.fn() }));
 jest.mock('../src/blink-api/rtsp-broker', () => ({ OwnedRtspBroker: jest.fn() }));
@@ -27,10 +28,9 @@ function setup(audio = false, outputQuality: OutputQualityProfile = 'auto', befo
   let closed!: () => void;
   const whenClosed = new Promise<void>(resolve => { closed = resolve; });
   const native: OwnedMediaSession = { whenClosed, failed: false,
-    audioTiming: { initialPaddingSamples: 0, skipStartSamples: 0, skipEndSamples: 0 },
     write: jest.fn(async () => {}), end: jest.fn(async () => {}), stop: jest.fn(async () => { closed(); }) };
   (createOwnedMediaSession as jest.Mock).mockResolvedValue(native);
-  (loadPackagedMediaWorker as jest.Mock).mockReturnValue('/verified/worker');
+  (loadPackagedProtectionWorker as jest.Mock).mockReturnValue('/verified/worker');
   let transportClosed!: () => void;
   const transport = Object.assign(new EventEmitter(), { whenClosed: new Promise<void>(resolve => { transportClosed = resolve; }),
     start: jest.fn(async () => 'pipe:0'), attachConsumer: jest.fn(), retire: jest.fn(() => transportClosed()), stop: jest.fn(() => transportClosed()) });
@@ -104,7 +104,7 @@ test('camera streaming routes private media and keys through owned capabilities 
     await f.prepare(); expect(await f.run()).toBeUndefined();
     expect(createOwnedMediaSession).toHaveBeenCalledTimes(1);
     const options = (createOwnedMediaSession as jest.Mock).mock.calls[0][0];
-    expect(options.workerPath).toBe('/verified/worker');
+    expect(options.protectionPath).toBe('/verified/worker');
     expect(options.video.output.key).toEqual(Buffer.alloc(16, 7));
     expect(options.video.output.salt).toEqual(Buffer.alloc(14, 9));
     expect(JSON.stringify(options)).not.toContain('DUMMY_CAPABILITY');
@@ -125,7 +125,7 @@ test.each(['aac-eld', 'unsupported'])('unsupported preference %s requires explic
 });
 test('a missing or modified packaged worker is refused before vendor allocation', async () => {
   jest.clearAllMocks(); const f = setup();
-  (loadPackagedMediaWorker as jest.Mock).mockImplementation(() => { throw new Error('Packaged media worker unavailable'); });
+  (loadPackagedProtectionWorker as jest.Mock).mockImplementation(() => { throw new Error('Packaged media worker unavailable'); });
   try {
     await f.prepare(); expect(await f.run()).toBeInstanceOf(Error);
     expect(f.api.startCameraLiveview).not.toHaveBeenCalled(); expect(createOwnedMediaSession).not.toHaveBeenCalled();

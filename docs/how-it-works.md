@@ -2,7 +2,10 @@
 
 [Documentation home](README.md) · [Illustrated setup](../output/articles/set-up-blink-cameras-in-apple-home/index.md) · [Recording checklist](configuration.md#recording-setup-checklist)
 
-Last reviewed: 16 November 2026 · Source edition: `1.1.0`.
+Last reviewed: 16 November 2026 · Source edition: `2.0.0-alpha.0` (prerelease).
+
+This guide describes the 2.0 prerelease source. The published 1.1.0 used a
+packaged codec backend; its acceptance does not qualify this changed backend.
 
 Homebridge connects your Blink account to Apple Home. This plugin discovers
 devices, publishes HomeKit accessories, and translates controls and media.
@@ -13,13 +16,19 @@ permissions and recording history.
 
 | Use | What starts it | Video source | What to expect |
 | --- | --- | --- | --- |
-| **Live viewing** | Open a camera in Home | An explicit Blink live feed, converted by the packaged worker | View the camera now. Opening a feed can wake the camera and use battery. |
+| **Live viewing** | Open a camera in Home | An explicit Blink live feed, converted by externally installed FFmpeg | View the camera now. Opening a feed can wake the camera and use battery. |
 | **HomeKit recording** | A motion push schedules work for a recording-enabled camera | A completed native Sync Module USB motion clip | Download, preparation and Home delivery happen after capture. No idle recording feed is started. |
 
 Recording is **off by default**. Enable it per camera in plugin settings, Save,
 and restart the Blink child bridge. Then allow recording separately in Home.
 Both paths use the camera's existing Home accessory; enabling recording does not
 create a replay camera or replace live viewing.
+
+Live viewing and recording require a separately installed **FFmpeg 6.1 or later**
+with the [required media capabilities](streaming.md#packaged-codec-requirements).
+The package retains a libSRTP-only protection and launch helper; it does not
+bundle FFmpeg codecs. Check the Homebridge service's executable discovery or
+configure `ffmpegPath` before testing video.
 
 The plugin's camera-audio setting affects both paths. Home also has a separate
 recording-audio permission. Video-only recording is valid. Live output quality
@@ -33,14 +42,14 @@ flowchart TB
   subgraph live[Live viewing]
     direction LR
     H[Open camera in Home] --> L[Blink live feed]
-    L --> W[Packaged media worker]
+    L --> W[External FFmpeg converts media]
     W --> V[Live video and audio in Home]
   end
   subgraph saved[Native recording]
     direction LR
     M[Blink motion push arrives] --> Q[Schedule native clip lookup]
     Q --> U[Completed USB clip is matched and downloaded]
-    U --> P[Packaged worker prepares clip]
+    U --> P[External FFmpeg prepares clip]
     P --> O[Clip offered to Home hub]
     O --> C[Verify saved playback in Home]
   end
@@ -109,8 +118,9 @@ permission remains respected.
 ## Know the current limits
 
 - Two-way talk and automatic Blink doorbell ring delivery remain unavailable.
-- Saved Home playback has been observed for two tested cameras. That does not
-  qualify every Blink model or clip; verify your own installed package and settings.
+- Saved Home playback was observed for two tested cameras with the 1.1.0 codec
+  backend. The changed 2.0 external backend requires fresh physical acceptance;
+  verify your own installed package and settings.
 - Native capture/retrigger gaps, matching failures, expiry, resource limits and
   Home's retention decisions can prevent a saved Home copy.
 - Blink's private interfaces can change. Current live-account evidence is limited

@@ -52,7 +52,7 @@ Last reviewed: 16 November 2026.
 | Overview, installation and Home controls | [Root README](../README.md) | User entry point and accessory behavior |
 | Settings | [Configuration](configuration.md) | Examples, defaults and operator explanations; [schema](../config.schema.json) owns UI validation |
 | Sign-in and recovery | [Authentication](authentication.md) | Operator procedure; ADR-001 owns architecture |
-| Video/audio and quality | [Streaming](streaming.md) | Packaged codec requirements, migration, input/output profiles and talkback |
+| Video/audio and quality | [Streaming](streaming.md) | External FFmpeg requirements, migration, input/output profiles and talkback |
 | Motion and native HomeKit recording | [Configuration](configuration.md#motion-and-homekit-recording) | Push subscription, completed USB clips, timing and Home policy; ADR-007 owns architecture |
 | Stable and beta upgrade conversion | [One-off migration](native-recording-config-migration.md) | Combined 0.10.0 media/motion upgrade, intermediate beta recording/journal migration, preview/apply, private backup and Windows manual steps |
 | Faults and recovery | [Troubleshooting](troubleshooting.md) | Operator diagnosis |
@@ -66,7 +66,8 @@ Last reviewed: 16 November 2026.
 | Security status | [Hardening ledger](plans/security-hardening.md) | Requirements, findings, evidence and release dispositions |
 | Release operations | [Release guide](RELEASE.md) | CI publication, operator installation, rollback and acceptance |
 | Release history | [Changelog](../CHANGELOG.md) | Versioned shipped changes |
-| Private media worker | [Native README](../native/README.md) | Integrated codec/IPC implementation and native evidence; release qualification remains gated |
+| Protection and process launch | [Native README](../native/README.md) | libSRTP-only helper, guarded external launch and native evidence; release qualification remains gated |
+| External FFmpeg transition | [Implementation plan](plans/2026-11-16-external-ffmpeg.md) | Current requirements, ownership and actual verification status; ADR-008 owns architecture |
 | Outstanding work | [GitHub issues](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues) | Search before adding tracking entries; local old TODOs are not active tracking |
 
 Package engines, runtime source, tests and CI remain the executable authority.

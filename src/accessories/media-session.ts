@@ -4,33 +4,36 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { withinRequestBudget, budgetedDelay } from '../operation-budget';
 import { ProtectedRtpStream, MEDIA_OUTPUT_LIMITS, validateMediaOutput, type MediaOutputOptions, type MediaPacketProtector } from './media-output';
 import { openMediaSocket, type OwnedMediaSocket } from './media-socket';
-import { PrivateMediaWorker, MEDIA_WORKER_LIMITS, type MediaWorkerCallbacks, type CodecPacket, type SourceVideoInfo } from './media-worker';
+import { PrivateProtectionWorker } from './srtp-worker';
+import { EXTERNAL_FFMPEG_LIMITS, ExternalFfmpegSetupError } from './external-ffmpeg';
+import { createExternalLiveCodec, type ExternalLiveCodec } from './external-live-codec';
+import type { CodecPacket, SourceVideoInfo } from './ffmpeg-packets';
 
 export interface MediaSessionOptions {
-  /** Must be resolved and verified by the packaged-artifact owner before this call. */
-  workerPath: string;
+  /** External executable and packaged protection helper are resolved before vendor allocation. */
+  ffmpegPath: string;
+  protectionPath: string;
   onSourceInfo?: (info: SourceVideoInfo) => void;
   video: { output: MediaOutputOptions; localPort: number; width: number; height: number;
     bitrate: number; maxFrames: number; profile: 0 | 1 | 2; level: 0 | 1 | 2; softwarePreset?: 'veryfast' | 'ultrafast' };
   audio?: { output: MediaOutputOptions; localPort: number; codec: 'opus' | 'pcma' | 'pcmu';
     rate: 8000 | 16000 | 24000; bitrate: number; packetTime?: 10 | 20 | 40 | 60 };
 }
-export type MediaSessionWorker = Pick<PrivateMediaWorker, 'whenClosed' | 'whenReady' | 'whenMediaDrained' | 'failed' |
-  'configure' | 'initialize' | 'media' | 'endMedia' | 'finishInput' | 'stop'>;
+export type MediaSessionProtection = Pick<PrivateProtectionWorker, 'whenClosed' | 'failed' | 'initialize' | 'stop'>;
 export interface MediaSessionDependencies {
-  createWorker?: (path: string, callbacks: MediaWorkerCallbacks) => MediaSessionWorker;
+  createProtection?: (path: string) => MediaSessionProtection;
+  createCodec?: typeof createExternalLiveCodec;
   openSocket?: typeof openMediaSocket;
 }
 export interface OwnedMediaSession {
   readonly whenClosed: Promise<void>;
   readonly failed: boolean;
-  readonly audioTiming: Readonly<{ initialPaddingSamples: number; skipStartSamples: number; skipEndSamples: number }>;
   write(bytes: Buffer): Promise<void>;
   end(): Promise<void>;
   stop(): Promise<void>;
 }
 export const MEDIA_SESSION_LIMITS = Object.freeze({ startupMs: 100, queuedPackets: 256,
-  queuedBytes: MEDIA_WORKER_LIMITS.frameBytes, vendorFrameBytes: 1024 * 1024 });
+  queuedBytes: EXTERNAL_FFMPEG_LIMITS.packetBytes, vendorFrameBytes: 1024 * 1024 });
 interface SessionStream {
   options: MediaOutputOptions; codec: 'h264' | 'opus' | 'pcma' | 'pcmu'; protector: MediaPacketProtector;
   socket: OwnedMediaSocket; rtp?: ProtectedRtpStream; sent: boolean; nextReport: number;
@@ -40,7 +43,7 @@ function integer(n: number, min: number, max: number): void {
   if (!Number.isInteger(n) || n < min || n > max) throw unavailable();
 }
 function validate(options: MediaSessionOptions): void {
-  if (!isAbsolute(options.workerPath) || options.workerPath.includes('\0')) throw unavailable();
+  if (![options.ffmpegPath, options.protectionPath].every(value => typeof value === 'string' && isAbsolute(value) && !value.includes('\0'))) throw unavailable();
   const v = options.video;
   validateMediaOutput(v.output); integer(v.localPort, 1, 65535); integer(v.width, 2, 1920); integer(v.height, 2, 1080);
   integer(v.output.fps, 1, 30); integer(v.bitrate, 20000, 8000000); integer(v.maxFrames, 1, 9000);
@@ -78,12 +81,10 @@ class Session implements OwnedMediaSession {
   readonly whenClosed: Promise<void>; #finishClosed!: () => void;
   #failed = false; get failed(): boolean { return this.#failed; }
   #cancel = new globalThis.AbortController(); #starting: Promise<void>; #finishStarting!: () => void;
-  #worker?: MediaSessionWorker; #sockets: OwnedMediaSocket[] = [];
+  #protection?: MediaSessionProtection; #codec?: ExternalLiveCodec; #sockets: OwnedMediaSocket[] = [];
   #streams: SessionStream[] = []; #queue: CodecPacket[] = []; #bytes = 0; #count = 0;
   #pumping?: Promise<void>; #ending = false; #wake?: () => void; #space?: () => void;
-  #origin = 0n; #anchor = 0; #audioInfoSeen = false;
-  #audioTiming = { initialPaddingSamples: 0, skipStartSamples: 0, skipEndSamples: 0 };
-  get audioTiming(): OwnedMediaSession['audioTiming'] { return { ...this.#audioTiming }; }
+  #origin = 0n; #anchor = 0;
   #feeding = false; #inputEnded = false; #finishing = false; #stopping = false; #stop?: Promise<void>;
   #ownerAbort: () => void;
   readonly options: MediaSessionOptions;
@@ -100,24 +101,19 @@ class Session implements OwnedMediaSession {
     const { video: v, audio: a } = this.options;
     try {
       this.#check();
-      this.#worker = (this.dependencies.createWorker ?? ((path, callbacks) => new PrivateMediaWorker(path, callbacks)))(this.options.workerPath, {
+      this.#protection = (this.dependencies.createProtection ?? (path => new PrivateProtectionWorker(path)))(this.options.protectionPath);
+      this.#protection.whenClosed.then(() => { if (!this.#stopping) this.fail(); });
+      const protectors = [await this.#protection.initialize(1, v.output.ssrc, v.output.key, v.output.salt)]; this.#check();
+      if (a) { protectors.push(await this.#protection.initialize(2, a.output.ssrc, a.output.key, a.output.salt)); this.#check(); }
+      this.#codec = await (this.dependencies.createCodec ?? createExternalLiveCodec)({ ffmpegPath: this.options.ffmpegPath,
+        protectionPath: this.options.protectionPath, video: { width: v.width, height: v.height, fps: v.output.fps,
+          bitrate: v.bitrate, maxFrames: v.maxFrames, profile: v.profile, level: v.level, softwarePreset: v.softwarePreset },
+        audio: a ? { codec: a.codec, rate: a.rate, bitrate: a.bitrate, packetTime: a.packetTime, mtu: a.output.mtu } : undefined }, {
         packet: (packet, signal) => this.#enqueue(packet, signal),
         sourceInfo: info => { try { this.#check(); this.options.onSourceInfo?.(info); } catch { this.fail(); throw unavailable(); } },
-        audioInfo: info => {
-          if (!a || this.#audioInfoSeen || info.codec !== (a.codec === 'opus' ? 1 : a.codec === 'pcma' ? 2 : 3) || info.rate !== a.rate || info.channels !== 1 || info.padding > a.rate * 2) {
-            this.fail(); throw unavailable();
-          }
-          this.#audioInfoSeen = true; this.#audioTiming.initialPaddingSamples = info.padding;
-        },
-      });
+      }, this.#cancel.signal);
       this.#check();
-      this.#worker.whenClosed.then(() => { if (!this.#finishing && !this.#stopping) this.fail(); });
-      const protectors = [await this.#worker.initialize(1, v.output.ssrc, v.output.key, v.output.salt)]; this.#check();
-      if (a) { protectors.push(await this.#worker.initialize(2, a.output.ssrc, a.output.key, a.output.salt)); this.#check(); }
-      await this.#worker.configure([v.width, v.height, v.output.fps, v.bitrate, v.maxFrames, v.softwarePreset === 'ultrafast' ? 1 : 0,
-        a ? a.codec === 'opus' ? 1 : a.codec === 'pcma' ? 2 : 3 : 0, a?.rate ?? 0, a ? 1 : 0, a?.bitrate ?? 0,
-        v.profile, v.level, a?.codec === 'opus' ? a.packetTime ?? 20 : 0, 0, 0, 0]);
-      await this.#worker.whenReady; this.#check();
+      this.#codec.whenClosed.then(() => { if (!this.#finishing && !this.#stopping) this.fail(); });
       for (const stream of [v, ...(a ? [a] : [])]) {
         const socket = await (this.dependencies.openSocket ?? openMediaSocket)(stream.output, stream.localPort, this.#cancel.signal);
         this.#sockets.push(socket); this.#check();
@@ -135,8 +131,8 @@ class Session implements OwnedMediaSession {
     try {
       this.#check(); signal.throwIfAborted(); const size = packet.data.length + 48;
       if (!packet.data.length || size > MEDIA_SESSION_LIMITS.queuedBytes || (packet.stream !== 1 && packet.stream !== 2) ||
-          (packet.stream === 2 && (!this.options.audio || !this.#audioInfoSeen || packet.duration <= 0n))) throw unavailable();
-      const deadline = Date.now() + MEDIA_WORKER_LIMITS.requestMs;
+          (packet.stream === 2 && (!this.options.audio || packet.duration <= 0n))) throw unavailable();
+      const deadline = Date.now() + EXTERNAL_FFMPEG_LIMITS.requestMs;
       while (this.#count >= MEDIA_SESSION_LIMITS.queuedPackets || this.#bytes + size > MEDIA_SESSION_LIMITS.queuedBytes) {
         if (this.#space) throw unavailable();
         let wake!: () => void; const space = new Promise<void>(resolve => { wake = resolve; this.#space = resolve; });
@@ -146,7 +142,6 @@ class Session implements OwnedMediaSession {
       }
       this.#bytes += size; this.#count++;
       this.#queue.push({ ...packet, data: Buffer.from(packet.data) }); this.#queue.sort((a, b) => a.pts < b.pts ? -1 : a.pts > b.pts ? 1 : 0);
-      if (packet.stream === 2) { this.#audioTiming.skipStartSamples += packet.skipStart; this.#audioTiming.skipEndSamples += packet.skipEnd; }
       this.#wake?.();
       if (!this.#pumping) this.#pumping = this.#pump().catch(() => { this.fail(); });
     } catch { this.fail(); throw unavailable(); }
@@ -154,7 +149,7 @@ class Session implements OwnedMediaSession {
   }
   #sourceNow(): bigint { return this.#origin + BigInt(Math.floor((globalThis.performance.now() - this.#anchor) * 1000)); }
   async #execute(operation: Promise<void>): Promise<void> {
-    await withinRequestBudget(operation, { signal: this.#cancel.signal, deadline: Date.now() + MEDIA_WORKER_LIMITS.requestMs }); this.#check();
+    await withinRequestBudget(operation, { signal: this.#cancel.signal, deadline: Date.now() + EXTERNAL_FFMPEG_LIMITS.requestMs }); this.#check();
   }
   async #reports(final = false): Promise<void> {
     const mono = globalThis.performance.now(), unix = Date.now(), pts = this.#sourceNow();
@@ -183,7 +178,7 @@ class Session implements OwnedMediaSession {
       const reportDelay = Math.min(...this.#streams.filter(stream => stream.sent).map(stream => stream.nextReport - mono));
       if (!next) { await this.#wait(reportDelay); continue; }
       const offset = next.pts - this.#origin;
-      if (offset > BigInt(MEDIA_WORKER_LIMITS.lifetimeMs) * 1000n || offset < -BigInt(MEDIA_WORKER_LIMITS.lifetimeMs) * 1000n) throw unavailable();
+      if (offset > BigInt(EXTERNAL_FFMPEG_LIMITS.lifetimeMs) * 1000n || offset < -BigInt(EXTERNAL_FFMPEG_LIMITS.lifetimeMs) * 1000n) throw unavailable();
       const delay = this.#anchor + Number(offset) / 1000 - mono;
       if (delay > 0) { await this.#wait(Math.min(delay, reportDelay)); continue; }
       this.#queue.shift();
@@ -201,8 +196,8 @@ class Session implements OwnedMediaSession {
     if (this.#inputEnded || this.#feeding || !bytes.length || bytes.length > MEDIA_SESSION_LIMITS.vendorFrameBytes) throw unavailable();
     this.#feeding = true; const owned = Buffer.from(bytes);
     try {
-      for (let offset = 0; offset < owned.length; offset += MEDIA_WORKER_LIMITS.inputBytes) {
-        this.#check(); await this.#worker!.media(owned.subarray(offset, offset + MEDIA_WORKER_LIMITS.inputBytes));
+      for (let offset = 0; offset < owned.length; offset += EXTERNAL_FFMPEG_LIMITS.inputBytes) {
+        this.#check(); await this.#codec!.write(owned.subarray(offset, offset + EXTERNAL_FFMPEG_LIMITS.inputBytes));
       }
     } catch { this.fail(); await this.stop(); throw unavailable(); }
     finally { owned.fill(0); this.#feeding = false; }
@@ -210,9 +205,9 @@ class Session implements OwnedMediaSession {
   async end(): Promise<void> {
     this.#check(); if (this.#inputEnded || this.#feeding) throw unavailable(); this.#inputEnded = true; this.#finishing = true;
     try {
-      await this.#worker!.endMedia(); await this.#worker!.whenMediaDrained;
+      await this.#codec!.end();
       this.#check(); this.#ending = true; this.#wake?.(); await this.#pumping; this.#check(); await this.#reports(true);
-      await this.#worker!.finishInput(); if (this.#worker!.failed) throw unavailable(); await this.stop();
+      if (this.#codec!.failed || this.#protection!.failed) throw unavailable(); await this.stop();
     } catch { this.fail(); await this.stop(); throw unavailable(); }
   }
   stop(): Promise<void> {
@@ -221,11 +216,11 @@ class Session implements OwnedMediaSession {
       this.#stopping = true; this.#cancel.abort();
       for (const packet of this.#queue.splice(0)) { this.#bytes -= packet.data.length + 48; this.#count--; packet.data.fill(0); }
       for (const stream of this.#streams) stream.rtp?.close();
-      void this.#worker?.stop(); for (const socket of this.#sockets) socket.close();
+      void this.#codec?.stop(); void this.#protection?.stop(); for (const socket of this.#sockets) socket.close();
       void (async () => {
         await this.#starting;
-        void this.#worker?.stop(); for (const socket of this.#sockets) socket.close();
-        await Promise.all([this.#worker?.whenClosed, ...this.#sockets.map(socket => socket.whenClosed)]);
+        void this.#codec?.stop(); void this.#protection?.stop(); for (const socket of this.#sockets) socket.close();
+        await Promise.all([this.#codec?.whenClosed, this.#protection?.whenClosed, ...this.#sockets.map(socket => socket.whenClosed)]);
         this.owner.removeEventListener('abort', this.#ownerAbort); this.#finishClosed();
       })().catch(() => { this.#failed = true; });
     }
@@ -239,5 +234,5 @@ export async function createOwnedMediaSession(options: MediaSessionOptions, sign
   try { signal.throwIfAborted(); validate(options); } catch { throw unavailable(); }
   const session = new Session(options, signal, dependencies);
   try { await session.start(); return session; }
-  catch { session.fail(); await session.stop(); throw unavailable(); }
+  catch (error) { session.fail(); await session.stop(); throw error instanceof ExternalFfmpegSetupError ? error : unavailable(); }
 }

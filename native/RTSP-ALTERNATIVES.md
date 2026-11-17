@@ -1,3 +1,7 @@
+> Historical record of the former bundled codec worker. The external FFmpeg
+> implementation replaced that pipeline on November 16, 2026. Current helper
+> build and qualification instructions are in [README.md](README.md).
+
 # Bounded RTSP architecture comparison
 
 See the [native prototype overview](README.md) for scope and navigation.

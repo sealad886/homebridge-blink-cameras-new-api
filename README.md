@@ -103,7 +103,16 @@ Note: Blink only has armed/disarmed states, so all "armed" modes map to Blink's 
 - Homebridge 1.11.1 or later
 - Node.js 20.3+, 22, 24 or 26 (see [package engines](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/package.json))
 - A Blink account
-- For live streaming, the matching private codec worker supplied in the package; see [streaming requirements](https://sealad886.github.io/homebridge-blink-cameras-new-api/streaming/#packaged-codec-requirements).
+- For live streaming and HomeKit recording, a separately installed **FFmpeg 6.1 or later** with H.264, Opus and AAC support. The plugin does not bundle FFmpeg. See [media requirements](https://sealad886.github.io/homebridge-blink-cameras-new-api/streaming/#packaged-codec-requirements).
+
+Install FFmpeg on the Homebridge host using your platform's package manager or a
+build linked from [FFmpeg's download page](https://ffmpeg.org/download.html).
+The default `ffmpegPath: "ffmpeg"` searches the Homebridge service's PATH. If the
+service cannot find it, set **Advanced & troubleshooting → Media tools and tuning
+→ FFmpeg executable** to its absolute path, such as `/usr/bin/ffmpeg` or
+`/opt/homebrew/bin/ffmpeg`. A desktop terminal's PATH may differ from the service.
+The plugin checks the version and required capabilities before opening live
+media; missing dependencies do not require removing authentication or pairing.
 
 ## Installation
 
@@ -195,7 +204,7 @@ set a device-name override in the plugin for a consistent prefix throughout.
 
 ## Live streaming and quality
 
-Live video and audio use the packaged private codec worker. Output quality is system-wide; input quality
+Live video and audio use the externally installed FFmpeg executable. Output quality is system-wide; input quality
 is per camera. The default preserves automatic selection. Optional 720p/15 and
 640×360/15 profiles reduce encoding work; 1080p/30 increases it. Smoothness depends
 on the installed host and source; synthetic tests do not establish playback.
@@ -207,8 +216,10 @@ See [streaming and quality](https://sealad886.github.io/homebridge-blink-cameras
 
 Talkback remains disabled. See the [talkback guard](https://sealad886.github.io/homebridge-blink-cameras-new-api/streaming/#two-way-talk-status).
 
-The release workflow verifies the exact packaged workers, their corresponding
-source and installed behavior on all five supported targets. The
+The package retains a small protection helper for HomeKit encryption and guarded
+process launch; it contains no FFmpeg codec libraries. The release workflow
+verifies that helper, its corresponding source and installed behavior with an
+external FFmpeg installation on all five supported targets. The
 [hardening ledger](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/docs/plans/security-hardening.md)
 records security evidence and remaining acceptance limits.
 
@@ -281,7 +292,7 @@ restart instead of causing a replacement POST. Normal state polling prepares no
 USB catalogs. No video, thumbnail or other data file is uploaded to Blink.
 
 The completed video is downloaded before a finite local recording is offered to
-HomeKit. Recording uses the packaged codec worker; ordinary live viewing remains
+HomeKit. Recording uses the externally installed FFmpeg; ordinary live viewing remains
 a separate, explicit operation. The public motion indication is separate from
 the internal recording trigger, which fires after local media is ready. Home's
 camera, recording and audio permissions fence delayed and active work.
@@ -290,10 +301,12 @@ This delayed offer does not establish pre-event recording or insert a clip at an
 arbitrary historical point in Home's timeline. The home hub decides whether to
 request and retain it. Apple requires a compatible home hub and an eligible
 iCloud+ plan; see [Apple's HomeKit Secure Video guide](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud).
-Saved Home recordings from both tested cameras have been played on the physical
-installation. That is bounded evidence for those cameras and settings, not every
-Blink model or clip. Verify your own camera after setup or upgrade; unsupported
-or malformed media can still be rejected with a bounded preparation diagnostic.
+Historical physical-installation evidence for version 1.1.0's bundled native codec
+backend includes saved Home recordings played from both tested cameras. That
+evidence covers those cameras and settings; it does not qualify the current
+external FFmpeg recording backend or every Blink model or clip. Verify your own
+camera after setup or upgrade; unsupported or malformed media can still be
+rejected with a bounded preparation diagnostic.
 Home controls retention and playback. Clip length comes from the completed Blink
 recording, not the plugin motion-sensor timeout. A saved entry’s Home timeline
 time can reflect delayed delivery rather than the original Blink capture time.
@@ -330,11 +343,13 @@ See [CHANGELOG.md](CHANGELOG.md) for current release notes and migration history
 
 ## License
 
-The JavaScript plugin is MIT - see [LICENSE](LICENSE). Native worker development
+The JavaScript plugin is MIT - see [LICENSE](LICENSE). Native protection-helper development
 sources are GPL-3.0-or-later; see [native/COPYING](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/native/COPYING) and the pinned
 dependency notices under [native/dependencies](https://github.com/sealad886/homebridge-blink-cameras-new-api/blob/main/native/dependencies/README.md).
-Release packages include verified target workers and complete corresponding source
-under the native license and dependency notices.
+Release packages include verified protection helpers and their corresponding
+source under the native license and dependency notices. FFmpeg, x264 and Opus
+libraries and source archives are not distributed in this package; the operator
+provides the external FFmpeg installation.
 
 ## Credits
 

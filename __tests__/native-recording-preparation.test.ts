@@ -1,22 +1,17 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { existsSync, promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
 import type { CameraRecordingConfiguration } from 'homebridge';
 import { NativeRecordingMemoryBudget, NativeRecordingSource, prepareNativeRecording,
   snapshotNativeRecordingConfiguration, NativeRecordingPreparationError } from '../src/accessories/native-recording-preparation';
-import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifact';
+import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
+import * as externalFfmpeg from '../src/accessories/external-ffmpeg';
 
-jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: jest.fn() }));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn() }));
 
-const suffix = process.platform === 'win32' ? '.exe' : '';
-const workerPath = path.resolve('native/build/blink-codec-worker' + suffix);
-const fixturePath = path.resolve('native/build/fixture' + suffix);
-const checkerPath = path.resolve('native/build/check-recording' + suffix);
-const mediaTest = [workerPath, fixturePath, checkerPath].every(existsSync) ? it : it.skip;
 const posixPermissionTest = typeof process.getuid === 'function' ? it : it.skip;
 const configuration = (): CameraRecordingConfiguration => ({
   prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
@@ -25,7 +20,7 @@ const configuration = (): CameraRecordingConfiguration => ({
 });
 let directory: string;
 beforeEach(async () => { directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-recording-media-'));
-  jest.mocked(loadPackagedMediaWorker).mockReturnValue(workerPath); });
+  jest.mocked(loadPackagedProtectionWorker).mockReturnValue('/verified/helper'); });
 afterEach(async () => { await fs.rm(directory, { recursive: true, force: true }); });
 const admit = <T>(work: () => Promise<T>) => work();
 async function source(bytes = Buffer.from('not a media file')): Promise<NativeRecordingSource> {
@@ -33,16 +28,6 @@ async function source(bytes = Buffer.from('not a media file')): Promise<NativeRe
   await fs.writeFile(filePath, bytes, { mode: 0o600 });
   return { filePath, expectedBytes: bytes.length, expectedSha256: createHash('sha256').update(bytes).digest('hex') };
 }
-async function fixture(): Promise<NativeRecordingSource> {
-  const filePath = path.join(directory, 'source.mp4');
-  const result = spawnSync(fixturePath, ['audio-mp4', '320', '180', '15', '33'], { maxBuffer: 32 * 1024 * 1024 });
-  if (result.status !== 0) throw new Error('Native synthetic MP4 fixture could not be generated');
-  await fs.writeFile(filePath, result.stdout, { mode: 0o600 });
-  await fs.chmod(filePath, 0o600);
-  const bytes = await fs.readFile(filePath);
-  return { filePath, expectedBytes: bytes.length, expectedSha256: createHash('sha256').update(bytes).digest('hex') };
-}
-
 it('takes a detached supported configuration and rejects invalid codec/resolution/duration requests', () => {
   const original = configuration(), selected = snapshotNativeRecordingConfiguration(original);
   original.videoCodec.resolution[0] = 640;
@@ -63,6 +48,29 @@ it('keeps preparation diagnostics detached, fixed and free of arbitrary error da
   expect(() => new NativeRecordingPreparationError({ phase: 'output', workerCode: 'private-source' } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(() => new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: false } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: true }).diagnostic).toEqual({ phase: 'output', salvageAttempted: true });
+});
+
+it('closes a reopened snapshot when descriptor validation rejects without exposing the underlying error', async () => {
+  const file = await source(), memory = new NativeRecordingMemoryBudget(), open = fs.open.bind(fs);
+  let snapshot: Awaited<ReturnType<typeof fs.open>> | undefined, closed: jest.SpyInstance | undefined;
+  const resolve = jest.spyOn(externalFfmpeg, 'resolveExternalFfmpegPath').mockReturnValue('/verified/ffmpeg');
+  const probe = jest.spyOn(externalFfmpeg, 'probeExternalFfmpeg').mockResolvedValue({ version: '9.0' });
+  const opening = jest.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+    const handle = await open(target, flags, mode);
+    if (path.basename(String(target)).startsWith('.native-') && flags === (constants.O_RDONLY | constants.O_NOFOLLOW)) {
+      snapshot = handle; closed = jest.spyOn(handle, 'close');
+      jest.spyOn(handle, 'stat').mockRejectedValue(new Error('private snapshot stat failure'));
+    }
+    return handle;
+  });
+  try {
+    await expect(prepareNativeRecording(file, configuration(), false, new globalThis.AbortController().signal,
+      { memory, admit })).rejects.toMatchObject({ message: 'Recording conversion failed during input',
+      diagnostic: { phase: 'input', workerCode: 'MEDIA' } });
+    expect(snapshot).toBeDefined(); expect(closed).toHaveBeenCalledTimes(1); expect(snapshot!.fd).toBe(-1);
+    expect(memory.bytes).toBe(0); expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+    expect(createHash('sha256').update(await fs.readFile(file.filePath)).digest('hex')).toBe(file.expectedSha256);
+  } finally { opening.mockRestore(); resolve.mockRestore(); probe.mockRestore(); await snapshot?.close(); }
 });
 
 it('bounds and accounts owned media allocations', () => {
@@ -123,121 +131,4 @@ it('does not enter admission with an already cancelled owner and handles synchro
   expect(entered).toBe(false);
   await expect(prepareNativeRecording(file, configuration(), false, new globalThis.AbortController().signal,
     { admit: () => { throw new Error('Local conversion capacity unavailable'); } })).rejects.toThrow('capacity unavailable');
-});
-
-mediaTest.each([1, 2] as const)('prepares finite MP4 with negotiated audio rate %s and preserves the source', async samplerate => {
-  const file = await fixture(), memory = new NativeRecordingMemoryBudget(), selected = configuration();
-  selected.audioCodec.samplerate = samplerate;
-  const prepared = await prepareNativeRecording(file, selected, true, new globalThis.AbortController().signal, { admit, memory });
-  expect(prepared.recovery).toBeUndefined();
-  expect(prepared.initialization.toString('ascii', 4, 8)).toBe('ftyp');
-  expect(prepared.fragments.length).toBeGreaterThan(1);
-  expect(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= 1000.01)).toBe(true);
-  expect(prepared.durationMs).toBeGreaterThan(2000);
-  expect(prepared.durationMs).toBeLessThan(2300);
-  expect(prepared.audioActive).toBe(true);
-  expect(memory.bytes).toBe(prepared.bytes);
-  expect(await fs.stat(file.filePath)).toMatchObject({ size: file.expectedBytes });
-  const outputPath = path.join(directory, 'prepared.mp4');
-  await fs.writeFile(outputPath, Buffer.concat([prepared.initialization, ...prepared.fragments.map(fragment => fragment.data)]), { mode: 0o600 });
-  const decode = spawnSync(checkerPath, [], { input: await fs.readFile(outputPath), encoding: 'utf8' });
-  expect(decode.status).toBe(0); expect(decode.stderr).toBe('');
-  expect(JSON.parse(decode.stdout)).toMatchObject({ videoFrames: 33, videoWidth: 320, videoHeight: 180,
-    audioTracks: 1, audioSampleRate: samplerate === 1 ? 16000 : 24000, audioChannels: 1 });
-  const initialization = prepared.initialization;
-  prepared.dispose(); prepared.dispose();
-  expect(initialization.every(byte => byte === 0)).toBe(true);
-  expect(memory.bytes).toBe(0);
-});
-
-mediaTest('prepares recovery-point metadata clips at the negotiated 1080p Home recording configuration', async () => {
-  const result = spawnSync(fixturePath, ['audio-mp4-sei', '16', '16', '15', '90'], { maxBuffer: 32 * 1024 * 1024 });
-  expect(result.status).toBe(0);
-  const file = await source(result.stdout), memory = new NativeRecordingMemoryBudget(), selected = configuration();
-  selected.videoCodec.resolution = [1920, 1080, 30];
-  selected.videoCodec.parameters = { profile: 0, level: 2, bitRate: 2000, iFrameInterval: 4000 };
-  selected.mediaContainerConfiguration.fragmentLength = 4000;
-  selected.audioCodec.bitrate = 16;
-  const prepared = await prepareNativeRecording(file, selected, true, new globalThis.AbortController().signal, { admit, memory });
-  try {
-    expect(prepared.audioActive).toBe(true);
-    expect(prepared.durationMs).toBeGreaterThan(5900);
-    expect(prepared.durationMs).toBeLessThan(6100);
-    expect(prepared.fragments.length).toBeGreaterThan(1);
-    expect(prepared.fragments.every(fragment => fragment.durationMs > 0 && fragment.durationMs <= 4000.01)).toBe(true);
-    const decoded = spawnSync(checkerPath, [], { input: Buffer.concat([prepared.initialization,
-      ...prepared.fragments.map(fragment => fragment.data)]), encoding: 'utf8' });
-    expect(decoded.status).toBe(0); expect(decoded.stderr).toBe('');
-    const media = JSON.parse(decoded.stdout);
-    expect(media).toMatchObject({ videoFrames: 90, videoWidth: 1920, videoHeight: 1080,
-      audioTracks: 1, audioSampleRate: 16000, audioChannels: 1 });
-    expect(media.lastVideoUs - media.firstVideoUs).toBeCloseTo(89 * 1001 / 15000 * 1_000_000, -1);
-    expect(Math.abs(media.audioSamples / 16 - prepared.durationMs)).toBeLessThan(160);
-    expect(createHash('sha256').update(await fs.readFile(file.filePath)).digest('hex')).toBe(file.expectedSha256);
-  } finally { prepared.dispose(); }
-  expect(memory.bytes).toBe(0);
-}, 150_000);
-
-mediaTest('excludes audio when recording audio permission is off', async () => {
-  const file = await fixture();
-  const prepared = await prepareNativeRecording(file, configuration(), false, new globalThis.AbortController().signal, { admit });
-  // The parser verifies there is exactly one video track and zero audio tracks.
-  expect(prepared.audioActive).toBe(false);
-  expect(prepared.initialization.includes(Buffer.from('soun'))).toBe(false);
-  prepared.dispose();
-});
-
-mediaTest('preserves a sixty-second 30fps source when HomeKit selects 15fps output', async () => {
-  const result = spawnSync(fixturePath, ['video-mp4', '16', '16', '30', '1800'], { maxBuffer: 32 * 1024 * 1024 });
-  expect(result.status).toBe(0);
-  const selected = configuration(); selected.videoCodec.resolution = [16, 16, 15];
-  const prepared = await prepareNativeRecording(await source(result.stdout), selected, false,
-    new globalThis.AbortController().signal, { admit });
-  try {
-    expect(prepared.durationMs).toBeCloseTo(60000, 1);
-    const decode = spawnSync(checkerPath, [], { input: Buffer.concat([prepared.initialization,
-      ...prepared.fragments.map(fragment => fragment.data)]), encoding: 'utf8' });
-    expect(decode.status).toBe(0);
-    expect(JSON.parse(decode.stdout)).toMatchObject({ videoFrames: 900, videoWidth: 16, videoHeight: 16, audioTracks: 0 });
-  } finally { prepared.dispose(); }
-});
-
-mediaTest('fails closed on corrupt input and releases its owned media budget', async () => {
-  const memory = new NativeRecordingMemoryBudget();
-  await expect(prepareNativeRecording(await source(), configuration(), false, new globalThis.AbortController().signal,
-    { admit, memory })).rejects.toMatchObject({ constructor: NativeRecordingPreparationError,
-      diagnostic: { phase: 'output', workerCode: 'MEDIA' } });
-  expect(memory.bytes).toBe(0);
-});
-
-mediaTest('stops output when the shared owned-media budget is exhausted', async () => {
-  const memory = new NativeRecordingMemoryBudget(100);
-  await expect(prepareNativeRecording(await fixture(), configuration(), false, new globalThis.AbortController().signal,
-    { admit, memory })).rejects.toThrow('output exhausted');
-  expect(memory.bytes).toBe(0);
-});
-
-mediaTest.each(['video-mp4', 'audio-mp4-bad-audio'])('salvages real video with negotiated silent AAC when original audio is unusable: %s', async mode => {
-  const bytes = spawnSync(fixturePath, [mode, '320', '180', '15', '90'], { maxBuffer: 32 * 1024 * 1024 });
-  expect(bytes.status).toBe(0);
-  const original = await source(bytes.stdout), memory = new NativeRecordingMemoryBudget(), admission = jest.fn(work => work());
-  const result = await prepareNativeRecording(original, configuration(), true, new globalThis.AbortController().signal, { memory, admit: admission });
-  try {
-    expect(result.recovery).toMatchObject({ attempts: 2 }); expect(result.recovery!.flags & 2).toBe(2);
-    expect(admission).toHaveBeenCalledTimes(1); expect(await fs.readFile(original.filePath)).toEqual(bytes.stdout);
-    const output = Buffer.concat([result.initialization, ...result.fragments.map(fragment => fragment.data)]);
-    const decoded = JSON.parse(spawnSync(checkerPath, [], { input: output, maxBuffer: 65536 }).stdout.toString());
-    expect(decoded).toMatchObject({ videoFrames: 90, audioTracks: 1, audioSampleRate: 16000, audioChannels: 1 });
-    expect(decoded.audioSamples / 16000).toBeCloseTo(6, 0); expect(decoded.audioPeak).toBeLessThan(1e-7); output.fill(0);
-  } finally { result.dispose(); }
-  expect(memory.bytes).toBe(0);
-});
-mediaTest('repairs finite audio clock jitter in the initial conversion without salvage', async () => {
-  const bytes = spawnSync(fixturePath, ['audio-mp4-jitter', '320', '180', '15', '90'], { maxBuffer: 32 * 1024 * 1024 });
-  expect(bytes.status).toBe(0);
-  const original = await source(bytes.stdout), memory = new NativeRecordingMemoryBudget();
-  const result = await prepareNativeRecording(original, configuration(), true, new globalThis.AbortController().signal, { memory, admit });
-  try { expect(result.recovery).toMatchObject({ attempts: 1, flags: 1 }); expect(await fs.readFile(original.filePath)).toEqual(bytes.stdout); }
-  finally { result.dispose(); }
-  expect(memory.bytes).toBe(0);
 });

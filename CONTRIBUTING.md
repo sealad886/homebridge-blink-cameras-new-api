@@ -53,6 +53,13 @@ Run focused tests while iterating, then the broader checks appropriate to the
 change. Jest also supports `npm test -- --watch` and
 `npm test -- --coverage`; coverage output is written to `coverage/`.
 
+Media integration requires an external FFmpeg 6.1+ build with the
+[documented capabilities](docs/streaming.md#packaged-codec-requirements) and a
+locally built protection helper. FFmpeg libraries are not compiled or packaged
+by this project. Set `BLINK_PROTECTION_TEST_WORKER_PATH` to the helper executable
+and optionally `BLINK_FFMPEG_TEST_PATH` to the external FFmpeg for guarded process
+and secrecy integration tests. A skipped media test does not qualify the package.
+
 Tests should prove observable behavior, contracts, security boundaries, or a
 regression rather than mirror private implementation details. Documentation-only
 changes normally need link/example checks, not new unit tests. Review the actual

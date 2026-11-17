@@ -17,12 +17,13 @@ import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createOwnedMediaSession, type OwnedMediaSession } from '../src/accessories/media-session';
-import { loadPackagedMediaWorker } from '../src/accessories/media-worker-artifact';
+import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
 import { Characteristic as HapCharacteristic } from 'hap-nodejs';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 
 jest.mock('../src/accessories/media-session', () => ({ createOwnedMediaSession: jest.fn() }));
-jest.mock('../src/accessories/media-worker-artifact', () => ({ loadPackagedMediaWorker: jest.fn() }));
+jest.mock('../src/accessories/external-ffmpeg', () => ({ ...jest.requireActual('../src/accessories/external-ffmpeg'), resolveExternalFfmpegPath: jest.fn(() => '/external/ffmpeg') }));
+jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn() }));
 jest.mock('../src/blink-api/immis-proxy', () => ({ ImmisProxyServer: jest.fn() }));
 jest.mock('node:child_process', () => ({ spawn: jest.fn(() => { throw new Error('Unexpected media CLI'); }) }));
 jest.mock('node:dgram', () => {
@@ -50,12 +51,11 @@ function streamingRuntime(source: BlinkCameraSource) {
       retire: jest.fn(() => close()), stop: jest.fn(() => close()),
     });
   }
-  jest.mocked(loadPackagedMediaWorker).mockReturnValue('/verified/worker');
+  jest.mocked(loadPackagedProtectionWorker).mockReturnValue('/verified/worker');
   jest.mocked(createOwnedMediaSession).mockImplementation(async () => {
     let close!: () => void;
     const session: OwnedMediaSession = {
       whenClosed: new Promise<void>(resolve => { close = resolve; }), failed: false,
-      audioTiming: { initialPaddingSamples: 0, skipStartSamples: 0, skipEndSamples: 0 },
       write: jest.fn(async () => {}), end: jest.fn(async () => {}),
       stop: jest.fn(async () => { if (state.closeMedia) close(); }),
     };

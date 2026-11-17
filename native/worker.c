@@ -1,559 +1,139 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Prototype: owned MPEG-TS input -> H.264 packet output. No network URL APIs.
- */
-#include "protocol.h"
-#include <errno.h>
+ * libSRTP-only packet protection and constrained external executable launcher.
+ * No codec libraries, provider URLs, output sockets or media parsing. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#ifndef _WIN32
 #include <signal.h>
-#include <sys/resource.h>
-#endif
+#include "protocol.h"
 #ifdef _WIN32
 #include <windows.h>
-#include <fcntl.h>
 #include <io.h>
-typedef CRITICAL_SECTION Mutex;
-typedef CONDITION_VARIABLE Condition;
-#define LOCK(m) EnterCriticalSection(m)
-#define UNLOCK(m) LeaveCriticalSection(m)
-#define WAKE(c) WakeAllConditionVariable(c)
-#define WAIT(c,m) SleepConditionVariableCS(c,m,15000)
-#else
-#include <pthread.h>
-typedef pthread_mutex_t Mutex;
-typedef pthread_cond_t Condition;
-#define LOCK(m) pthread_mutex_lock(m)
-#define UNLOCK(m) pthread_mutex_unlock(m)
-#define WAKE(c) pthread_cond_broadcast(c)
-static int wait_condition(Condition *c, Mutex *m) {
-    struct timespec until; clock_gettime(CLOCK_REALTIME, &until); until.tv_sec += 15;
-    return pthread_cond_timedwait(c, m, &until) == 0;
-}
-#define WAIT(c,m) wait_condition(c,m)
+#include <fcntl.h>
+#include <wchar.h>
+/* MinGW-w64 exposes the attribute number but omits this Windows SDK macro. */
+#ifndef PROC_THREAD_ATTRIBUTE_JOB_LIST
+#define PROC_THREAD_ATTRIBUTE_JOB_LIST ProcThreadAttributeValue(13,FALSE,TRUE,FALSE)
 #endif
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/avutil.h>
-#include <libavutil/opt.h>
-#include <libavutil/intreadwrite.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/time.h>
-#include <libswscale/swscale.h>
-
-#define CAPACITY (1024u * 1024u)
-#define MAX_FRAME (64u * 1024u)
-#define MAX_MEDIA (128u * 1024u * 1024u)
-#define MAX_PACKET (CAPACITY - 60u)
-#define MAX_INPUT_DIMENSION 4096
-#define MAX_INPUT_PIXELS 8388608
-static Mutex mutex;
-static Condition changed;
-static uint8_t queue[CAPACITY];
-static size_t first, available;
-static int configured, ended, reader_closed;
-static uint32_t config[16], recovery_flags;
-static int salvage_silence;
-/* Finite MP4 mode receives all bounded bytes before the demuxer can seek.
- * Neither the decoder nor its child protocols receives a filesystem capability. */
-static uint8_t *file_input;
-static size_t file_size,file_position;
-static int64_t started;
-static uint32_t consumed_media;
-static void fatal(const char *code) { fprintf(stderr, "BLINK_WORKER_%s\n", code); fflush(stderr); _Exit(2); }
+#else
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
+static void fatal(const char *code) { fprintf(stderr,"BLINK_PROTECTION_%s\n",code);fflush(stderr);_Exit(2); }
 static uint32_t u32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
-static void put32(uint8_t *p, uint32_t n) { p[0]=n>>24; p[1]=n>>16; p[2]=n>>8; p[3]=n; }
-static void put64(uint8_t *p, int64_t n) { uint64_t v=(uint64_t)n; put32(p,(uint32_t)(v>>32)); put32(p+4,(uint32_t)v); }
-static int exact(void *target, size_t length) {
-    uint8_t *p=target; size_t used=0;
-    while (used<length) { size_t n=fread(p+used,1,length-used,stdin); if(!n) return used? -1:0; used+=n; }
-    return 1;
+static void put32(uint8_t *p,uint32_t n) { p[0]=n>>24;p[1]=n>>16;p[2]=n>>8;p[3]=n; }
+static void output(uint32_t type,const uint8_t *data,uint32_t length) {
+    uint8_t header[12];memcpy(header,BLINK_OUTPUT_MAGIC,4);put32(header+4,type);put32(header+8,length);
+    if(length>2070 || fwrite(header,1,12,stdout)!=12 || fwrite(data,1,length,stdout)!=length || fflush(stdout))fatal("OUTPUT");
 }
-static void silence(void *context, int level, const char *format, va_list arguments) { (void)context;(void)level;(void)format;(void)arguments; }
-#include "output.inc"
 #include "protection.inc"
-static void read_messages(void) {
-    uint8_t header[12], payload[MAX_FRAME]; uint64_t total=0;
-    for (;;) {
-        int result=exact(header,sizeof(header));
-        if (result==0) { LOCK(&mutex); int finished=ended; if(finished){reader_closed=1;WAKE(&changed);} UNLOCK(&mutex); if(finished) return; fatal("TRUNCATED"); }
-        if(result<0 || memcmp(header,BLINK_INPUT_MAGIC,4)) fatal("FRAMING");
-        uint32_t type=u32(header+4), length=u32(header+8);
-        if(length>MAX_FRAME) fatal("FRAMING");
-        if(length && exact(payload,length)!=1) fatal("TRUNCATED");
-        if(type==BLINK_STOP && length==0) _Exit(0); /* STOP never waits on codec/output/queue. */
-        if(type>=10 && type<=12) { protect_message(type,payload,length); LOCK(&mutex);WAKE(&changed);UNLOCK(&mutex); continue; }
-        LOCK(&mutex);
-        if(type==1 && !configured && !ended && length==BLINK_CONFIG_BYTES) {
-            for(int i=0;i<16;i++) config[i]=u32(payload+4*i);
-            if(!config[0] || !config[1] || config[0]>1920 || config[1]>1080 ||
-               (config[0]&1) || (config[1]&1) || config[2]<1 || config[2]>30 ||
-               config[3]<20000 || config[3]>8000000 || config[4]<1 || config[4]>9000 || config[5]>1) fatal("CONFIG");
-            if(config[10]>2 || config[11]>2)fatal("CONFIG");
-            uint32_t blocks=((config[0]+15)/16)*((config[1]+15)/16);
-            const uint32_t max_blocks[]={3600,5120,8192},max_block_rate[]={108000,216000,245760};
-            if(blocks>max_blocks[config[11]] || blocks*config[2]>max_block_rate[config[11]])fatal("CONFIG");
-            if(config[13]>3 || (!config[13] && (config[14] || config[15])) ||
-               (config[13] && (config[14]<1000 || config[14]>4000 || config[15]<1000 || config[15]>4000 || config[15]>config[14])))fatal("CONFIG");
-            if(config[6]>4 || (config[13]?(config[6]!=0 && config[6]!=4):config[6]==4) || (!config[6] && (config[7] || config[8] || config[9])) ||
-               (config[6] && (config[8]!=1 || config[9]<8000 || config[9]>128000 ||
-               (config[6]==1 || config[6]==4?(config[7]!=16000 && config[7]!=24000):config[7]!=8000)))) fatal("AUDIO_CONFIG");
-            if(config[6]==1?(config[12]!=10 && config[12]!=20 && config[12]!=40 && config[12]!=60):config[12]!=0)fatal("AUDIO_CONFIG");
-            if(config[13]>=2) { file_input=av_malloc(BLINK_FILE_INPUT_MAX);if(!file_input)fatal("MEMORY"); }
-            configured=1;
-        } else if(type==2 && configured && !ended && length) {
-            total+=length;
-            if(config[13]>=2) {
-                if(total>BLINK_FILE_INPUT_MAX)fatal("INPUT_LIMIT");
-                memcpy(file_input+file_size,payload,length);file_size+=length;
-                consumed_media+=(uint32_t)length;
-                uint8_t credit[4];put32(credit,consumed_media);output(BLINK_MEDIA_CONSUMED,credit,sizeof(credit));
-            } else {
-                if(total>MAX_MEDIA || available+length>CAPACITY)fatal("INPUT_LIMIT");
-                size_t tail=(first+available)%CAPACITY;
-                size_t a=length<CAPACITY-tail?length:CAPACITY-tail;
-                memcpy(queue+tail,payload,a); memcpy(queue,payload+a,length-a); available+=length;
-            }
-        } else if(type==3 && configured && !ended && length==0) ended=1;
-        else fatal("FRAMING");
-        WAKE(&changed); UNLOCK(&mutex);
-    }
-}
-static void watch_time(void) {
-    for (;;) {
+static void suppress_crashes(void) {
 #ifdef _WIN32
-        Sleep(100);
+    const UINT mode=SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX;SetErrorMode(mode);
+    if((GetErrorMode()&mode)!=mode)fatal("ERROR_MODE");
+    if(_setmode(_fileno(stdin),_O_BINARY)<0 || _setmode(_fileno(stdout),_O_BINARY)<0)fatal("IO_SETUP");
 #else
-        struct timespec pause = {0, 100000000}; nanosleep(&pause, NULL);
+    struct rlimit core={0,0},files={0,0},cpu={300,300};
+    if(setrlimit(RLIMIT_CORE,&core) || getrlimit(RLIMIT_CORE,&core) || core.rlim_cur || core.rlim_max)fatal("CORE_LIMIT");
+    if(setrlimit(RLIMIT_FSIZE,&files) || setrlimit(RLIMIT_CPU,&cpu))fatal("RESOURCE_LIMIT");
+    signal(SIGPIPE,SIG_IGN);
 #endif
-        check_output_deadline();
-        if (av_gettime_relative()-started>300000000) fatal("TIME_LIMIT");
-    }
 }
-#ifdef _WIN32
-static DWORD WINAPI watchdog(void *unused) { (void)unused; watch_time(); return 0; }
-#else
-static void *watchdog(void *unused) { (void)unused; watch_time(); return NULL; }
-#endif
-#ifdef _WIN32
-static DWORD WINAPI reader(void *unused) { (void)unused; read_messages(); return 0; }
-#else
-static void *reader(void *unused) { (void)unused; read_messages(); return NULL; }
-#endif
-static int read_media(void *unused, uint8_t *target, int count) {
-    (void)unused; LOCK(&mutex);
-    while(!available && !ended) if(!WAIT(&changed,&mutex)) fatal("INPUT_TIMEOUT");
-    if(av_gettime_relative()-started>300000000) fatal("TIME_LIMIT");
-    if(!available) { UNLOCK(&mutex); return AVERROR_EOF; }
-    size_t n=available<(size_t)count?available:(size_t)count;
-    size_t a=n<CAPACITY-first?n:CAPACITY-first;
-    memcpy(target,queue+first,a); memcpy(target+a,queue,n-a);
-    first=(first+n)%CAPACITY; available-=n; UNLOCK(&mutex);
-    consumed_media+=(uint32_t)n;
-    uint8_t credit[4];put32(credit,consumed_media);output(BLINK_MEDIA_CONSUMED,credit,sizeof(credit));
-    return (int)n;
-}
-static int read_file_media(void *unused,uint8_t *target,int count) {
-    (void)unused;
-    if(count<=0)return AVERROR(EINVAL);
-    if(file_position==file_size)return AVERROR_EOF;
-    size_t length=file_size-file_position;if(length>(size_t)count)length=(size_t)count;
-    memcpy(target,file_input+file_position,length);file_position+=length;return (int)length;
-}
-static int64_t seek_file_media(void *unused,int64_t offset,int whence) {
-    (void)unused;whence&=~AVSEEK_FORCE;
-    if(whence==AVSEEK_SIZE)return (int64_t)file_size;
-    int64_t origin=whence==SEEK_SET?0:whence==SEEK_CUR?(int64_t)file_position:whence==SEEK_END?(int64_t)file_size:-1;
-    if(origin<0 || offset< -origin || offset>(int64_t)file_size-origin)return AVERROR(EINVAL);
-    file_position=(size_t)(origin+offset);return (int64_t)file_position;
-}
-/* Custom media bytes are the only I/O capability. Reject secondary library opens. */
-static int deny_open(AVFormatContext *context, AVIOContext **io, const char *url,
-                     int flags, AVDictionary **options) {
-    (void)context; (void)io; (void)url; (void)flags; (void)options;
-    return AVERROR(EPERM);
-}
-static int interrupted(void *unused) { (void)unused; return av_gettime_relative()-started>300000000; }
-#include "recording.inc"
-static void packets(AVCodecContext *encoder, AVPacket *packet, uint64_t *bytes,uint32_t type) {
-    int result;
-    while((result=avcodec_receive_packet(encoder,packet))>=0) {
-        if(packet->size<=0 || (uint32_t)packet->size>MAX_PACKET || *bytes+(uint32_t)packet->size>64u*1024u*1024u) fatal("OUTPUT_LIMIT");
-        *bytes+=(uint32_t)packet->size;
-        if(config[13]) { recording_packet(encoder,packet,type);av_packet_unref(packet);continue; }
-        uint32_t length=48+(uint32_t)packet->size;
-        uint8_t *framed=av_malloc(length); if(!framed) fatal("MEMORY");
-        put64(framed,av_rescale_q(packet->pts,encoder->time_base,AV_TIME_BASE_Q));
-        put64(framed+8,av_rescale_q(packet->dts,encoder->time_base,AV_TIME_BASE_Q));
-        put64(framed+16,av_rescale_q(packet->duration,encoder->time_base,AV_TIME_BASE_Q));
-        put32(framed+24,(uint32_t)(packet->flags&AV_PKT_FLAG_KEY));put32(framed+28,type==2?1:2);put32(framed+32,1);put32(framed+36,1000000);
-        size_t side_length=0; const uint8_t *side=av_packet_get_side_data(packet,AV_PKT_DATA_SKIP_SAMPLES,&side_length);
-        if(side && side_length<10)fatal("PACKET_METADATA");
-        put32(framed+40,side?AV_RL32(side):0);put32(framed+44,side?AV_RL32(side+4):0);
-        memcpy(framed+48,packet->data,(size_t)packet->size); output(type,framed,length);
-        av_free(framed); av_packet_unref(packet);
-    }
-    if(result!=AVERROR(EAGAIN) && result!=AVERROR_EOF) fatal("ENCODE");
-}
-static void audio_silence_until(int64_t end,uint64_t *bytes);
-static void encode_picture(AVCodecContext *encoder,AVFrame *picture,AVPacket *packet,uint64_t *bytes,int64_t *keyframe_pts) {
-    picture->pict_type=AV_PICTURE_TYPE_NONE;
-    /* Demuxed AAC may lead the current picture by one source-picture interval. */
-    int64_t target=recording_fragment_target-(config[13]>=2 && config[6]?picture->duration:0);
-    if(config[13] && (*keyframe_pts==AV_NOPTS_VALUE ||
-       (config[13]>=2?picture->pts-*keyframe_pts+picture->duration>target:
-                       picture->pts-*keyframe_pts>=recording_fragment_target-1))) {
-        picture->pict_type=AV_PICTURE_TYPE_I;*keyframe_pts=picture->pts;
-    }
-    if(avcodec_send_frame(encoder,picture)<0)fatal("ENCODE");
-    packets(encoder,packet,bytes,BLINK_VIDEO_PACKET);
-    if(salvage_silence)audio_silence_until(picture->pts+picture->duration,bytes);
-}
-#include "audio.inc"
-
-/* Blink stores recovery SEI as a timed MP4 sample without a picture. Keep its
- * metadata with the next picture, excluding only proved contiguous empty slots. */
-static uint8_t *video_metadata;
-static size_t video_metadata_size;
-static int64_t video_source_end=AV_NOPTS_VALUE,video_metadata_start,video_clock_offset;
-static int sei_payload_valid(const uint8_t *nal,size_t length) {
-    uint8_t *rbsp=av_malloc(length);if(!rbsp)fatal("MEMORY");
-    size_t size=0;int zeros=0,valid=0;
-    for(size_t i=1;i<length;i++) {
-        if(zeros==2 && nal[i]==3) {
-            if(i+1>=length || nal[i+1]>3)goto done;
-            zeros=0;continue;
-        }
-        rbsp[size++]=nal[i];zeros=nal[i]==0?zeros+1:0;
-    }
-    if(!size || rbsp[size-1]!=0x80)goto done;
-    size_t position=0;
-    while(position<size-1) {
-        while(position<size-1 && rbsp[position]==255)position++;
-        if(position>=size-1)goto done;
-        position++;size_t payload=0;
-        while(position<size-1 && rbsp[position]==255) { payload+=255;position++; }
-        if(position>=size-1)goto done;
-        payload+=rbsp[position++];
-        if(payload>size-1-position)goto done;
-        position+=payload;
-    }
-    valid=position==size-1;
-done:
-    av_free(rbsp);return valid;
-}
-static int normalize_video_metadata(AVPacket *packet,AVStream *stream) {
-    AVCodecParameters *params=stream->codecpar;
-    if(config[13]<2 || params->extradata_size<7 || params->extradata[0]!=1)return 0;
-    unsigned width=(params->extradata[4]&3)+1;size_t position=0;int only_sei=1,has_picture=0;
-    while(position<(size_t)packet->size) {
-        if((size_t)packet->size-position<width)fatal("DECODE");
-        uint32_t length=0;for(unsigned i=0;i<width;i++)length=(length<<8)|packet->data[position++];
-        if(!length || length>(size_t)packet->size-position || packet->data[position]&0x80)fatal("DECODE");
-        unsigned type=packet->data[position]&31;
-        if(type!=6)only_sei=0;
-        else if(!sei_payload_valid(packet->data+position,length))fatal("DECODE");
-        if(type>=1 && type<=5)has_picture=1;
-        position+=length;
-    }
-    if(only_sei && packet->size) {
-        int64_t duration_us=av_rescale_q(packet->duration,stream->time_base,AV_TIME_BASE_Q);
-        if(packet->pts==AV_NOPTS_VALUE || packet->pts!=packet->dts || packet->duration<=0 ||
-           video_source_end==AV_NOPTS_VALUE || packet->dts!=video_source_end ||
-           packet->dts>INT64_MAX-packet->duration ||
-           duration_us<=0 || duration_us>1000000)fatal("VIDEO_DISCONTINUITY");
-        if((size_t)packet->size>2u*1024u*1024u-video_metadata_size)fatal("PACKET_LIMIT");
-        if(!video_metadata_size)video_metadata_start=packet->dts;
-        uint8_t *owned=av_realloc(video_metadata,video_metadata_size+(size_t)packet->size);if(!owned)fatal("MEMORY");
-        video_metadata=owned;memcpy(owned+video_metadata_size,packet->data,(size_t)packet->size);
-        video_metadata_size+=(size_t)packet->size;video_source_end=packet->dts+packet->duration;return 1;
-    }
-    if(video_metadata_size) {
-        uint64_t extra=(uint64_t)video_source_end-(uint64_t)video_metadata_start;
-        if(!has_picture || packet->pts!=packet->dts || packet->dts!=video_source_end ||
-           extra>(uint64_t)(INT64_MAX-video_clock_offset))fatal("VIDEO_DISCONTINUITY");
-        video_clock_offset+=(int64_t)extra;
-        if(av_rescale_q(video_clock_offset,stream->time_base,AV_TIME_BASE_Q)>90000000)fatal("RECORDING_DURATION");
-        if((size_t)packet->size>2u*1024u*1024u-video_metadata_size)fatal("PACKET_LIMIT");
-        int original=packet->size;
-        if(av_grow_packet(packet,(int)video_metadata_size)<0)fatal("MEMORY");
-        memmove(packet->data+video_metadata_size,packet->data,(size_t)original);
-        memcpy(packet->data,video_metadata,video_metadata_size);av_freep(&video_metadata);video_metadata_size=0;
-    }
-    if(video_clock_offset && (packet->pts==AV_NOPTS_VALUE || packet->dts==AV_NOPTS_VALUE || packet->duration<=0 ||
-       packet->dts>INT64_MAX-packet->duration || packet->pts<INT64_MIN+video_clock_offset ||
-       packet->dts<INT64_MIN+video_clock_offset))fatal("VIDEO_TIMESTAMP");
-    video_source_end=packet->dts!=AV_NOPTS_VALUE && packet->duration>0 && packet->dts<=INT64_MAX-packet->duration?
-        packet->dts+packet->duration:AV_NOPTS_VALUE;
-    packet->pts-=video_clock_offset;packet->dts-=video_clock_offset;return 0;
-}
-
-static int salvage_audio_usable(AVFormatContext *input) {
-    AVCodecContext *decoder=NULL;AVFrame *frame=av_frame_alloc();AVPacket *packet=av_packet_alloc();
-    if(!frame || !packet)fatal("MEMORY");
-    int stream=-1,usable=1,rate=0,channels=0,format=-1,result;
-    int64_t first=AV_NOPTS_VALUE,end=AV_NOPTS_VALUE,video_first=AV_NOPTS_VALUE,video_end=AV_NOPTS_VALUE;
-    uint64_t samples=0;
+static int run_protection(void) {
+    if(srtp_get_version()!=0x02080001u || srtp_init()!=srtp_err_status_ok)fatal("SRTP_INIT");
+    uint8_t header[12],payload[8+BLINK_PROTECTION_PLAINTEXT_MAX];
     for(;;) {
-        if(interrupted(NULL))fatal("TIME_LIMIT");
-        result=av_read_frame(input,packet);
-        if(result<0 && result!=AVERROR_EOF) { usable=0;break; }
-        if(result>=0) {
-            if(packet->size>2*1024*1024)fatal("PACKET_LIMIT");
-            AVStream *track=input->streams[packet->stream_index];
-            if(track->codecpar->codec_type==AVMEDIA_TYPE_VIDEO && packet->pts!=AV_NOPTS_VALUE && packet->duration>0) {
-                int64_t pts=av_rescale_q(packet->pts,track->time_base,AV_TIME_BASE_Q),duration=av_rescale_q(packet->duration,track->time_base,AV_TIME_BASE_Q);
-                if(duration<=0 || duration>1000000 || pts>INT64_MAX-duration)fatal("VIDEO_TIMESTAMP");
-                if(video_first==AV_NOPTS_VALUE || pts<video_first)video_first=pts;
-                if(video_end==AV_NOPTS_VALUE || pts+duration>video_end)video_end=pts+duration;
-            }
-            if(track->codecpar->codec_type!=AVMEDIA_TYPE_AUDIO || !usable) { av_packet_unref(packet);continue; }
-            if(stream<0) {
-                stream=packet->stream_index;
-                if((track->codecpar->codec_id!=AV_CODEC_ID_AAC && track->codecpar->codec_id!=AV_CODEC_ID_AAC_LATM) ||
-                   track->codecpar->sample_rate<8000 || track->codecpar->sample_rate>48000 ||
-                   track->codecpar->ch_layout.nb_channels<1 || track->codecpar->ch_layout.nb_channels>2)usable=0;
-                if(usable) {
-                    const AVCodec *codec=avcodec_find_decoder(track->codecpar->codec_id);decoder=avcodec_alloc_context3(codec);
-                    if(!decoder)fatal("MEMORY");
-                    if(avcodec_parameters_to_context(decoder,track->codecpar)<0)usable=0;
-                    decoder->thread_count=1;decoder->pkt_timebase=track->time_base;
-                    if(usable && avcodec_open2(decoder,codec,NULL)<0)usable=0;
-                }
-            }
-            if(packet->stream_index!=stream || !usable) { av_packet_unref(packet);continue; }
-        }
-        if(!decoder || !usable) { av_packet_unref(packet);if(result<0)break;continue; }
-        if(avcodec_send_packet(decoder,result>=0?packet:NULL)<0)usable=0;
-        av_packet_unref(packet);
-        int received=AVERROR_EOF;
-        while(usable && (received=avcodec_receive_frame(decoder,frame))>=0) {
-            int current_rate=frame->sample_rate,current_channels=frame->ch_layout.nb_channels;
-            if(current_rate<8000 || current_rate>48000 || current_channels<1 || current_channels>2 ||
-               frame->nb_samples<1 || frame->nb_samples>8192 || frame->best_effort_timestamp==AV_NOPTS_VALUE ||
-               frame->decode_error_flags || (frame->flags&AV_FRAME_FLAG_CORRUPT) ||
-               (rate && (rate!=current_rate || channels!=current_channels || format!=frame->format))) { usable=0;break; }
-            rate=current_rate;channels=current_channels;format=frame->format;
-            int64_t pts=av_rescale_q(frame->best_effort_timestamp,input->streams[stream]->time_base,AV_TIME_BASE_Q);
-            int64_t duration=av_rescale_q(frame->nb_samples,(AVRational){1,rate},AV_TIME_BASE_Q);
-            if(pts>INT64_MAX-300000000 || pts<INT64_MIN+300000000) { usable=0;break; }
-            if(first==AV_NOPTS_VALUE)first=pts;
-            int64_t expected=first+av_rescale_q((int64_t)samples,(AVRational){1,rate},AV_TIME_BASE_Q);
-            uint64_t distance=pts>=expected?(uint64_t)pts-(uint64_t)expected:(uint64_t)expected-(uint64_t)pts;
-            if(distance>1000000)usable=0;
-            samples+=(uint64_t)frame->nb_samples;if(samples>300u*(uint32_t)rate)fatal("AUDIO_LIMIT");
-            end=pts+duration;av_frame_unref(frame);
-        }
-        if(received!=AVERROR(EAGAIN) && received!=AVERROR_EOF)usable=0;
-        if(result<0)break;
+        size_t count=fread(header,1,sizeof(header),stdin);
+        if(!count && feof(stdin))break;
+        if(count!=sizeof(header) || memcmp(header,BLINK_INPUT_MAGIC,4))fatal("FRAMING");
+        uint32_t type=u32(header+4),length=u32(header+8);
+        if(type==BLINK_STOP) { if(length)fatal("FRAMING");break; }
+        if((type!=BLINK_PROTECTION_INIT && type!=BLINK_PROTECT_RTP && type!=BLINK_PROTECT_RTCP) || length>sizeof(payload))fatal("FRAMING");
+        if(fread(payload,1,length,stdin)!=length)fatal("TRUNCATED");
+        protect_message(type,payload,length);erase_bytes(payload,sizeof(payload));
     }
-    av_frame_free(&frame);av_packet_free(&packet);avcodec_free_context(&decoder);
-    if(first==AV_NOPTS_VALUE || end==AV_NOPTS_VALUE || video_first==AV_NOPTS_VALUE || video_end==AV_NOPTS_VALUE)return 0;
-    /* The normal muxer allows two AAC access units for priming/final padding. */
-    int64_t margin=av_rescale_rnd(2048,1000000,config[7],AV_ROUND_UP)+2000;
-    uint64_t start_distance=first>=video_first?(uint64_t)first-(uint64_t)video_first:(uint64_t)video_first-(uint64_t)first;
-    uint64_t end_distance=end>=video_end?(uint64_t)end-(uint64_t)video_end:(uint64_t)video_end-(uint64_t)end;
-    return usable && start_distance<=(uint64_t)margin && end_distance<=(uint64_t)margin;
+    close_protection();srtp_shutdown();erase_bytes(payload,sizeof(payload));return 0;
 }
-
-static AVFormatContext *open_media_input(AVIOContext **owned_io) {
-    AVFormatContext *input=avformat_alloc_context(); if(!input) fatal("MEMORY");
-    uint8_t *buffer=av_malloc(32768); if(!buffer) fatal("MEMORY");
-    *owned_io=avio_alloc_context(buffer,32768,0,NULL,config[13]>=2?read_file_media:read_media,NULL,config[13]>=2?seek_file_media:NULL); if(!*owned_io) fatal("MEMORY");
-    AVIOContext *io=*owned_io;
-    input->pb=io; input->flags|=AVFMT_FLAG_CUSTOM_IO; input->io_open=deny_open;
-    const char *format_name=config[13]>=2?"mov":"mpegts";
-    input->protocol_whitelist=av_strdup(""); input->format_whitelist=av_strdup(format_name);
-    if(!input->protocol_whitelist || !input->format_whitelist) fatal("MEMORY");
-    const AVInputFormat *demuxer=av_find_input_format(format_name);
-    if(!demuxer) fatal("DEMUXER");
-    input->interrupt_callback.callback=interrupted; input->probesize=64*1024; input->max_analyze_duration=1000000; input->max_probe_packets=32; input->max_streams=8;
-    AVDictionary *options=NULL;
-    if(av_dict_set(&options,"codec_whitelist","h264,aac,aac_latm",0)<0 ||
-       av_dict_set_int(&options,"max_packet_size",256*1024,0)<0 ||
-       av_dict_set_int(&options,"resync_size",65536,0)<0 ||
-       av_dict_set_int(&options,"enable_drefs",0,0)<0 ||
-       av_dict_set_int(&options,"use_absolute_path",0,0)<0) fatal("MEMORY");
-    if(avformat_open_input(&input,NULL,demuxer,&options)<0) { fatal("MEDIA"); }
-    av_dict_free(&options);
-    return input;
-}
-
-int main(int argc, char **argv) {
-    (void)argv; if(argc!=1) fatal("ARGUMENTS");
 #ifdef _WIN32
-    if (_setmode(_fileno(stdin),_O_BINARY)<0 || _setmode(_fileno(stdout),_O_BINARY)<0) fatal("IO_SETUP");
-    const UINT error_mode=SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX;
-    SetErrorMode(error_mode);
-    if((GetErrorMode()&error_mode)!=error_mode)fatal("ERROR_MODE");
-    InitializeCriticalSection(&mutex); InitializeConditionVariable(&changed);
-#else
-    struct rlimit core_limit={0,0};
-    if(setrlimit(RLIMIT_CORE,&core_limit))fatal("CORE_LIMIT");
-    if(getrlimit(RLIMIT_CORE,&core_limit) || core_limit.rlim_cur || core_limit.rlim_max)fatal("CORE_LIMIT");
-    signal(SIGPIPE, SIG_IGN); pthread_mutex_init(&mutex,NULL); pthread_cond_init(&changed,NULL);
-#endif
-    av_log_set_callback(silence);av_max_alloc(64u*1024u*1024u); started=av_gettime_relative();
-    start_output(); if(srtp_get_version()!=0x02080001u)fatal("SRTP_VERSION"); if(srtp_init()!=srtp_err_status_ok)fatal("SRTP_INIT");
-    /* Fail closed on ABI/version drift instead of accidentally using ffmpeg@4. */
-    if(avcodec_version()!=AV_VERSION_INT(63,1,102) || avformat_version()!=AV_VERSION_INT(63,1,102) || avutil_version()!=AV_VERSION_INT(61,1,102)) fatal("VERSION");
-#ifdef _WIN32
-    HANDLE thread=CreateThread(NULL,0,reader,NULL,0,NULL); if(!thread) fatal("THREAD"); CloseHandle(thread);
-    thread=CreateThread(NULL,0,watchdog,NULL,0,NULL); if(!thread) fatal("THREAD"); CloseHandle(thread);
-#else
-    pthread_t thread; if(pthread_create(&thread,NULL,reader,NULL)) fatal("THREAD"); pthread_detach(thread);
-    if(pthread_create(&thread,NULL,watchdog,NULL)) { fatal("THREAD"); }
-    pthread_detach(thread);
-#endif
-    LOCK(&mutex); while(!configured) if(!WAIT(&changed,&mutex)) fatal("CONFIG_TIMEOUT"); UNLOCK(&mutex);
-    uint8_t status[8]; put32(status,BLINK_PROTOCOL_VERSION); put32(status+4,config[2]); output(1,status,sizeof(status));
-    if(config[13]>=2) {
-        LOCK(&mutex);while(!ended)if(!WAIT(&changed,&mutex))fatal("INPUT_TIMEOUT");UNLOCK(&mutex);
-        if(!file_size)fatal("MEDIA");
-    }
-    AVIOContext *io=NULL;
-    AVFormatContext *input=open_media_input(&io);
-    if(config[13]==3 && config[6]) {
-        salvage_silence=!salvage_audio_usable(input);
-        avformat_close_input(&input);av_freep(&io->buffer);avio_context_free(&io);
-        file_position=0;input=open_media_input(&io);
-        if(salvage_silence)recovery_flags|=2;
-    }
-    AVDictionary *options=NULL;
-    AVCodecContext *decoder=NULL;
-    const AVCodec *codec=avcodec_find_encoder_by_name("libx264"); if(!codec) fatal("ENCODER");
-    AVCodecContext *encoder=avcodec_alloc_context3(codec); if(!encoder) fatal("MEMORY");
-    encoder->width=(int)config[0]; encoder->height=(int)config[1]; encoder->time_base=AV_TIME_BASE_Q; encoder->framerate=(AVRational){(int)config[2],1};
-    encoder->pix_fmt=AV_PIX_FMT_YUV420P; encoder->sample_aspect_ratio=(AVRational){1,1}; encoder->bit_rate=config[3]; encoder->gop_size=(int)config[2]; encoder->max_b_frames=0; encoder->thread_count=1;
-    if(config[13]>=2 && config[6]) {
-        /* Leave room for AAC priming and one complete access unit inside the
-         * selected finite fragment, including a one-second HomeKit selection. */
-        int64_t margin=av_rescale_rnd(2048,1000,config[7],AV_ROUND_UP);
-        int64_t frames=(int64_t)config[2]*((int64_t)config[14]-margin)/1000;
-        encoder->gop_size=(int)FFMAX(1,FFMIN(encoder->gop_size,frames));
-    }
-    if(config[13]==3) {
-        int conservative=FFMAX(1,(int)config[2]/2);
-        if(conservative<encoder->gop_size) { encoder->gop_size=conservative;recovery_flags|=4; }
-    }
-    const int profiles[]={AV_PROFILE_H264_BASELINE,AV_PROFILE_H264_MAIN,AV_PROFILE_H264_HIGH},levels[]={31,32,40};
-    encoder->profile=profiles[config[10]];encoder->level=levels[config[11]];
-    encoder->rc_max_rate=config[3];encoder->rc_buffer_size=(int)config[3];
-    if(config[13])encoder->flags|=AV_CODEC_FLAG_GLOBAL_HEADER;
-    if(config[13]>=2)encoder->flags|=AV_CODEC_FLAG_FRAME_DURATION;
-    /* Profiles are exact: libx264 applies these public options after the preset.
-     * CABAC distinguishes Main; the 8x8 transform distinguishes High. */
-    if(av_dict_set(&options,"preset",config[5]?"ultrafast":"veryfast",0)<0 ||
-       av_dict_set(&options,"tune","zerolatency",0)<0 ||
-       av_dict_set(&options,"coder",config[10]?"cabac":"cavlc",0)<0 ||
-       av_dict_set_int(&options,"8x8dct",config[10]==2,0)<0)fatal("MEMORY");
-    if(config[13] && (av_dict_set_int(&options,"sc_threshold",0,0)<0 ||
-       av_dict_set_int(&options,"forced-idr",1,0)<0))fatal("MEMORY");
-    if(avcodec_open2(encoder,codec,&options)<0) { fatal("ENCODER"); }
-    av_dict_free(&options);
-    if(config[13]) { if(config[6])audio_open_encoder();recording_open(encoder,audio_encoder); }
-    AVFrame *decoded=av_frame_alloc(), *scaled=av_frame_alloc(); AVPacket *packet=av_packet_alloc(), *encoded=av_packet_alloc();
-    if(!decoded || !scaled || !packet || !encoded) fatal("MEMORY");
-    scaled->format=AV_PIX_FMT_YUV420P; scaled->width=encoder->width; scaled->height=encoder->height;scaled->sample_aspect_ratio=(AVRational){1,1};
-    if(av_frame_get_buffer(scaled,32)<0) fatal("MEMORY");
-    struct SwsContext *scaler=NULL; uint32_t frames=0; uint64_t bytes=0; int video=-1, result,source_reported=0;
-    int64_t first_video_pts=AV_NOPTS_VALUE,last_selected_pts=AV_NOPTS_VALUE,last_source_pts=AV_NOPTS_VALUE,next_output_frame=0;
-    int64_t recording_keyframe_pts=AV_NOPTS_VALUE;int pending_picture=0;
-    for (;;) {
-        result=av_read_frame(input,packet);
-        if(result<0 && result!=AVERROR_EOF) fatal("MEDIA");
-        if(result>=0) {
-            if(packet->size>2*1024*1024) fatal("PACKET_LIMIT");
-            if(video<0 && input->streams[packet->stream_index]->codecpar->codec_type==AVMEDIA_TYPE_VIDEO) {
-                video=packet->stream_index; AVCodecParameters *params=input->streams[video]->codecpar;
-                if(params->codec_id!=AV_CODEC_ID_H264) fatal("CODEC");
-                codec=avcodec_find_decoder(AV_CODEC_ID_H264); decoder=avcodec_alloc_context3(codec); if(!decoder) fatal("MEMORY");
-                if(avcodec_parameters_to_context(decoder,params)<0) fatal("DECODE");
-                decoder->pkt_timebase=input->streams[video]->time_base; decoder->max_pixels=MAX_INPUT_PIXELS; decoder->thread_count=1;
-                if(params->width>MAX_INPUT_DIMENSION || params->height>MAX_INPUT_DIMENSION)fatal("FRAME_LIMIT");
-                if(avcodec_open2(decoder,codec,NULL)<0) fatal("DECODE");
-            }
-            if(config[6] && !salvage_silence && audio_stream<0 && input->streams[packet->stream_index]->codecpar->codec_type==AVMEDIA_TYPE_AUDIO) {
-                audio_stream=packet->stream_index;audio_open(input->streams[audio_stream]->codecpar,input->streams[audio_stream]->time_base);
-            }
-            if(packet->stream_index==audio_stream) { audio_decode(packet,&bytes);av_packet_unref(packet);continue; }
-            if(packet->stream_index!=video) { av_packet_unref(packet); continue; }
-            if(normalize_video_metadata(packet,input->streams[video])) { av_packet_unref(packet);continue; }
-        }
-        if(!decoder) fatal("MEDIA");
-        if(avcodec_send_packet(decoder,result>=0?packet:NULL)<0) fatal("DECODE");
-        av_packet_unref(packet);
-        int received;
-        while((received=avcodec_receive_frame(decoder,decoded))>=0) {
-            if(++frames>config[4] || decoded->width<=0 || decoded->height<=0 || decoded->width>MAX_INPUT_DIMENSION || decoded->height>MAX_INPUT_DIMENSION || (int64_t)decoded->width*decoded->height>MAX_INPUT_PIXELS || interrupted(NULL)) fatal("FRAME_LIMIT");
-            if(!source_reported) {
-                AVRational rate=av_guess_frame_rate(input,input->streams[video],decoded);
-                if(rate.num<=0 || rate.den<=0 || (int64_t)rate.num>120LL*rate.den)rate=(AVRational){0,1};
-                uint8_t info[16];put32(info,(uint32_t)decoded->width);put32(info+4,(uint32_t)decoded->height);put32(info+8,(uint32_t)rate.num);put32(info+12,(uint32_t)rate.den);
-                output(BLINK_SOURCE_INFO,info,sizeof(info));source_reported=1;
-            }
-            if(decoded->best_effort_timestamp==AV_NOPTS_VALUE)fatal("VIDEO_TIMESTAMP");
-            int64_t pts=av_rescale_q(decoded->best_effort_timestamp,input->streams[video]->time_base,AV_TIME_BASE_Q);
-            if(config[13] && last_source_pts!=AV_NOPTS_VALUE && pts<=last_source_pts)fatal("VIDEO_DISCONTINUITY");
-            last_source_pts=pts;
-            /* Keep rational output deadlines anchored to the source clock, not each selected frame. */
-            if(last_selected_pts!=AV_NOPTS_VALUE && pts<=last_selected_pts) { av_frame_unref(decoded);continue; }
-            if(first_video_pts==AV_NOPTS_VALUE)first_video_pts=pts;
-            uint64_t elapsed=(uint64_t)pts-(uint64_t)first_video_pts;
-            if(elapsed>INT64_MAX)fatal("VIDEO_TIMESTAMP");
-            if(config[13]>=2 && elapsed>=90000000)fatal("RECORDING_DURATION");
-            /* One microsecond covers rounding the source and output clocks to AV_TIME_BASE. */
-            if(elapsed+1<(uint64_t)av_rescale(next_output_frame,1000000,config[2])) { av_frame_unref(decoded);continue; }
-            int64_t after_source=av_rescale_rnd((int64_t)elapsed,config[2],1000000,AV_ROUND_DOWN)+1;
-            next_output_frame=FFMAX(next_output_frame+1,after_source);
-            last_selected_pts=pts;
-            if(pending_picture) {
-                /* The next selected source timestamp closes the previous picture. */
-                scaled->duration=pts-scaled->pts;
-                encode_picture(encoder,scaled,encoded,&bytes,&recording_keyframe_pts);
-            }
-            int inner_width=encoder->width,inner_height=encoder->height;
-            if((int64_t)decoded->width*encoder->height>(int64_t)decoded->height*encoder->width)
-                inner_height=(int)((int64_t)decoded->height*encoder->width/decoded->width)&~1;
-            else inner_width=(int)((int64_t)decoded->width*encoder->height/decoded->height)&~1;
-            if(inner_width<2 || inner_height<2)fatal("SCALE");
-            scaler=sws_getCachedContext(scaler,decoded->width,decoded->height,decoded->format,inner_width,inner_height,AV_PIX_FMT_YUV420P,SWS_BILINEAR,NULL,NULL,NULL);
-            if(!scaler || av_frame_make_writable(scaled)<0) fatal("SCALE");
-            ptrdiff_t lines[4]={scaled->linesize[0],scaled->linesize[1],scaled->linesize[2],scaled->linesize[3]};
-            if(av_image_fill_black(scaled->data,lines,AV_PIX_FMT_YUV420P,AVCOL_RANGE_MPEG,encoder->width,encoder->height)<0)fatal("SCALE");
-            int x=(encoder->width-inner_width)/2,y=(encoder->height-inner_height)/2;
-            uint8_t *target[4]={scaled->data[0]+y*scaled->linesize[0]+x,
-                scaled->data[1]+(y/2)*scaled->linesize[1]+x/2,scaled->data[2]+(y/2)*scaled->linesize[2]+x/2,NULL};
-            if(sws_scale(scaler,(const uint8_t *const*)decoded->data,decoded->linesize,0,decoded->height,target,scaled->linesize)!=inner_height) fatal("SCALE");
-            scaled->pts=pts;
-            scaled->duration=0;pending_picture=config[13]>=2;
-            if(config[13]>=2 && decoded->duration>0) {
-                int64_t duration=av_rescale_q(decoded->duration,input->streams[video]->time_base,AV_TIME_BASE_Q);
-                if(duration<=0 || duration>1000000)fatal("VIDEO_TIMESTAMP");
-                /* Slower source pictures cover more time than one negotiated frame. */
-                scaled->duration=FFMAX(duration,av_rescale(1,1000000,config[2]));
-                pending_picture=duration<scaled->duration;
-            }
-            if(!pending_picture)encode_picture(encoder,scaled,encoded,&bytes,&recording_keyframe_pts);
-            av_frame_unref(decoded);
-        }
-        if(received!=AVERROR(EAGAIN) && received!=AVERROR_EOF) fatal("DECODE");
-        if(result==AVERROR_EOF) break;
-    }
-    if(pending_picture)encode_picture(encoder,scaled,encoded,&bytes,&recording_keyframe_pts);
-    if(avcodec_send_frame(encoder,NULL)<0) { fatal("ENCODE"); }
-    packets(encoder,encoded,&bytes,2); audio_finish(&bytes); if(config[13])recording_finish();
-    if(config[13]>=2) { uint8_t recovery[4];put32(recovery,recovery_flags);output(BLINK_RECORDING_RECOVERY,recovery,sizeof(recovery)); }
-    output(3,NULL,0);
-    /* A terminal SEI has no following picture; discard it without adding a clock slot. */
-    av_freep(&video_metadata);
-    sws_freeContext(scaler); av_frame_free(&decoded); av_frame_free(&scaled); av_packet_free(&packet); av_packet_free(&encoded); avcodec_free_context(&decoder); avcodec_free_context(&encoder);
-    avformat_close_input(&input); av_freep(&io->buffer); avio_context_free(&io);
-    if(file_input) { memset(file_input,0,file_size);av_freep(&file_input); }
-    LOCK(&mutex);while(!reader_closed)if(!WAIT(&changed,&mutex))fatal("FINAL_IDLE_TIMEOUT");UNLOCK(&mutex);
-    close_protection();drain_output();
-    return 0;
+/* Keep the supervisor alive: killing its process closes the job and therefore
+ * kills FFmpeg and descendants. Assign the job during creation so termination
+ * cannot orphan a suspended child between creation and job admission.
+ * CRT descriptor inheritance preserves a regular fd0 and optional pipe3/4/5. */
+static void command_character(wchar_t *target,size_t *used,wchar_t character) {
+    if(*used>=32767)fatal("ARGUMENTS");
+    if(target)target[*used]=character;
+    (*used)++;
 }
+/* Count and write the same quoted UTF-16 units, including separators and NUL.
+ * Bounded single-unit admission avoids overflow and worst-case overestimates. */
+static size_t quote_command(int argc,wchar_t **argv,wchar_t *target) {
+    size_t used=0;
+    for(int i=2;i<argc;i++) {
+        if(i>2)command_character(target,&used,L' ');
+        command_character(target,&used,L'"');size_t slashes=0;
+        for(const wchar_t *s=argv[i];;s++) {
+            if(*s==L'\\') { if(slashes>=32767)fatal("ARGUMENTS");slashes++;continue; }
+            for(size_t n=0;n<slashes;n++) {
+                command_character(target,&used,L'\\');
+                if(*s==L'"' || !*s)command_character(target,&used,L'\\');
+            }
+            slashes=0;if(!*s)break;
+            if(*s==L'"')command_character(target,&used,L'\\');
+            command_character(target,&used,*s);
+        }
+        command_character(target,&used,L'"');
+    }
+    command_character(target,&used,L'\0');return used;
+}
+static void ignore_invalid(const wchar_t *a,const wchar_t *b,const wchar_t *c,unsigned int d,uintptr_t e) { (void)a;(void)b;(void)c;(void)d;(void)e; }
+static int execute_external(int argc,wchar_t **argv) {
+    const wchar_t *executable=argv[2];
+    if(!((executable[0] && executable[1]==L':' && (executable[2]==L'\\' || executable[2]==L'/')) || (executable[0]==L'\\' && executable[1]==L'\\')))fatal("ARGUMENTS");
+    size_t capacity=quote_command(argc,argv,NULL);
+    wchar_t *command=calloc(capacity,sizeof(wchar_t));if(!command)fatal("MEMORY");
+    if(quote_command(argc,argv,command)!=capacity)fatal("ARGUMENTS");
+    _set_invalid_parameter_handler(ignore_invalid);
+    int maximum=_getmaxstdio(),count=0;for(int fd=0;fd<maximum;fd++)if(_get_osfhandle(fd)>=0)count=fd+1;
+    size_t bytes=sizeof(int)+(size_t)count*(sizeof(char)+sizeof(intptr_t));if(bytes>65535)fatal("IO_SETUP");
+    unsigned char *table=calloc(1,bytes);if(!table)fatal("MEMORY");memcpy(table,&count,sizeof(int));
+    for(int fd=0;fd<count;fd++) {
+        intptr_t raw=_get_osfhandle(fd);HANDLE handle=(HANDLE)raw;unsigned char flags=0;
+        if(raw>=0) { if(!SetHandleInformation(handle,HANDLE_FLAG_INHERIT,HANDLE_FLAG_INHERIT))fatal("IO_SETUP");
+            DWORD kind=GetFileType(handle);flags=1|(kind==FILE_TYPE_PIPE?8:kind==FILE_TYPE_CHAR?64:0); }
+        table[sizeof(int)+fd]=flags;memcpy(table+sizeof(int)+count+(size_t)fd*sizeof(raw),&raw,sizeof(raw));
+    }
+    HANDLE job=CreateJobObjectW(NULL,NULL);if(!job)fatal("JOB");
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;memset(&limits,0,sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+    if(!SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))fatal("JOB");
+    SIZE_T attribute_bytes=0;
+    if(InitializeProcThreadAttributeList(NULL,1,0,&attribute_bytes) || GetLastError()!=ERROR_INSUFFICIENT_BUFFER || !attribute_bytes)fatal("JOB");
+    LPPROC_THREAD_ATTRIBUTE_LIST attributes=calloc(1,attribute_bytes);if(!attributes)fatal("MEMORY");
+    if(!InitializeProcThreadAttributeList(attributes,1,0,&attribute_bytes) ||
+       !UpdateProcThreadAttribute(attributes,0,PROC_THREAD_ATTRIBUTE_JOB_LIST,&job,sizeof(job),NULL,NULL))fatal("JOB");
+    STARTUPINFOEXW info;PROCESS_INFORMATION child;memset(&info,0,sizeof(info));memset(&child,0,sizeof(child));info.StartupInfo.cb=sizeof(info);
+    info.StartupInfo.dwFlags=STARTF_USESTDHANDLES;info.StartupInfo.hStdInput=GetStdHandle(STD_INPUT_HANDLE);info.StartupInfo.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);info.StartupInfo.hStdError=GetStdHandle(STD_ERROR_HANDLE);
+    info.StartupInfo.cbReserved2=(WORD)bytes;info.StartupInfo.lpReserved2=table;info.lpAttributeList=attributes;
+    BOOL created=CreateProcessW(executable,command,NULL,NULL,TRUE,CREATE_SUSPENDED|CREATE_NO_WINDOW|EXTENDED_STARTUPINFO_PRESENT,NULL,NULL,&info.StartupInfo,&child);
+    DeleteProcThreadAttributeList(attributes);free(attributes);if(!created)fatal("EXEC");
+    if(ResumeThread(child.hThread)==(DWORD)-1) { TerminateProcess(child.hProcess,2);fatal("EXEC"); }
+    free(command);free(table);CloseHandle(child.hThread);
+    if(WaitForSingleObject(child.hProcess,INFINITE)!=WAIT_OBJECT_0)fatal("EXEC");
+    DWORD code=2;
+    if(!GetExitCodeProcess(child.hProcess,&code))fatal("EXEC");
+    CloseHandle(child.hProcess);CloseHandle(job);return (int)code;
+}
+int wmain(int argc,wchar_t **argv) {
+    suppress_crashes();if(argc>=3 && !wcscmp(argv[1],L"--exec"))return execute_external(argc,argv);
+    if(argc!=1)fatal("ARGUMENTS");
+    return run_protection();
+}
+#else
+int main(int argc,char **argv) {
+    suppress_crashes();
+    if(argc>=3 && !strcmp(argv[1],"--exec")) { if(argv[2][0]!='/')fatal("ARGUMENTS");execv(argv[2],argv+2);fatal("EXEC"); }
+    if(argc!=1)fatal("ARGUMENTS");
+    return run_protection();
+}
+#endif
