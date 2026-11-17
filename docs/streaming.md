@@ -94,8 +94,14 @@ the vendor interval independently of Continue timing.
 
 `mediaDebug` enables bounded, redacted diagnostics. IMMIS debug recordings remain
 under `<debugStreamPath>/blink-stream-recordings/`, with hashed camera identifiers
-and owner-only POSIX permissions. They contain sensitive footage. Older recordings
-are not moved or re-permissioned automatically. RTSPS debug recording is not
+and owner-only POSIX permissions. `debugStreamPath` is disabled when blank. Relative
+paths (for example, `blink-streams`) resolve under Homebridge storage; absolute paths
+must stay within that storage root. Missing storage and external paths, traversal
+outside storage, or symlinked child directories disable diagnostic recording before
+creating files outside storage. They contain sensitive footage. Replace old external
+settings such as `/tmp/blink-streams` with `blink-streams` or an absolute directory
+inside Homebridge storage. Existing captures are not moved, deleted, or
+re-permissioned automatically. RTSPS debug recording is not
 implemented. See the [logging specification](debug_logging_spec.md#streaming-diagnostics).
 
 ### Two-way talk status

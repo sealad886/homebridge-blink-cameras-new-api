@@ -6,7 +6,8 @@ import { BlinkHomescreen } from '../src/types';
 import { CameraAccessory, NetworkAccessory } from '../src/accessories';
 import { sampleBlinkConnection } from '../src/blink-api/connection-diagnostics';
 import { AuthStateChangedError } from '../src/blink-api/auth-storage';
-import { Blink2FARequiredError, BlinkTokenRefreshError } from '../src/blink-api/auth';
+import { BlinkAuth, Blink2FARequiredError, BlinkTokenRefreshError } from '../src/blink-api/auth';
+const timers = jest.requireActual<typeof import('timers')>('timers');
 
 jest.mock('../src/blink-api');
 jest.mock('../src/blink-api/connection-diagnostics', () => ({
@@ -74,10 +75,24 @@ describe('BlinkCamerasPlatform', () => {
     hapApi = null;
   });
 
-  it('starts credential-free from persisted auth with a runtime tier and no hosted pending path', () => {
+  it.each(['ios', 'android'] as const)('launches credential-free from persisted %s auth and polls normally', async oauthClientId => {
+    jest.spyOn(timers, 'setInterval').mockImplementation(globalThis.setInterval);
+    jest.spyOn(timers, 'clearInterval').mockImplementation(globalThis.clearInterval);
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected OAuth request'));
     hapApi = createApi() as unknown as MockAPI;
     const log = createLogger() as unknown as Logger;
     const blinkApi = buildBlinkApi();
+    const auth = new BlinkAuth({ email: '', password: '', hardwareId: 'test-only', authStorage: {
+      load: jest.fn().mockResolvedValue({
+        accessToken: 'stored-test-token', refreshToken: 'stored-test-refresh', oauthClientId,
+        tokenExpiry: new Date(Date.now() + 7_200_000).toISOString(),
+      }),
+      save: jest.fn(), clear: jest.fn(),
+    } });
+    blinkApi.login.mockImplementation(() => auth.ensureValidToken());
+    blinkApi.getHomescreen.mockResolvedValue({
+      account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+    });
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const tokenConfig: TestConfig = {
       platform: 'BlinkCameras',
@@ -86,7 +101,16 @@ describe('BlinkCamerasPlatform', () => {
       tier: 'e005',
     };
 
-    new BlinkCamerasPlatform(log, tokenConfig, hapApi);
+    const platform = new BlinkCamerasPlatform(log, tokenConfig, hapApi);
+    hapApi.emit('didFinishLaunching');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(platform.isOperational()).toBe(true);
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sampleBlinkConnection).not.toHaveBeenCalled();
 
     expect(BlinkApi).toHaveBeenCalledWith(expect.objectContaining({
       email: '',
@@ -105,6 +129,58 @@ describe('BlinkCamerasPlatform', () => {
     hapApi = null;
     jest.restoreAllMocks();
     jest.useRealTimers();
+  });
+
+  it('keeps empty tokenless launch and explicit failed retry local, then resumes polling after sign-in', async () => {
+    jest.spyOn(timers, 'setInterval').mockImplementation(globalThis.setInterval);
+    jest.spyOn(timers, 'clearInterval').mockImplementation(globalThis.clearInterval);
+    hapApi = createApi() as unknown as MockAPI;
+    const log = createLogger() as unknown as Logger;
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected provider request'));
+    const auth = new BlinkAuth({ email: '', password: '', hardwareId: 'test-only', authStorage: {
+      load: jest.fn().mockResolvedValue(null), save: jest.fn(), clear: jest.fn(),
+    } });
+    const blinkApi = buildBlinkApi();
+    blinkApi.login.mockImplementation(() => auth.ensureValidToken());
+    blinkApi.getHomescreen.mockResolvedValue({
+      account: { account_id: 1 }, networks: [], cameras: [], doorbells: [], owls: [], sync_modules: [],
+    });
+    (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
+    const platform = new BlinkCamerasPlatform(log, { platform: 'BlinkCameras', name: 'Blink' }, hapApi);
+
+    hapApi.emit('didFinishLaunching');
+    await jest.advanceTimersByTimeAsync(0);
+
+    const expectLocalSetupFailure = (): void => {
+      expect(platform.isOperational()).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sampleBlinkConnection).not.toHaveBeenCalled();
+      expect(blinkApi.getHomescreen).not.toHaveBeenCalled();
+      expect(blinkApi.getCachedIdentity).not.toHaveBeenCalled();
+      expect(blinkApi.getUnwatchedMedia).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+    };
+    expectLocalSetupFailure();
+    await jest.advanceTimersByTimeAsync(180_000);
+    expect(blinkApi.login).toHaveBeenCalledTimes(1);
+    expectLocalSetupFailure();
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('Blink sign-in required'));
+
+    const retry = platform.accessories.find(accessory => accessory.context.blinkConnectionRetry)
+      ?.getServiceById(hapApi.hap.Service.Switch, 'blink-connection-retry')
+      ?.getCharacteristic(hapApi.hap.Characteristic.On) as unknown as MockCharacteristic;
+    await expect(retry.onSetHandler?.(true)).rejects.toMatchObject({ hapStatus: -70402 });
+    expect(retry.value).toBe(false);
+    expect(blinkApi.login).toHaveBeenCalledTimes(2);
+    expectLocalSetupFailure();
+
+    blinkApi.login.mockResolvedValue(undefined);
+    await retry.onSetHandler?.(true);
+    expect(platform.isOperational()).toBe(true);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(2);
+    expect(retry.value).toBe(false);
   });
 
   it.each([undefined, false, true])('resolves temperature overrides independently of motion and quality (%s)', global => {
@@ -189,6 +265,7 @@ describe('BlinkCamerasPlatform', () => {
 
   it('keeps native streaming configuration stable during discovery', async () => {
     hapApi = createApi() as unknown as MockAPI;
+    Object.defineProperty(hapApi, 'user', { value: { storagePath: () => '/synthetic-homebridge-storage' } });
     const blinkApi = buildBlinkApi();
     blinkApi.getHomescreen.mockResolvedValue({
       account: { account_id: 1 }, networks: [],
@@ -197,12 +274,13 @@ describe('BlinkCamerasPlatform', () => {
     });
     (BlinkApi as jest.Mock).mockImplementation(() => blinkApi);
     const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger, {
-      ...config, mediaDebug: true, audioCodec: 'pcma', softwareEncodingPreset: 'ultrafast',
+      ...config, mediaDebug: true, debugStreamPath: 'diagnostics', audioCodec: 'pcma', softwareEncodingPreset: 'ultrafast',
     }, hapApi);
     await expect((platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices()).resolves.toBe(true);
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);
     expect(platform.accessories.length).toBeGreaterThan(0);
     expect(platform.streamingConfig).toMatchObject({ enabled: true, mediaDebug: true,
+      storagePath: '/synthetic-homebridge-storage', debugStreamPath: 'diagnostics',
       audio: { codec: 'pcma' }, video: { softwarePreset: 'ultrafast' } });
   });
 
@@ -436,6 +514,8 @@ describe('BlinkCamerasPlatform', () => {
   });
 
   it('keeps temporary token-refresh failures eligible for automatic recovery', async () => {
+    jest.spyOn(timers, 'setInterval').mockImplementation(globalThis.setInterval);
+    jest.spyOn(timers, 'clearInterval').mockImplementation(globalThis.clearInterval);
     hapApi = createApi() as unknown as MockAPI;
     const blinkApi = buildBlinkApi();
     blinkApi.login
@@ -450,11 +530,11 @@ describe('BlinkCamerasPlatform', () => {
       { ...config, enableStreaming: false },
       hapApi,
     );
-    const discover = (platform as unknown as { discoverDevices: () => Promise<boolean> }).discoverDevices.bind(platform);
-    const poll = (platform as unknown as { pollDeviceStates: () => Promise<void> }).pollDeviceStates.bind(platform);
-
-    await expect(discover()).resolves.toBe(false);
-    await poll();
+    hapApi.emit('didFinishLaunching');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(platform.isOperational()).toBe(false);
+    expect(sampleBlinkConnection).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(60_000);
 
     expect(blinkApi.login).toHaveBeenCalledTimes(2);
     expect(blinkApi.getHomescreen).toHaveBeenCalledTimes(1);

@@ -128,7 +128,7 @@ Add a platform entry to your Homebridge `config.json`:
 | `outputQuality` | No | `auto` | System-wide output profile; see [quality profiles](streaming.md#input-and-output-quality) |
 | `softwareEncodingPreset` | No | `veryfast` | Balanced or optional `ultrafast` software encoding |
 | `videoBitrate` | No | - | Cap video bitrate (kbps) |
-| `debugStreamPath` | No | - | Save raw IMMIS MPEG-TS stream recordings under a `blink-stream-recordings` child directory for debugging; RTSPS recording is not implemented |
+| `debugStreamPath` | No | - | Save raw IMMIS MPEG-TS diagnostics inside Homebridge storage, under a `blink-stream-recordings` child directory; relative paths resolve from Homebridge storage, absolute paths must stay inside it. Blank disables recording. RTSPS recording is not implemented |
 | `snapshotCacheTTL` | No | `60` | Snapshot cache duration (seconds); `0` requests fresh snapshots, subject to capture coalescing, failure backoff and provider busy fallback |
 | `persistSnapshotCache` | No | `false` | Keep the last snapshot indefinitely and expose a per-camera `Refresh Snapshot` switch in Home |
 | `excludeDevices` | No | - | Camera identities to hide; new editor selections use qualified type/ID values |

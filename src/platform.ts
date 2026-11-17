@@ -27,6 +27,7 @@ import {
   BlinkAuthenticationError,
   BlinkHostedReauthenticationRequiredError,
   BlinkHostedTokenExchangeError,
+  BlinkSignInRequiredError,
 } from './blink-api/auth';
 import { InvalidAuthStateError } from './blink-api/auth-state';
 import { AuthStateChangedError } from './blink-api/auth-storage';
@@ -188,6 +189,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       ffmpegPath: this.config.ffmpegPath,
       mediaDebug: this.config.mediaDebug,
       maxStreams: this.config.maxStreams,
+      storagePath: this.api?.user?.storagePath?.(),
       debugStreamPath: this.config.debugStreamPath,
       snapshotCacheTTL: this.config.snapshotCacheTTL,
       persistSnapshotCache: this.config.persistSnapshotCache,
@@ -757,13 +759,19 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private setConnectionFailure(error?: unknown): void {
     const shouldReportFailure = !this.connectionFailureConfirmed;
     this.connectionState = this.requiresAuthenticationAction(error) ? 'authentication-required' : 'faulted';
+    if (this.connectionState === 'authentication-required' && this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
     this.operational = false;
     this.connectionFailureConfirmed = true;
     if (shouldReportFailure) {
       this.outageConfirmedAt = Date.now();
       this.log.warn(`Blink outage confirmed after ${this.consecutivePollFailures} failed cycles; ` +
         `last successful poll ${this.lastSuccessfulPoll === null ? 'not yet verified' : new Date(this.lastSuccessfulPoll).toISOString()}.`);
-      void this.sampleConnectionDiagnostic();
+      if (this.connectionState !== 'authentication-required') {
+        void this.sampleConnectionDiagnostic();
+      }
     }
     this.updateCachedAccessoryFaults(true);
     this.ensureConnectionAccessories();
@@ -823,6 +831,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
   private requiresAuthenticationAction(error: unknown): boolean {
     if (
       error instanceof AuthStateChangedError ||
+      error instanceof BlinkSignInRequiredError ||
       error instanceof InvalidAuthStateError ||
       error instanceof Blink2FARequiredError ||
       error instanceof BlinkHostedReauthenticationRequiredError ||
@@ -909,6 +918,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         this.inventoryInitialized = true;
       }
       this.setConnectionHealthy();
+      if (!this.pollTimer) this.startPolling();
       if (this.nativeRuntime) await this.nativeRuntime.start();
       return this.monitorActive;
     } catch (error) {
@@ -916,6 +926,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       if (startedFaulted || authenticate) {
         this.log.error(`Blink connection recovery failed (${this.describeConnectionFailure(error)}).`);
         this.setConnectionFailure(error);
+        if (!this.pollTimer) this.startPolling();
       }
       throw error;
     }
@@ -1101,6 +1112,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
    * Polls homescreen for armed/disarmed state and device status
    */
   private startPolling(): void {
+    if (!this.monitorActive || this.connectionState === 'authentication-required') return;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
     }

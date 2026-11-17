@@ -144,9 +144,9 @@
       },
       "debugStreamPath": {
         "title": "Save raw diagnostic video locally",
-        "description": "Optional folder on the Homebridge host for raw IMMIS .ts diagnostic video. Uses local disk and can contain private footage. Not an HSV or iCloud destination. Leave blank to disable.",
+        "description": "Optional folder within Homebridge storage for raw IMMIS .ts diagnostic video. Relative paths resolve under Homebridge storage; absolute paths must remain inside it. Uses local disk and can contain private footage. Not an HSV or iCloud destination. Leave blank to disable.",
         "type": "string",
-        "placeholder": "/tmp/blink-streams"
+        "placeholder": "blink-streams"
       },
       "maxStreams": {
         "title": "Simultaneous live viewers per camera",

@@ -4,6 +4,7 @@ import {
   BlinkAuth,
   Blink2FARequiredError,
   BlinkAuthenticationError,
+  BlinkSignInRequiredError,
   hardenAuthStateFileMode,
   readPersistedAuthStateFile,
 } from '../../src/blink-api/auth';
@@ -73,6 +74,43 @@ describe('BlinkAuth OAuth 2.0 PKCE Flow', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it.each([
+    { email: '', password: '' },
+    { email: '   ', password: 'password' },
+    { email: 'user@example.com', password: '' },
+    { email: 'user@example.com', password: 'password', authLocked: true },
+  ])('requires local sign-in without provider traffic when unavailable: %j', async credentials => {
+    const fetchMock = mockFetch();
+    const authStorage: BlinkAuthStorage = {
+      load: jest.fn().mockResolvedValue(null), save: jest.fn(), clear: jest.fn(),
+    };
+    const auth = new BlinkAuth({ ...baseConfig, ...credentials, authStorage });
+
+    await expect(auth.ensureValidToken()).rejects.toBeInstanceOf(BlinkSignInRequiredError);
+    await expect(auth.login()).rejects.toBeInstanceOf(BlinkSignInRequiredError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authStorage.save).not.toHaveBeenCalled();
+    expect(authStorage.clear).not.toHaveBeenCalled();
+  });
+
+  it.each(['ios', 'android'] as const)('uses persisted %s tokens without credentials or OAuth traffic', async oauthClientId => {
+    const fetchMock = mockFetch();
+    const authStorage: BlinkAuthStorage = {
+      load: jest.fn().mockResolvedValue({
+        accessToken: 'stored-test-token', refreshToken: 'stored-test-refresh', oauthClientId,
+        tokenExpiry: new Date(Date.now() + 7_200_000).toISOString(),
+      }),
+      save: jest.fn(), clear: jest.fn(),
+    };
+    const auth = new BlinkAuth({ ...baseConfig, email: '', password: '', authStorage });
+
+    await expect(auth.ensureValidToken()).resolves.toBeUndefined();
+    expect(auth.getAuthHeaders().Authorization).toBe('Bearer stored-test-token');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authStorage.load).toHaveBeenCalledTimes(1);
+    expect(authStorage.save).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('keeps credential values out of failed OAuth diagnostics with debug=%s', async debugAuth => {

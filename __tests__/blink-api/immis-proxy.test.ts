@@ -688,7 +688,7 @@ describe('ImmisProxyServer security controls', () => {
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
     });
 
     try {
@@ -723,12 +723,12 @@ describe('ImmisProxyServer security controls', () => {
     const proxyA = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
     });
     const proxyB = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
     });
 
     try {
@@ -779,7 +779,7 @@ describe('ImmisProxyServer security controls', () => {
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
       log,
     });
 
@@ -812,7 +812,7 @@ describe('ImmisProxyServer security controls', () => {
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
       log,
     });
 
@@ -828,7 +828,7 @@ describe('ImmisProxyServer security controls', () => {
 
   it('rejects debug stream recording directory swaps before using the capture file', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
-    const recordingDir = path.join(tmpDir, 'blink-stream-recordings');
+    const recordingDir = path.join(await fs.realpath(tmpDir), 'blink-stream-recordings');
     const targetDir = path.join(tmpDir, 'target');
     const log = jest.fn();
     const realLstat = fs.lstat.bind(fs);
@@ -847,7 +847,7 @@ describe('ImmisProxyServer security controls', () => {
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
       log,
     });
 
@@ -866,7 +866,7 @@ describe('ImmisProxyServer security controls', () => {
 
   it('does not chmod a swapped debug recording directory before verifying its identity', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-recording-'));
-    const recordingDir = path.join(tmpDir, 'blink-stream-recordings');
+    const recordingDir = path.join(await fs.realpath(tmpDir), 'blink-stream-recordings');
     const targetDir = path.join(tmpDir, 'target');
     const log = jest.fn();
     const realLstat = fs.lstat.bind(fs);
@@ -892,7 +892,7 @@ describe('ImmisProxyServer security controls', () => {
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
       log,
     });
 
@@ -932,7 +932,7 @@ describe('ImmisProxyServer security controls', () => {
     const proxy = new ImmisProxyServer({
       immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1',
       serial: 'TEST_SERIAL',
-      saveStreamPath: tmpDir,
+      storagePath: tmpDir, saveStreamPath: tmpDir,
       log,
     });
 
@@ -951,12 +951,12 @@ describe('ImmisProxyServer security controls', () => {
 
   it('refuses recording when plugin-owned captures exhaust the aggregate budget and preserves existing files', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-quota-'));
-    const recordingDir = path.join(tmpDir, 'blink-stream-recordings');
+    const recordingDir = path.join(await fs.realpath(tmpDir), 'blink-stream-recordings');
     await fs.mkdir(recordingDir);
     const existing = path.join(recordingDir, 'blink-stream-0123456789abcdef-old-0123456789abcdef.ts');
     await fs.writeFile(existing, '');
     await fs.truncate(existing, 256 * 1024 * 1024);
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: tmpDir, saveStreamPath: tmpDir });
     try {
       await proxy.start();
       expect((proxy as unknown as { streamFile: WriteStream | null }).streamFile).toBeNull();
@@ -968,7 +968,7 @@ describe('ImmisProxyServer security controls', () => {
   it('serializes recorder admission across simultaneous sessions', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-reservation-'));
     const proxies = Array.from({ length: 5 }, () => new ImmisProxyServer({
-      immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir,
+      immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: tmpDir, saveStreamPath: tmpDir,
     }));
     try {
       await Promise.all(proxies.map((proxy) => proxy.start()));
@@ -996,7 +996,7 @@ describe('ImmisProxyServer security controls', () => {
     const launch = async (): Promise<ChildProcess> => {
       const child = spawn(process.execPath, ['-e', `
         const { ImmisProxyServer } = require(process.argv[1]);
-        const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: process.argv[2] });
+        const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: process.argv[2], saveStreamPath: process.argv[2] });
         process.on('message', async message => {
           if (message === 'stop') { proxy.stop(); await proxy.whenClosed; process.send('closed'); process.disconnect(); }
         });
@@ -1039,7 +1039,7 @@ describe('ImmisProxyServer security controls', () => {
     const target = path.join(tmpDir, 'lock-target');
     if (kind === 'symlink') { await fs.writeFile(target, 'owner'); await fs.symlink(target, lock); }
     else await fs.writeFile(lock, 'owner');
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: tmpDir, saveStreamPath: tmpDir });
     try {
       await proxy.start();
       expect(await fs.readdir(directory)).toEqual(['.admission.lock']);
@@ -1053,7 +1053,7 @@ describe('ImmisProxyServer security controls', () => {
     const directory = path.join(tmpDir, 'blink-stream-recordings'); await fs.mkdir(directory);
     const markers = Array.from({ length: 4 }, (_, index) => `blink-stream-0123456789abcdef-old${index}-0123456789abcdef.ts.reserve`);
     for (const marker of markers) await fs.writeFile(path.join(directory, marker), '');
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: tmpDir, saveStreamPath: tmpDir });
     try {
       await proxy.start(); expect((await fs.readdir(directory)).sort()).toEqual(markers.sort());
       expect(proxy.isServing).toBe(true);
@@ -1071,7 +1071,7 @@ describe('ImmisProxyServer security controls', () => {
       if (String(filePath).endsWith('blink-stream-recordings')) { opened(); await gate; }
       return realOpen(filePath, flags, mode);
     });
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: tmpDir, saveStreamPath: tmpDir });
     try {
       const startup = proxy.start();
       const rejected = expect(startup).rejects.toThrow('stopped during startup');
@@ -1087,7 +1087,7 @@ describe('ImmisProxyServer security controls', () => {
 
   it('stops recording after five minutes while leaving the media session active', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-immis-duration-'));
-    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', saveStreamPath: tmpDir });
+    const proxy = new ImmisProxyServer({ immisUrl: 'immis://media.immedia-semi.com/?client_id=1', serial: 'TEST', storagePath: tmpDir, saveStreamPath: tmpDir });
     jest.useFakeTimers();
     try {
       await proxy.start();

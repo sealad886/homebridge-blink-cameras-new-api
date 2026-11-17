@@ -62,7 +62,7 @@ async function recordingFixture() {
   const created = jest.spyOn(actualFs, 'createWriteStream').mockImplementation((...args: Parameters<typeof original>) => {
     writer = original(...args); return writer;
   });
-  const proxy = new ImmisProxyServer({ immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1', serial: 'SYNTHETIC', saveStreamPath: directory });
+  const proxy = new ImmisProxyServer({ immisUrl: 'immis://stream.immedia-semi.com/session?client_id=1', serial: 'SYNTHETIC', storagePath: directory, saveStreamPath: directory });
   let consumed = 0;
   const output = new Writable({ highWaterMark: 1024 * 1024, write(bytes, _encoding, done) { consumed += bytes.length; done(); } });
   proxy.on('error', () => {});

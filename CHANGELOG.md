@@ -7,6 +7,24 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.0-alpha.1] - 2026-11-17
+
+### Fixed
+- Keep a platform without credentials or stored authentication idle until sign-in.
+  Report authentication requirements without connectivity probes or polling;
+  preserve stored-token startup and resume polling after a successful retry.
+- Require the Homebridge UI's absolute storage directory before authentication.
+  Return a contained storage error instead of using the working directory when
+  the host does not supply it.
+- Keep optional raw diagnostic recordings inside Homebridge storage. Resolve
+  relative `debugStreamPath` values there and refuse external paths or symlinked
+  child directories without interrupting normal streaming. Existing captures are
+  not moved or deleted; replace an old external path with an internal child path
+  or leave the setting blank to disable recording.
+
+This prerelease continues the external FFmpeg 6.1+ requirement. Stable promotion
+and Homebridge verification remain subject to the release guide's acceptance gates.
+
 ## [2.0.0-alpha.0] - 2026-11-16
 
 First alpha for 2.0.0. Version 1.1.0 remains immutable. The new

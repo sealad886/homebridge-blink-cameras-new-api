@@ -69,7 +69,9 @@ export interface BlinkCameraStreamingConfig {
     maxBitrate?: number;
     softwarePreset?: 'veryfast' | 'ultrafast';
   };
-  /** Path to save debug stream recordings (MPEG-TS files) */
+  /** Authoritative Homebridge storage root, supplied by the platform. */
+  storagePath?: string;
+  /** Path within Homebridge storage to save debug stream recordings (MPEG-TS files) */
   debugStreamPath?: string;
   /** Snapshot cache TTL in seconds (0 = always request fresh, default 60) */
   snapshotCacheTTL?: number;
@@ -122,6 +124,7 @@ export const resolveStreamingConfig = (
     mediaDebug: config?.mediaDebug ?? DEFAULT_STREAMING_CONFIG.mediaDebug,
     maxStreams: Math.max(1, config?.maxStreams ?? DEFAULT_STREAMING_CONFIG.maxStreams),
     debugStreamPath: config?.debugStreamPath,
+    storagePath: config?.storagePath,
     snapshotCacheTTL: config?.snapshotCacheTTL ?? DEFAULT_STREAMING_CONFIG.snapshotCacheTTL,
     persistSnapshotCache: config?.persistSnapshotCache ?? DEFAULT_STREAMING_CONFIG.persistSnapshotCache,
     passiveSnapshots: config?.passiveSnapshots ?? DEFAULT_STREAMING_CONFIG.passiveSnapshots,
@@ -888,7 +891,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
       if (liveview.server.startsWith('immis://')) {
         proxy = new ImmisProxyServer({ immisUrl: liveview.server, serial: this.serial,
           log: message => this.log(message), errorLog: message => this.logError(message),
-          debug: this.streamingConfig.mediaDebug, saveStreamPath: this.streamingConfig.debugStreamPath, verifyTls: true });
+          debug: this.streamingConfig.mediaDebug, saveStreamPath: this.streamingConfig.debugStreamPath, storagePath: this.streamingConfig.storagePath, verifyTls: true });
         proxy.on('error', failed);
         consumer = new Writable({ write(bytes: Buffer, _encoding, done) {
           void sink.write(bytes).then(() => done(), () => done(new Error('Private media unavailable')));

@@ -51,7 +51,9 @@ export interface ImmisProxyConfig {
   errorLog?: (message: string) => void;
   /** Debug logging enabled */
   debug?: boolean;
-  /** Save the raw MPEG-TS stream to disk for debugging (path to save directory) */
+  /** Authoritative Homebridge storage root; recording fails closed when absent. */
+  storagePath?: string;
+  /** Save the raw MPEG-TS stream within Homebridge storage for debugging. */
   saveStreamPath?: string;
   /** @deprecated Ignored: upstream TLS certificate and hostname verification is mandatory. */
   verifyTls?: boolean;
@@ -172,7 +174,7 @@ const CONN_ID_MAX_LENGTH = 16;
  * ImmisProxyServer owns a private MPEG-TS consumer and upstream TLS session.
  */
 export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
-  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'waitForReady'>;
+  private readonly config: Required<Omit<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'storagePath' | 'waitForReady'>> & Pick<ImmisProxyConfig, 'log' | 'errorLog' | 'debug' | 'saveStreamPath' | 'storagePath' | 'waitForReady'>;
   private readonly parsedUrl: URL;
 
   private consumer: Writable | null = null;
@@ -232,6 +234,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       log: config.log,
       errorLog: config.errorLog,
       saveStreamPath: config.saveStreamPath,
+      storagePath: config.storagePath,
       debug: config.debug,
       waitForReady: config.waitForReady,
       verifyTls: true,
@@ -390,6 +393,35 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       () => this.fail('IMMIS upstream writer exceeded its budget'));
   }
 
+  /** Resolve the host root first, then create only real child directories within it. */
+  private async resolveRecordingDirectory(): Promise<string> {
+    if (!this.config.storagePath || !path.isAbsolute(this.config.storagePath)) {
+      throw new Error('Absolute Homebridge storage is required for diagnostic recording');
+    }
+    const configuredRoot = path.resolve(this.config.storagePath);
+    const canonicalRoot = await fs.promises.realpath(configuredRoot);
+    if (!(await fs.promises.stat(canonicalRoot)).isDirectory()) throw new Error('Invalid Homebridge storage');
+    const configuredPath = path.resolve(configuredRoot, this.config.saveStreamPath!);
+    const isWithin = (relative: string): boolean => relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    // Accept both the host's storage alias and its canonical spelling (/var vs /private/var).
+    let relative = path.relative(configuredRoot, configuredPath);
+    if (!isWithin(relative)) relative = path.relative(canonicalRoot, configuredPath);
+    if (!isWithin(relative)) throw new Error('Diagnostic recording must stay within Homebridge storage');
+    let directory = canonicalRoot;
+    for (const component of [...relative.split(path.sep).filter(Boolean), DEBUG_RECORDING_DIR]) {
+      directory = path.join(directory, component);
+      let stat: FsStats;
+      try { stat = await fs.promises.lstat(directory); }
+      catch (error) {
+        if ((error as { code?: string }).code !== 'ENOENT') throw error;
+        await fs.promises.mkdir(directory, { mode: 0o700 });
+        stat = await fs.promises.lstat(directory);
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Diagnostic recording requires real child directories');
+    }
+    return directory;
+  }
+
   /**
    * Start recording the stream to a file
    */
@@ -406,8 +438,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     let admissionHandle: FileHandle | null = null;
     let removeAdmission: (() => Promise<void>) | null = null;
     try {
-      const recordingDir = path.join(this.config.saveStreamPath, DEBUG_RECORDING_DIR);
-      await fs.promises.mkdir(recordingDir, { recursive: true, mode: 0o700 });
+      const recordingDir = await this.resolveRecordingDirectory();
       const recordingDirPathStats = await fs.promises.lstat(recordingDir);
       if (recordingDirPathStats.isSymbolicLink() || !recordingDirPathStats.isDirectory()) {
         throw new Error('Debug stream recording directory must be a real directory');
