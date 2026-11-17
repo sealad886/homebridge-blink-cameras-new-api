@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Buffer } from 'node:buffer';
@@ -28,13 +29,31 @@ test('validation preparation creates closed synthetic helpers and a source/worke
     assert.throws(() => prepareValidation(f.build, f.output, f.target, source));
   } finally { f.cleanup(); }
 });
+test('validation restores executable permission lost during POSIX artifact transfer without changing bytes', { skip: process.platform === 'win32' }, () => {
+  const f = fixture(); try {
+    const helper = join(f.output, 'check-protection');
+    writeFileSync(join(f.build, 'check-protection'), '#!/bin/sh\nprintf "validated receiver\\n"\n');
+    prepareValidation(f.build, f.output, f.target, source);
+    const before = readFileSync(helper), receipt = readFileSync(join(f.output, 'validation-receipt.json'));
+    chmodSync(helper, 0o644);
+    assert.throws(() => execFileSync(helper, [], { env: {}, timeout: 5000 }), error => error.code === 'EACCES');
+    verifyValidation(f.output, f.target, source, sha256(Buffer.from('blink-protection-worker')));
+    assert.equal(statSync(helper).mode & 0o777, 0o755);
+    assert.equal(execFileSync(helper, [], { env: {}, encoding: 'utf8', timeout: 5000 }), 'validated receiver\n');
+    assert.deepEqual(readFileSync(helper), before);
+    assert.deepEqual(readFileSync(join(f.output, 'validation-receipt.json')), receipt);
+  } finally { f.cleanup(); }
+});
 for (const change of ['source', 'worker', 'helper', 'extra']) test(`validation refuses ${change} identity mismatch`, () => {
   const f = fixture(); try {
     prepareValidation(f.build, f.output, f.target, source);
+    const helper = join(f.output, 'check-protection' + f.suffix);
+    if (process.platform !== 'win32') chmodSync(helper, 0o644);
     if (change === 'helper') writeFileSync(join(f.output, 'check-protection' + f.suffix), 'modified');
     if (change === 'extra') writeFileSync(join(f.output, 'unknown'), 'extra');
     assert.throws(() => verifyValidation(f.output, f.target, change === 'source' ? 'b'.repeat(40) : source,
       change === 'worker' ? 'b'.repeat(64) : sha256(Buffer.from('blink-protection-worker'))));
+    if (process.platform !== 'win32') assert.equal(statSync(helper).mode & 0o777, 0o644);
   } finally { f.cleanup(); }
 });
 test('publication aggregation requires exactly five successful qualifications for the same immutable tar', () => {

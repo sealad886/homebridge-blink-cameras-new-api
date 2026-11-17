@@ -34,6 +34,9 @@ export function verifyValidation(root, target, sourceSha, workerSha) {
   assert.deepEqual(Object.keys(receipt.files).sort(), names(target).sort());
   assert.deepEqual(readdirSync(root).sort(), [...names(target), 'validation-receipt.json'].sort());
   for (const name of names(target)) { assert.match(receipt.files[name], /^[a-f0-9]{64}$/); assert.equal(sha256(regularFile(root, name)), receipt.files[name], 'Validation helper hash mismatch'); }
+  // Artifact ZIP transfer resets POSIX files to 0644. Restore only the closed,
+  // source/worker-bound receiver inventory after every identity check succeeds.
+  if (process.platform !== 'win32') for (const name of names(target)) chmodSync(join(root, name), 0o755);
   return receipt;
 }
 export async function exerciseInstalledRuntimeBootstrap(packageRoot) {
