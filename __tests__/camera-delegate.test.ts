@@ -29,6 +29,27 @@ describe('camera delegate callbacks', () => {
   });
   afterEach(() => { globalThis.fetch = originalFetch; });
 
+  it('refuses all media requests before vendor access when media availability is false', async () => {
+    const { source, api } = fixture({}, () => false);
+    const snapshot = jest.fn();
+    await source.handleSnapshotRequest(request, snapshot);
+    expect(snapshot).toHaveBeenCalledWith(expect.any(Error));
+    await expect(source.refreshSnapshotCache()).rejects.toThrow();
+    const prepare = jest.fn();
+    source.prepareStream({ sessionID: 'no-media' } as PrepareStreamRequest, prepare);
+    expect(prepare).toHaveBeenCalledWith(expect.any(Error));
+    const start = jest.fn();
+    source.handleStreamRequest({ type: 'start', sessionID: 'no-media' } as StreamingRequest, start);
+    expect(start).toHaveBeenCalledWith(expect.any(Error));
+    const stop = jest.fn();
+    source.handleStreamRequest({ type: 'stop', sessionID: 'no-media' } as StreamingRequest, stop);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(api.requestCameraThumbnail).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    await source.shutdown();
+  });
+
   it('camera privacy-off erases persistent snapshots and permits a fresh image only after re-enable', async () => {
     const { source, api } = fixture({ persistSnapshotCache: true });
     const first = jest.fn(); await source.handleSnapshotRequest(request, first);

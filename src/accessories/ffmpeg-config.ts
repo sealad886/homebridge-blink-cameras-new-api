@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 
-/** Pure configuration validation; executable discovery happens only when media is requested. */
+/** Pure configuration validation; authenticated discovery and media requests resolve executables. */
 export function configuredFfmpegPath(value: unknown): string {
   if (value === undefined) return 'ffmpeg';
   if (typeof value !== 'string' || !value.trim() || value.length > 4096 || value.includes('\0') ||

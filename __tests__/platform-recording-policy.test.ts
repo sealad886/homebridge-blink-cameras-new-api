@@ -10,6 +10,10 @@ import { FcmEventSource, type FcmEventSourceOptions } from '../src/blink-api/fcm
 import { NativeRecordingRuntime, type NativeRecordingRuntimeState } from '../src/native-recording-runtime';
 import type { BlinkHomescreen } from '../src/types';
 import { createApi, createLogger, MockCharacteristic } from './helpers/homebridge';
+import * as externalFfmpeg from '../src/accessories/external-ffmpeg';
+import * as protectionWorker from '../src/accessories/protection-worker-artifact';
+
+const resolveInstalledFfmpeg = externalFfmpeg.resolveExternalFfmpegPath;
 
 jest.mock('../src/blink-api', () => ({ BlinkApi: jest.fn() }));
 jest.mock('../src/blink-api/fcm/source');
@@ -35,6 +39,9 @@ describe('platform native recording and ordinary command ownership', () => {
   let createRuntime: jest.SpyInstance<ReturnType<typeof NativeRecordingRuntime.create>, Parameters<typeof NativeRecordingRuntime.create>>;
 
   beforeEach(async () => {
+    jest.spyOn(externalFfmpeg, 'resolveExternalFfmpegPath').mockReturnValue('/fixture/ffmpeg');
+    jest.spyOn(externalFfmpeg, 'probeExternalFfmpeg').mockResolvedValue({ version: '6.1' });
+    jest.spyOn(protectionWorker, 'loadPackagedProtectionWorker').mockReturnValue('/fixture/protection');
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'blink-platform-policy-'));
     api = createApi();
     Object.assign(api, { user: { storagePath: () => directory } });
@@ -83,6 +90,74 @@ describe('platform native recording and ordinary command ownership', () => {
     return accessory.getServiceById(platform.Service.Switch, 'blink-connection-retry')!
       .getCharacteristic(platform.Characteristic.On) as unknown as MockCharacteristic;
   }
+
+  it.each([
+    ['PATH', undefined, 'missing', 'not found on the Homebridge service PATH'],
+    ['override', '/private/EXECUTABLE_PATH_CANARY', 'missing', 'configured ffmpegPath'],
+    ['old version', undefined, 'version', '6.1 or later is required'],
+    ['incomplete build', undefined, 'capabilities', 'lacks required'],
+  ] as const)('keeps controls and public motion available with unavailable FFmpeg (%s)', async (_kind, ffmpegPath, code, warning) => {
+    if (code === 'missing') {
+      // Exercise actual executable discovery with a PATH guaranteed to contain no FFmpeg.
+      jest.mocked(externalFfmpeg.resolveExternalFfmpegPath).mockImplementation(configured => {
+        const original = process.env.PATH;
+        try { process.env.PATH = directory; return resolveInstalledFfmpeg(configured); }
+        finally { process.env.PATH = original; }
+      });
+    } else jest.mocked(externalFfmpeg.probeExternalFfmpeg).mockRejectedValue(new externalFfmpeg.ExternalFfmpegSetupError(code));
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', ffmpegPath,
+      enableStreaming: true, deviceSettingOverrides: [{ deviceIdentifier: 'camera:40', homeKitSecureVideo: true }], exposeMotionDetected: true });
+    expect(platform.isOperational()).toBe(true);
+    expect(platform.isMediaAvailable()).toBe(false);
+    expect(source.setDemand).toHaveBeenLastCalledWith({ motionAccessory: true, hsv: false });
+    expect(platform.log.warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    const setupWarnings = jest.mocked(platform.log.warn).mock.calls.filter(([message]) => String(message).includes('ffmpegPath'));
+    expect(setupWarnings).toHaveLength(1);
+    for (const text of ['Install FFmpeg 6.1+', 'libx264', 'libopus', 'restart the Blink child bridge'])
+      expect(setupWarnings[0][0]).toContain(text);
+    expect(JSON.stringify(setupWarnings)).not.toContain('EXECUTABLE_PATH_CANARY');
+    if (code === 'missing') expect(externalFfmpeg.probeExternalFfmpeg).not.toHaveBeenCalled();
+
+    const consumer = createRuntime.mock.calls[0][0].devices[0];
+    const motion = jest.spyOn(consumer, 'motion');
+    const notification = { persistentMessageId: 'motion-without-media', scope: { accountId: 10, clientId: 11, tier: 'u001' },
+      receivedAt: Date.now(), activatedAt: Date.now(), data: { category: 'motion', event_type: 'cloud_motion', camera: '40', target: 'camera', network: '20',
+        created_at: new Date().toISOString() } };
+    const fcmOptions = (FcmEventSource as jest.Mock).mock.calls[0][0] as FcmEventSourceOptions;
+    await fcmOptions.onNotification(notification, new AbortController().signal);
+    expect(motion).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+
+    jest.spyOn(client, 'armNetwork').mockResolvedValue({ id: 71 } as never);
+    jest.spyOn(client, 'disarmNetwork').mockResolvedValue({ id: 72 } as never);
+    jest.spyOn(client, 'disableCameraMotion').mockResolvedValue({ id: 73 } as never);
+    const network = platform.accessories.find(item => item.UUID === api.hap.uuid.generate('blink-network-20'))!;
+    const target = network.getService(api.hap.Service.SecuritySystem)!
+      .getCharacteristic(platform.Characteristic.SecuritySystemTargetState) as unknown as MockCharacteristic;
+    await expect(target.onSetHandler!(api.hap.Characteristic.SecuritySystemTargetState.AWAY_ARM)).resolves.toBeUndefined();
+    await expect(target.onSetHandler!(api.hap.Characteristic.SecuritySystemTargetState.DISARM)).resolves.toBeUndefined();
+    expect(client.armNetwork).toHaveBeenCalled();
+    expect(client.disarmNetwork).toHaveBeenCalled();
+    const camera = platform.accessories.find(item => item.UUID === api.hap.uuid.generate('blink-camera-40'))!;
+    const enabled = camera.getService(api.hap.Service.Switch)!
+      .getCharacteristic(platform.Characteristic.On) as unknown as MockCharacteristic;
+    await expect(enabled.onSetHandler!(false)).resolves.toBeUndefined();
+    expect(client.disableCameraMotion).toHaveBeenCalled();
+    await refresh(platform, homescreen);
+    expect(jest.mocked(platform.log.warn).mock.calls.filter(([message]) => String(message).includes('ffmpegPath'))).toHaveLength(1);
+  });
+
+  it('qualifies supported FFmpeg without changing media demand', async () => {
+    const homescreen = emptyHomescreen();
+    homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
+    const platform = await launch(homescreen, { platform: 'BlinkCameras', deviceSettingOverrides: [{ deviceIdentifier: 'camera:40', homeKitSecureVideo: true }] });
+    expect(platform.isMediaAvailable()).toBe(true);
+    expect(source.setDemand).toHaveBeenLastCalledWith({ motionAccessory: false, hsv: true });
+    await refresh(platform, homescreen);
+    expect(externalFfmpeg.probeExternalFfmpeg).toHaveBeenCalledTimes(1);
+  });
 
   it('gives fixed external-FFmpeg setup guidance without logging the configured executable path', async () => {
     const homescreen = emptyHomescreen();
