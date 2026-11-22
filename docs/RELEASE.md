@@ -129,10 +129,12 @@ accepted upload. The workflow allows 40 polling intervals of 30 seconds, coverin
 20 minutes of registry processing plus lookup time. It logs upload acceptance,
 pending visibility, and verified identity separately. Transport and identity errors
 stop immediately. If visibility is pending or the upload outcome is unclear, rerun
-the same workflow run to reuse its qualification evidence. Reruns only perform
-registry readback and record reconciliation, even if the first registry lookup
-shows no version. Upload outcome and release receipts are preserved in each
-attempt's workflow artifact when available.
+only the failed `publish` job in the original workflow run. Re-running all jobs
+can replace the package artifact. Preserve the original qualified tarball and five
+target receipts before their seven-day expiry. The publish retry performs registry
+readback and record reconciliation, even if the first registry lookup shows no
+version. Upload outcome and release receipts are preserved in each attempt's
+workflow artifact when available.
 
 If the attempt record exists and no registry version appears, keep the record
 while the upload outcome is uncertain. A maintainer may separately authorize

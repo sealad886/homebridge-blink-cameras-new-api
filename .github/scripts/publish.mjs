@@ -96,7 +96,7 @@ if (!existing && !existingTag && !attemptedRef && runAttempt === '1') {
       '--registry', 'https://registry.npmjs.org', '--fetch-retries=0']);
   } catch (cause) {
     recordUploadStatus('unconfirmed');
-    throw new Error('npm upload did not confirm acceptance. Recover by rerunning this workflow for registry readback only.', { cause });
+    throw new Error('npm upload did not confirm acceptance. Rerun only the publish job in this run for registry readback.', { cause });
   }
   recordUploadStatus('accepted');
   console.log('npm accepted the upload. Waiting for registry visibility.');
