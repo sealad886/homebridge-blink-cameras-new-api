@@ -9,6 +9,7 @@ import { NativeRecordingMemoryBudget, NativeRecordingSource, prepareNativeRecord
   snapshotNativeRecordingConfiguration, NativeRecordingPreparationError } from '../src/accessories/native-recording-preparation';
 import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
 import * as externalFfmpeg from '../src/accessories/external-ffmpeg';
+import * as externalRecording from '../src/accessories/external-recording';
 
 jest.mock('../src/accessories/protection-worker-artifact', () => ({ loadPackagedProtectionWorker: jest.fn() }));
 
@@ -47,6 +48,7 @@ it('keeps preparation diagnostics detached, fixed and free of arbitrary error da
   expect(() => new NativeRecordingPreparationError({ phase: 'private-source' } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(() => new NativeRecordingPreparationError({ phase: 'output', workerCode: 'private-source' } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(() => new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: false } as never)).toThrow('Invalid recording preparation diagnostic');
+  expect(() => new NativeRecordingPreparationError({ phase: 'output', deadlineExceeded: 'private-data' } as never)).toThrow('Invalid recording preparation diagnostic');
   expect(new NativeRecordingPreparationError({ phase: 'output', salvageAttempted: true }).diagnostic).toEqual({ phase: 'output', salvageAttempted: true });
 });
 
@@ -119,6 +121,47 @@ it('cancels before shared CPU admission and prevents late admission from startin
   controller.abort();
   await expect(pending).rejects.toThrow('cancelled before admission');
   await expect(run()).rejects.toThrow();
+});
+
+it('identifies expiration while waiting for admission and still fences late admission', async () => {
+  const file = await source(), controller = new globalThis.AbortController();
+  let run!: () => Promise<unknown>;
+  jest.useFakeTimers();
+  try {
+    const pending = prepareNativeRecording(file, configuration(), false, controller.signal, {
+      timeoutMs: 1000,
+      admit: <T>(work: () => Promise<T>) => { run = work; return new Promise<T>(() => undefined); },
+    });
+    const rejection = expect(pending).rejects.toMatchObject({ diagnostic: { phase: 'admission', deadlineExceeded: true } });
+    await jest.advanceTimersByTimeAsync(1000);
+    await rejection;
+    await expect(run()).rejects.toThrow();
+  } finally { jest.useRealTimers(); }
+});
+
+it('identifies expiration during input inspection and removes the private working copy', async () => {
+  const file = await source(), controller = new globalThis.AbortController(), memory = new NativeRecordingMemoryBudget();
+  const resolve = jest.spyOn(externalFfmpeg, 'resolveExternalFfmpegPath').mockReturnValue('/verified/ffmpeg');
+  const probe = jest.spyOn(externalFfmpeg, 'probeExternalFfmpeg').mockResolvedValue({ version: '9.0' });
+  let onStart!: () => void;
+  const started = new Promise<void>(done => { onStart = done; });
+  const inspect = jest.spyOn(externalRecording, 'inspectExternalRecording').mockImplementation(async context => {
+    onStart();
+    await new Promise((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('private input detail')),
+      { once: true }));
+    throw new Error('Inspection unexpectedly continued');
+  });
+  jest.useFakeTimers();
+  try {
+    const pending = prepareNativeRecording(file, configuration(), false, controller.signal, { admit, memory, timeoutMs: 1000 });
+    const rejection = expect(pending).rejects.toMatchObject({ message: 'Recording conversion failed during input',
+      diagnostic: { phase: 'input', deadlineExceeded: true } });
+    await started;
+    await jest.advanceTimersByTimeAsync(1000);
+    await rejection;
+    expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+    expect(memory.bytes).toBe(0);
+  } finally { jest.useRealTimers(); inspect.mockRestore(); resolve.mockRestore(); probe.mockRestore(); }
 });
 
 it('does not enter admission with an already cancelled owner and handles synchronous admission refusal', async () => {

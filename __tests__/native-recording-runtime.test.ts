@@ -1641,6 +1641,41 @@ describe('native recording runtime composition', () => {
     await expect(f.delegate.handleRecordingStreamRequest(72).next()).rejects.toThrow('No permitted prepared');
   });
 
+  it('reports only counts and an opaque flow for a refreshed catalog with no eligible clip', async () => {
+    const f = await setup({ config: { initialDelaySeconds: 0 } });
+    f.media[0].device_name = 'Other private camera';
+    await f.push(); await jest.advanceTimersByTimeAsync(0);
+    await until(() => f.events.includes('acquisition-missing'));
+
+    const acquisition = f.reports.find(report => report.event === 'acquisition-missing');
+    expect(f.reports.find(report => report.event === 'catalog-no-eligible-clip')).toEqual({
+      event: 'catalog-no-eligible-clip',
+      context: { flow: acquisition?.context?.flow, attempt: 1,
+        clipEligibility: { rows: 1, wrongNetwork: 0, otherName: 1, invalidMetadata: 0, outsideWindow: 0, consumed: 0 } },
+    });
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+  });
+
+  it('ends an unsupported clip URL before dispatch and allows another camera to use the catalog', async () => {
+    const f = await setup({ secondCamera: true, config: { initialDelaySeconds: 0 } });
+    f.media.push({ ...f.media[0], id: 102, device_name: 'Corner native name',
+      media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/102/' });
+    f.transport.validateMediaUrl.mockImplementationOnce(() => { throw new BlinkOperationNotStartedError('invalid-native-route'); });
+    await f.push();
+    await until(() => f.events.includes('job-cancelled'));
+    expect(f.events).toContain('download-invalid-media');
+    expect(f.events).not.toContain('download-started');
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+    expect((await f.state()).nativeByModule['20:30'].state.operation).toMatchObject({ kind: 'catalog', phase: 'finished' });
+
+    await f.push(f.notification('valid-corner', { camera: '41' }));
+    await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect(f.cornerReady).toHaveBeenCalledWith(true);
+  });
+
   it('finishes a timed-out prepared download and records the next motion without restarting the runtime', async () => {
     const f = await setup({ config: { initialDelaySeconds: 0 } });
     f.transport.downloadMedia.mockRejectedValueOnce(new OperationTimeoutError());
@@ -1656,6 +1691,36 @@ describe('native recording runtime composition', () => {
     expect(f.transport.postEmpty).toHaveBeenCalledTimes(3); expect(f.transport.getJson).toHaveBeenCalledTimes(4);
     expect(f.transport.downloadMedia).toHaveBeenCalledTimes(2); expect(f.prepare).toHaveBeenCalledTimes(1);
     expect(f.readyMotion).toHaveBeenLastCalledWith(true);
+  });
+
+  it('retires a private clip when its durable ready save finishes after acquisition expiry', async () => {
+    const f = await setup({ config: { initialDelaySeconds: 0, maxJobAgeSeconds: 1 } });
+    const gate = deferred<void>();
+    const original = secureJson.writeOwnerOnlyJsonFile;
+    let clip: NativeStoredMedia | undefined;
+    const writes = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (filename, value) => {
+      const operation = (value as NativeRecordingRuntimeState).nativeByModule?.['20:30']?.state.operation;
+      if (!clip && operation?.kind === 'clip' && operation.result?.status === 'ready') {
+        clip = operation.result.value as NativeStoredMedia;
+        await gate.promise;
+      }
+      return original(filename, value);
+    });
+    try {
+      await f.push();
+      await until(() => !!clip);
+      expect((await fs.stat(clip!.reference)).isFile()).toBe(true);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(f.events).not.toContain('downloaded');
+      gate.resolve();
+      await until(async () => f.events.includes('job-abandoned') &&
+        await fs.stat(clip!.reference).then(() => false, error => error.code === 'ENOENT'));
+      const state = await f.state();
+      expect(state.nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished', result: { status: 'ready' } });
+      expect(state.downloads).toEqual([]);
+      expect(f.prepare).not.toHaveBeenCalled();
+      expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    } finally { gate.resolve(); writes.mockRestore(); }
   });
 
   it('finishes a timed-out prepared catalog and records the next motion without operator recovery', async () => {
@@ -1863,6 +1928,59 @@ describe('native recording runtime composition', () => {
     await expect(fs.stat(reference)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await fs.readFile(path.join(restored.runtime.cacheDirectory, 'unknown.mp4'), 'utf8')).toBe('preserve');
     expect(await fs.readFile(path.join(restored.runtime.cacheDirectory, '.DS_Store'), 'utf8')).toBe('preserve');
+  });
+
+  it('cancels the genuine prior permission-period queue on startup after lowering its admission limit', async () => {
+    const f = await setup({ secondCamera: true, config: { maxQueuedJobs: 4 } });
+    await f.push();
+    await f.push(f.notification('second-camera', { camera: '41' }));
+    await f.runtime.stop();
+    const checkpoint = await f.state();
+    expect(checkpoint.core?.queue).toHaveLength(2);
+
+    const restored = await setup({ secondCamera: true, config: { maxQueuedJobs: 1 } });
+    const recovered = await restored.state();
+    expect(recovered.core?.queue).toEqual([]);
+    expect(recovered.core?.rememberedEvents).toEqual(checkpoint.core?.rememberedEvents);
+    expect(restored.transport.postEmpty).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 4])('restores the downloads journal with a queue limit of one after running at %i', async maxQueuedJobs => {
+    const held = deferred<PreparedNativeRecording>();
+    const prepare = jest.fn<ReturnType<typeof prepareNativeRecording>, Parameters<typeof prepareNativeRecording>>()
+      .mockReturnValue(held.promise);
+    const f = await setup({ prepare, secondCamera: true, config: { initialDelaySeconds: 0, maxQueuedJobs } });
+    let checkpoint: NativeRecordingRuntimeState;
+    let files: { reference: string; contents: Buffer }[];
+    try {
+      f.media.push({ ...f.media[0], id: 102, device_name: 'Corner native name',
+        media: '/api/v1/accounts/10/networks/20/sync_modules/30/local_storage/manifest/91/clip/request/102/' });
+      await f.push();
+      await until(async () => prepare.mock.calls.length === 1 && !(await f.state()).core?.operation);
+      await f.push(f.notification('second-camera', { camera: '41' }));
+      await until(async () => {
+        const state = await f.state();
+        return state.downloads.length === 2 && !state.core?.operation;
+      });
+      checkpoint = await f.state();
+      files = await Promise.all(checkpoint.downloads.map(async ({ reference }) => ({ reference, contents: await fs.readFile(reference) })));
+    } finally {
+      const stopping = f.runtime.stop();
+      held.resolve(prepared(configuration(), false));
+      await stopping;
+    }
+    // Restore the journal and files as they existed before the first conversion completed.
+    for (const file of files) await fs.writeFile(file.reference, file.contents, { mode: 0o600 });
+    await writeOwnerOnlyJsonFile(path.join(f.runtime.directory, 'state.json'), checkpoint);
+
+    const restored = await setup({ secondCamera: true, config: { initialDelaySeconds: 0, maxQueuedJobs: 1 } });
+    const recovered = await restored.state();
+    expect(recovered.downloads).toEqual([]);
+    expect(recovered.consumed).toEqual(checkpoint.consumed);
+    expect(recovered.nativeByModule).toEqual(checkpoint.nativeByModule);
+    expect(restored.transport.postEmpty).not.toHaveBeenCalled();
+    expect(restored.prepare).not.toHaveBeenCalled();
+    for (const file of files) await expect(fs.stat(file.reference)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each(['before-result', 'before-download-index'] as const)('reclaims the %s crash window and resumes recording at the minimum cache capacity', async crashWindow => {
@@ -2270,6 +2388,45 @@ describe('native recording runtime composition', () => {
           .toHaveLength(phase === 'permission-revoked' ? 0 : 1);
       } finally { saving.mockRestore(); }
     });
+
+  it.each(['before-save', 'after-save'] as const)('reconciles a clip index write failure %s without replaying acquisition', async failure => {
+    const f = await setup({ config: { initialDelaySeconds: 0, maxCachedBytes: 32 * 1024 * 1024 } });
+    const write = secureJson.writeOwnerOnlyJsonFile, held = deferred<PreparedNativeRecording>();
+    f.prepare.mockReturnValueOnce(held.promise);
+    let reference: string | undefined;
+    const saving = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (filename, value) => {
+      const candidate = (value as NativeRecordingRuntimeState).downloads?.[0];
+      if (reference || !candidate) return write(filename, value);
+      reference = candidate.reference;
+      if (failure === 'after-save') await write(filename, value);
+      throw new Error('clip index acknowledgment failed');
+    });
+    try {
+      await f.push();
+      await until(() => f.events.includes('acquisition-faulted'));
+      expect(reference).toBeDefined();
+      expect((await fs.stat(reference!)).isFile()).toBe(true);
+      expect(f.prepare).not.toHaveBeenCalled();
+      expect((await f.state()).downloads).toHaveLength(failure === 'after-save' ? 1 : 0);
+
+      await f.runtime.retryConnection();
+      if (failure === 'after-save') {
+        await until(() => f.prepare.mock.calls.length === 1);
+        expect((await f.state()).downloads[0]?.reference).toBe(reference);
+        expect((await fs.stat(reference!)).isFile()).toBe(true);
+        held.resolve(prepared(configuration(), false));
+        await until(async () => (await f.state()).downloads.length === 0);
+        expect(f.prepare).toHaveBeenCalledTimes(1);
+      } else {
+        expect(f.prepare).not.toHaveBeenCalled();
+        expect((await f.state()).downloads).toEqual([]);
+      }
+      await expect(fs.stat(reference!)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await f.state()).nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished', result: { status: 'ready' } });
+      expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+      expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    } finally { held.resolve(prepared(configuration(), false)); saving.mockRestore(); }
+  });
 
   it.each(['failed-save', 'committed-new-scope', 'permission-revoked', 'stopped'] as const)(
     'uses committed auth authority while a real candidate save is pending: %s', async phase => {

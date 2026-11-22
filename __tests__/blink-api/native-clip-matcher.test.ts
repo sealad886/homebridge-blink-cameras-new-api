@@ -38,7 +38,7 @@ describe('native clip metadata matching', () => {
   it.each(['Entry Camera AB12', 'entryCameraAB12', 'Entry', 'AB12'])('does not normalize catalog text or match a partial/case-folded name: %s', deviceName => {
     const decorated = { ...camera, nativeName: 'Entry Camera (AB-12)' };
     expect(matchNativeClip(options([clip(101, { deviceName })], { camera: decorated, devices: [decorated] })))
-      .toEqual({ status: 'missing' });
+      .toMatchObject({ status: 'missing' });
   });
 
   it.each(['Entry-Camera', 'Entry Camera', 'EntryCamera'])('rejects compacted-name collisions with any known scoped camera: %s', otherName => {
@@ -64,20 +64,20 @@ describe('native clip metadata matching', () => {
       { ...alias, syncModuleId: 31, moduleId: 'sync:31' }];
     expect(matchNativeClip(options([clip(101, { deviceName: 'EntryCamera' })], { camera: selected, devices })).status).toBe('matched');
     expect(matchNativeClip(options([clip(101, { deviceName: 'EntryCamera', networkId: 21 })], { camera: selected, devices })))
-      .toEqual({ status: 'missing' });
+      .toMatchObject({ status: 'missing' });
   });
 
   it('keeps Unicode raw names exact and never creates an empty or transliterated alias', () => {
     const selected = { ...camera, nativeName: '門口!!' };
     for (const deviceName of ['門口', '', null]) {
       expect(matchNativeClip(options([clip(101, { deviceName })], { camera: selected, devices: [selected] })))
-        .toEqual({ status: 'missing' });
+        .toMatchObject({ status: 'missing' });
     }
     expect(matchNativeClip(options([clip(101, { deviceName: selected.nativeName })], { camera: selected, devices: [selected] })).status)
       .toBe('matched');
     const accented = { ...camera, nativeName: 'Entrée (AB-12)' };
     expect(matchNativeClip(options([clip(101, { deviceName: 'EntreeAB12' })], { camera: accented, devices: [accented] })))
-      .toEqual({ status: 'missing' });
+      .toMatchObject({ status: 'missing' });
     expect(matchNativeClip(options([clip(101, { deviceName: 'EntreAB12' })], { camera: accented, devices: [accented] })).status)
       .toBe('matched');
   });
@@ -87,9 +87,9 @@ describe('native clip metadata matching', () => {
     const current = clip(101, { deviceName: 'EntryCameraAB12' });
     const scoped = { camera: selected, devices: [selected] };
     expect(matchNativeClip(options([current], { ...scoped, consumedClipIdentities: new Set([nativeClipIdentity(scope, current)!]) })))
-      .toEqual({ status: 'missing' });
+      .toMatchObject({ status: 'missing' });
     expect(matchNativeClip(options([{ ...current, capturedAt: '2026-11-09T06:00:02.001Z' }], scoped)))
-      .toEqual({ status: 'missing' });
+      .toMatchObject({ status: 'missing' });
     expect(matchNativeClip(options([current, { ...current, deviceName: 'OtherCamera' }], scoped)))
       .toEqual({ status: 'ambiguous', reason: 'conflicting-clip-identity' });
   });
@@ -109,7 +109,7 @@ describe('native clip metadata matching', () => {
     for (const timestamp of ['2026-11-09T05:59:58.000Z', '2026-11-09T06:00:02.000Z']) {
       expect(matchNativeClip(options([clip(101, { capturedAt: timestamp })])).status).toBe('matched');
     }
-    expect(matchNativeClip(options([clip(101, { capturedAt: '2026-11-09T06:00:02.001Z' })]))).toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { capturedAt: '2026-11-09T06:00:02.001Z' })]))).toMatchObject({ status: 'missing' });
   });
 
   it('rejects equidistant distinct media instead of guessing by media ID or list order', () => {
@@ -133,9 +133,23 @@ describe('native clip metadata matching', () => {
   });
 
   it('never matches HomeKit display aliases or wrong-camera/network metadata', () => {
-    expect(matchNativeClip(options([clip(101, { deviceName: 'Entry' })]))).toEqual({ status: 'missing' });
-    expect(matchNativeClip(options([clip(101, { deviceName: 'Corner' })]))).toEqual({ status: 'missing' });
-    expect(matchNativeClip(options([clip(101, { networkId: 21 })]))).toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { deviceName: 'Entry' })]))).toMatchObject({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { deviceName: 'Corner' })]))).toMatchObject({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { networkId: 21 })]))).toMatchObject({ status: 'missing' });
+  });
+
+  it('counts one exclusion per catalog row without returning catalog data', () => {
+    const consumed = clip(101);
+    const staleConsumed = clip(102, { capturedAt: '2026-11-09T05:59:00Z' });
+    const rows = [consumed, staleConsumed, clip(103, { deviceName: 'Other private camera' }),
+      clip(104, { networkId: 21 }), clip(105, { capturedAt: null })];
+
+    expect(matchNativeClip(options(rows, {
+      consumedClipIdentities: new Set([nativeClipIdentity(scope, consumed)!, nativeClipIdentity(scope, staleConsumed)!]),
+    }))).toEqual({
+      status: 'missing',
+      eligibility: { rows: 5, wrongNetwork: 1, otherName: 1, invalidMetadata: 1, outsideWindow: 1, consumed: 1 },
+    });
   });
 
   it('requires the selected camera to exist in the authoritative device inventory', () => {
@@ -166,20 +180,23 @@ describe('native clip metadata matching', () => {
   it('excludes already consumed clip identities rather than repeatedly importing one clip', () => {
     const current = clip(101);
     const consumedClipIdentities = new Set([nativeClipIdentity(scope, current)!]);
-    expect(matchNativeClip(options([current], { consumedClipIdentities }))).toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([current], { consumedClipIdentities }))).toMatchObject({ status: 'missing' });
     const laterReuse = clip(101, { capturedAt: '2026-11-09T06:00:01Z' });
     expect(matchNativeClip(options([laterReuse], { consumedClipIdentities })).status).toBe('matched');
   });
 
   it('does not infer a filename, date, camera or capture time from an opaque URL', () => {
     const misleading = clip(101, { capturedAt: null, mediaUrl: '/2026/11/09/06-00-00_Entry.mp4' });
-    expect(matchNativeClip(options([misleading]))).toEqual({ status: 'missing' });
-    expect(matchNativeClip(options([clip(101, { capturedAt: '2026-11-09T06:00:00' })]))).toEqual({ status: 'missing' });
-    expect(matchNativeClip(options([clip(101, { mediaUrl: null })]))).toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([misleading]))).toMatchObject({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { capturedAt: '2026-11-09T06:00:00' })]))).toMatchObject({ status: 'missing' });
+    expect(matchNativeClip(options([clip(101, { mediaUrl: null })]))).toMatchObject({ status: 'missing' });
   });
 
   it('treats an empty valid catalog as missing without constructing a manifest-zero request', () => {
-    expect(matchNativeClip(options([], { catalog: { manifestId: null, clips: [], pageSize: null, paginationKey: null } }))).toEqual({ status: 'missing' });
+    expect(matchNativeClip(options([], { catalog: { manifestId: null, clips: [], pageSize: null, paginationKey: null } }))).toEqual({
+      status: 'missing',
+      eligibility: { rows: 0, wrongNetwork: 0, otherName: 0, invalidMetadata: 0, outsideWindow: 0, consumed: 0 },
+    });
     expect(matchNativeClip(options([clip(101)], { catalog: { manifestId: null, clips: [clip(101)], pageSize: null, paginationKey: null } })))
       .toEqual({ status: 'invalid', reason: 'invalid-input' });
   });

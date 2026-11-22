@@ -23,6 +23,11 @@ export interface ExternalRecordingContext {
 }
 /** Microseconds: corrected PTS relative to the first corrected video picture, and positive picture duration. */
 interface Picture { pts: number; duration: number; }
+/** Observed origin is the first decoded PTS on the common input timeline after AAC priming and edit handling. */
+type EnabledSourceAudio =
+  | { kind: 'observed'; originUs: number }
+  | { kind: 'unavailable'; reason: 'audio-discontinuity' | 'unobserved' };
+export type RecordingAudioOutput = 'disabled' | 'source' | 'generated-silence';
 export interface ExternalRecordingPlan {
   /** First video track's input stream index, derived from the verified ordinary MP4 track inventory. */
   videoStreamIndex: number;
@@ -31,10 +36,7 @@ export interface ExternalRecordingPlan {
   durationUs: number;
   /** First corrected video PTS on the shared input timeline after copyts/start_at_zero. */
   originUs: number;
-  /** First decoded audio PTS on that input timeline, after AAC priming/edit handling; undefined if unobserved. */
-  audioOriginUs?: number;
-  /** Proven AAC failure from the isolated source-audio decode, eligible for the single silence retry. */
-  audioFailure?: 'AUDIO_DISCONTINUITY';
+  sourceAudio: { kind: 'disabled' } | EnabledSourceAudio;
   metadata: number;
   /** Raw input-microsecond breakpoints and the cumulative metadata duration to subtract from video PTS. */
   corrections: readonly { at: number; offset: number }[];
@@ -325,13 +327,12 @@ function observeMetadataErrors(stream: Readable, expected: () => number, videoSt
   return { valid: () => !invalid && metadataValid(), audioFailed: () => audioFailure && !otherFailure && metadataValid() };
 }
 
-type AudioOriginObservation = { kind: 'decoded'; originUs: number } | { kind: 'damaged' } | { kind: 'unobserved' };
 const MAX_AUDIO_OBSERVATION_BYTES = 2 * 1024 * 1024;
 // The shortest valid PCM framecrc row plus newline occupies 21 bytes.
 const MAX_AUDIO_OBSERVATION_ROWS = Math.floor(MAX_AUDIO_OBSERVATION_BYTES / 21);
 /** Validate source audio through the selected video end without encoding video.
  * Retain the first decoded PTS so AAC priming/edit lists preserve the A/V offset. */
-async function inspectSourceAudio(context: ExternalRecordingContext, videoStreamIndex: number, endUs: number): Promise<AudioOriginObservation> {
+async function inspectSourceAudio(context: ExternalRecordingContext, videoStreamIndex: number, endUs: number): Promise<EnabledSourceAudio> {
   const input = await context.open(), controller = new globalThis.AbortController(), abort = () => controller.abort();
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
   let closed: Promise<number | null> | undefined;
@@ -355,14 +356,15 @@ async function inspectSourceAudio(context: ExternalRecordingContext, videoStream
     });
     const [code] = await Promise.all([closed, parsed]); context.signal.throwIfAborted();
     if (Date.now() >= context.deadline) failure('TIME_LIMIT');
-    if (code !== null && okay.audioFailed()) return { kind: 'damaged' };
-    return code === 0 && okay.valid() && origin !== undefined ? { kind: 'decoded', originUs: origin } : { kind: 'unobserved' };
+    if (code !== null && okay.audioFailed()) return { kind: 'unavailable', reason: 'audio-discontinuity' };
+    if (code === 0 && okay.valid() && origin !== undefined) return { kind: 'observed', originUs: origin };
+    return { kind: 'unavailable', reason: 'unobserved' };
   } catch (error) {
     controller.abort(); await closed; context.signal.throwIfAborted();
     if (Date.now() >= context.deadline) failure('TIME_LIMIT');
     if (error instanceof ExternalRecordingError && error.code === 'OUTPUT_LIMIT') throw error;
-    // Missing or undecodable source audio must still reach the existing bounded silence fallback.
-    return { kind: 'unobserved' };
+    // Conversion can still establish an audio-specific failure and permit a silence retry.
+    return { kind: 'unavailable', reason: 'unobserved' };
   } finally { controller.abort(); await closed; context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
@@ -468,15 +470,14 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
     const durationUs = pictures.reduce((end, picture) => Math.max(end, picture.pts + picture.duration), 0);
     if (durationUs < 1 || durationUs > 90000000) failure('VIDEO_TIMESTAMP');
     recordingKeyframeIndices(configuration, { selected, durationUs });
-    const audio = audioActive ? await inspectSourceAudio(context, videoStreamIndex, origin + durationUs) : undefined;
-    return { pictures, selected, durationUs, originUs: origin,
-      ...(audio?.kind === 'decoded' ? { audioOriginUs: audio.originUs } : {}),
-      ...(audio?.kind === 'damaged' ? { audioFailure: 'AUDIO_DISCONTINUITY' as const } : {}), metadata, corrections, videoStreamIndex };
+    const sourceAudio: ExternalRecordingPlan['sourceAudio'] = audioActive
+      ? await inspectSourceAudio(context, videoStreamIndex, origin + durationUs) : { kind: 'disabled' };
+    return { pictures, selected, durationUs, originUs: origin, sourceAudio, metadata, corrections, videoStreamIndex };
   } finally { controller.abort(); await closure; queue.dispose(); context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 
-export function recordingFfmpegArguments(configuration: CameraRecordingConfiguration, plan: ExternalRecordingPlan,
-  audioActive: boolean, silence: boolean): string[] {
+function recordingFfmpegArguments(configuration: CameraRecordingConfiguration, plan: ExternalRecordingPlan,
+  audioOutput: RecordingAudioOutput): string[] {
   const v = configuration.videoCodec, [width, height, fps] = v.resolution;
   const rate = configuration.audioCodec.samplerate === 1 ? 16000 : 24000;
   // At most 512 corrections are admitted. A balanced threshold tree keeps
@@ -500,33 +501,36 @@ export function recordingFfmpegArguments(configuration: CameraRecordingConfigura
     const middle = Math.floor((from + to) / 2);
     return `(${forceKeyframe(from, middle)}+${forceKeyframe(middle, to)})`;
   };
-  const sourceArguments = [...inputArguments.slice(0, -2), ...(!audioActive || silence ? ['-an'] : []), ...inputArguments.slice(-2)];
+  const sourceArguments = [...inputArguments.slice(0, -2), ...(audioOutput !== 'source' ? ['-an'] : []), ...inputArguments.slice(-2)];
   return [...sourceArguments.slice(0, 6), ...(plan.metadata ? ['-err_detect', 'explode'] : ['-xerror', '-err_detect', 'explode']),
-    ...sourceArguments.slice(6), ...(silence ? ['-f', 'lavfi', '-i', `anullsrc=r=${rate}:cl=mono`] : []),
-    '-map', '0:v:0', ...(audioActive ? ['-map', silence ? '1:a:0' : '0:a:0'] : ['-an']),
+    ...sourceArguments.slice(6), ...(audioOutput === 'generated-silence' ? ['-f', 'lavfi', '-i', `anullsrc=r=${rate}:cl=mono`] : []),
+    '-map', '0:v:0', ...(audioOutput === 'disabled' ? ['-an'] : ['-map', audioOutput === 'source' ? '0:a:0' : '1:a:0']),
     '-vf', filter, '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-c:v', 'libx264', '-threads:v', '1',
     '-preset', 'veryfast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-bf', '0',
     '-profile:v', ['baseline', 'main', 'high'][v.parameters.profile], '-level:v', ['3.1', '3.2', '4.0'][v.parameters.level],
     '-b:v', String(v.parameters.bitRate * 1000), '-maxrate:v', String(v.parameters.bitRate * 1000), '-bufsize:v', String(v.parameters.bitRate * 1000),
     '-sc_threshold', '0', '-force_key_frames', `expr:${forceKeyframe(0, keyframes.length)}`,
     '-bsf:v', `setts=duration='if(eq(N,${plan.selected.length - 1}),${plan.durationUs - plan.selected.at(-1)!.pts},DURATION)'`,
-    ...(audioActive ? ['-c:a', 'aac', '-profile:a', 'aac_low', '-threads:a', '1', '-ar', String(rate), '-ac', '1',
+    ...(audioOutput !== 'disabled' ? ['-c:a', 'aac', '-profile:a', 'aac_low', '-threads:a', '1', '-ar', String(rate), '-ac', '1',
       '-b:a', String(configuration.audioCodec.bitrate * 1000), '-af', 'aresample=async=1:min_comp=0.002:min_hard_comp=0.002'] : []),
     '-t', String((plan.originUs + plan.durationUs) / 1000000), '-avoid_negative_ts', 'disabled', '-use_editlist', '1',
     '-movflags', 'frag_keyframe+delay_moov+default_base_moof+skip_trailer', '-f', 'mp4', 'pipe:1'];
 }
 
 export async function convertExternalRecording(context: ExternalRecordingContext, configuration: CameraRecordingConfiguration,
-  plan: ExternalRecordingPlan, audioActive: boolean, silence: boolean, collect: (bytes: Buffer) => void): Promise<void> {
+  plan: ExternalRecordingPlan, audioOutput: RecordingAudioOutput, collect: (bytes: Buffer) => void): Promise<void> {
   context.signal.throwIfAborted();
   if (Date.now() >= context.deadline) failure('TIME_LIMIT');
-  if (audioActive && !silence && plan.audioFailure === 'AUDIO_DISCONTINUITY') failure('AUDIO_DISCONTINUITY');
+  if ((audioOutput === 'disabled') !== (plan.sourceAudio.kind === 'disabled')) failure('DECODE');
+  if (audioOutput === 'source' && plan.sourceAudio.kind === 'unavailable' && plan.sourceAudio.reason === 'audio-discontinuity') {
+    failure('AUDIO_DISCONTINUITY');
+  }
   const input = await context.open(), controller = new globalThis.AbortController(), abort = () => controller.abort();
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
   let closure: Promise<number | null> | undefined;
   try {
-    const child = launch({ ...context, signal: controller.signal }, recordingFfmpegArguments(configuration, plan, audioActive, silence), [input.fd, 'pipe', 'pipe']);
-    const okay = observeMetadataErrors(readable(child.stderr), () => plan.metadata, plan.videoStreamIndex, audioActive && !silence);
+    const child = launch({ ...context, signal: controller.signal }, recordingFfmpegArguments(configuration, plan, audioOutput), [input.fd, 'pipe', 'pipe']);
+    const okay = observeMetadataErrors(readable(child.stderr), () => plan.metadata, plan.videoStreamIndex, audioOutput === 'source');
     const closed = closure = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
     let bytes = 0, failed = false;
     child.stdout?.on('data', (value: Buffer) => {
@@ -542,14 +546,20 @@ export async function convertExternalRecording(context: ExternalRecordingContext
 
 /** A separate decoder pass validates actual pictures/audio clocks, not only MP4 container declarations. */
 export async function validateExternalRecording(context: ExternalRecordingContext, data: Buffer,
-  configuration: CameraRecordingConfiguration, plan: ExternalRecordingPlan, audioActive: boolean, silence = false): Promise<void> {
+  configuration: CameraRecordingConfiguration, plan: ExternalRecordingPlan, audioOutput: RecordingAudioOutput): Promise<void> {
+  context.signal.throwIfAborted();
+  if (Date.now() >= context.deadline) failure('TIME_LIMIT');
+  if ((audioOutput === 'disabled') !== (plan.sourceAudio.kind === 'disabled')) failure('DECODE');
+  const inputAudioOriginUs = audioOutput === 'source'
+    ? (plan.sourceAudio.kind === 'observed' ? plan.sourceAudio.originUs : failure('DECODE'))
+    : (audioOutput === 'generated-silence' ? 0 : undefined);
   const controller = new globalThis.AbortController(), abort = () => controller.abort();
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) controller.abort();
   let closed: Promise<number | null> | undefined;
   try {
   const child = launch({ ...context, signal: controller.signal }, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-xerror', '-err_detect', 'explode', '-max_alloc', '67108864',
     '-threads', '1', '-protocol_whitelist', 'pipe', '-f', 'mp4', '-i', 'pipe:0', '-map', '0:v:0',
-    ...(audioActive ? ['-map', '0:a:0'] : ['-an']), '-c:v', 'rawvideo', '-threads:v', '1', '-fps_mode:v', 'passthrough',
+    ...(audioOutput === 'disabled' ? ['-an'] : ['-map', '0:a:0']), '-c:v', 'rawvideo', '-threads:v', '1', '-fps_mode:v', 'passthrough',
     '-enc_time_base:v', '1/1000000', '-c:a', 'pcm_f32le',
     '-f', 'framecrc', 'pipe:1'], ['pipe', 'pipe', 'pipe']);
   closed = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
@@ -575,7 +585,7 @@ export async function validateExternalRecording(context: ExternalRecordingContex
       videoOrigin ??= pts; const picture = plan.selected[count++];
       if (!picture || Math.abs(pts - videoOrigin - picture.pts) > 12) failure('VIDEO_DISCONTINUITY');
     } else {
-      if (!audioActive || !audioRate || !audioMono || row.size % 4 || row.size / 4 > 8192 || duration <= 0 || duration > 1000000 ||
+      if (audioOutput === 'disabled' || !audioRate || !audioMono || row.size % 4 || row.size / 4 > 8192 || duration <= 0 || duration > 1000000 ||
           row.duration * base.numerator * BigInt(rate) * 4n !== BigInt(row.size) * base.denominator) failure('AUDIO_DISCONTINUITY');
       audioFirst ??= pts;
       if (audioEnd && Math.abs(pts - audioEnd) > 2000) failure('AUDIO_DISCONTINUITY');
@@ -586,8 +596,8 @@ export async function validateExternalRecording(context: ExternalRecordingContex
     if (code !== 0) failure('DECODE');
     if (count !== plan.selected.length || videoOrigin === undefined) failure('VIDEO_FRAME_COUNT');
     const tolerance = 2048 * 1000000 / rate + 2000;
-    const expectedAudioOffset = (silence ? 0 : plan.audioOriginUs ?? 0) - plan.originUs;
-    if (audioActive && (audioFirst === undefined || Math.abs(audioFirst - videoOrigin! - expectedAudioOffset) > tolerance ||
+    if (inputAudioOriginUs !== undefined && (audioFirst === undefined ||
+        Math.abs((audioFirst - videoOrigin!) - (inputAudioOriginUs - plan.originUs)) > tolerance ||
         Math.abs(audioEnd - videoOrigin! - plan.durationUs) > tolerance)) failure('AUDIO_DISCONTINUITY');
   } catch (error) { controller.abort(); await closed; throw error; }
   finally { controller.abort(); context.signal.removeEventListener('abort', abort); }

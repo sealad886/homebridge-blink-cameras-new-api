@@ -11,7 +11,8 @@ import process from 'node:process';
 import { PassThrough } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import type { CameraRecordingConfiguration } from 'homebridge';
-import { convertExternalRecording, inspectExternalRecording, validateExternalRecording } from '../src/accessories/external-recording';
+import { convertExternalRecording, inspectExternalRecording, validateExternalRecording,
+  type RecordingAudioOutput } from '../src/accessories/external-recording';
 import { resolveExternalFfmpegPath, spawnExternalFfmpeg } from '../src/accessories/external-ffmpeg';
 import { NativeRecordingMemoryBudget, prepareNativeRecording } from '../src/accessories/native-recording-preparation';
 import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
@@ -96,7 +97,8 @@ it.each([['unexpected', 'unexpected decoder error'], ['NULL decoder error', '[NU
     await expect(convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
       signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input }, configuration(),
     { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
-      originUs: 0, metadata: 512, corrections: [], videoStreamIndex: 0 }, false, false, () => undefined)).rejects.toMatchObject({ code: 'DECODE' });
+      originUs: 0, sourceAudio: { kind: 'disabled' }, metadata: 512, corrections: [], videoStreamIndex: 0 }, 'disabled', () => undefined))
+      .rejects.toMatchObject({ code: 'DECODE' });
     expect(close).toHaveBeenCalledTimes(1);
   });
 const audioFailureDiagnostic = '[aac @ 0x123] Error decoding AAC frame header.\n' +
@@ -131,7 +133,7 @@ it.each([
   const pending = convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
     signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input }, configuration(),
   { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
-    originUs: 0, metadata: 1, corrections: [], videoStreamIndex: 0 }, false, false, () => undefined);
+    originUs: 0, sourceAudio: { kind: 'disabled' }, metadata: 1, corrections: [], videoStreamIndex: 0 }, 'disabled', () => undefined);
   if (accepted) await expect(pending).resolves.toBeUndefined();
   else await expect(pending).rejects.toMatchObject({ code: 'DECODE' });
   expect(close).toHaveBeenCalledTimes(1);
@@ -164,7 +166,7 @@ it.each([
   const pending = convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
     signal: new globalThis.AbortController().signal, deadline: Date.now() + 1000, open: async () => input }, configuration(),
   { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
-    originUs: 0, audioOriginUs: 0, metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined);
+    originUs: 0, sourceAudio: { kind: 'observed', originUs: 0 }, metadata: 0, corrections: [], videoStreamIndex: 0 }, 'source', () => undefined);
   await expect(pending).rejects.toMatchObject({ code: expected, message: 'External recording conversion failed' });
   expect(close).toHaveBeenCalledTimes(1);
 });
@@ -183,7 +185,8 @@ it('reports an expired conversion deadline before classifying an audio failure',
     await expect(convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper',
       signal: new globalThis.AbortController().signal, deadline, open: async () => input }, configuration(),
     { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
-      originUs: 0, metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined)).rejects.toMatchObject({ code: 'TIME_LIMIT' });
+      originUs: 0, sourceAudio: { kind: 'observed', originUs: 0 }, metadata: 0, corrections: [], videoStreamIndex: 0 }, 'source', () => undefined))
+      .rejects.toMatchObject({ code: 'TIME_LIMIT' });
   } finally { clock?.mockRestore(); }
 });
 it.each(['active', 'privacy', 'deadline'])('checks %s ownership before recovering proven source audio damage', async state => {
@@ -191,10 +194,22 @@ it.each(['active', 'privacy', 'deadline'])('checks %s ownership before recoverin
   if (state === 'privacy') owner.abort();
   const pending = convertExternalRecording({ ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper', signal: owner.signal,
     deadline, open }, configuration(), { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
-    originUs: 0, audioFailure: 'AUDIO_DISCONTINUITY', metadata: 0, corrections: [], videoStreamIndex: 0 }, true, false, () => undefined);
+    originUs: 0, sourceAudio: { kind: 'unavailable', reason: 'audio-discontinuity' }, metadata: 0, corrections: [], videoStreamIndex: 0 },
+  'source', () => undefined);
   if (state === 'privacy') await expect(pending).rejects.toThrow();
   else await expect(pending).rejects.toMatchObject({ code: state === 'deadline' ? 'TIME_LIMIT' : 'AUDIO_DISCONTINUITY' });
   expect(open).not.toHaveBeenCalled(); expect(spawnExternalFfmpeg).not.toHaveBeenCalled();
+});
+
+it('refuses to validate source audio when its decoded origin is unavailable', async () => {
+  const context = { ffmpegPath: '/verified/ffmpeg', protectionPath: '/verified/helper', deadline: Date.now() + 1000,
+    signal: new globalThis.AbortController().signal, open: jest.fn() };
+  const picture = { pts: 0, duration: 66667 };
+  await expect(validateExternalRecording(context, Buffer.alloc(0), configuration(), {
+    pictures: [picture], selected: [picture], durationUs: picture.duration, originUs: 0,
+    sourceAudio: { kind: 'unavailable', reason: 'unobserved' }, metadata: 0, corrections: [], videoStreamIndex: 0,
+  }, 'source')).rejects.toMatchObject({ code: 'DECODE' });
+  expect(spawnExternalFfmpeg).not.toHaveBeenCalled();
 });
 
 const ffmpeg = (() => { try { return resolveExternalFfmpegPath(process.env.BLINK_FFMPEG_TEST_PATH ??
@@ -208,7 +223,7 @@ const configuration = (rate = 16000): CameraRecordingConfiguration => ({ prebuff
   mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
   videoCodec: { type: 0, resolution: [16, 16, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
   audioCodec: { type: 0, samplerate: rate === 16000 ? 1 : 2, audioChannels: 1, bitrateMode: 0, bitrate: 32 } });
-async function recording(source: Buffer, audio: boolean, rate = 16000, silence = false, dimensions?: readonly [number, number]) {
+async function recording(source: Buffer, audioOutput: RecordingAudioOutput, rate = 16000, dimensions?: readonly [number, number]) {
   jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
   const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-clock-')), file = join(directory, 'source.mp4');
   try {
@@ -216,11 +231,11 @@ async function recording(source: Buffer, audio: boolean, rate = 16000, silence =
     const context = { ffmpegPath: ffmpeg!, protectionPath: protection, signal: new globalThis.AbortController().signal,
       deadline: Date.now() + 15000, open: () => fs.open(file, 'r') };
     const selected = configuration(rate), chunks: Buffer[] = [];
-    const plan = await inspectExternalRecording(context, selected, audio);
+    const plan = await inspectExternalRecording(context, selected, audioOutput !== 'disabled');
     if (dimensions) selected.videoCodec.resolution = [...dimensions, 15];
-    await convertExternalRecording(context, selected, plan, audio, silence, bytes => chunks.push(Buffer.from(bytes)));
+    await convertExternalRecording(context, selected, plan, audioOutput, bytes => chunks.push(Buffer.from(bytes)));
     const output = Buffer.concat(chunks);
-    await validateExternalRecording(context, output, selected, plan, audio, silence);
+    await validateExternalRecording(context, output, selected, plan, audioOutput);
     return { plan, output };
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }
@@ -305,7 +320,7 @@ media('preserves finite display aspect before emitting square pixels', async () 
   try {
     execute(['-f', 'lavfi', '-i', 'color=c=white:size=640x360:rate=15:duration=0.4', '-vf', 'setsar=2', '-an',
       '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-bf', '0', '-f', 'mp4', file]);
-    const { output } = await recording(await fs.readFile(file), false, 16000, false, [640, 360]);
+    const { output } = await recording(await fs.readFile(file), 'disabled', 16000, [640, 360]);
     const frames = execute(['-i', 'pipe:0', '-map', '0:v:0', '-frames:v', '1', '-c:v', 'rawvideo', '-f', 'framecrc', 'pipe:1'], output).toString();
     expect(frames).toMatch(/^#sar 0: 1\/1$/m);
     const pixels = execute(['-i', 'pipe:0', '-map', '0:v:0', '-frames:v', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'], output);
@@ -364,8 +379,8 @@ media.each(['missing', 'corrupt', 'zero-corrupt', 'first-corrupt'])('keeps %s so
     { input: original, timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
     if (defect === 'zero-corrupt') for (let at = 0; at < source.length; at++) if (source[at] !== original[at]) source[at] = 0;
     original.fill(0);
-    await expect(recording(source, true)).rejects.toMatchObject({ code: 'AUDIO_DISCONTINUITY' });
-    const { output } = await recording(source, true, 16000, true);
+    await expect(recording(source, 'source')).rejects.toMatchObject({ code: 'AUDIO_DISCONTINUITY' });
+    const { output } = await recording(source, 'generated-silence');
     const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
     expect(pcm.every(byte => byte === 0)).toBe(true); output.fill(0);
     await fs.writeFile(file, source); await fs.chmod(file, 0o600);
@@ -448,18 +463,26 @@ media('does not retry a late video decode failure as audio recovery', async () =
     expect(createHash('sha256').update(await fs.readFile(file)).digest('hex')).toBe(expectedSha256); source.fill(0);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 20000);
-media.each([16000, 24000])('preserves an audio-leading source offset at %s Hz without silence recovery', async rate => {
+media.each([['audio', 16000], ['audio', 24000], ['video', 16000], ['video', 24000]] as const)(
+  'preserves a %s-leading source offset at %s Hz without silence recovery', async (leading, rate) => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-offset-')), file = join(directory, 'source.mp4');
   try {
-    execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', '-f', 'lavfi', '-i',
-      'sine=frequency=440:sample_rate=16000:duration=2.3', '-vf', 'settb=1/1000000,setpts=PTS+200000',
+    execute(['-f', 'lavfi', '-i', 'testsrc2=size=16x16:rate=15:duration=2', ...(leading === 'video' ? ['-itsoffset', '0.2'] : []),
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=2.3',
+      '-vf', leading === 'audio' ? 'settb=1/1000000,setpts=PTS+200000' : 'settb=1/1000000',
       '-fps_mode:v', 'passthrough', '-enc_time_base:v', '1/1000000', '-c:v', 'libx264', '-threads', '1',
       '-preset', 'ultrafast', '-bf', '0', '-c:a', 'aac', '-ar', '16000', '-ac', '1', '-f', 'mp4', file]);
-    const { plan, output } = await recording(await fs.readFile(file), true, rate);
-    expect(plan.originUs).toBe(200000); expect(plan.audioOriginUs).toBe(0);
-    const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ar', String(rate), '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
-    expect(Array.from({ length: pcm.length / 4 }, (_, index) => Math.abs(pcm.readFloatLE(index * 4))).some(value => value > 0.01)).toBe(true);
-    output.fill(0);
+    const { plan, output } = await recording(await fs.readFile(file), 'source', rate);
+    try {
+      expect(plan.sourceAudio.kind).toBe('observed');
+      if (plan.sourceAudio.kind === 'observed') {
+        const offsetUs = plan.sourceAudio.originUs - plan.originUs;
+        if (leading === 'audio') expect(offsetUs).toBe(-200000);
+        else expect(offsetUs).toBeGreaterThan(100000);
+      }
+      const pcm = execute(['-i', 'pipe:0', '-map', '0:a:0', '-ar', String(rate), '-ac', '1', '-f', 'f32le', 'pipe:1'], output);
+      expect(Array.from({ length: pcm.length / 4 }, (_, index) => Math.abs(pcm.readFloatLE(index * 4))).some(value => value > 0.01)).toBe(true);
+    } finally { output.fill(0); }
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }, 20000);
 
@@ -594,7 +617,7 @@ media.each([false, true])('preserves reordered source pictures with signed offse
       'sine=frequency=440:sample_rate=16000:duration=3', '-vf', 'setpts=PTS+0.2/TB', '-fps_mode:v', 'passthrough',
       '-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast', '-bf', '2', '-c:a', 'aac', '-ar', '16000', '-ac', '1',
       ...(signed ? ['-movflags', '+negative_cts_offsets'] : []), '-shortest', '-f', 'mp4', file]);
-    const { plan, output } = await recording(await fs.readFile(file), true);
+    const { plan, output } = await recording(await fs.readFile(file), 'source');
     try { expect(plan.pictures).toHaveLength(30); expect(plan.originUs).toBe(200000); expect(plan.durationUs).toBe(2000000); }
     finally { output.fill(0); }
   } finally { await fs.rm(directory, { recursive: true, force: true }); }

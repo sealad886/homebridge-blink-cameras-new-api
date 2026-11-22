@@ -1397,6 +1397,8 @@ describe('owned native storage SDK', () => {
     mediaUrl.replace('/accounts/10/', '/accounts/11/'),
     mediaUrl.replace('/networks/20/', '/networks/21/'),
     mediaUrl.replace('/sync_modules/30/', '/sync_modules/31/'),
+    mediaUrl.replace('/manifest/303/', '/manifest/9007199254740992/'),
+    mediaUrl.replace('/request/404/', '/request/9007199254740992/'),
     mediaUrl.replace('https:', 'http:'),
     mediaUrl.replace('https://', 'https://user:password@'),
     `${mediaUrl}#fragment`,
@@ -1707,7 +1709,11 @@ describe('owned native storage SDK', () => {
       expect(saved.some(next => next.operation?.phase === 'finished' && next.operation.result?.status === 'failed')).toBe(false);
       restore(); await rollback;
       expect(f.api.getCachedIdentity().clientId).toBe(90);
-      await expect(acquire()).resolves.toMatchObject({ status: 'ready' });
+      // The catalog is replayable. A finished clip receipt preserves remote
+      // proof but cannot transfer ownership of a temporary file a second time.
+      if (kind === 'catalog') await expect(acquire()).resolves.toMatchObject({ status: 'ready' });
+      else await expect(acquire()).resolves.toEqual({ status: 'failed', reason: 'discarded' });
+      expect(owner.snapshot().operation?.result?.status).toBe('ready');
       expect((fetch as jest.Mock).mock.calls.every(([url, request]) => request.method === 'GET' && (kind === 'catalog'
         ? url.endsWith('/media/202') : url === mediaUrl))).toBe(true);
       expect(fetch).toHaveBeenCalledTimes(1);

@@ -11,10 +11,17 @@ import { convertExternalRecording, inspectExternalRecording, validateExternalRec
   isRecordingFailureCode, type RecordingFailureCode } from './external-recording';
 export { isRecordingFailureCode } from './external-recording';
 
+const PREPARATION_PHASES = ['admission', 'configuration', 'input', 'output', 'closure', 'validation'] as const;
+type PreparationPhase = typeof PREPARATION_PHASES[number];
+export function isNativeRecordingPreparationPhase(value: unknown): value is PreparationPhase {
+  return PREPARATION_PHASES.some(phase => value === phase);
+}
+
 export interface NativeRecordingPreparationDiagnostic {
-  phase: 'configuration' | 'input' | 'output' | 'closure' | 'validation';
+  phase: PreparationPhase;
   workerCode?: RecordingFailureCode;
   salvageAttempted?: true;
+  deadlineExceeded?: true;
 }
 export interface NativeRecordingRecovery {
   readonly flags: number;
@@ -24,15 +31,17 @@ export interface NativeRecordingRecovery {
 export class NativeRecordingPreparationError extends Error {
   readonly diagnostic: Readonly<NativeRecordingPreparationDiagnostic>;
   constructor(diagnostic: NativeRecordingPreparationDiagnostic) {
-    if (!['configuration', 'input', 'output', 'closure', 'validation'].includes(diagnostic.phase) ||
+    if (!isNativeRecordingPreparationPhase(diagnostic.phase) ||
         (diagnostic.workerCode !== undefined && !isRecordingFailureCode(diagnostic.workerCode)) ||
-        (diagnostic.salvageAttempted !== undefined && diagnostic.salvageAttempted !== true)) {
+        (diagnostic.salvageAttempted !== undefined && diagnostic.salvageAttempted !== true) ||
+        (diagnostic.deadlineExceeded !== undefined && diagnostic.deadlineExceeded !== true)) {
       throw new Error('Invalid recording preparation diagnostic');
     }
     super(`Recording conversion failed during ${diagnostic.phase}`);
     this.diagnostic = Object.freeze({ phase: diagnostic.phase,
       ...(diagnostic.workerCode ? { workerCode: diagnostic.workerCode } : {}),
-      ...(diagnostic.salvageAttempted ? { salvageAttempted: true } : {}) });
+      ...(diagnostic.salvageAttempted ? { salvageAttempted: true } : {}),
+      ...(diagnostic.deadlineExceeded ? { deadlineExceeded: true } : {}) });
   }
 }
 
@@ -239,9 +248,15 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
   const cancelled = () => controller.abort();
   signal.addEventListener('abort', cancelled, { once: true });
   if (signal.aborted) controller.abort();
-  const timer = globalThis.setTimeout(cancelled, timeout);
-  const deadline = Date.now() + timeout;
   const owner = controller.signal, memory = options.memory ?? sharedMemory;
+  const deadline = Date.now() + timeout;
+  let phase: PreparationPhase = 'admission';
+  let deadlinePhase: PreparationPhase | undefined;
+  const timer = globalThis.setTimeout(() => {
+    if (owner.aborted) return;
+    deadlinePhase = phase;
+    controller.abort();
+  }, timeout);
   let started = false;
   let rejectQueued!: (reason: Error) => void;
   const queuedAbort = new Promise<never>((_resolve, reject) => { rejectQueued = reject; });
@@ -249,6 +264,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
   owner.addEventListener('abort', abortQueued, { once: true });
   const pending = Promise.resolve().then(() => options.admit(async () => {
     owner.throwIfAborted(); started = true;
+    phase = 'input';
     if (!source || !path.isAbsolute(source.filePath) || !Number.isSafeInteger(source.expectedBytes) || source.expectedBytes < 1 ||
         source.expectedBytes > NATIVE_RECORDING_MEDIA_LIMITS.sourceBytes || !/^[a-f0-9]{64}$/.test(source.expectedSha256)) throw new Error('Invalid local recording source');
     const parent = await fs.lstat(path.dirname(source.filePath));
@@ -285,6 +301,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       // The private snapshot binds every external pass to the verified bytes.
       // Child processes receive only a read-only seekable descriptor, never its
       // path, provider capabilities, URLs, session keys or inherited environment.
+      phase = 'configuration';
       // eslint-disable-next-line no-undef -- This plugin is published as CommonJS.
       const protectionPath = loadPackagedProtectionWorker(path.resolve(__dirname, '../..'));
       let ffmpegPath: string;
@@ -317,12 +334,15 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
         }
       };
       let plan: Awaited<ReturnType<typeof inspectExternalRecording>>;
+      phase = 'input';
       try { plan = await inspectExternalRecording(context, selected, audioActive); }
       catch (error) { if (owner.aborted) throw new Error('Recording conversion cancelled');
         throw new NativeRecordingPreparationError({ phase: 'input', workerCode: error instanceof ExternalRecordingError ? error.code : 'MEDIA' }); }
       let initialWorkerCode: RecordingFailureCode | undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
+        phase = 'output';
         owner.throwIfAborted(); await unchanged();
+        const audioOutput = attempt === 1 ? 'generated-silence' : audioActive ? 'source' : 'disabled';
         try {
           let outputFailure: Error | undefined;
           const collect = (value: Buffer): void => {
@@ -336,7 +356,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
             chunks.push(copy); collected += copy.length;
           };
           try {
-            await convertExternalRecording(context, selected, plan, audioActive, attempt === 1, collect);
+            await convertExternalRecording(context, selected, plan, audioOutput, collect);
             await unchanged();
           } catch (error) {
             if (owner.aborted) throw new Error('Recording conversion cancelled');
@@ -352,9 +372,10 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
           for (const chunk of chunks) chunk.fill(0);
           chunks.length = 0; memory.release(collected);
           let parsed: ReturnType<typeof parsePrepared>;
+          phase = 'validation';
           try {
             parsed = parsePrepared(output, selected, audioActive);
-            await validateExternalRecording(context, output, selected, plan, audioActive, attempt === 1);
+            await validateExternalRecording(context, output, selected, plan, audioOutput);
           } catch (error) { if (owner.aborted) throw new Error('Recording conversion cancelled');
             throw new NativeRecordingPreparationError({ phase: 'validation',
             ...(error instanceof ExternalRecordingError ? { workerCode: error.code } : {}), ...(attempt === 1 ? { salvageAttempted: true as const } : {}) }); }
@@ -381,6 +402,7 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
       }
       throw new Error('Recording recovery exhausted');
     } finally {
+      phase = 'closure';
       let cleanupSucceeded = false;
       try {
         try { await file.close(); }
@@ -402,8 +424,18 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
     const prepared = await Promise.race([pending, queuedAbort]);
     // Cleanup and admission may yield after validation; ownership transfers only
     // while the privacy owner and the original preparation deadline remain valid.
-    if (owner.aborted || Date.now() >= deadline) { prepared.dispose(); throw new Error('Recording conversion cancelled'); }
+    if (owner.aborted || Date.now() >= deadline) {
+      if (!owner.aborted) deadlinePhase = phase;
+      prepared.dispose(); throw new Error('Recording conversion cancelled');
+    }
     return prepared;
+  }
+  catch (error) {
+    if (deadlinePhase !== undefined) throw new NativeRecordingPreparationError({ phase: deadlinePhase, deadlineExceeded: true });
+    if (error instanceof NativeRecordingPreparationError && error.diagnostic.workerCode === 'TIME_LIMIT') {
+      throw new NativeRecordingPreparationError({ ...error.diagnostic, deadlineExceeded: true });
+    }
+    throw error;
   }
   finally { globalThis.clearTimeout(timer); owner.removeEventListener('abort', abortQueued); signal.removeEventListener('abort', cancelled); }
 }

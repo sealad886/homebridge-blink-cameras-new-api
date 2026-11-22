@@ -86,15 +86,18 @@ clip must exist before this plugin can offer it to Home.
   recording policy is unavailable or inactive. Check its Home recording mode,
   camera availability and connected home hub; the message alone does not identify
   which setting or readiness condition blocked it.
-- `acquisition-missing` means the available catalog has no usable clip satisfying
-  the camera, scope, timestamp and other matching checks. Compare the new clip's
-  timestamp with the motion event. Do not assume the nearest clip is the same
-  event or widen the matching window without confirming that relationship. The
-  default 15-second bound can exclude valid events when Blink timestamps differ
-  by more; verify several isolated events and adjacent recordings before choosing
-  the smallest measured global tolerance and check all enabled cameras. Changing
-  the initial lookup delay does not
-  change timestamp matching.
+- When `catalog-no-eligible-clip` accompanies `acquisition-missing`, the newly
+  fetched catalog yielded no eligible row. `catalog-rows=0` means the response
+  was empty. Otherwise, each row contributes to its first exclusion count for
+  network, camera name, metadata, event time, or prior consumption. This message
+  uses the same temporary flow label as the surrounding events and omits the
+  camera label and catalog values. An empty response alone cannot establish
+  whether Blink recorded the event.
+- Compare the clip timestamp with the motion event before changing
+  `matchToleranceSeconds`. The default 15-second bound excludes candidates
+  farther from the event. Verify several isolated events and adjacent recordings
+  before choosing the smallest measured tolerance, and check all enabled
+  cameras. Changing the initial lookup delay leaves timestamp matching unchanged.
 - A Home recording request can be rejected while no prepared clip exists. Check
   acquisition and preparation first; that rejection alone does not establish an
   encoder or Home transport failure.
@@ -113,10 +116,11 @@ audio. A terminal `recovery=exhausted` means the salvage attempt also failed; it
 not a reason to keep a failed recording permanently on the Pi. No backup/archive
 mode or indefinite retry queue exists.
 
-Preparation failures are reported with bounded phase/code diagnostics. A rejected
-clip does not establish that all recording is broken; preserve the code and event
-time for an issue. Do not widen identity/time matching or disable media validation
-to force an unrelated or malformed clip through.
+Preparation failures use fixed phase and error codes. `deadline=exceeded` with
+`phase=admission` means the job ran out of time waiting for a local conversion
+slot. The other phases identify FFmpeg setup, input inspection, conversion
+output, result validation, or private file cleanup and handoff. Preserve the
+phase, error code if present, and event time when reporting a failure.
 
 Successful download, preparation or a Home transport acknowledgment still needs
 confirmation by playing the saved clip in Home. Apple's hub decides whether to

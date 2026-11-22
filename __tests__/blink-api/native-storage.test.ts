@@ -185,7 +185,9 @@ it.each(['catalog', 'clip'] as const)('keeps completed %s durable when persisten
   expect(f.saved.at(-1)).toEqual(f.owner.snapshot());
   expect(f.saved.at(-1)?.operation?.phase).toBe('finished');
   const restarted = f.restart();
-  expect(await (kind === 'catalog' ? restarted.readCatalog(context) : restarted.downloadClip(context, clipRequest()))).toEqual(result);
+  expect(restarted.snapshot().operation?.result).toEqual(result);
+  if (kind === 'catalog') expect(await restarted.readCatalog(context)).toEqual(result);
+  else expect(await restarted.downloadClip(context, clipRequest())).toEqual({ status: 'failed', reason: 'discarded' });
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
@@ -415,6 +417,40 @@ it.each(['catalog', 'clip'] as const)('settles prepared %s retrieval failure at 
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
 });
 
+it('preserves a ready clip receipt when its save crosses the caller deadline', async () => {
+  jest.useFakeTimers();
+  let release!: () => void;
+  const saving = new Promise<void>(done => { release = done; });
+  let readySaveStarted = false;
+  const retireUnclaimedClip = jest.fn().mockResolvedValue(undefined);
+  const f = fixture({ retireUnclaimedClip, saveState: async state => {
+    if (state.operation?.result?.status === 'ready') { readySaveStarted = true; await saving; }
+  } });
+  const settled = jest.fn();
+  const acquisition = f.owner.downloadClip(context, clipRequest(), { deadline: Date.now() + 1000 }).then(settled);
+  await jest.advanceTimersByTimeAsync(0);
+  expect(readySaveStarted).toBe(true);
+  await jest.advanceTimersByTimeAsync(1000);
+  const returnedAtDeadline = settled.mock.calls[0]?.[0];
+  try {
+    expect(retireUnclaimedClip).not.toHaveBeenCalled();
+    await expect(f.owner.abandonExpired()).resolves.toBe(false);
+    await expect(f.owner.readCatalog({ ...context, operationId: 'competing' }))
+      .resolves.toMatchObject({ status: 'unresolved', reason: 'caller-in-progress' });
+  } finally { release(); }
+  await acquisition;
+  await jest.advanceTimersByTimeAsync(0);
+
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', result: { status: 'ready', value: file() } });
+  expect(returnedAtDeadline).toMatchObject({ status: 'unresolved', reason: 'terminal-save-pending' });
+  expect(f.saved.filter(state => state.operation?.phase === 'finished')).toHaveLength(1);
+  expect(retireUnclaimedClip).toHaveBeenCalledTimes(1);
+  expect(retireUnclaimedClip).toHaveBeenCalledWith(file());
+  expect(await f.owner.downloadClip(context, clipRequest())).toEqual({ status: 'failed', reason: 'discarded' });
+  expect(await f.restart().downloadClip(context, clipRequest())).toEqual({ status: 'failed', reason: 'discarded' });
+  expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+});
+
 it.each(['catalog', 'clip'] as const)('records an explicit refused %s POST without owning a nonexistent command', async kind => {
   const f = fixture();
   f.transport.postEmpty.mockRejectedValue(new BlinkHttpError('Busy', 409, '', location, 'POST'));
@@ -621,7 +657,10 @@ it('prepares a selected clip once, then downloads its validated original media l
   expect(f.transport.downloadMedia).toHaveBeenCalledWith(location,
     expect.objectContaining({ maxBytes: 32 * 1024 * 1024, retry: false }));
   expect(f.transport.getJson.mock.calls.map(([route]) => route.base)).toEqual(['root']);
-  expect(await f.restart().downloadClip(clipContext, request)).toEqual({ status: 'ready', value: file() });
+  expect(await f.owner.downloadClip(clipContext, request)).toEqual({ status: 'failed', reason: 'discarded' });
+  const restored = f.restart();
+  expect(restored.snapshot().operation?.result).toEqual({ status: 'ready', value: file() });
+  expect(await restored.downloadClip(clipContext, request)).toEqual({ status: 'failed', reason: 'discarded' });
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
   expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
 });

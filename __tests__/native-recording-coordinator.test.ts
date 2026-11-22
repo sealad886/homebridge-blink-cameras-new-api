@@ -521,6 +521,23 @@ describe('native recording FIFO', () => {
     expect(await restored.coordinator.observe(event('submitted'))).toBe('duplicate');
   });
 
+  it('restores a valid larger queue and its unresolved owner before enforcing the reduced admission limit', async () => {
+    const original = setup({ maxQueuedJobs: 4, acquire: jest.fn().mockResolvedValue({ status: 'unresolved' }) });
+    await original.coordinator.observe(event('owned'));
+    await original.coordinator.observe(event('waiting', { cameraId: 'corner' }));
+    await jest.advanceTimersByTimeAsync(60_000);
+    await original.coordinator.stop();
+    const saved = original.coordinator.snapshot();
+    expect(saved.queue).toHaveLength(2);
+    expect(saved.operation?.status).toBe('unresolved');
+
+    const restored = setup({ maxQueuedJobs: 1, restoredState: saved });
+    expect(restored.coordinator.snapshot()).toEqual(saved);
+    await expect(restored.coordinator.observe(event('new'))).resolves.toBe('capacity');
+    expect(restored.acquire).not.toHaveBeenCalled();
+    expect(restored.coordinator.snapshot()).toEqual(saved);
+  });
+
   it('preserves a terminal-missing retry deadline across restart', async () => {
     const first = setup({ acquire: jest.fn().mockResolvedValue({ status: 'missing' }) });
     await first.coordinator.observe(event('missing'));

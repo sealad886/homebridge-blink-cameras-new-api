@@ -15,6 +15,16 @@ export interface NativeClipMatchOptions {
   consumedClipIdentities?: ReadonlySet<string>;
 }
 
+/** Aggregate first-exclusion counts for a catalog with no eligible clip. */
+export interface NativeClipEligibility {
+  rows: number;
+  wrongNetwork: number;
+  otherName: number;
+  invalidMetadata: number;
+  outsideWindow: number;
+  consumed: number;
+}
+
 export type NativeClipMatchResult = {
   status: 'matched';
   clip: NativeStorageClip;
@@ -22,7 +32,7 @@ export type NativeClipMatchResult = {
   identity: string;
   captureTimeMs: number;
   deltaMs: number;
-} | { status: 'missing' }
+} | { status: 'missing'; eligibility: NativeClipEligibility }
   | { status: 'ambiguous'; reason: 'duplicate-device-name' | 'conflicting-clip-identity' | 'equidistant-clips' }
   | { status: 'invalid'; reason: 'scope-mismatch' | 'unknown-camera' | 'invalid-input' };
 
@@ -62,8 +72,11 @@ export function matchNativeClip(options: NativeClipMatchOptions): NativeClipMatc
   const names = new Set(catalogNames(camera.nativeName));
   const sameName = new Set(devices.filter(device => catalogNames(device.nativeName).some(name => names.has(name))).map(deviceIdentity));
   if (sameName.size > 1) return { status: 'ambiguous', reason: 'duplicate-device-name' };
-  if (!catalog.clips.length) return { status: 'missing' };
-  if (!positiveId(catalog.manifestId)) return { status: 'invalid', reason: 'invalid-input' };
+  const eligibility: NativeClipEligibility = { rows: catalog.clips.length, wrongNetwork: 0, otherName: 0,
+    invalidMetadata: 0, outsideWindow: 0, consumed: 0 };
+  if (!eligibility.rows) return { status: 'missing', eligibility };
+  const manifestId = catalog.manifestId;
+  if (!positiveId(manifestId)) return { status: 'invalid', reason: 'invalid-input' };
 
   const fingerprints = new Map<number, string>();
   const collisions = new Set<number>();
@@ -76,22 +89,26 @@ export function matchNativeClip(options: NativeClipMatchOptions): NativeClipMatc
 
   const candidates = new Map<string, { clip: NativeStorageClip; captureTimeMs: number; deltaMs: number }>();
   for (const clip of catalog.clips) {
-    if (!clip || typeof clip.deviceName !== 'string' || !names.has(clip.deviceName) || clip.networkId !== scope.networkId
-      || typeof clip.mediaUrl !== 'string' || !clip.mediaUrl.length || clip.mediaUrl.length > 8_192) continue;
+    if (!clip || typeof clip.deviceName !== 'string') { eligibility.invalidMetadata++; continue; }
+    if (clip.networkId !== scope.networkId) { eligibility.wrongNetwork++; continue; }
+    if (!names.has(clip.deviceName)) { eligibility.otherName++; continue; }
     const identity = nativeClipIdentity(scope, clip);
     const captureTimeMs = parseBlinkOffsetTimestamp(clip.capturedAt);
-    if (!identity || captureTimeMs === null || options.consumedClipIdentities?.has(identity)) continue;
+    if (!identity || captureTimeMs === null || typeof clip.mediaUrl !== 'string' || !clip.mediaUrl.length || clip.mediaUrl.length > 8_192) {
+      eligibility.invalidMetadata++; continue;
+    }
     const deltaMs = captureTimeMs - options.occurredAt;
-    if (Math.abs(deltaMs) > options.toleranceMs) continue;
+    if (Math.abs(deltaMs) > options.toleranceMs) { eligibility.outsideWindow++; continue; }
+    if (options.consumedClipIdentities?.has(identity)) { eligibility.consumed++; continue; }
     if (collisions.has(clip.clipId)) return { status: 'ambiguous', reason: 'conflicting-clip-identity' };
     candidates.set(identity, { clip, captureTimeMs, deltaMs });
   }
   const ordered = [...candidates].sort((a, b) => Math.abs(a[1].deltaMs) - Math.abs(b[1].deltaMs));
-  if (!ordered.length) return { status: 'missing' };
+  if (!ordered.length) return { status: 'missing', eligibility };
   if (ordered[1] && Math.abs(ordered[0][1].deltaMs) === Math.abs(ordered[1][1].deltaMs)) return { status: 'ambiguous', reason: 'equidistant-clips' };
   const [identity, selected] = ordered[0];
   return {
-    status: 'matched', clip: { ...selected.clip }, manifestId: catalog.manifestId,
+    status: 'matched', clip: { ...selected.clip }, manifestId,
     identity, captureTimeMs: selected.captureTimeMs, deltaMs: selected.deltaMs,
   };
 }

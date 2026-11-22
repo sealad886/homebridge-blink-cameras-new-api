@@ -159,6 +159,33 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(externalFfmpeg.probeExternalFfmpeg).toHaveBeenCalledTimes(1);
   });
 
+  it('stops a runtime whose creation finishes after Homebridge shutdown', async () => {
+    const create = createRuntime.getMockImplementation()!;
+    let creation!: NativeRecordingRuntime;
+    let release!: () => void;
+    const gate = new Promise<void>(done => { release = done; });
+    createRuntime.mockImplementationOnce(async options => {
+      creation = await create(options);
+      await gate;
+      return creation;
+    });
+    jest.spyOn(client, 'getHomescreen').mockResolvedValue(emptyHomescreen());
+    const platform = new BlinkCamerasPlatform(createLogger() as unknown as Logger,
+      { platform: 'BlinkCameras', persistAuth: false }, api as unknown as API);
+    api.emit('didFinishLaunching');
+    try {
+      await waitFor(() => !!creation);
+      const stop = jest.spyOn(creation, 'stop');
+      const discovery = (platform as unknown as { discoveryPromise: Promise<boolean> }).discoveryPromise;
+      api.emit('shutdown');
+      release();
+      await expect(discovery).resolves.toBe(false);
+      expect(source.setDemand).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(creation.localWriterReleased).toBe(true);
+    } finally { release(); }
+  });
+
   it('gives fixed external-FFmpeg setup guidance without logging the configured executable path', async () => {
     const homescreen = emptyHomescreen();
     homescreen.cameras.push({ id: 40, network_id: 20, name: 'Entry', enabled: true });
@@ -208,6 +235,17 @@ describe('platform native recording and ordinary command ownership', () => {
     expect(output).not.toContain('Entry\\n');
   });
 
+  it('logs only bounded catalog eligibility counts', async () => {
+    const platform = await launch(emptyHomescreen());
+    const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
+    const report = createRuntime.mock.calls[0][0].report;
+    report('catalog-no-eligible-clip', { flow: 'flow-0123456789', attempt: 1,
+      clipEligibility: { rows: 2, otherName: 1, consumed: 1, outsideWindow: 1001, wrongNetwork: -1,
+        invalidMetadata: 'private-url', cameraName: 'private-camera' } } as never);
+    expect(log.info).toHaveBeenLastCalledWith(
+      '[NativeRecording] catalog-no-eligible-clip flow-0123456789 attempt=1 catalog-rows=2 other-name=1 consumed=1');
+  });
+
   it('logs safe preparation phase and worker code at WARN and discards arbitrary diagnostic context', async () => {
     const platform = await launch(emptyHomescreen());
     const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
@@ -215,6 +253,8 @@ describe('platform native recording and ordinary command ownership', () => {
     log.warn.mockClear(); log.debug.mockClear();
     report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'DECODE' } });
     expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=DECODE');
+    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'admission', deadlineExceeded: true } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=admission deadline=exceeded');
     report('delivery-not-offered-preparation-failed', {
       preparation: { phase: 'private-path-or-token', workerCode: 'private-url-or-password' },
     } as never);
