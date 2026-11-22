@@ -1,7 +1,7 @@
 {
     "name": "@sealad886/homebridge-blink-cameras-new-api",
     "displayName": "Homebridge Blink Cameras (New API)",
-    "version": "2.0.0",
+    "version": "2.0.1-alpha.0",
     "description": "Blink Camera plugin for homebridge",
     "author": {
         "name": "sealad886",
@@ -75,8 +75,8 @@
         "@commitlint/config-conventional": "20.5.3",
         "@types/jest": "^30.0.0",
         "@types/node": "^25.0.9",
-        "@typescript-eslint/eslint-plugin": "^8.53.1",
-        "@typescript-eslint/parser": "^8.53.1",
+        "@typescript-eslint/eslint-plugin": "^8.73.0",
+        "@typescript-eslint/parser": "^8.73.0",
         "eslint": "^9.39.2",
         "homebridge": "^1.11.1",
         "jest": "^30.2.0",

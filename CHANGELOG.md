@@ -7,6 +7,31 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.1-alpha.0] - 2026-11-22
+
+### Fixed
+- Report why a Blink catalog check could not select a recording. The new
+  catalog-count message omits camera names, media locations, and clip contents.
+  Preparation deadline messages now identify the phase that ran out of time.
+- Resume recording after a restart with a lower acquisition queue limit and
+  safely retire old temporary files. Preserve finished download receipts through
+  timeouts and reconcile interrupted clip indexing before offering or removing
+  files.
+- Keep source audio timing explicit throughout HomeKit recording preparation,
+  including when source audio is missing or generated silence is used.
+- Reuse completed FFmpeg capability checks for unchanged tools while keeping
+  requests independently cancellable.
+
+### Changed
+- Verify and retain the pinned libSRTP source archive between CI runs. Every
+  target still builds and qualifies its helper from source.
+- Allow more time for npm registry visibility and preserve readback-only recovery
+  after a publication attempt.
+- Update TypeScript ESLint to remove its affected minimatch dependency path.
+
+This prerelease is for evaluating HomeKit recording behavior. The cause of
+previous acquisition expiries still requires runtime evidence.
+
 ## [2.0.0] - 2026-11-17
 
 ### Changed
