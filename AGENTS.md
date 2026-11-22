@@ -1,5 +1,16 @@
 # Agent Instructions
 
+## Release authorization
+
+A maintainer request to complete and release work in this repository authorizes
+the routine steps required by [the release guide](docs/RELEASE.md). That includes
+staging the scoped diff, making signed commits, pushing the task branch, opening
+or updating its pull request, merging after required checks, and publishing the
+intended version through GitHub Actions. A single release request covers these
+steps. Apply any narrower scope the maintainer specifies. Worktree creation,
+history rewrites, and installation on an owned Homebridge host need their own
+authorization.
+
 ## Issue tracking
 
 Use [GitHub issues](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues)
