@@ -64,6 +64,8 @@ export interface NativeStorageOwnerOptions {
   /** The client's existing account command queue owns admission; this class adds no remote queue. */
   admit<T>(work: () => Promise<T>, options: RequestOptions, operationId: string, scope: NativeStorageScope): Promise<T>;
   saveState(state: NativeStorageState): Promise<void>;
+  /** Retire an owned private file whose acquisition caller never received its result. */
+  retireUnclaimedClip?(value: NativeStoredMedia): Promise<void>;
   restoredState?: NativeStorageState;
   maxStatusReads?: number;
   maxJsonBytes?: number;
@@ -104,6 +106,12 @@ export class NativeStorageOwner {
   private persistenceFailed = false;
   private generation = 0;
   private abandonment?: Promise<boolean>;
+  private terminalWrite?: {
+    operationId: string;
+    result: NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia>;
+    saved: Promise<void>;
+  };
+  private unclaimedClipCleanup?: Promise<void>;
   private writes: Promise<void> = Promise.resolve();
   private readonly maxStatusReads: number;
   private readonly maxJsonBytes: number;
@@ -123,10 +131,12 @@ export class NativeStorageOwner {
 
   snapshot(): NativeStorageState { return clone(this.state); }
 
+  get settlingResult(): boolean { return !!(this.terminalWrite || this.unclaimedClipCleanup); }
+
   /** Retain uncertain evidence, but stop its local veto without another provider request. */
   async abandonExpired(): Promise<boolean> {
     if (this.abandonment) return this.abandonment;
-    if (this.persistenceFailed) return false;
+    if (this.persistenceFailed || this.settlingResult) return false;
     const operation = this.state.operation;
     if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned'
       || isRemoteOperationLeaseActive(operation.expiresAt)) return false;
@@ -170,7 +180,7 @@ export class NativeStorageOwner {
     if (abandoned) return 'abandoned';
     const operation = this.state.operation;
     if (!operation || operation.phase === 'finished' || operation.phase === 'abandoned') return 'none';
-    if (this.running || operation.phase === 'intent') return 'unresolved';
+    if (this.running || this.settlingResult || operation.phase === 'intent') return 'unresolved';
     this.running = true;
     const generation = this.generation;
     try {
@@ -215,7 +225,7 @@ export class NativeStorageOwner {
     await this.abandonExpired();
     if (this.persistenceFailed) return this.unresolved('persistence-failed');
     if (this.state.abandoned?.some(item => item.operationId === context.operationId)) return { status: 'abandoned' };
-    if (this.running) return this.unresolved('caller-in-progress');
+    if (this.running || this.settlingResult) return this.unresolved('caller-in-progress');
     const previous = this.state.operation;
     const same = previous?.operationId === context.operationId;
     if (same && (!scopeMatches(previous, context) || previous.kind !== kind || !clipMatches(previous.clip, clip))) {
@@ -223,7 +233,7 @@ export class NativeStorageOwner {
     }
     if (same && previous.phase === 'abandoned') return { status: 'abandoned' };
     if (previous && !same && previous.phase !== 'finished' && previous.phase !== 'abandoned') return this.unresolved('operation-in-progress');
-    if (same && previous.phase === 'finished') return clone(previous.result!);
+    if (same && previous.phase === 'finished') return this.replayTerminal(previous);
     const deadline = Math.min(supplied.deadline ?? Infinity, Date.now() + this.responseBudgetMs,
       same && previous?.expiresAt !== undefined ? previous.expiresAt : Infinity);
     const request = { ...supplied, deadline, queueDeadline: Math.min(supplied.queueDeadline ?? Infinity, deadline) };
@@ -237,7 +247,7 @@ export class NativeStorageOwner {
         entered = true;
         const current = this.state.operation;
         const currentMatches = current?.operationId === context.operationId;
-        if (currentMatches && current.phase === 'finished') return clone(current.result!);
+        if (currentMatches && current.phase === 'finished') return this.replayTerminal(current);
         if (current && !currentMatches && current.phase !== 'finished' && current.phase !== 'abandoned') return this.unresolved('operation-in-progress');
         if (!currentMatches) {
           const intent: NativeStorageOperation = { ...context, kind, phase: 'intent', statusReads: 0,
@@ -271,6 +281,20 @@ export class NativeStorageOwner {
       }, request, context.operationId, context), request);
     } catch (error) {
       if (generation !== this.generation) return { status: 'abandoned' };
+      const pending = this.terminalWrite;
+      if (pending?.operationId === context.operationId) {
+        // Timeout or caller cancellation can win while the terminal save is queued.
+        // Its result still owns the decision and any private clip that was promoted.
+        if (kind === 'clip' && pending.result.status === 'ready') {
+          this.retireDetachedClip(pending.result.value as NativeStoredMedia, pending.saved);
+        }
+        return this.unresolved('terminal-save-pending');
+      }
+      const terminal = this.state.operation;
+      if (terminal?.operationId === context.operationId && terminal.phase === 'finished') {
+        if (kind === 'clip' && terminal.result?.status === 'ready') this.retireDetachedClip(terminal.result.value as NativeStoredMedia);
+        return this.unresolved('terminal-result-not-transferred');
+      }
       if (entered && !this.persistenceFailed && this.state.operation?.operationId === context.operationId
         && this.state.operation.phase === 'prepared') {
         // Preparation already has durable terminal proof. A failed result GET
@@ -481,6 +505,14 @@ export class NativeStorageOwner {
       ...(notDispatched ? { notDispatched } : {}) };
   }
 
+  private replayTerminal(operation: NativeStorageOperation): NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia> {
+    const result = operation.result!;
+    // A completed clip is handed to its live caller once. The retained proof
+    // cannot grant ownership of a file that may already have been retired.
+    if (operation.kind === 'clip' && result.status === 'ready') return { status: 'failed', reason: 'discarded' };
+    return clone(result);
+  }
+
   private queueWrite(save: () => Promise<void>): Promise<void> {
     const write = this.writes.then(save);
     this.writes = write.catch(() => undefined);
@@ -507,7 +539,26 @@ export class NativeStorageOwner {
 
   private async finish(result: NativeStorageTerminal<NativeStorageCatalog | NativeStoredMedia>, generation = this.generation):
     Promise<NativeStorageResult<NativeStorageCatalog | NativeStoredMedia>> {
-    await this.persist({ ...this.state.operation!, phase: 'finished', result: clone(result) }, generation);
-    return result;
+    const operation = this.state.operation!;
+    const saved = this.persist({ ...operation, phase: 'finished', result: clone(result) }, generation);
+    const terminal = { operationId: operation.operationId, result, saved };
+    this.terminalWrite = terminal;
+    try {
+      await saved;
+      return result;
+    } catch (error) {
+      if (operation.kind === 'clip' && result.status === 'ready') this.retireDetachedClip(result.value as NativeStoredMedia);
+      throw error;
+    } finally {
+      if (this.terminalWrite === terminal) this.terminalWrite = undefined;
+    }
+  }
+
+  private retireDetachedClip(media: NativeStoredMedia, after = Promise.resolve()): void {
+    if (!this.options.retireUnclaimedClip || this.unclaimedClipCleanup) return;
+    const cleanup = after.catch(() => undefined).then(() => this.options.retireUnclaimedClip!(clone(media)))
+      .catch(() => undefined); // The runtime retains failed cleanup for explicit recovery.
+    this.unclaimedClipCleanup = cleanup;
+    void cleanup.then(() => { if (this.unclaimedClipCleanup === cleanup) this.unclaimedClipCleanup = undefined; });
   }
 }

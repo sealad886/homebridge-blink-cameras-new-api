@@ -68,10 +68,12 @@ async function capture(ffmpegPath: string, protectionPath: string, args: string[
   launch?: ExternalFfmpegProcessOptions['launch']): Promise<string> {
   const controller = new globalThis.AbortController(), abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) controller.abort();
-  let child: ChildProcess;
-  try { child = spawnExternalFfmpeg(ffmpegPath, args, { protectionPath, signal: controller.signal, timeoutMs: EXTERNAL_FFMPEG_LIMITS.probeMs,
-    stdio: ['ignore', 'pipe', 'pipe'], launch }); } catch { signal?.removeEventListener('abort', abort); throw new ExternalFfmpegSetupError('probe'); }
+  const expiresAt = globalThis.performance.now() + EXTERNAL_FFMPEG_LIMITS.probeMs;
+  const deadline = globalThis.setTimeout(abort, EXTERNAL_FFMPEG_LIMITS.probeMs);
   try {
+    let child: ChildProcess;
+    try { child = spawnExternalFfmpeg(ffmpegPath, args, { protectionPath, signal: controller.signal, timeoutMs: EXTERNAL_FFMPEG_LIMITS.probeMs,
+      stdio: ['ignore', 'pipe', 'pipe'], launch }); } catch { throw new ExternalFfmpegSetupError('probe'); }
     return await new Promise<string>((resolve, reject) => {
       const chunks: Buffer[] = []; let length = 0, failed = false;
       child.stdout?.on('data', (bytes: Buffer) => {
@@ -79,25 +81,48 @@ async function capture(ffmpegPath: string, protectionPath: string, args: string[
         chunks.push(Buffer.from(bytes));
       });
       child.on('error', () => { failed = true; });
-      child.once('close', code => code === 0 && !failed && !controller.signal.aborted
+      child.once('close', code => code === 0 && !failed && !controller.signal.aborted && globalThis.performance.now() < expiresAt
         ? resolve(Buffer.concat(chunks).toString('utf8')) : reject(new ExternalFfmpegSetupError('probe')));
     });
-  } finally { signal?.removeEventListener('abort', abort); }
+  } finally {
+    globalThis.clearTimeout(deadline);
+    signal?.removeEventListener('abort', abort);
+  }
 }
 
-const cache = new Map<string, Promise<{ version: string }>>();
+const MAX_CACHED_PROBES = 16;
+const completedProbes = new Map<string, string>();
+
+function probeIdentity(ffmpegPath: string, protectionPath: string): string {
+  try {
+    return JSON.stringify([ffmpegPath, protectionPath].map(path => {
+      if (!isAbsolute(path) || path.includes('\0')) throw new Error();
+      const stat = statSync(path, { bigint: true });
+      if (!stat.isFile()) throw new Error();
+      return [path, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String);
+    }));
+  } catch { throw new ExternalFfmpegSetupError('missing'); }
+}
+
 export async function probeExternalFfmpeg(ffmpegPath: string, protectionPath: string, signal?: globalThis.AbortSignal,
   launch?: ExternalFfmpegProcessOptions['launch']): Promise<{ version: string }> {
   signal?.throwIfAborted();
-  let identity: string;
-  try { identity = [ffmpegPath, protectionPath, ...[ffmpegPath, protectionPath].map(value => {
-    const s = statSync(value); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
-  })].join('|'); } catch { throw new ExternalFfmpegSetupError('missing'); }
-  // An aborted request never owns a cached probe used by another session.
-  if (signal || launch) return inspect();
-  let pending = cache.get(identity);
-  if (!pending) { pending = inspect(); cache.set(identity, pending); pending.catch(() => { cache.delete(identity); }); }
-  return pending;
+  const identity = probeIdentity(ffmpegPath, protectionPath);
+  if (launch) return inspect();
+  const cachedVersion = completedProbes.get(identity);
+  if (cachedVersion !== undefined) return { version: cachedVersion };
+
+  // Unfinished inspections belong to the initiating request, including its abort signal.
+  const result = await inspect();
+  signal?.throwIfAborted();
+  if (probeIdentity(ffmpegPath, protectionPath) !== identity) throw new ExternalFfmpegSetupError('probe');
+  completedProbes.set(identity, result.version);
+  if (completedProbes.size > MAX_CACHED_PROBES) {
+    const oldest = completedProbes.keys().next();
+    if (!oldest.done) completedProbes.delete(oldest.value);
+  }
+  return result;
+
   async function inspect(): Promise<{ version: string }> {
     const versionText = await capture(ffmpegPath, protectionPath, ['-hide_banner', '-version'], signal, launch);
     const match = /^ffmpeg version\s+n?(\d+)\.(\d+)(?:\.\d+)?[^\r\n]*/m.exec(versionText);

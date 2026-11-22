@@ -9,14 +9,15 @@ import { supportsEarlyNotificationControl } from './blink-api/domain-validation'
 import { FcmEventSource, type FcmEventSourceOptions } from './blink-api/fcm/source';
 import type { FcmNotification, FcmReceiverState, FcmScope, FirebaseConfig } from './blink-api/fcm/types';
 import { decodeBlinkMotionMessage, isBlinkMotionDevice, isNativeMotionDevice, type BlinkMotionDevice, type NativeMotionDevice } from './blink-api/motion-events';
-import { matchNativeClip } from './blink-api/native-clip-matcher';
+import { matchNativeClip, type NativeClipEligibility } from './blink-api/native-clip-matcher';
 import { NativeStorageOwner, type NativeStorageCatalog, type NativeStorageScope, type NativeStorageState, type NativeStoredMedia } from './blink-api/native-storage';
 import { readOwnerOnlyJsonFile, readOwnerOnlyTextFile, writeOwnerOnlyJsonFile } from './blink-api/secure-json-file';
 import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type NativeRecordingAcquisitionResult,
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
 import type { NativeRecordingConfig, NativeRecordingDevicePolicy } from './native-recording-config';
 import type { NativeRecordingDelegate, NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
-import type { NativeRecordingPreparationDiagnostic, NativeRecordingRecovery } from './accessories/native-recording-preparation';
+import { NATIVE_RECORDING_MEDIA_LIMITS, type NativeRecordingPreparationDiagnostic,
+  type NativeRecordingRecovery } from './accessories/native-recording-preparation';
 import { checkRequestBudget, isRemoteOperationLeaseActive, OperationTimeoutError, REMOTE_OPERATION_LEASE_MS, withinRequestBudget, type RequestOptions } from './operation-budget';
 import type { BlinkCameraKind } from './types';
 
@@ -45,7 +46,11 @@ interface EarlyNotificationOriginals {
   scope: { accountId: number; tier: string };
   devices: EarlyNotificationOriginal[];
 }
-export interface NativeRecordingLogContext { camera?: string; flow?: string; attempt?: number; preparation?: NativeRecordingPreparationDiagnostic; recovery?: NativeRecordingRecovery; }
+export interface NativeRecordingLogContext {
+  camera?: string; flow?: string; attempt?: number;
+  clipEligibility?: NativeClipEligibility;
+  preparation?: NativeRecordingPreparationDiagnostic; recovery?: NativeRecordingRecovery;
+}
 const preferenceFailure = (error: unknown): string => {
   if (error instanceof BlinkEarlyNotificationNotConfirmedError) return 'readback-unconfirmed';
   if (error instanceof OperationTimeoutError) return 'timeout';
@@ -100,6 +105,7 @@ export interface NativeRecordingRuntimeOptions {
 }
 
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
+const MAX_PERSISTED_DOWNLOADS = 1_024;
 /** Serialize actual file replacement across runtime generations, including late writes. */
 const stateFileWrites = new Map<string, Promise<void>>();
 const pendingEarlyNotificationDiscards = new Map<string, Set<string>>();
@@ -140,6 +146,8 @@ export class NativeRecordingRuntime {
   private persistenceRecovery?: Promise<void>;
   private preferences?: Promise<void>;
   private cacheBytes = 0;
+  private readonly unclaimedClips = new Map<string, NativeStoredMedia>();
+  private readonly pendingClipIndexes = new Map<string, DownloadedAsset>();
   private releaseOwnership?: (options?: RequestOptions) => Promise<void>;
   private writerReleased = false;
   readonly directory: string;
@@ -188,11 +196,7 @@ export class NativeRecordingRuntime {
     await this.loadEarlyNotificationOriginals();
     await this.assertPriorScopesSettled();
     try {
-      const stat = await fs.lstat(this.statePath);
-      const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_STATE_BYTES
-        || (uid !== undefined && ((stat.mode & 0o777) !== 0o600 || stat.uid !== uid))) throw new Error('Unsafe native recording state');
-      this.state = await readOwnerOnlyJsonFile<NativeRecordingRuntimeState>(this.statePath);
+      this.state = await this.readState();
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') throw error;
       this.state = { version: 1, scope: { ...this.options.scope }, nativeByModule: {}, consumed: [], catalogStartedAt: {}, refusedUntil: {}, downloads: [] };
@@ -205,7 +209,7 @@ export class NativeRecordingRuntime {
       || Object.values(this.state.catalogStartedAt).some(at => !Number.isSafeInteger(at) || at < 0)
       || !this.state.refusedUntil || typeof this.state.refusedUntil !== 'object' || Array.isArray(this.state.refusedUntil)
       || Object.values(this.state.refusedUntil).some(at => !Number.isSafeInteger(at) || at < 0)
-      || !Array.isArray(this.state.downloads) || this.state.downloads.length > this.options.config.maxQueuedJobs) throw new Error('Invalid scoped native recording state');
+      || !Array.isArray(this.state.downloads)) throw new Error('Invalid scoped native recording state');
     this.releaseOwnership = this.options.client.configureRemoteOperationOwnership({ scope: this.options.scope,
       restoredState: this.state.remoteOperations, restoredNativeStorage: Object.values(this.state.nativeByModule),
       saveState: remoteOperations => this.commit(next => { next.remoteOperations = clone(remoteOperations); }) });
@@ -225,6 +229,7 @@ export class NativeRecordingRuntime {
         admit: (work, request, operationId, operationScope) => this.options.client.withNativeStorageAdmission(operationId, work, request, operationScope),
         restoredState: this.state.nativeByModule[moduleId]?.state,
         saveState: state => this.commit(next => { next.nativeByModule[moduleId] = { scope, state: clone(state) }; }),
+        retireUnclaimedClip: media => this.retireUnclaimedClip(media),
       });
       this.owners.set(moduleId, owner);
     }
@@ -517,19 +522,57 @@ export class NativeRecordingRuntime {
 
   private async recoverPersistence(): Promise<void> {
     try {
-      await this.commit(next => {
+      let indexedClips = new Set<DownloadedAsset>();
+      await this.commit(async next => {
+        indexedClips = await this.checkPendingClipIndexes();
         next.core = this.core.snapshot();
         for (const [moduleId, owner] of this.owners) {
           if (next.nativeByModule[moduleId]) next.nativeByModule[moduleId].state = owner.snapshot();
         }
+        for (const asset of indexedClips) {
+          if (!next.downloads.some(entry => entry.reference === asset.reference)) this.indexClip(next, asset);
+        }
       });
+      for (const asset of this.pendingClipIndexes.values()) {
+        if (indexedClips.has(asset)) this.cacheBytes += asset.bytes;
+        else await this.retireUnclaimedClip(asset);
+        this.pendingClipIndexes.delete(asset.reference);
+      }
       await this.options.client.retryRemoteOperationPersistence();
       for (const owner of this.owners.values()) await owner.retryPersistence();
+      for (const media of this.unclaimedClips.values()) await this.retireUnclaimedClip(media);
       await this.core.retryPersistence();
       this.failed = false;
       this.report('persistence-recovered');
       this.pumpDelivery();
     } catch (error) { this.failed = true; throw error; }
+  }
+
+  private async checkPendingClipIndexes(): Promise<Set<DownloadedAsset>> {
+    const indexed = new Set<DownloadedAsset>();
+    if (!this.pendingClipIndexes.size) return indexed;
+    // A caller timeout or directory sync failure can follow the atomic rename.
+    // Wait for the actual write and read back the private journal before cleanup.
+    const durable = await withinRequestBudget((async () => {
+      await stateFileWrites.get(this.statePath)?.catch(() => undefined);
+      return this.readState();
+    })(), { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });
+    if (durable.version !== 1 || durable.scope?.accountId !== this.options.scope.accountId
+      || durable.scope.clientId !== this.options.scope.clientId || durable.scope.tier !== this.options.scope.tier
+      || !Array.isArray(durable.downloads)) throw new Error('Invalid clip index recovery state');
+    for (const asset of this.pendingClipIndexes.values()) {
+      const receipt = durable.downloads.find(entry => entry?.reference === asset.reference);
+      if (receipt) {
+        if (receipt.bytes !== asset.bytes || receipt.sha256 !== asset.sha256 || receipt.identity !== asset.identity
+          || receipt.jobId !== asset.jobId || !Array.isArray(durable.consumed) || !durable.consumed.includes(asset.identity)) {
+          throw new Error('Conflicting clip index recovery receipt');
+        }
+        indexed.add(asset);
+      } else if (this.state.downloads.some(entry => entry.reference === asset.reference)) {
+        throw new Error('Missing clip index recovery receipt');
+      }
+    }
+    return indexed;
   }
 
   policyChanged(cameraId: string, policy: NativeRecordingPolicy): Promise<void> {
@@ -646,7 +689,7 @@ export class NativeRecordingRuntime {
   private matching(event: NativeRecordingObservation, fallbackAt?: number) {
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
     const cached = this.catalogs.get(event.moduleId);
-    if (!device || !cached) return { status: 'missing' as const };
+    if (!device || !cached) return;
     const camera: NativeMotionDevice = { ...device.binding, ...device.nativeStorage! };
     return matchNativeClip({ catalog: cached.catalog, camera,
       devices: this.matchingDevices,
@@ -668,8 +711,8 @@ export class NativeRecordingRuntime {
     if ((this.state.refusedUntil[event.moduleId] ?? 0) > Date.now()) return this.state.refusedUntil[event.moduleId];
     const device = [...this.devices.values()].find(item => item.binding.cameraId === event.cameraId && item.nativeStorage?.moduleId === event.moduleId);
     if (!device?.recording()?.available || this.state.downloads.some(asset => asset.cameraId === event.cameraId)
-      || this.cacheBytes + 32 * 1024 * 1024 > this.options.config.maxCachedBytes) return Date.now() + 1000;
-    if (this.matching(event, fallbackAt).status === 'matched') return Date.now();
+      || !this.hasDownloadCapacity()) return Date.now() + 1000;
+    if (this.matching(event, fallbackAt)?.status === 'matched') return Date.now();
     return Math.max(Date.now(), (this.state.catalogStartedAt[event.moduleId] ?? 0) + this.options.config.catalogRefreshMs);
   }
 
@@ -692,7 +735,7 @@ export class NativeRecordingRuntime {
     if (!allowed()) return { status: 'skipped' };
     const context = { accountId: device.binding.accountId, networkId: device.binding.networkId, syncModuleId: device.nativeStorage!.syncModuleId };
     let match = this.matching(event, request.fallbackAt);
-    if (match.status !== 'matched') {
+    if (match?.status !== 'matched') {
       const priorCatalogStart = this.state.catalogStartedAt[event.moduleId];
       const startedAt = Date.now();
       try { await this.commit(next => { next.catalogStartedAt[event.moduleId] = startedAt; }); }
@@ -729,12 +772,29 @@ export class NativeRecordingRuntime {
       match = this.matching(event, request.fallbackAt);
     }
     if (!allowed()) return { status: 'skipped' };
-    if (match.status === 'missing') return { status: 'missing' };
+    if (!match) return { status: 'missing' };
+    if (match.status === 'missing') {
+      const { flow, attempt } = this.observationContext(event, request.attempt);
+      this.report('catalog-no-eligible-clip', { flow, attempt, clipEligibility: match.eligibility });
+      return { status: 'missing' };
+    }
     if (match.status !== 'matched') { this.report(`clip-${match.status}`, this.observationContext(event, request.attempt)); return { status: 'skipped' }; }
     if (match.captureTimeMs < (this.enabledSince.get(event.cameraId) ?? Infinity)) return { status: 'skipped' };
-    this.report('download-started', this.observationContext(event, request.attempt));
-    const result = await owner.downloadClip({ ...context, operationId: `${request.operationId}:clip` },
-      { manifestId: match.manifestId, clip: match.clip }, { signal, deadline: request.expiresAt });
+    if (!this.hasDownloadCapacity()) return { status: 'deferred' };
+    const logContext = this.observationContext(event, request.attempt);
+    let download: ReturnType<NativeStorageOwner['downloadClip']>;
+    try {
+      download = owner.downloadClip({ ...context, operationId: `${request.operationId}:clip` },
+        { manifestId: match.manifestId, clip: match.clip }, { signal, deadline: request.expiresAt });
+    } catch (error) {
+      // URL validation precedes admission. Only this known pre-dispatch refusal
+      // can finish the local job without a new module operation or receipt.
+      if (!(error instanceof BlinkOperationNotStartedError) || error.reason !== 'invalid-native-route') throw error;
+      this.report('download-invalid-media', logContext);
+      return { status: 'skipped' };
+    }
+    this.report('download-started', logContext);
+    const result = await download;
     if (result.status === 'abandoned') return { status: 'abandoned' };
     if (result.status === 'unresolved') return unresolved(result.notDispatched);
     if (result.status !== 'ready') {
@@ -744,12 +804,39 @@ export class NativeRecordingRuntime {
     }
     const asset: DownloadedAsset = { logFlow: this.observationContext(event).flow, ...result.value, identity: match.identity, capturedAt: match.clip.capturedAt!, moduleId: event.moduleId,
       cameraId: event.cameraId, jobId: request.operationId, policyEpoch, cameraGeneration: request.cameraGeneration };
-    await this.commit(next => { next.consumed = [...new Set([...next.consumed, asset.identity])].slice(-2048); next.downloads.push(asset); });
+    this.pendingClipIndexes.set(asset.reference, asset);
+    await this.commit(next => this.indexClip(next, asset));
+    this.pendingClipIndexes.delete(asset.reference);
     this.cacheBytes += asset.bytes;
     this.report('downloaded', this.observationContext(event, request.attempt));
     if (!allowed()) await this.removeOwnedAsset(asset);
     else this.pumpDelivery();
     return { status: 'retrieved' };
+  }
+
+  private indexClip(state: NativeRecordingRuntimeState, asset: DownloadedAsset): void {
+    state.consumed = [...new Set([...state.consumed, asset.identity])].slice(-2048);
+    state.downloads.push(asset);
+  }
+
+  private hasDownloadCapacity(): boolean {
+    // The state file budget bounds legacy records during recovery. Apply the
+    // count limit only to new downloads so existing owned files can be retired.
+    return this.state.downloads.length < MAX_PERSISTED_DOWNLOADS
+      && this.cacheBytes + NATIVE_RECORDING_MEDIA_LIMITS.sourceBytes <= this.options.config.maxCachedBytes
+      && ![...this.owners.values()].some(owner => owner.settlingResult);
+  }
+
+  private async retireUnclaimedClip(media: NativeStoredMedia): Promise<void> {
+    try {
+      await this.removeCacheFile(media);
+      this.unclaimedClips.delete(media.reference);
+    } catch (error) {
+      this.unclaimedClips.set(media.reference, media);
+      this.failed = true;
+      this.report('unclaimed-clip-cleanup-faulted');
+      throw error;
+    }
   }
 
   private deferRefusal(moduleId: string): Promise<void> {
@@ -843,7 +930,12 @@ export class NativeRecordingRuntime {
     // Retire only generated regular/private artifacts; leave unexpected names and all remote receipts intact.
     for (const name of await fs.readdir(this.cacheDirectory)) {
       if (!CACHE_ARTIFACT.test(name)) continue;
-      const reference = path.join(this.cacheDirectory, name), stat = await fs.lstat(reference);
+      const reference = path.join(this.cacheDirectory, name);
+      const stat = await fs.lstat(reference).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      if (!stat) continue;
       await this.removeCacheFile({ reference, bytes: stat.size });
       this.report('orphan-cache-retired');
     }
@@ -928,10 +1020,20 @@ export class NativeRecordingRuntime {
     return scope.accountId === this.options.scope.accountId && scope.clientId === this.options.scope.clientId && scope.tier === this.options.scope.tier;
   }
 
-  private commit(update: (state: NativeRecordingRuntimeState) => void): Promise<void> {
+  private async readState(): Promise<NativeRecordingRuntimeState> {
+    const stat = await fs.lstat(this.statePath);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_STATE_BYTES
+      || (uid !== undefined && ((stat.mode & 0o777) !== 0o600 || stat.uid !== uid))) throw new Error('Unsafe native recording state');
+    return readOwnerOnlyJsonFile<NativeRecordingRuntimeState>(this.statePath);
+  }
+
+  private commit(update: (state: NativeRecordingRuntimeState) => void | Promise<void>): Promise<void> {
     const write = this.writes.then(async () => {
       if ((this.failed && !this.persistenceRecovery) || this.writerReleased) throw new Error('Native recording persistence unavailable');
-      const next = clone(this.state); update(next);
+      const next = clone(this.state);
+      const updating = update(next);
+      if (updating) await updating;
       if (Buffer.byteLength(JSON.stringify(next)) > MAX_STATE_BYTES) throw new Error('Native recording state budget exceeded');
       await withinRequestBudget(this.writeStateFile(next), { deadline: Date.now() + REMOTE_OPERATION_LEASE_MS });
       if (this.writerReleased) throw new Error('Native recording writer was released');

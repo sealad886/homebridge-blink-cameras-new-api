@@ -92,6 +92,7 @@ export interface NativeRecordingCoordinatorOptions {
 
 export type NativeRecordingObservationResult = 'accepted' | 'duplicate' | 'unknown-module' | 'capacity' | 'invalid' | 'stopped' | 'cancelled';
 
+const MAX_QUEUED_JOBS = 10_000;
 const eventKey = (event: NativeRecordingObservation): string => JSON.stringify([event.moduleId, event.cameraId, event.eventId]);
 const cloneObservation = (event: NativeRecordingObservation): NativeRecordingObservation => ({ ...event });
 const asError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error));
@@ -121,7 +122,7 @@ export class NativeRecordingCoordinator {
     this.initialDelayMs = this.limit(options.initialDelayMs ?? 60_000, 0, 86_400_000);
     this.retryIntervalMs = this.limit(options.retryIntervalMs ?? 5_000, 1, 3_600_000);
     this.maxRetries = this.limit(options.maxRetries ?? 10, 0, 100);
-    this.maxQueuedJobs = this.limit(options.maxQueuedJobs ?? 128, 1, 10_000);
+    this.maxQueuedJobs = this.limit(options.maxQueuedJobs ?? 128, 1, MAX_QUEUED_JOBS);
     this.maxRememberedEvents = this.limit(options.maxRememberedEvents ?? 2_048, 1, 65_536);
     this.maxJobAgeMs = this.limit(options.maxJobAgeMs ?? 900_000, 1, 86_400_000);
     this.moduleIds = new Set(options.moduleIds);
@@ -456,7 +457,9 @@ export class NativeRecordingCoordinator {
   }
 
   private restore(saved: NativeRecordingState): void {
-    if (saved.version !== 1 || !Array.isArray(saved.queue) || saved.queue.length > this.maxQueuedJobs || !Array.isArray(saved.rememberedEvents)) {
+    // Restore older jobs and the exact unresolved owner before applying the
+    // currently configured limit to new admissions.
+    if (saved.version !== 1 || !Array.isArray(saved.queue) || saved.queue.length > MAX_QUEUED_JOBS || !Array.isArray(saved.rememberedEvents)) {
       throw new Error('Invalid native recording state');
     }
     for (const key of saved.rememberedEvents.slice(-this.maxRememberedEvents)) {

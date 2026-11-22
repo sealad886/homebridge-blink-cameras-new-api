@@ -1,4 +1,5 @@
 """Offline source-fetch invariants; no provider traffic or build execution."""
+import hashlib
 import importlib.util
 import io
 import json
@@ -151,6 +152,25 @@ class DownloadTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Checksum mismatch: libsrtp'):
                     prepare.fetch()
                 run.assert_not_called()
+
+    def test_cold_fetch_and_warm_fetch_during_upstream_outage(self):
+        content = b'pinned source archive fixture'
+        manifest = {'sources': [{
+            'name': 'libsrtp', 'filename': 'source.tar.gz', 'url': Response.url,
+            'sha256': hashlib.sha256(content).hexdigest(),
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            opener = Mock()
+            opener.open.return_value = Response(content)
+            with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'MANIFEST', manifest), \
+                    patch.object(prepare.urllib.request, 'build_opener', return_value=opener) as build_opener:
+                self.assertEqual(prepare.fetch(), root / 'downloads')
+                self.assertEqual((root / 'downloads' / 'source.tar.gz').read_bytes(), content)
+                opener.open.assert_called_once()
+                build_opener.side_effect = OSError('upstream unavailable')
+                self.assertEqual(prepare.fetch(), root / 'downloads')
+                build_opener.assert_called_once()
 
 
 

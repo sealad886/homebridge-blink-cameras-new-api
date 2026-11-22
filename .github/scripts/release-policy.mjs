@@ -27,17 +27,22 @@ export async function registryMetadata(name, fetcher = fetch) {
   return metadata;
 }
 
-function verifyPublishedIdentity(metadata, { name, version, sha, integrity, latestBefore }) {
+function verifyLatest(metadata, { version, latestBefore }) {
+  if (releaseTag(version) !== 'latest') {
+    assert.equal(metadata['dist-tags'].latest, latestBefore, 'Prerelease changed latest');
+  }
+}
+
+function verifyPublishedIdentity(metadata, { name, version, sha, integrity }) {
   const published = metadata.versions[version];
   assert(published, 'Published version is missing from the registry');
   assert.equal(published.name, name);
   assert.equal(published.gitHead, sha, 'Registry version belongs to a different source revision');
   assert.equal(published.dist?.integrity, integrity, 'Registry integrity differs from the verified package');
-  const tag = releaseTag(version);
-  if (tag !== 'latest') assert.equal(metadata['dist-tags'].latest, latestBefore, 'Prerelease changed latest');
 }
 
 export function verifyPublished(metadata, expected) {
+  verifyLatest(metadata, expected);
   verifyPublishedIdentity(metadata, expected);
   assert.equal(metadata['dist-tags'][releaseTag(expected.version)], expected.version, 'Release dist-tag is incorrect');
 }
@@ -65,16 +70,19 @@ export async function waitForPublished(expected, options) {
   const tag = releaseTag(expected.version);
   const metadata = await waitForRegistry(expected.name,
     (current) => {
+      verifyLatest(current, expected);
       if (current.versions[expected.version]) verifyPublishedIdentity(current, expected);
       return Boolean(current.versions[expected.version]) && current['dist-tags'][tag] === expected.version;
     }, {
-      attempts: 21,
+      attempts: 41,
       intervalMs: 30000,
-      onPending: ({ attempt, elapsedMs }) => console.log(
-        `Waiting for npm registry propagation (${attempt}/20 retries; ${Math.floor(elapsedMs / 1000)}s elapsed)...`,
+      onPending: ({ attempt, attempts, elapsedMs }) => console.log(
+        `Waiting for npm version and dist-tag visibility (${attempt}/${attempts - 1} retries; ${Math.floor(elapsedMs / 1000)}s in polling intervals)...`,
       ),
       ...options,
     });
+  assert(metadata.versions[expected.version],
+    'npm registry visibility is still pending: exact version is missing. Use readback-only recovery.');
   verifyPublished(metadata, expected);
   return metadata;
 }

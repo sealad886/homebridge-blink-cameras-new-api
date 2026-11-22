@@ -5,6 +5,8 @@ import { releaseTag, releaseNotes, registryMetadata, waitForPublished, compareSt
 import { verifyReleaseArtifact } from './release-artifact.mjs';
 
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Releases must run from main');
+const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
+assert(/^[1-9]\d*$/.test(runAttempt), 'GitHub workflow attempt is required');
 
 const receipt = verifyReleaseArtifact({
   receiptPath: process.env.PACKAGE_RECEIPT,
@@ -18,22 +20,51 @@ assert.equal(version, process.env.RELEASE_VERSION, 'Requested version differs fr
 const tag = releaseTag(version);
 const notes = releaseNotes(readFileSync('CHANGELOG.md', 'utf8'), version);
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+const workflow = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+const gitApi = `repos/${process.env.GITHUB_REPOSITORY}/git`;
+const findRef = (ref) => JSON.parse(run('gh', ['api', '--paginate', '--slurp',
+  `${gitApi}/matching-refs/${ref.slice('refs/'.length)}`])).flat().find((item) => item.ref === ref);
 assertTrustedPublishing(process.env, run('npm', ['--version']));
 const metadata = await registryMetadata(name);
-const latestBefore = metadata['dist-tags'].latest;
-if (tag !== 'latest') assert.equal(releaseTag(latestBefore), 'latest', 'Existing latest must be a stable release before prerelease publication');
-if (tag === 'latest') assert(compareStableVersions(version, latestBefore) >= 0, 'Stable publication cannot move latest backwards');
+const currentLatest = metadata['dist-tags'].latest;
+assert.equal(releaseTag(currentLatest), 'latest', 'Existing latest must be a stable release');
+if (tag === 'latest') assert(compareStableVersions(version, currentLatest) >= 0, 'Stable publication cannot move latest backwards');
+
+// Reserve this version before dispatching npm. The custom ref is not a release tag.
+const attemptName = `npm-upload-attempts/v${version}`;
+const attemptRef = `refs/${attemptName}`;
+const attemptedRef = findRef(attemptRef);
+let latestBefore = currentLatest;
+if (attemptedRef) {
+  assert.equal(attemptedRef.object?.type, 'tag', 'npm upload attempt must reference an annotated record');
+  assert.match(attemptedRef.object.sha, /^[a-f0-9]{40}$/, 'Invalid npm upload attempt reference');
+  const annotation = JSON.parse(run('gh', ['api', `${gitApi}/tags/${attemptedRef.object.sha}`]));
+  assert.equal(annotation.sha, attemptedRef.object.sha, 'GitHub returned a different npm upload attempt object');
+  assert.equal(annotation.tag, attemptName, 'npm upload attempt record belongs to another reference');
+  assert.equal(annotation.object?.type, 'commit', 'npm upload attempt must bind a source commit');
+  assert.equal(annotation.object.sha, sha, 'npm upload attempt belongs to a different source revision');
+  const recorded = JSON.parse(annotation.message);
+  assert.equal(recorded.schemaVersion, 1, 'Unsupported npm upload attempt record');
+  assert.equal(recorded.name, name, 'npm upload attempt belongs to a different package');
+  assert.equal(recorded.version, version, 'npm upload attempt belongs to a different version');
+  assert.equal(recorded.sha, sha, 'npm upload attempt records a different source revision');
+  assert.equal(recorded.integrity, integrity, 'npm upload attempt belongs to a different qualified artifact');
+  assert.equal(releaseTag(recorded.latestBefore), 'latest', 'Invalid recorded stable latest');
+  latestBefore = recorded.latestBefore;
+  if (tag !== 'latest') assert.equal(currentLatest, latestBefore, 'Prerelease changed latest');
+}
+
 const existing = metadata.versions[version];
 if (existing) {
   assert.equal(existing.gitHead, sha, 'Version already exists from a different revision; bump the version');
   assert.equal(existing.dist?.integrity, integrity, 'Existing version does not match the verified artifact');
-  assert.equal(metadata['dist-tags'][tag], version, 'Existing version has a different dist-tag; explicit authenticated maintenance is required before recovery');
+  if (!attemptedRef && runAttempt === '1') {
+    assert.equal(metadata['dist-tags'][tag], version, 'Existing version has a different dist-tag; explicit authenticated maintenance is required before recovery');
+  }
 }
 // Read tag state through GitHub; checkout credentials are not persisted.
 const tagRef = `refs/tags/v${version}`;
-const tagMatches = JSON.parse(run('gh', ['api', '--paginate', '--slurp',
-  `repos/${process.env.GITHUB_REPOSITORY}/git/matching-refs/tags/v${version}`])).flat();
-const existingTag = tagMatches.find((item) => item.ref === tagRef);
+const existingTag = findRef(tagRef);
 if (existingTag) {
   const tagSha = existingTag.object?.type === 'commit'
     ? existingTag.object.sha
@@ -41,18 +72,45 @@ if (existingTag) {
   assert.match(tagSha, /^[a-f0-9]{40}$/, 'Release tag must resolve to a commit');
   assert.equal(tagSha, sha, 'Release tag points to another revision');
 }
-if (!existing) {
+if (!existing && !existingTag && !attemptedRef && runAttempt === '1') {
   assert.equal(run('git', ['ls-remote', 'origin', 'refs/heads/main']).split(/\s+/)[0], sha, 'Source is no longer the main branch head; re-run gates on current main');
+  const intent = { schemaVersion: 1, name, version, sha, integrity, latestBefore, workflow };
+  const annotation = JSON.parse(run('gh', ['api', '-X', 'POST', `${gitApi}/tags`,
+    '-f', `tag=${attemptName}`, '-f', `message=${JSON.stringify(intent)}`, '-f', `object=${sha}`, '-f', 'type=commit']));
+  assert.match(annotation.sha, /^[a-f0-9]{40}$/, 'Invalid npm upload attempt object');
+  assert.equal(annotation.tag, attemptName, 'GitHub returned a different npm upload attempt name');
+  assert.equal(annotation.object?.type, 'commit', 'GitHub did not bind the npm upload attempt to a commit');
+  assert.equal(annotation.object.sha, sha, 'GitHub did not bind the npm upload attempt to the verified source');
+  assert.deepEqual(JSON.parse(annotation.message), intent, 'GitHub did not preserve the npm upload attempt evidence');
+  const created = JSON.parse(run('gh', ['api', '-X', 'POST', `${gitApi}/refs`,
+    '-f', `ref=${attemptRef}`, '-f', `sha=${annotation.sha}`]));
+  assert.equal(created.ref, attemptRef, 'GitHub did not confirm the npm upload attempt reference');
+  assert.equal(created.object?.type, 'tag', 'GitHub did not confirm the annotated npm upload attempt');
+  assert.equal(created.object.sha, annotation.sha, 'GitHub did not confirm the expected npm upload attempt object');
+  const recordUploadStatus = (status) => writeFileSync('npm-upload-attempt.json',
+    JSON.stringify({ ...intent, status }, null, 2) + '\n');
+  recordUploadStatus('attempt-recorded');
+  console.log(`Submitting qualified package ${name}@${version} to npm.`);
+  try {
+    run('npm', ['publish', filename, '--ignore-scripts', '--access', 'public', '--tag', tag,
+      '--registry', 'https://registry.npmjs.org', '--fetch-retries=0']);
+  } catch (cause) {
+    recordUploadStatus('unconfirmed');
+    throw new Error('npm upload did not confirm acceptance. Rerun only the publish job in this run for registry readback.', { cause });
+  }
+  recordUploadStatus('accepted');
+  console.log('npm accepted the upload. Waiting for registry visibility.');
+} else {
+  console.log(`Checking registry visibility for ${name}@${version} in readback-only mode.`);
 }
-if (!existing) run('npm', ['publish', filename, '--ignore-scripts', '--access', 'public', '--tag', tag, '--registry', 'https://registry.npmjs.org']);
-// Reruns finish a partially completed publication without republishing an immutable version.
 await waitForPublished({ name, version, sha, integrity, latestBefore });
+console.log('Registry identity and dist-tag verified. Reconciling GitHub release records.');
 if (!existingTag) {
   run('gh', ['api', '--silent', '-X', 'POST',
-    `repos/${process.env.GITHUB_REPOSITORY}/git/refs`,
+    `${gitApi}/refs`,
     '-f', `ref=${tagRef}`, '-f', `sha=${sha}`]);
 }
-const receiptText = JSON.stringify({ ...receipt, filename: undefined, npmTag: tag, latestBefore, workflow: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` }, null, 2);
+const receiptText = JSON.stringify({ ...receipt, filename: undefined, npmTag: tag, latestBefore, workflow }, null, 2);
 writeFileSync('release-receipt.json', receiptText + '\n');
 writeFileSync('release-notes.md', `${notes}\n\n## Verified artifact\n\n\`\`\`json\n${receiptText}\n\`\`\`\n`);
 // gh api --paginate fails on transport/auth failures rather than treating them as missing releases.

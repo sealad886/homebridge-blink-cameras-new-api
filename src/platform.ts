@@ -51,7 +51,8 @@ import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
 import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recording-runtime';
 import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput,
   type NativeRecordingDeviceOverride, type NativeRecordingPolicyConfig } from './native-recording-config';
-import { NativeRecordingMemoryBudget, isRecordingFailureCode, type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
+import { NativeRecordingMemoryBudget, isNativeRecordingPreparationPhase, isRecordingFailureCode,
+  type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
 import type { NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
 import type { NativeMotionDevice } from './blink-api/motion-events';
@@ -537,6 +538,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
     // Defer executable checks until authenticated discovery actually finds a camera.
     // An unconfigured/tokenless bridge must remain idle.
     if (candidates.length) await this.qualifyMedia();
+    if (!this.monitorActive) return;
     const identity = this.apiClient.getCachedIdentity();
     if (!identity?.accountId || !identity.clientId) { this.log.warn('Push motion waits for a cached authenticated account and client.'); return; }
     const scope = { accountId: identity.accountId, clientId: identity.clientId, tier: identity.tier };
@@ -582,10 +584,11 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         }
       }
     }
+    if (!this.monitorActive) return;
     this.nativeRuntime = undefined;
     this.nativeRuntimeKey = undefined;
     const storagePath = this.api.user.storagePath();
-    this.nativeRuntime = await NativeRecordingRuntime.create({ client: this.apiClient, scope, devices, matchingDevices, storagePath,
+    const runtime = await NativeRecordingRuntime.create({ client: this.apiClient, scope, devices, matchingDevices, storagePath,
       config: resolveNativeRecordingConfig(this.config.nativeRecording), firebase: BLINK_FIREBASE_CLIENT, appVersion: BLINK_NOTIFICATION_APP_VERSION,
       report: (event, context) => {
         const camera = context?.camera && redactDiagnosticText(context.camera).replace(/[\p{C}\u2028\u2029]/gu, ' ')
@@ -593,6 +596,12 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         const flow = context?.flow && /^flow-[a-f0-9]{10}$/.test(context.flow) ? context.flow : undefined;
         const phase = context?.preparation?.phase;
         const workerCode = context?.preparation?.workerCode;
+        const eligibility = context?.clipEligibility;
+        const eligibilityDetails = eligibility ? ([
+          ['catalog-rows', eligibility.rows], ['wrong-network', eligibility.wrongNetwork], ['other-name', eligibility.otherName],
+          ['invalid-metadata', eligibility.invalidMetadata], ['outside-window', eligibility.outsideWindow], ['consumed', eligibility.consumed],
+        ] as const).filter(([, count]) => Number.isInteger(count) && count >= 0 && count <= 1_000)
+          .map(([label, count]) => `${label}=${count}`) : [];
         const recovery = context?.recovery, flags = recovery?.flags;
         const validRecovery = Number.isInteger(flags) && flags! >= 0 && flags! <= 7 && (flags! & 3) !== 3
           && (recovery?.attempts === 1 || recovery?.attempts === 2) && (recovery.attempts === 2 || !(flags! & 6));
@@ -600,8 +609,10 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           .filter(([bit]) => flags! & bit).map(([, name]) => name).join(',') : '';
         const details = [camera && `camera=${JSON.stringify(camera)}`, flow,
           Number.isSafeInteger(context?.attempt) && `attempt=${context!.attempt}`,
-          phase && ['configuration', 'input', 'output', 'closure', 'validation'].includes(phase) && `phase=${phase}`,
+          ...eligibilityDetails,
+          isNativeRecordingPreparationPhase(phase) && `phase=${phase}`,
           isRecordingFailureCode(workerCode) && `worker=${workerCode}`,
+          context?.preparation?.deadlineExceeded === true && 'deadline=exceeded',
           context?.preparation?.salvageAttempted === true && 'recovery=exhausted',
           validRecovery && `conversion-attempts=${recovery!.attempts}`, repairs && `recovery=${repairs}`,
           validRecovery && isRecordingFailureCode(recovery?.initialWorkerCode) && `initial-worker=${recovery.initialWorkerCode}`].filter(Boolean).join(' ');
@@ -612,6 +623,8 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         else if (/^(?:push-(?:ready|client-bound|received|message-accepted|message-ignored|retrying)|motion-|acquisition-|job-|catalog-|clip-|download|preparation-|prepared$|offered$|delivery-|home-)/.test(event)) this.log.info(message);
         else this.log.debug(message);
       } });
+    if (!this.monitorActive) { await runtime.stop(); return; }
+    this.nativeRuntime = runtime;
     this.nativeRuntimeKey = key;
   }
 
@@ -937,6 +950,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
       const homescreen = await this.apiClient.getHomescreen({ deadline: Date.now() + 25000, retryTransient: true });
       if (!this.monitorActive) return false;
       await this.prepareNativeRuntime(homescreen);
+      if (!this.monitorActive) return false;
       if (this.inventoryInitialized) {
         this.updateDeviceStates(homescreen);
       } else {

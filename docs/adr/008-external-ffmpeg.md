@@ -57,8 +57,8 @@ layouts whose stream identity cannot be established are refused at inspection.
 | `originUs` | First corrected video timestamp on the common input timeline after `copyts` / `start_at_zero`. |
 | `pictures[].pts`, `selected[].pts` | Corrected video timestamp relative to `originUs`. |
 | `durationUs` | Corrected video end relative to `originUs`, independent of frame selection. |
-| `audioOriginUs` | First decoded source audio timestamp on the common input timeline, after AAC priming/edit handling; absent if observation is disabled or unavailable. |
-| Output A/V offset | Decoded audio origin minus decoded video origin, compared with the source offset; silence recovery uses its explicitly generated audio origin. |
+| `sourceAudio.originUs` | First decoded source audio timestamp on the common input timeline after AAC priming and edit-list handling. Present only for observed source audio. |
+| Output A/V offset | Decoded audio origin minus decoded video origin. Source audio uses the observed source offset. Generated silence starts at zero on the common input timeline. |
 
 Select frames by source-anchored time intervals. A source gap or a temporarily
 slow source does not accumulate credit to exceed the selected frame rate later.
@@ -135,11 +135,11 @@ actual launch, adversarial pipe chunk boundaries, and cancellation during final
 cleanup. Source test counts do not replace the immutable installed-package
 qualification or an observed FFmpeg 6.1 runtime receipt.
 
-The bounded follow-up in [issue #120](https://github.com/sealad886/homebridge-blink-cameras-new-api/issues/120)
-tracks further consolidation of source-audio observations and output-mode types.
-The bounded decoder-damage observation above addresses a demonstrated recovery
-failure; the remaining representation work is separate from these required
-contract corrections.
+The recording plan distinguishes disabled, observed, and unavailable source
+audio. Conversion and validation use one output mode for omitted audio, source
+audio, or generated silence. Validation requires a measured origin for source
+audio. Unavailable observations allow a silence retry only after a classified
+audio discontinuity.
 
 ## Alternatives and consequences
 

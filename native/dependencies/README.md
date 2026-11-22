@@ -6,6 +6,15 @@ and builds an isolated static prefix. No global packages or user keyrings change
 FFmpeg, x264 and Opus are external executable implementation details and are not
 compiled, linked or distributed by this project.
 
+CI uses an exact-key cache for the libSRTP source archive. The committed source
+manifest and recipe determine the key. Only a push to `main` can save a verified
+archive. Pull requests and manual release runs can restore it. A cold or evicted
+cache fetches the pinned HTTPS origin. Every run checks the archive against the
+manifest, including on a cache hit. A checksum mismatch fails the run. Remove a
+corrupt cache entry through GitHub's cache controls before retrying cold.
+Each target still builds from source for that run and verifies the installed
+artifact. Cached binaries never enter qualification.
+
 The helper source is GPL-3.0-or-later; libSRTP is BSD-3-Clause. Full license text
 is retained in `licenses/libsrtp-LICENSE`. Windows runtime notices are retained
 for the UCRT64 toolchain. The npm package includes the helper, its sources,

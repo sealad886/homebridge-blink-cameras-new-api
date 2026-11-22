@@ -136,6 +136,8 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
   try {
     const trials = [...selected.map(name => ({ name })), { name: 'low-fps-source', fps: 7, fragment: 4000 },
       { name: '25fps-source-15fps-output', fragment: 4000 }, { name: 'recovery-metadata', hd: true, fragment: 4000 },
+      { name: 'audio-16khz', label: 'audio-16khz-16kbps', audioBitrate: 16 },
+      { name: 'audio-24khz', label: 'audio-24khz-19kbps', audioBitrate: 19 },
       { name: 'recovery-metadata', audioFirst: true }, { name: 'audio-disabled', sar: 2 },
       { name: 'audio-disabled', label: '90s-24fps-source-15fps-output', fps: 24, count: 2160, tiny: true, outputFps: 15, expectedFrames: 1350 },
       { name: 'audio-disabled', label: '90s-24fps-source-24fps-output', fps: 24, count: 2160, tiny: true, outputFps: 24, expectedFrames: 2160 },
@@ -171,7 +173,7 @@ export async function exerciseExternalRecording(packageRoot, protectionPath, ffm
       const active = !['audio-disabled', 'damaged-audio-disabled', '30fps-source-15fps-output'].includes(name), rate = name === 'audio-24khz' || odd || name === 'corrupt-audio-recovery' ? 24000 : 16000;
       const configuration = { prebufferLength: 4000, eventTriggerTypes: [1], mediaContainerConfiguration: { type: 0, fragmentLength: fragmentMs },
         videoCodec: { type: 0, resolution: [outputWidth, outputHeight, trial.outputFps ?? (low || name === 'recovery-metadata' ? 30 : 15)], parameters: { profile: 0, level: trial.hd ? 2 : 0, bitRate: trial.hd ? 2000 : 300, iFrameInterval: fragmentMs } },
-        audioCodec: { type: 0, samplerate: rate === 16000 ? 1 : 2, audioChannels: 1, bitrateMode: 0, bitrate: 32 } };
+        audioCodec: { type: 0, samplerate: rate === 16000 ? 1 : 2, audioChannels: 1, bitrateMode: 0, bitrate: trial.audioBitrate ?? 32 } };
       const memory = new NativeRecordingMemoryBudget();
       const prepare = () => prepareNativeRecording({ filePath: path, expectedBytes: bytes.length, expectedSha256: hash(bytes) }, configuration, active,
         new globalThis.AbortController().signal, { ffmpegPath, memory, admit: work => work() });

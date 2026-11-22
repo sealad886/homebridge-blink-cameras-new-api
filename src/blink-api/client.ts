@@ -927,8 +927,9 @@ export class BlinkApi {
     if (url.protocol !== 'https:' || url.origin !== base.origin || url.username || url.password || url.hash || !matches) {
       throw new BlinkOperationNotStartedError('invalid-native-route');
     }
-    const manifestId = requireRemoteId(Number(matches[1])), clipId = requireRemoteId(Number(matches[2]));
-    if (expected && (manifestId !== expected.manifestId || clipId !== expected.clipId)) {
+    const manifestId = Number(matches[1]), clipId = Number(matches[2]);
+    if (!Number.isSafeInteger(manifestId) || !Number.isSafeInteger(clipId)
+      || (expected && (manifestId !== expected.manifestId || clipId !== expected.clipId))) {
       throw new BlinkOperationNotStartedError('invalid-native-route');
     }
     return url.toString();

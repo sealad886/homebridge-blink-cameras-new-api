@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 const entry = resolve('.github/scripts/publish.mjs');
-function fixture({ existing = false, existingImmutableRelease = false, failRelease = false, badSha = false, badTag = false, annotatedTag = false, staleChannel = false, version = '0.10.0-alpha.0', latest = '0.9.1' } = {}) {
+function fixture({ existing = false, existingImmutableRelease = false, failRelease = false, failUpload = false, failAttemptRef = false, delayVisibility = 0, badSha = false, badTag = false, annotatedTag = false, staleChannel = false, version = '0.10.0-alpha.0', latest = '0.9.1' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'blink-publish-test-'));
   const packageBytes = Buffer.from('verified release fixture');
   const receipt = { name: 'test-package', version, sha: 'a'.repeat(40), integrity: 'sha512-' + createHash('sha512').update(packageBytes).digest('base64'), filename: join(root, 'release.tgz') };
@@ -43,14 +43,33 @@ if (command === 'git') {
 } else if (command === 'npm') {
   if (args[0] === '--version') output = '11.5.1';
   else if (args[0] === 'publish') {
-    state.metadata.versions[state.receipt.version] = { name: state.receipt.name, gitHead: state.receipt.sha, dist: { integrity: state.receipt.integrity } };
-    state.metadata['dist-tags'][args[args.indexOf('--tag') + 1]] = state.receipt.version;
+    state.pending = {
+      reads: ${JSON.stringify(delayVisibility)},
+      version: state.receipt.version,
+      record: { name: state.receipt.name, gitHead: state.receipt.sha, dist: { integrity: state.receipt.integrity } },
+      tag: args[args.indexOf('--tag') + 1],
+    };
+    if (${JSON.stringify(failUpload)}) status = 1;
   } else if (args[0] === 'dist-tag') state.metadata['dist-tags'][args[3]] = state.receipt.version;
 } else if (command === 'gh') {
-  if (args[0] === 'api' && args.some(arg => arg.includes('matching-refs/tags/'))) {
+  const field = (name) => args.find(arg => arg.startsWith(name + '='))?.slice(name.length + 1);
+  if (args[0] === 'api' && args.some(arg => arg.includes('matching-refs/npm-upload-attempts/'))) {
+    output = JSON.stringify([state.attemptRef ? [state.attemptRef] : []]);
+  } else if (args[0] === 'api' && args.some(arg => arg.endsWith('/git/tags')) && args.includes('POST')) {
+    state.attemptAnnotation = { tag: field('tag'), sha: 'd'.repeat(40), object: { type: field('type'), sha: field('object') }, message: field('message') };
+    output = JSON.stringify(state.attemptAnnotation);
+  } else if (args[0] === 'api' && args.some(arg => arg.includes('/git/tags/'))) {
+    output = JSON.stringify(state.attemptAnnotation);
+  } else if (args[0] === 'api' && args.some(arg => arg.includes('matching-refs/tags/'))) {
     output = JSON.stringify([state.tag ? [{ ref: 'refs/tags/v' + state.receipt.version, object: { type: state.annotatedTag ? 'tag' : 'commit', sha: state.annotatedTag ? 'c'.repeat(40) : state.tag } }] : []]);
   } else if (args[0] === 'api' && args.includes('POST')) {
-    state.tag = state.receipt.sha;
+    if (field('ref')?.startsWith('refs/npm-upload-attempts/')) {
+      if (state.attemptRef || ${JSON.stringify(failAttemptRef)}) status = 1;
+      else {
+        state.attemptRef = { ref: field('ref'), object: { type: 'tag', sha: field('sha') } };
+        output = JSON.stringify(state.attemptRef);
+      }
+    } else state.tag = state.receipt.sha;
   } else if (args[0] === 'api') output = JSON.stringify([state.releases]);
   else if (args[1] === 'create') {
     if (state.failRelease) { state.failRelease = false; status = 1; }
@@ -73,10 +92,32 @@ process.stdout.write(output);
 process.exit(status);
 `;
   for (const command of ['git', 'npm', 'gh']) writeFileSync(join(bin, command), executable, { mode: 0o755 });
-  writeFileSync(join(root, 'fetch.cjs'), `const fs = require('node:fs'); global.fetch = async () => ({ ok: true, json: async () => JSON.parse(fs.readFileSync(process.env.TEST_STATE, 'utf8')).metadata });`);
+  writeFileSync(join(root, 'fetch.cjs'), `
+const fs = require('node:fs');
+const setTimeout = global.setTimeout;
+global.setTimeout = (callback, ms) => ms === 30000 ? setImmediate(callback) : setTimeout(callback, ms);
+global.fetch = async () => {
+  const file = process.env.TEST_STATE;
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (state.pending && state.pending.reads-- === 0) {
+    const { version, record, tag } = state.pending;
+    state.metadata.versions[version] = record;
+    state.metadata['dist-tags'][tag] = version;
+    delete state.pending;
+  }
+  fs.writeFileSync(file, JSON.stringify(state));
+  return { ok: true, json: async () => state.metadata };
+};
+`);
   return {
-    run: () => spawnSync(process.execPath, ['--require', join(root, 'fetch.cjs'), entry], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH, TEST_STATE: statePath, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.test/oidc', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc-token', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: receipt.sha, GITHUB_REPOSITORY: 'owner/repo', GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: '123', PACKAGE_RECEIPT: join(root, 'receipt.json'), PACKAGE_ARTIFACT_DIR: root, RELEASE_VERSION: receipt.version } }),
+    run: (attempt = '1', runId = '123') => spawnSync(process.execPath, ['--require', join(root, 'fetch.cjs'), entry], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH, TEST_STATE: statePath, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.test/oidc', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc-token', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: receipt.sha, GITHUB_REPOSITORY: 'owner/repo', GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: attempt, PACKAGE_RECEIPT: join(root, 'receipt.json'), PACKAGE_ARTIFACT_DIR: root, RELEASE_VERSION: receipt.version } }),
     state: () => JSON.parse(readFileSync(statePath, 'utf8')),
+    update: (apply) => {
+      const state = JSON.parse(readFileSync(statePath, 'utf8'));
+      apply(state);
+      writeFileSync(statePath, JSON.stringify(state));
+    },
+    uploadStatus: () => JSON.parse(readFileSync(join(root, 'npm-upload-attempt.json'), 'utf8')),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -123,7 +164,12 @@ test('publication preserves latest and records exact source and artifact', () =>
     assert(upload >= 0 && publish > upload, 'release receipt uploads before final publication');
     assert(create.includes('--latest=false'), 'draft creation cannot become latest');
     assert(state.calls[publish].includes('--latest=false'));
-    assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
+    const attempts = state.calls.filter(([command, action]) => command === 'npm' && action === 'publish');
+    assert.equal(attempts.length, 1);
+    assert(attempts[0].includes('--fetch-retries=0'));
+    const reserve = state.calls.findIndex(args => args.includes('ref=refs/npm-upload-attempts/v0.10.0-alpha.0'));
+    assert(reserve >= 0 && reserve < state.calls.indexOf(attempts[0]));
+    assert.deepEqual(testCase.uploadStatus(), { ...JSON.parse(state.attemptAnnotation.message), status: 'accepted' });
   } finally { testCase.cleanup(); }
 });
 test('stable release selects latest only after its receipt upload', () => {
@@ -162,13 +208,89 @@ test('rerun recovers GitHub release after successful npm publication', () => {
   const testCase = fixture({ failRelease: true });
   try {
     assert.notEqual(testCase.run().status, 0);
-    const result = testCase.run();
+    const result = testCase.run('2');
     assert.equal(result.status, 0, result.stderr);
     const state = testCase.state();
     assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
     assert.equal(state.releases.length, 1);
   } finally { testCase.cleanup(); }
 });
+test('rerun before an accepted upload is visible only reads back and finishes release records', () => {
+  const testCase = fixture({ delayVisibility: 42 });
+  try {
+    const result = testCase.run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /npm accepted the upload/);
+    assert.match(result.stderr, /visibility is still pending/);
+    assert.equal(testCase.state().tag, '');
+    const recovery = testCase.run('2');
+    assert.equal(recovery.status, 0, recovery.stderr);
+    const state = testCase.state();
+    assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
+    assert.equal(state.releases.length, 1);
+  } finally { testCase.cleanup(); }
+});
+test('rerun after an ambiguous upload cannot send the package again', () => {
+  const testCase = fixture({ failUpload: true, delayVisibility: 100 });
+  try {
+    const result = testCase.run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /did not confirm acceptance/);
+    assert.equal(testCase.uploadStatus().status, 'unconfirmed');
+    const recovery = testCase.run('2');
+    assert.notEqual(recovery.status, 0);
+    assert.match(recovery.stderr, /visibility is still pending/);
+    const state = testCase.state();
+    assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
+    assert.equal(state.tag, '');
+    assert.deepEqual(state.releases, []);
+  } finally { testCase.cleanup(); }
+});
+test('a fresh dispatch after a delayed acceptance reads back without uploading again', () => {
+  const testCase = fixture({ delayVisibility: 42 });
+  try {
+    assert.notEqual(testCase.run().status, 0);
+    const recovery = testCase.run('1', '456');
+    assert.equal(recovery.status, 0, recovery.stderr);
+    const state = testCase.state();
+    assert.equal(state.calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
+    assert.equal(state.releases.length, 1);
+  } finally { testCase.cleanup(); }
+});
+test('an unconfirmed reservation stops before invoking npm', () => {
+  const testCase = fixture({ failAttemptRef: true });
+  try {
+    assert.notEqual(testCase.run().status, 0);
+    assert(!testCase.state().calls.some(([command, action]) => command === 'npm' && action === 'publish'));
+    assert.equal(testCase.state().tag, '');
+  } finally { testCase.cleanup(); }
+});
+for (const [change, rejected] of [
+  [
+    (state) => { state.metadata['dist-tags'].latest = '0.9.2'; },
+    /Prerelease changed latest/,
+  ],
+  [
+    (state) => {
+      const marker = JSON.parse(state.attemptAnnotation.message);
+      state.attemptAnnotation.message = JSON.stringify({ ...marker, integrity: 'sha512-other' });
+    },
+    /different qualified artifact/,
+  ],
+]) {
+  test(`a new dispatch fails closed on a conflicting upload attempt (${rejected.source})`, () => {
+    const testCase = fixture({ failUpload: true });
+    try {
+      assert.notEqual(testCase.run().status, 0);
+      testCase.update(change);
+      const recovery = testCase.run('1', '456');
+      assert.notEqual(recovery.status, 0);
+      assert.match(recovery.stderr, rejected);
+      assert.equal(testCase.state().calls.filter(([command, action]) => command === 'npm' && action === 'publish').length, 1);
+      assert.equal(testCase.state().tag, '');
+    } finally { testCase.cleanup(); }
+  });
+}
 for (const options of [{ existing: true, badSha: true }, { badTag: true }, { badTag: true, annotatedTag: true }, { existing: true, staleChannel: true }, { version: '0.9.0', latest: '0.9.1' }]) {
   test(`rejects conflicting immutable release identity ${JSON.stringify(options)}`, () => {
     const testCase = fixture(options);
