@@ -117,15 +117,34 @@ then obtains a short-lived publishing credential through OIDC. It
 validates registry responses, serializes releases, publishes the verified package,
 and records source SHA and registry integrity. Existing versions must match their original source;
 a failed post-publish release-record step can be retried at that same revision.
-After npm accepts an upload, registry processing can delay exact-version and dist-tag
-visibility. The publish workflow polls for up to 10 minutes at 30-second intervals,
-reports each pending retry, and fails closed on lookup, source-identity, integrity,
-or tag mismatch. This is a bounded workflow wait, not an npm processing SLA. Do not
-dispatch another release while that bounded wait is active.
-A recovery run also requires the existing dist-tag to match. If it does not, stop
-and arrange explicit authenticated tag maintenance; trusted publishing does not
-authorize `npm dist-tag add`. Do not repair a partial release by publishing locally
-or overwriting a Git tag. New GitHub releases are created as drafts, receive their
+Before invoking npm, the publisher stores an annotated upload-attempt record under
+`refs/npm-upload-attempts/vVERSION`. It binds the exact package version, source SHA,
+qualified integrity, original stable `latest`, and workflow run. A rerun or a fresh
+dispatch that finds this record only reads the registry and reconciles matching
+release records. The npm upload itself runs with transport retries disabled. The
+normal `refs/tags/vVERSION` release tag still requires successful registry verification.
+
+Registry processing can delay exact-version and dist-tag visibility after an
+accepted upload. The workflow allows 40 polling intervals of 30 seconds, covering
+20 minutes of registry processing plus lookup time. It logs upload acceptance,
+pending visibility, and verified identity separately. Transport and identity errors
+stop immediately. If visibility is pending or the upload outcome is unclear, rerun
+the same workflow run to reuse its qualification evidence. Reruns only perform
+registry readback and record reconciliation, even if the first registry lookup
+shows no version. Upload outcome and release receipts are preserved in each
+attempt's workflow artifact when available.
+
+If the attempt record exists and no registry version appears, keep the record
+while the upload outcome is uncertain. A maintainer may separately authorize
+removing the attempt ref only after confirming that npm was never invoked. Preserve
+the workflow evidence and arrange a fresh authorized dispatch after that removal.
+If the prior run stopped before creating the attempt record or invoking npm, start
+a fresh authorized dispatch once the failure is resolved.
+
+The expected dist-tag must also match before the publisher records the release.
+If it remains incorrect after registry propagation, stop and arrange explicit
+authenticated tag maintenance. Trusted publishing does not authorize `npm dist-tag add`.
+New GitHub releases are created as drafts, receive their
 receipt asset, then publish. Recovery validates an immutable existing release's
 tag, source revision, and prerelease state, leaves it unchanged, and preserves the
 current receipt through the workflow artifact.

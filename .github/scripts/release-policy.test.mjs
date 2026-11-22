@@ -65,22 +65,24 @@ test('publication waits for independently propagating version and dist-tag', asy
   assert.deepEqual(registry.delays, [30000, 30000]);
   const stuck = delayedRegistry([staleTag]);
   await assert.rejects(waitForPublished(expected, stuck.options), /Release dist-tag is incorrect/);
-  assert.equal(stuck.reads(), 21);
-  assert.deepEqual(stuck.delays, Array(20).fill(30000));
+  assert.equal(stuck.reads(), 41);
+  assert.deepEqual(stuck.delays, Array(40).fill(30000));
+  const invisible = delayedRegistry([missing]);
+  await assert.rejects(waitForPublished(expected, invisible.options), /visibility is still pending/);
+  assert.equal(invisible.reads(), 41);
 });
 
 test('publication reports every 30-second propagation retry without real waiting', async () => {
   const expected = { name: 'pkg', version: '0.10.0-alpha.0', sha: 'abc', integrity: 'sha512-xyz', latestBefore: '0.9.1' };
   const missing = { versions: {}, 'dist-tags': { latest: '0.9.1' } };
   const ready = { versions: { [expected.version]: { name: 'pkg', gitHead: 'abc', dist: { integrity: 'sha512-xyz' } } }, 'dist-tags': { latest: '0.9.1', alpha: expected.version } };
-  const registry = delayedRegistry([missing, missing, ready]);
+  const registry = delayedRegistry([...Array(29).fill(missing), ready]);
   const progress = [];
   registry.options.onPending = (status) => progress.push(status);
   await waitForPublished(expected, registry.options);
-  assert.deepEqual(progress, [
-    { attempt: 1, elapsedMs: 0, intervalMs: 30000, attempts: 21 },
-    { attempt: 2, elapsedMs: 30000, intervalMs: 30000, attempts: 21 },
-  ]);
+  assert.equal(progress.length, 29);
+  assert.deepEqual(progress[0], { attempt: 1, elapsedMs: 0, intervalMs: 30000, attempts: 41 });
+  assert.deepEqual(registry.delays, Array(29).fill(30000));
 });
 
 test('publication fails immediately on registry identity mismatch or network failure', async () => {
@@ -90,6 +92,10 @@ test('publication fails immediately on registry identity mismatch or network fai
   await assert.rejects(waitForPublished(expected, mismatch.options), /different source revision/);
   assert.equal(mismatch.reads(), 1);
   assert.deepEqual(mismatch.delays, []);
+  const latestMoved = delayedRegistry([{ versions: {}, 'dist-tags': { latest: '0.9.2' } }]);
+  await assert.rejects(waitForPublished(expected, latestMoved.options), /Prerelease changed latest/);
+  assert.equal(latestMoved.reads(), 1);
+  assert.deepEqual(latestMoved.delays, []);
   const network = delayedRegistry([]);
   network.options.readMetadata = async () => { throw new Error('network unavailable'); };
   await assert.rejects(waitForPublished(expected, network.options), /network unavailable/);
