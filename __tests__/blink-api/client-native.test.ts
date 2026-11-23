@@ -1646,6 +1646,20 @@ describe('owned native storage SDK', () => {
     expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
   });
 
+  it.each(['viewer closed', { reason: 'viewer closed' }, null])
+  ('releases live-view ownership when a non-Error cancellation interrupts HTTP preflight (%p)', async reason => {
+    const f = fixture(), viewer = new globalThis.AbortController();
+    (f.auth.ensureValidToken as jest.Mock).mockImplementationOnce(async () => {
+      expect(f.savedLive.at(-1)).toMatchObject({ phase: 'starting' });
+      viewer.abort(reason);
+    });
+    await expect(f.api.startCameraLiveview(20, 40, undefined, undefined, { viewerSignal: viewer.signal }))
+      .rejects.toMatchObject({ name: 'AbortError', dispatched: false, cause: { cause: reason } });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+    expect(f.savedRemote.at(-1)).toEqual({});
+  });
+
   it('retains the retry reservation if the live-view acknowledgement becomes ambiguous', async () => {
     jest.useFakeTimers();
     const f = fixture();
