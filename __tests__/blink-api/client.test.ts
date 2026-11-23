@@ -120,7 +120,7 @@ describe('BlinkApi', () => {
       http.post.mockResolvedValue({ command_id: 7, server: 'immis://vendor.example' });
       await (api as unknown as BlinkApi)[method](5, 7);
       expect(http.post).toHaveBeenCalledWith(expect.stringContaining('/liveview'),
-        { intent: 'liveview', motion_event_start_time: null }, [], expect.objectContaining({ retry: false }));
+        { intent: 'liveview', motion_event_start_time: null }, [409], expect.objectContaining({ retry: false }));
     });
 
   it('retires a command using its Unit contract without ambiguous POST replay', async () => {

@@ -24,9 +24,10 @@ import {
 import { withResponseBudget, withinRequestBudget, RequestOptions, checkRequestBudget } from '../operation-budget';
 import { toHapError } from '../hap-errors';
 import { BlinkApi } from '../blink-api/client';
+import { isBlinkCommandBusy } from '../blink-api/domain-validation';
 import { FeedAdmissionError, type FeedLease } from './feed-admission';
 import { readBoundedBody } from '../blink-api/response-body';
-import { BlinkHttpError } from '../blink-api/http';
+import { BlinkHttpError, isBlinkPostRefusal } from '../blink-api/http';
 import {
   recordSecurityBoundaryEvent,
   describeNetworkFailure,
@@ -489,7 +490,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           : await this.api.requestDoorbellThumbnail(this.networkId, this.deviceId, options);
       return { completed: response.captureOutcome === 'completed', thumbnail: response.thumbnail };
     } catch (error) {
-      if (error instanceof BlinkHttpError && error.failure === 'http' && error.status === 409) {
+      if (isBlinkPostRefusal(error) && error.status === 409) {
         return { completed: false, thumbnail: this.getThumbnailUrl() };
       }
       throw error;
@@ -805,14 +806,15 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     return owner.retirement;
   }
 
-  private async requestLiveView(): Promise<{ server: string; command_id?: number; polling_interval?: number; continue_interval?: number; id?: number; }> {
+  private async requestLiveView(viewerSignal: globalThis.AbortSignal): Promise<{ server: string; command_id?: number; polling_interval?: number; continue_interval?: number; id?: number; }> {
+    const options = { viewerSignal };
     switch (this.deviceType) {
       case 'camera':
-        return this.api.startCameraLiveview(this.networkId, this.deviceId);
+        return this.api.startCameraLiveview(this.networkId, this.deviceId, undefined, undefined, options);
       case 'owl':
-        return this.api.startOwlLiveview(this.networkId, this.deviceId);
+        return this.api.startOwlLiveview(this.networkId, this.deviceId, undefined, undefined, options);
       case 'doorbell':
-        return this.api.startDoorbellLiveview(this.networkId, this.deviceId);
+        return this.api.startDoorbellLiveview(this.networkId, this.deviceId, undefined, undefined, options);
     }
   }
 
@@ -871,7 +873,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
         { signal: abort.signal, deadline: Date.now() + 4000 });
       abort.signal.throwIfAborted();
       lease = this.acquireFeed?.();
-      const allocation = this.requestLiveView().then(async liveview => {
+      const allocation = this.requestLiveView(abort.signal).then(async liveview => {
         commandId = liveview.command_id ?? liveview.id;
         if (abort.signal.aborted) {
           await retireCommand();
@@ -910,7 +912,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
           if (abort.signal.aborted) return;
           try {
             const status = await this.api.getCommandStatus(this.networkId, ownedCommand, { signal: abort.signal, deadline: Date.now() + 30_000 });
-            if (abort.signal.aborted || status.complete || status.status === 'complete' || status.status === 'failed') return;
+            if (abort.signal.aborted) return;
+            if (status.complete === true && typeof status.status === 'number' && Number.isSafeInteger(status.status)
+              && status.status !== 0 && isBlinkCommandBusy(status.status_code)) {
+              this.log('Blink reported a busy live-view command.');
+              failed();
+              return;
+            }
+            if (status.complete || status.status === 'complete' || status.status === 'failed') return;
           } catch { if (abort.signal.aborted) return; this.logError('Live view polling failed'); }
           timer = setTimeout(() => { void poll(); }, interval);
         };

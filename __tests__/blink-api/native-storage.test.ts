@@ -537,6 +537,46 @@ it('treats a complete nonzero numeric status as terminal failure without retriev
   expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
 });
 
+it.each([['catalog', 307], ['clip', 520]] as const)('keeps terminal busy proof for %s code %s without replaying its POST', async (kind, statusCode) => {
+  const f = fixture();
+  const acquire = (owner: NativeStorageOwner) => kind === 'catalog'
+    ? owner.readCatalog(context) : owner.downloadClip({ ...context, operationId: 'event-1:clip' }, clipRequest());
+  f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 1, status_code: statusCode });
+
+  const result = { status: 'failed', reason: 'command-failed', remoteStatus: 1, busy: true };
+  expect(await acquire(f.owner)).toEqual(result);
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'finished', commandId: 101, statusReads: 1, result });
+  expect(await acquire(f.restart())).toEqual(result);
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  expect(f.transport.getJson).toHaveBeenCalledTimes(1);
+  expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+});
+
+it('keeps an accepted command pending when its incomplete response carries a busy code', async () => {
+  const f = fixture({ maxStatusReads: 1 });
+  f.transport.getJson.mockResolvedValueOnce({ complete: false, status: 1, status_code: 520 });
+
+  expect(await f.owner.readCatalog(context)).toMatchObject({ status: 'unresolved', reason: 'status-budget-exhausted' });
+  expect(f.owner.snapshot().operation).toMatchObject({ phase: 'accepted', commandId: 101, statusReads: 1 });
+  expect(f.owner.snapshot().operation?.result).toBeUndefined();
+  expect(await f.restart().readCatalog({ ...context, operationId: 'next-event:catalog' }))
+    .toMatchObject({ status: 'unresolved', reason: 'operation-in-progress' });
+  expect(f.transport.postEmpty).toHaveBeenCalledTimes(1);
+  expect(f.transport.getJson).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ['pending command', { phase: 'accepted' }, {}],
+  ['zero status', {}, { remoteStatus: 0 }],
+  ['unread command', { statusReads: 0 }, {}],
+  ['discarded command', {}, { reason: 'discarded' }],
+] as const)('refuses restored busy metadata for a %s', (_case, operation, result) => {
+  expect(() => fixture({ restoredState: { version: 1, operation: { ...context, kind: 'catalog', phase: 'finished',
+    commandId: 101, statusReads: 1, ...operation,
+    result: { status: 'failed', reason: 'command-failed', remoteStatus: 1, busy: true, ...result } } } }))
+    .toThrow('Invalid native storage busy receipt');
+});
+
 it.each([
   { complete: true, status: '0', commands: [{ id: 202 }] },
   { complete: 'true', status: 0, commands: [{ id: 202 }] },

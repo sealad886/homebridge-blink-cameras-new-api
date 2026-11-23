@@ -10,7 +10,8 @@ import { FcmEventSource, type FcmEventSourceOptions } from './blink-api/fcm/sour
 import type { FcmNotification, FcmReceiverState, FcmScope, FirebaseConfig } from './blink-api/fcm/types';
 import { decodeBlinkMotionMessage, isBlinkMotionDevice, isNativeMotionDevice, type BlinkMotionDevice, type NativeMotionDevice } from './blink-api/motion-events';
 import { matchNativeClip, type NativeClipEligibility } from './blink-api/native-clip-matcher';
-import { NativeStorageOwner, type NativeStorageCatalog, type NativeStorageScope, type NativeStorageState, type NativeStoredMedia } from './blink-api/native-storage';
+import { NativeStorageOwner, type NativeStorageCatalog, type NativeStorageScope, type NativeStorageState,
+  type NativeStorageTerminal, type NativeStoredMedia } from './blink-api/native-storage';
 import { readOwnerOnlyJsonFile, readOwnerOnlyTextFile, writeOwnerOnlyJsonFile } from './blink-api/secure-json-file';
 import { NativeRecordingCoordinator, type NativeRecordingAcquisition, type NativeRecordingAcquisitionResult,
   type NativeRecordingObservation, type NativeRecordingState } from './native-recording-coordinator';
@@ -85,7 +86,7 @@ export interface NativeRecordingRuntimeState {
   remoteOperations?: BlinkRemoteOperationOwnership;
   consumed: string[];
   catalogStartedAt: Record<string, number>;
-  /** Conservative local backoff after definite provider refusal, not a vendor limit. */
+  /** Local cooldown after provider refusal or completed busy command. */
   refusedUntil: Record<string, number>;
   downloads: DownloadedAsset[];
 }
@@ -751,7 +752,7 @@ export class NativeRecordingRuntime {
       if (result.status === 'abandoned') return { status: 'abandoned' };
       if (result.status === 'unresolved') return unresolved(result.notDispatched);
       if (result.status !== 'ready') {
-        this.report(`catalog-${result.reason}`, this.observationContext(event, request.attempt));
+        this.report(`catalog-${result.busy ? 'command-busy' : result.reason}`, this.observationContext(event, request.attempt));
         if (result.reason === 'not-started') {
           // Definite local admission refusal allocated no provider operation.
           // Requeue within the existing attempt/age bound, without inventing a
@@ -762,10 +763,7 @@ export class NativeRecordingRuntime {
           });
           return { status: 'missing' };
         }
-        if (result.reason === 'refused') {
-          await this.deferRefusal(event.moduleId); return { status: 'missing' };
-        }
-        return { status: 'skipped' };
+        return this.handleAcquisitionFailure(event.moduleId, request.attempt, result);
       }
       this.report('catalog-ready', this.observationContext(event, request.attempt));
       this.catalogs.set(event.moduleId, { catalog: result.value, startedAt });
@@ -798,9 +796,8 @@ export class NativeRecordingRuntime {
     if (result.status === 'abandoned') return { status: 'abandoned' };
     if (result.status === 'unresolved') return unresolved(result.notDispatched);
     if (result.status !== 'ready') {
-      this.report(`download-${result.reason}`, this.observationContext(event, request.attempt));
-      if (result.reason === 'refused') await this.deferRefusal(event.moduleId);
-      return { status: result.reason === 'not-started' || result.reason === 'refused' ? 'missing' : 'skipped' };
+      this.report(`download-${result.busy ? 'command-busy' : result.reason}`, this.observationContext(event, request.attempt));
+      return this.handleAcquisitionFailure(event.moduleId, request.attempt, result);
     }
     const asset: DownloadedAsset = { logFlow: this.observationContext(event).flow, ...result.value, identity: match.identity, capturedAt: match.clip.capturedAt!, moduleId: event.moduleId,
       cameraId: event.cameraId, jobId: request.operationId, policyEpoch, cameraGeneration: request.cameraGeneration };
@@ -839,10 +836,17 @@ export class NativeRecordingRuntime {
     }
   }
 
-  private deferRefusal(moduleId: string): Promise<void> {
-    // Refusal and no-send races consume the same finite attempt budget as a
-    // terminal no-match; neither permits an unbounded hidden retry loop.
-    return this.commit(next => { next.refusedUntil[moduleId] = Date.now() + this.options.config.catalogRefreshMs; });
+  private async handleAcquisitionFailure(moduleId: string, attempt: number,
+    result: Extract<NativeStorageTerminal<never>, { status: 'failed' }>): Promise<NativeRecordingAcquisitionResult> {
+    if (result.reason === 'not-started') return { status: 'missing' };
+    if (result.reason !== 'refused' && !result.busy) return { status: 'skipped' };
+    // Only a definite provider conflict grows the cooldown. The scheduler
+    // still charges the attempt and ends the job at its original age limit.
+    const conflict = result.busy || result.httpStatus === 409;
+    const multiplier = conflict ? 2 ** Math.min(attempt - 1, 2) : 1;
+    const delay = this.options.config.catalogRefreshMs * multiplier;
+    await this.commit(next => { next.refusedUntil[moduleId] = Date.now() + delay; });
+    return { status: 'missing' };
   }
 
   private pumpDelivery(): void {

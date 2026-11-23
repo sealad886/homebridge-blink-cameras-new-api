@@ -22,6 +22,21 @@ retries. Reconcile motion conflicts against matching fresh device/network/type
 and requested enabled state. An explicit resolved/value result supports void
 operations without confusing success with missing reconciliation.
 
+Use a fresh Live View allocation only after a confirmed HTTP 409 refusal,
+with up to three retries after one, two and four seconds. Closing the viewer
+cancels the wait and prevents a fresh POST. Read a response already in flight
+so any late command ID can still be retired.
+
+Blink command status codes 307 and 520 identify a busy system or camera when
+the command completes with a nonzero status. The ordinary command path can
+retry after clearing the completed owner. An acknowledged live-view session
+uses its existing retirement path. Native storage releases the completed or
+refused owner and requeues acquisition under its existing attempt and age
+limits. An HTTP 409 refusal or terminal busy result sets the durable module
+cooldown to one, two or four times the configured catalog refresh interval,
+capped at four times. The mobile app's generic failure message supplies no
+retry classification.
+
 Ordinary command execution has a bounded local budget of at most 60 seconds.
 HomeKit callers wait at most 12 seconds. Pending expired mutations are not sent;
 started work may complete later and update confirmed state. No automatic POST

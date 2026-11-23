@@ -1889,6 +1889,81 @@ describe('native recording runtime composition', () => {
     expect(f.transport.postEmpty.mock.calls.filter(([route]) => route.path.endsWith('/manifest/request'))).toHaveLength(kind === 'clip' ? 1 : 2);
   });
 
+  it.each([
+    ['catalog', 409, [1, 2, 4, 4]],
+    ['clip', 409, [1, 2, 4, 4]],
+    ['catalog', 429, [1, 1]],
+  ] as const)('applies bounded cooldowns after repeated %s POST responses with HTTP %s', async (kind, status, cooldowns) => {
+    const f = await setup();
+    const send = f.transport.postEmpty.getMockImplementation()!;
+    const stage = (route: { path: string }) => route.path.endsWith('/manifest/request') === (kind === 'catalog');
+    const posts = () => f.transport.postEmpty.mock.calls.filter(([route]) => stage(route)).length;
+    const refused = new BlinkHttpError('Synthetic refusal', status, '', 'https://rest-u000.immedia-semi.com/api/v1/example', 'POST');
+    f.transport.postEmpty.mockImplementation(async (route, options) => {
+      if (stage(route) && posts() <= cooldowns.length) throw refused;
+      return send(route, options);
+    });
+
+    // A journal rename is readable before its directory sync returns. Wait for
+    // the full write before moving the fake clock across the local write budget.
+    const write = secureJson.writeOwnerOnlyJsonFile;
+    let settledAttempt = 0;
+    const writes = jest.spyOn(secureJson, 'writeOwnerOnlyJsonFile').mockImplementation(async (filename, value) => {
+      await write(filename, value);
+      const { core } = value as NativeRecordingRuntimeState;
+      if (!core?.operation && core?.queue[0]) settledAttempt = core.queue[0].attempts;
+    });
+    try {
+      await f.push();
+      await jest.advanceTimersByTimeAsync(60_000);
+      for (const [index, multiplier] of cooldowns.entries()) {
+        const attempt = index + 1;
+        await until(() => settledAttempt === attempt);
+        const saved = await f.state(), delay = multiplier * 60_000;
+        expect(posts()).toBe(attempt);
+        expect(saved.refusedUntil['20:30']).toBe(Date.now() + delay);
+        expect(saved.nativeByModule['20:30'].state.operation).toMatchObject({ phase: 'finished',
+          result: { status: 'failed', reason: 'refused', httpStatus: status } });
+        await jest.advanceTimersByTimeAsync(delay - 1);
+        expect(posts()).toBe(attempt);
+        expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(1);
+      }
+      await until(() => f.events.includes('offered'));
+      expect(posts()).toBe(cooldowns.length + 1);
+      expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    } finally {
+      writes.mockRestore();
+    }
+  });
+
+  it('backs off a completed busy clip command and acquires a later command after the cooldown', async () => {
+    const f = await setup();
+    const send = f.transport.postEmpty.getMockImplementation()!;
+    f.transport.postEmpty.mockImplementationOnce(send).mockImplementationOnce(async (route, options) => {
+      const accepted = await send(route, options);
+      f.transport.getJson.mockResolvedValueOnce({ complete: true, status: 1, status_code: 520 });
+      return accepted;
+    });
+
+    await f.push();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await until(async () => f.events.includes('download-command-busy') && !(await f.state()).core?.operation);
+    const saved = await f.state(), finished = saved.nativeByModule['20:30'].state.operation;
+    expect(finished).toMatchObject({ phase: 'finished', result: { status: 'failed', reason: 'command-failed', remoteStatus: 1, busy: true } });
+    expect(saved.refusedUntil['20:30']).toBe(Date.now() + 60_000);
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+    expect(f.transport.downloadMedia).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(59_999);
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    await until(() => f.events.includes('offered'));
+    expect(f.transport.postEmpty).toHaveBeenCalledTimes(3);
+    expect(f.transport.downloadMedia).toHaveBeenCalledTimes(1);
+    expect((await f.state()).nativeByModule['20:30'].state.operation?.commandId).not.toBe(finished?.commandId);
+  });
+
   it('cancels queued work when HomeKit permission is revoked and never replays it after re-enabling', async () => {
     const f = await setup(); await f.push();
     f.delegate.updateCameraActive(false);

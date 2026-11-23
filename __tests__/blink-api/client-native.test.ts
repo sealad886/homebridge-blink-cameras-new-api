@@ -1286,6 +1286,40 @@ describe('owned native storage SDK', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('retries a thumbnail only after the accepted capture completes with a camera-busy status', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ id: 101 }))
+      .mockResolvedValueOnce(json({ complete: false, status: 1, status_code: 520 }))
+      .mockResolvedValueOnce(json({ complete: true, status: 1, status_code: 520 }))
+      .mockResolvedValueOnce(json({ id: 102 }))
+      .mockResolvedValueOnce(json({ complete: true, status: 0 }))
+      .mockResolvedValueOnce(json({ account: { account_id: 10 }, networks: [],
+        cameras: [{ id: 40, network_id: 20, name: 'Camera', thumbnail: '/fresh.jpg' }], doorbells: [], owls: [] }));
+    const capture = f.api.requestCameraThumbnail(20, 40);
+    await jest.advanceTimersByTimeAsync(999);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(f.api.getRemoteOperationState().stateCommand).toMatchObject({ commandId: 101 });
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+    await jest.advanceTimersByTimeAsync(1);
+    await expect(capture).resolves.toMatchObject({ captureOutcome: 'completed', thumbnail: '/fresh.jpg' });
+  });
+
+  it('keeps dispatch proof for a busy Early Notification command without using refusal readback', async () => {
+    const f = fixture(), beforeChange = jest.fn(async () => undefined);
+    (fetch as jest.Mock).mockResolvedValueOnce(json({ camera: [{ early_notification: true, early_notification_compatible: true }] }))
+      .mockResolvedValueOnce(json({ id: 101 }))
+      .mockResolvedValueOnce(json({ complete: true, status: 1, status_code: 307 }))
+      .mockResolvedValueOnce(json({ camera: [{ early_notification: false, early_notification_compatible: true }] }));
+    await expect(f.api.setDeviceEarlyNotification('camera', 20, 40, 'catalina', false, { beforeChange }))
+      .rejects.toMatchObject({ name: 'BlinkCommandBusyError', dispatched: true });
+    expect(beforeChange).toHaveBeenCalledWith(true);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(f.api.getRemoteOperationState().stateCommand).toBeUndefined();
+  });
+
   it('keeps no-send proof for a thumbnail read after the capture POST was definitively refused', async () => {
     const f = fixture();
     (fetch as jest.Mock).mockResolvedValueOnce(json({}, 409)).mockRejectedValueOnce(new TypeError('fetch failed', {
@@ -1555,14 +1589,72 @@ describe('owned native storage SDK', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it.each([409, 429])('releases a definitively refused live view at HTTP %s without automatic replay', async status => {
+  it('releases a rate-limited live view without treating HTTP 429 as a command conflict', async () => {
     const f = fixture();
-    (fetch as jest.Mock).mockResolvedValue(json({}, status));
-    await expect(f.api.startCameraLiveview(20, 40)).rejects.toMatchObject({ status });
+    (fetch as jest.Mock).mockResolvedValue(json({}, 429));
+    await expect(f.api.startCameraLiveview(20, 40)).rejects.toMatchObject({ status: 429 });
     expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(1);
     await expect(f.api.withNativeStorageAdmission('next-event', async () => 'admitted', {}, scope)).resolves.toBe('admitted');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('backs off live-view POST conflicts with a new reservation for each attempt', async () => {
+    jest.useFakeTimers();
+    const f = fixture(), dispatchedAt: number[] = [];
+    (fetch as jest.Mock).mockImplementation(async () => {
+      expect(f.savedLive.at(-1)).toMatchObject({ phase: 'starting' });
+      return dispatchedAt.push(Date.now()) === 4 ? json({ command_id: 707 }) : json({}, 409);
+    });
+    const start = f.api.startCameraLiveview(20, 40);
+    await jest.advanceTimersByTimeAsync(6999);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+    await jest.advanceTimersByTimeAsync(1);
+    await expect(start).resolves.toMatchObject({ command_id: 707 });
+    expect(dispatchedAt.slice(1).map((at, index) => at - dispatchedAt[index])).toEqual([1000, 2000, 4000]);
+    const reservations = f.savedLive.filter(owner => owner?.phase === 'starting');
+    expect(new Set(reservations.map(owner => owner!.reservationId)).size).toBe(4);
+    expect(f.api.getRemoteOperationState().liveView).toMatchObject({ phase: 'active', commandId: 707 });
+  });
+
+  it('stops after three retries if Blink continues to refuse the live-view POST', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    (fetch as jest.Mock).mockImplementation(async () => json({}, 409));
+    const refused = expect(f.api.startCameraLiveview(20, 40)).rejects.toMatchObject({ status: 409, method: 'POST' });
+    await jest.advanceTimersByTimeAsync(7000);
+    await refused;
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+  });
+
+  it('ends live-view backoff when the viewer leaves or the next retry exceeds its deadline', async () => {
+    jest.useFakeTimers();
+    const f = fixture(), viewer = new globalThis.AbortController();
+    (fetch as jest.Mock).mockImplementation(async () => json({}, 409));
+    const cancelled = expect(f.api.startCameraLiveview(20, 40, undefined, undefined, { viewerSignal: viewer.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    await jest.advanceTimersByTimeAsync(1);
+    viewer.abort();
+    await cancelled;
+    const timedOut = expect(f.api.startOwlLiveview(20, 41, undefined, undefined, { deadline: Date.now() + 1200 }))
+      .rejects.toBeInstanceOf(OperationTimeoutError);
+    await jest.advanceTimersByTimeAsync(1200);
+    await timedOut;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+  });
+
+  it('retains the retry reservation if the live-view acknowledgement becomes ambiguous', async () => {
+    jest.useFakeTimers();
+    const f = fixture();
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 409)).mockResolvedValueOnce(json({}, 502));
+    const failed = expect(f.api.startDoorbellLiveview(20, 42)).rejects.toMatchObject({ status: 502 });
+    await jest.advanceTimersByTimeAsync(7000);
+    await failed;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(f.api.getRemoteOperationState().liveView).toMatchObject({ phase: 'unresolved', deviceId: 42 });
   });
 
   it.each([408, 500])('keeps an unacknowledged live view fenced at HTTP %s', async status => {
