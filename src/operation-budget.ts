@@ -21,9 +21,11 @@ export class OperationTimeoutError extends Error {
 }
 
 /** A caller's abort reason carries no dispatch or provider-refusal proof for this operation. */
-function budgetAbortReason(signal: globalThis.AbortSignal): unknown {
-  const reason = signal.reason ?? new OperationTimeoutError();
-  if (!(reason instanceof Error) && !(reason instanceof globalThis.DOMException)) return reason;
+function budgetAbortReason(signal: globalThis.AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (!(reason instanceof Error) && !(reason instanceof globalThis.DOMException)) {
+    return Object.assign(new Error('Blink operation was cancelled.', { cause: reason }), { name: 'AbortError' });
+  }
   const local = reason instanceof OperationTimeoutError ? new OperationTimeoutError()
     : reason instanceof globalThis.DOMException ? new globalThis.DOMException(reason.message, reason.name)
       : new Error(reason.message);
