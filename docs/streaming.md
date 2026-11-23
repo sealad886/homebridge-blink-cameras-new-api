@@ -3,8 +3,8 @@
 [Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
 
 
-Last reviewed: 16 November 2026. Exact package qualification and physical runtime
-acceptance are tracked separately in the release evidence.
+Last reviewed: 23 November 2026. See the [release guide](RELEASE.md) for package
+qualification and physical runtime acceptance.
 
 This guide owns external codec requirements, transport, quality and talkback.
 See [configuration](configuration.md) for saving settings and
@@ -22,8 +22,9 @@ prints an actionable startup warning and disables live video, snapshots and
 HomeKit recording before camera media requests. Arm/disarm, public motion and
 settings continue to work. After installing a compatible build, update the
 Homebridge service PATH or `ffmpegPath` and restart the Blink child bridge.
-An unconfigured bridge does not probe FFmpeg. Host development
-checks used FFmpeg 9.0.2; version declarations do not establish every build or OS.
+An unconfigured bridge does not probe FFmpeg. In `2.0.1-alpha.0`, the plugin can
+reuse a successful capability check while the FFmpeg executable is unchanged.
+Host development checks used FFmpeg 9.0.2.
 
 The package retains a hash-verified protection/launch helper for Linux x64/arm64,
 macOS x64/arm64 and Windows x64. It links libsrtp, not FFmpeg. Missing, unsupported
@@ -37,8 +38,9 @@ sockets; only the protection helper receives SRTP keys through private IPC. Chil
 diagnostics are bounded and never copied directly into user logs. Keys and media
 still exist in process memory; this does not isolate a compromised Homebridge host.
 
-Audio supports mono Opus at 16/24 kHz, PCMA and PCMU at 8 kHz. Opus uses
-10/20/40/60 ms packets and a 48 kHz RTP clock. AAC-ELD is removed from the offer;
+For a first live-view test, keep **Current quality (Home chooses)** and the
+default Opus codec. Audio supports mono Opus at 16/24 kHz, PCMA and PCMU at 8 kHz.
+Opus uses 10/20/40/60 ms packets and a 48 kHz RTP clock. AAC-ELD is removed from the offer;
 a controller retaining an old selection is refused before vendor allocation.
 The normal HAP configuration update advertises changed capabilities while
 preserving accessory identities. Do not reset pairing to recover a refused codec.

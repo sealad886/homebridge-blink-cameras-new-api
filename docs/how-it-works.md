@@ -2,10 +2,7 @@
 
 [Documentation home](README.md) · [Illustrated setup](../output/articles/set-up-blink-cameras-in-apple-home/index.md) · [Recording checklist](configuration.md#recording-setup-checklist)
 
-Last reviewed: 16 November 2026 · Source edition: `2.0.0-alpha.0` (prerelease).
-
-This guide describes the 2.0 prerelease source. The published 1.1.0 used a
-packaged codec backend; its acceptance does not qualify this changed backend.
+Last reviewed: 23 November 2026 · Source edition: [`2.0.1-alpha.0`](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v2.0.1-alpha.0) (prerelease).
 
 Homebridge connects your Blink account to Apple Home. This plugin discovers
 devices, publishes HomeKit accessories, and translates controls and media.
@@ -114,6 +111,12 @@ remain on Blink storage; keep important footage using the relevant export
 controls. Recoverable faults may use bounded media repair, including disclosed
 replacement silence when original audio cannot be recovered. Home's audio-off
 permission remains respected.
+
+The alpha improves recovery of interrupted clip indexing and cleanup of old
+temporary media. Recording preparation also tracks source audio timing through
+missing-audio and silence recovery. If a fresh clip still fails, use the
+[acquisition and preparation diagnostics](troubleshooting.md#motion-arrives-but-no-home-recording-appears)
+to identify where it stopped.
 
 ## Know the current limits
 
