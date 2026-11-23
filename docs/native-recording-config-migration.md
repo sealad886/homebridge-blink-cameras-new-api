@@ -154,8 +154,8 @@ installed FFmpeg meeting the [current requirements](streaming.md#packaged-codec-
 Unknown fields, other platforms, credentials and current camera
 identities are preserved. It does not enable HSV automatically.
 
-The unpublished 2.0.0-alpha.1 preparation removes optional raw diagnostic file
-capture. Any existing configuration containing `debugStreamPath`, including a
+The 2.0 series removes optional raw diagnostic file capture. Any existing
+configuration containing `debugStreamPath`, including a
 blank value, requires the explicit preview/`--apply` conversion below before
 restart, or manual removal on Windows. Installation never runs this conversion.
 The converter removes only the setting; it does not scan, move, delete or change

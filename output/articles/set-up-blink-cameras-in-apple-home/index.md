@@ -7,14 +7,11 @@
 Connect Blink to Apple Home, verify live viewing, and test a native recording
 in the camera's saved timeline.
 
-**Source edition:** `2.0.0-alpha.0` (prerelease) · **Last reviewed:** 16 November 2026
+**Source edition:** [`2.0.1-alpha.0`](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v2.0.1-alpha.0) (prerelease) · **Last reviewed:** 23 November 2026
 
-Select the intended published version when installing; an unversioned installation
-does not select a prerelease automatically. Screenshots use the actual UI with
-synthetic data, not a connected account or camera acceptance test.
-This guide describes the 2.0 prerelease source; it does not establish publication
-or physical acceptance of that version. The published 1.1.0 used a different
-packaged codec backend.
+`2.0.0` is the stable release. Select `2.0.1-alpha.0` explicitly if you want to
+test its recording recovery and diagnostic improvements. The screenshots show
+the plugin's settings with synthetic camera data.
 
 > **Before you begin:** HomeKit recording is off by default. It imports completed
 > native Blink USB clips after download and preparation. A motion notification or
@@ -158,29 +155,15 @@ before tuning it.
 
 ## 6. Test one fresh recording
 
-Complete the [recording checklist](../../../docs/configuration.md#recording-setup-checklist)
-for each camera:
+Follow the [recording checklist](../../../docs/configuration.md#recording-setup-checklist)
+for the camera you selected. In Apple Home, set **Stream & Allow Recording** for
+the Home or Away modes you want to test. Start with **Any Motion** and check the
+active home hub, iCloud+ allowance, and audio setting before triggering motion.
 
-1. In Blink, keep the system armed, camera motion enabled and native Local Storage
-   working.
-2. Confirm the camera's **HomeKit recording** selection was saved and the child
-   bridge restarted.
-3. In Home, open the camera's **Settings → Recording Options**. Check **When Home**
-   and **When Away** separately. Choose **Stream & Allow Recording** for every
-   mode where you want recordings. **Stream** alone permits viewing.
-4. Under **More Options**, choose **Any Motion** for this first test. Specific
-   motion types and Activity Zones can exclude an event. Choose **Record Audio**
-   separately; audio off is valid video-only recording.
-5. Check that the Home hub is connected and the iCloud+ plan supports your camera
-   count. Trigger fresh motion, then confirm its finished native clip plays in
-   Blink.
-6. Allow download and preparation, then open the saved event under that same
-   camera in Home. Let playback advance beyond the thumbnail; check the beginning,
-   middle and end.
-
-Home chooses Home/Away mode from household location information. An Away-only
-recording choice will not record while Home considers someone at home. Notification
-settings and **Motion Detected** sensor visibility do not grant recording permission.
+Play the finished event in Blink **Local Storage** first. After download and
+preparation, open the saved event under the same camera in Home. Play past the
+thumbnail and check the beginning, middle and end. Test again after enabling any
+specific motion filters or Activity Zones.
 
 ## 7. Review and keep important footage
 
@@ -195,10 +178,9 @@ Recoverable media faults may use one bounded salvage pass. If usable video is
 recovered with replacement silence, logs identify degraded audio; Home audio-off
 permission still produces no audio track.
 
-Saved Home playback was observed for two tested cameras with the 1.1.0 codec
-backend. The changed 2.0 external backend needs fresh physical acceptance.
-Verify your own installation after setup or upgrade; prior evidence does not
-qualify this backend, every camera, or every clip.
+Release checks exercised the packaged plugin with external FFmpeg and synthetic
+clips. Verify saved playback and retention on your own cameras after setup or
+upgrade.
 
 ## If a step does not work
 
