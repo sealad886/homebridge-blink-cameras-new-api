@@ -4,6 +4,11 @@ export function isBlinkVideoQuality(value: unknown): value is BlinkVideoQuality 
   return value === 'saver' || value === 'standard' || value === 'best';
 }
 
+/** Blink Android 61 vendor status codes for system busy and camera busy. */
+export function isBlinkCommandBusy(statusCode: unknown): boolean {
+  return statusCode === 307 || statusCode === 520;
+}
+
 /** Android camera config signals.temp is Fahrenheit; HAP CurrentTemperature is Celsius. */
 export function validateCameraTemperature(value: unknown): number | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { budgetedDelay, checkRequestBudget, withinRequestBudget, isRemoteOperationLeaseActive,
   REMOTE_OPERATION_LEASE_MS, type RequestOptions } from '../operation-budget';
-import { requireRemoteId } from './domain-validation';
+import { isBlinkCommandBusy, requireRemoteId } from './domain-validation';
 import { isBlinkPostRefusal } from './http';
 
 /** APK 61.0 MediaApi uses the API base; CommandApi uses the REST root. */
@@ -34,7 +34,7 @@ export interface NativeStorageCatalog {
 export interface NativeStorageClipRequest { manifestId: number; clip: NativeStorageClip; }
 export type NativeStorageFailure = 'command-failed' | 'invalid-result' | 'invalid-media' | 'not-started' | 'refused' | 'discarded';
 export type NativeStorageTerminal<T> = { status: 'ready'; value: T } |
-  { status: 'failed'; reason: NativeStorageFailure; remoteStatus?: number; httpStatus?: number };
+  { status: 'failed'; reason: NativeStorageFailure; remoteStatus?: number; httpStatus?: number; busy?: true };
 export type NativeStorageResult<T> = NativeStorageTerminal<T> |
   { status: 'abandoned' } |
   { status: 'unresolved'; reason: string; operation?: NativeStorageOperation;
@@ -334,7 +334,10 @@ export class NativeStorageOwner {
         return this.unresolved('invalid-command-status');
       }
       if (raw.complete) {
-        if (raw.status !== 0) return this.finish({ status: 'failed', reason: 'command-failed', remoteStatus: raw.status }, generation);
+        if (raw.status !== 0) {
+          return this.finish({ status: 'failed', reason: 'command-failed', remoteStatus: raw.status,
+            ...(isBlinkCommandBusy(raw.status_code) ? { busy: true } : {}) }, generation);
+        }
         let resultCommandId: number | undefined;
         if (operation.kind === 'catalog') {
           if (!Array.isArray(raw.commands) || raw.commands.length === 0) return this.unresolved('missing-result-command');
@@ -445,6 +448,11 @@ export class NativeStorageOwner {
       if (op.result !== undefined) throw new Error('Abandonment is not provider completion');
       this.boundedJson(this.state, this.maxJsonBytes + 32768);
       return;
+    }
+    const busy = op.result && typeof op.result === 'object' && 'busy' in op.result ? op.result.busy : undefined;
+    if (busy !== undefined && (busy !== true || op.phase !== 'finished' || op.result?.status !== 'failed' ||
+        op.result.reason !== 'command-failed' || !Number.isSafeInteger(op.result.remoteStatus) || op.result.remoteStatus === 0 || !op.statusReads)) {
+      throw new Error('Invalid native storage busy receipt');
     }
     const notStarted = op.phase === 'finished' && op.result?.status === 'failed' && op.result.reason === 'not-started';
     const refused = op.phase === 'finished' && op.result?.status === 'failed' && op.result.reason === 'refused';

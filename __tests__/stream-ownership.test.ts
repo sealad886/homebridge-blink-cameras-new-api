@@ -112,7 +112,8 @@ describe('generation-owned streaming', () => {
     const sources = inventory.cameras.map(camera => fixture({}, () => admission.acquire(camera.key), { networkId: 1, deviceId: Number(camera.id) }));
     try {
       await Promise.all(sources.map(async f => { await f.prepare(); expect(await f.start()).toBeUndefined(); }));
-      sources.forEach((f, index) => expect(f.api.startCameraLiveview).toHaveBeenCalledWith(1, index + 1));
+      sources.forEach((f, index) => expect(f.api.startCameraLiveview).toHaveBeenCalledWith(1, index + 1,
+        undefined, undefined, { viewerSignal: expect.any(globalThis.AbortSignal) }));
       await Promise.all(sources.map(f => f.stop())); await flush();
       for (let id = 1; id <= 6; id++) admission.acquire(cameraKey('camera', id)).release();
     } finally { await Promise.all(sources.map(f => f.cleanup())); }
@@ -291,6 +292,19 @@ describe('generation-owned streaming', () => {
       await f.prepare(); await f.start(); await flush(); expect(f.api.getCommandStatus).toHaveBeenCalledTimes(1);
       await jest.advanceTimersByTimeAsync(1100); expect(f.api.getCommandStatus).toHaveBeenCalledTimes(2);
       await f.stop(); await jest.advanceTimersByTimeAsync(1100); expect(f.api.getCommandStatus).toHaveBeenCalledTimes(2);
+    } finally { await f.cleanup(); }
+  });
+
+  it('retires an acknowledged live-view session on a terminal camera-busy status', async () => {
+    const f = fixture(); let finishPoll!: (value: { complete: boolean; status: number; status_code: number }) => void;
+    f.api.startCameraLiveview.mockResolvedValue({ server: immis, command_id: 7 });
+    f.api.getCommandStatus.mockReturnValueOnce(new Promise(resolve => { finishPoll = resolve; }));
+    try {
+      await f.prepare(); await f.start(); await flush();
+      finishPoll({ complete: true, status: 1, status_code: 520 }); await flush();
+      expect(f.transports[0].transport.retire).toHaveBeenCalledTimes(1);
+      expect(f.api.completeCommand).toHaveBeenCalledWith(1, 7, expect.any(Object));
+      expect(f.api.startCameraLiveview).toHaveBeenCalledTimes(1);
     } finally { await f.cleanup(); }
   });
 

@@ -1,4 +1,4 @@
-import { isBlinkVideoQuality, requireRemoteId, supportsEarlyNotificationControl, validateCameraTemperature,
+import { isBlinkCommandBusy, isBlinkVideoQuality, requireRemoteId, supportsEarlyNotificationControl, validateCameraTemperature,
   validateEarlyNotificationState, validateHomescreen, validateVideoQualityState } from './domain-validation';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -101,6 +101,14 @@ export class BlinkOperationNotStartedError extends Error {
   }
 }
 
+class BlinkCommandBusyError extends Error {
+  readonly dispatched = true;
+  constructor() {
+    super('Blink command completed with a system or camera busy error.');
+    this.name = 'BlinkCommandBusyError';
+  }
+}
+
 /** Checks after work cannot prove that callback work was unsent; acknowledged mutations keep their dispatch proof. */
 function afterWorkFailure(error: unknown, mutationAcknowledged: boolean): unknown {
   if (!(error instanceof Error) || (error as Error & { dispatched?: boolean }).dispatched !== false) return error;
@@ -171,7 +179,9 @@ interface CommandAdmission {
   scope?: NativeStorageScope;
   networkId?: number;
   commandId?: number;
+  retrySignal?: globalThis.AbortSignal;
 }
+type LiveViewRequestOptions = RequestOptions & { viewerSignal?: globalThis.AbortSignal };
 interface CommandRequestOptions extends RequestOptions {
   generation: number;
   mutationAcknowledged: boolean;
@@ -298,11 +308,13 @@ export class BlinkApi {
             }
           }
           // Preserve mutation dispatch proof through status and public readback failures.
-          if (execution.mutationAcknowledged) throw afterWorkFailure(error, true);
-          if (!isBlinkPostRefusal(error) || error.status !== 409) throw error;
+          const completedBusy = error instanceof BlinkCommandBusyError;
+          if (execution.mutationAcknowledged && !completedBusy) throw afterWorkFailure(error, true);
+          if (!completedBusy && (!isBlinkPostRefusal(error) || error.status !== 409)) throw error;
           let reconciled: ConflictResolution<T> | undefined;
           try {
-            reconciled = conflictResolution ? await withinRequestBudget(conflictResolution(execution), execution) : undefined;
+            // Refusal readback can prove a change came from another actor only for an unaccepted command.
+            reconciled = !completedBusy && conflictResolution ? await withinRequestBudget(conflictResolution(execution), execution) : undefined;
             checkCompletion();
           } catch {
             // A known refusal survives readback failure only while this continuation still owns its scope.
@@ -316,8 +328,11 @@ export class BlinkApi {
           }
           const delay = retryDelays[attempt];
           if (delay === undefined) throw error;
-          this.log.warn(`[${label}] State conflict; retry in ${delay}ms (attempt ${attempt + 1}/${retryDelays.length}).`);
-          await budgetedDelay(delay, execution);
+          this.log.warn(`[${label}] Blink command conflict; retry in ${delay}ms (attempt ${attempt + 1}/${retryDelays.length}).`);
+          const retrySignal = execution.signal && admission.retrySignal
+            ? globalThis.AbortSignal.any([execution.signal, admission.retrySignal]) : execution.signal ?? admission.retrySignal;
+          await budgetedDelay(delay, { ...execution, signal: retrySignal });
+          execution.mutationAcknowledged = false;
         }
       }
     });
@@ -680,7 +695,8 @@ export class BlinkApi {
         current();
         const status = await this.readOwnedStateCommand(options);
         if (status !== undefined) {
-          if (status !== 0) throw new Error(`Blink command failed with status ${status}.`);
+          if (status.busy) throw new BlinkCommandBusyError();
+          if (status.value !== 0) throw new Error(`Blink command failed with status ${status.value}.`);
           return response;
         }
         await budgetedDelay(1000, options);
@@ -698,7 +714,7 @@ export class BlinkApi {
   }
 
   /** One durable, no-retry status read. A local timeout is never remote completion. */
-  private async readOwnedStateCommand(options: RequestOptions): Promise<number | undefined> {
+  private async readOwnedStateCommand(options: RequestOptions): Promise<{ value: number; busy: boolean } | undefined> {
     const owner = this.stateCommandOwner;
     const generation = this.writerGeneration;
     if (!owner?.commandId || owner.statusReads >= 60) throw new Error('No remaining owned command status budget.');
@@ -707,7 +723,7 @@ export class BlinkApi {
     authority();
     await this.persistStateCommandOwner({ ...owner, statusReads: owner.statusReads + 1 }, owner.reservationId, generation);
     checkRequestBudget(options);
-    const status = await withinRequestBudget(this.sharedRootHttp.get<{ complete?: unknown; status?: unknown }>(
+    const status = await withinRequestBudget(this.sharedRootHttp.get<{ complete?: unknown; status?: unknown; status_code?: unknown }>(
       `accounts/${owner.accountId}/networks/${owner.networkId}/commands/${owner.commandId}`,
       { ...options, retry: false, responseKind: 'command', maxResponseBytes: 256 * 1024, beforeDispatch: authority }), options);
     authority();
@@ -720,7 +736,7 @@ export class BlinkApi {
     }
     checkRequestBudget(options);
     authority(true);
-    return status.status;
+    return { value: status.status, busy: status.status !== 0 && isBlinkCommandBusy(status.status_code) };
   }
 
   /** Explicit recovery performs at most one GET for a known ordinary command; it never resends its POST. */
@@ -735,8 +751,8 @@ export class BlinkApi {
     let settled!: () => void;
     this.stateCommandReconciliation = new Promise<void>(resolve => { settled = resolve; });
     try {
-      const remoteStatus = await this.readOwnedStateCommand({ ...options,
-        deadline: Math.min(options.deadline ?? Infinity, Date.now() + 10_000) });
+      const remoteStatus = (await this.readOwnedStateCommand({ ...options,
+        deadline: Math.min(options.deadline ?? Infinity, Date.now() + 10_000) }))?.value;
       return { commandId: owner.commandId, confirmed: remoteStatus !== undefined,
         ...(remoteStatus !== undefined ? { remoteStatus } : {}) };
     } catch { return { commandId: owner.commandId, confirmed: false }; }
@@ -1753,7 +1769,7 @@ export class BlinkApi {
       const device = devices.find(device => device.id === deviceId && device.network_id === networkId);
       if (!device) throw new Error('Blink camera unavailable after capture.');
       return { ...response, captureOutcome, thumbnail: device.thumbnail };
-    }, [], undefined, options);
+    }, [1000, 2000, 4000], undefined, options);
   }
 
   /**
@@ -1795,7 +1811,7 @@ export class BlinkApi {
     cameraId: number,
     intent = 'liveview',
     motionEventStartTime?: string | null,
-    options: RequestOptions = {},
+    options: LiveViewRequestOptions = {},
   ): Promise<BlinkLiveVideoResponse> {
     return this.startOwnedLiveView('camera', networkId, cameraId, intent, motionEventStartTime, options);
   }
@@ -1810,7 +1826,7 @@ export class BlinkApi {
     owlId: number,
     intent = 'liveview',
     motionEventStartTime?: string | null,
-    options: RequestOptions = {},
+    options: LiveViewRequestOptions = {},
   ): Promise<BlinkLiveVideoResponse> {
     return this.startOwnedLiveView('owl', networkId, owlId, intent, motionEventStartTime, options);
   }
@@ -1825,15 +1841,16 @@ export class BlinkApi {
     doorbellId: number,
     intent = 'liveview',
     motionEventStartTime?: string | null,
-    options: RequestOptions = {},
+    options: LiveViewRequestOptions = {},
   ): Promise<BlinkLiveVideoResponse> {
     return this.startOwnedLiveView('doorbell', networkId, doorbellId, intent, motionEventStartTime, options);
   }
 
   private startOwnedLiveView(kind: BlinkCameraKind, networkId: number, deviceId: number, intent: string,
-    motionEventStartTime: string | null | undefined, options: RequestOptions): Promise<BlinkLiveVideoResponse> {
+    motionEventStartTime: string | null | undefined, { viewerSignal, ...options }: LiveViewRequestOptions): Promise<BlinkLiveVideoResponse> {
     requireRemoteId(networkId); requireRemoteId(deviceId);
     return this.queueStateCommand('LiveView', async execution => {
+      checkRequestBudget({ signal: viewerSignal });
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       execution.beforeDispatch();
       const owner: BlinkLiveViewOwnership = { reservationId: randomUUID(), accountId, networkId, deviceId, kind,
@@ -1856,7 +1873,11 @@ export class BlinkApi {
         dispatched = true;
         const response = await this.sharedHttp.post<BlinkLiveVideoResponse>(
           `${version}/accounts/${accountId}/networks/${networkId}/${segment}/${deviceId}/liveview`,
-          { intent, motion_event_start_time: motionEventStartTime ?? null }, [], { ...execution, retry: false, beforeDispatch: current });
+          { intent, motion_event_start_time: motionEventStartTime ?? null }, [409], { ...execution, retry: false, beforeDispatch: () => {
+            // Keep reading a dispatched allocation so a cancelled viewer can retire it.
+            checkRequestBudget({ signal: viewerSignal });
+            current();
+          } });
         acknowledged = execution.mutationAcknowledged = true;
         commandId = requireRemoteId(response.command_id ?? response.id);
         current();
@@ -1870,7 +1891,7 @@ export class BlinkApi {
           owner.reservationId, generation);
         throw error;
       }
-    }, [], undefined, options, { kind: 'liveview' });
+    }, [1000, 2000, 4000], undefined, options, { kind: 'liveview', retrySignal: viewerSignal });
   }
 
   /**

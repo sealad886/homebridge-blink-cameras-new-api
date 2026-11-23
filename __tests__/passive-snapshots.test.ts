@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { HAP, SnapshotRequest } from 'homebridge';
 import { BlinkCameraSource } from '../src/accessories/camera-source';
 import type { BlinkApi } from '../src/blink-api';
+import { BlinkHttpError } from '../src/blink-api/http';
 import { createHap } from './helpers/homebridge';
 type Response = globalThis.Response;
 
@@ -35,6 +36,15 @@ describe('native recording snapshot policy', () => {
     await Promise.all([source.refreshSnapshotCache(), source.refreshSnapshotCache()]);
     expect(capture).toHaveBeenCalledTimes(1);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a status read conflict after an accepted manual capture', async () => {
+    globalThis.fetch = jest.fn();
+    const { source, capture } = fixture();
+    const conflict = new BlinkHttpError('Status read was refused', 409, '', url, 'GET');
+    capture.mockRejectedValueOnce(conflict);
+    await expect(source.refreshSnapshotCache()).rejects.toBe(conflict);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('queues one manual capture after an in-flight passive read', async () => {

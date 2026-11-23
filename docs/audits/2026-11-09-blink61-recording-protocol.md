@@ -84,6 +84,31 @@ The Java/native live-view path still owns a Walnut `Player` whose stop wrapper c
 
 Evidence: `...Player.java` stop wrapper; `...BlinkWalnutLiveViewSessionManager.java` stopLiveView; `...WalnutSignalling.java` finish path; `...CommandApi.java:39–40`. This limitation is deliberate; no live session was started to investigate it.
 
+### Follow-up — Live View error handling and busy codes
+
+The shipped Android resources describe vendor codes `307` as system busy and
+`520` as camera busy. An earlier thumbnail status read independently returned
+`complete=true`, `status=1` and `status_code=520`. The `e409` resource describes
+a Sync Module update failure. HTTP 409 is a separate protocol field. The generic
+“Operation failed, Contact Support” resource also exists and gives no evidence
+that a particular Live View or storage request conflicted.
+
+`LiveViewRepository.startLiveView` delegates allocation once. `LiveViewV2Fragment`
+shows polling errors or a mapped Live View failure in an OK-only dialog. Its
+acknowledgement path navigates back or calls `stopLiveView(FinishedReason.ERROR)`.
+`BlinkCloudErrorMessage.errorToMessage` maps both structured HTTP errors and
+`PollingCompletedException` codes through its localization path. The displayed
+message alone cannot establish which stage failed.
+This pass established no automatic replay at those call sites and no link between
+the generic message and the reported recording outage.
+
+REA 6.10.1 evidence for the pinned base APK:
+`ev_c15ce4a5bc1201e374073c3d4372a95727fd8b58eab892c72e82fdd3e84b68a8`
+(package), `ev_b6920086c94d3ada38b6ee34695651ca6ffa286ea70790dd789bb78504e4fc44`
+(allocation wrapper) and `ev_89b587b4158dd702cadf718b18861a10f590a1f86a0006ecf52ea47e96ae9a9b`
+(error localization). Android resources and the fragment were independently
+inspected from the same APK with Android Build Tools and JADX.
+
 ## Redesign consequences
 
 - Motion delivery and video acquisition need separate owners. Parse authenticated, account/network/device-matched native motion promptly; a delayed catalog workflow must not be presented as an immediate completed-video event.

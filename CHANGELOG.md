@@ -7,6 +7,21 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.1-alpha.1] - 2026-11-23
+
+### Fixed
+- Retry a refused Live View start with bounded backoff. Closing the viewer
+  cancels pending retries and leaves any in-flight start available for cleanup.
+- Back off Local Storage catalog and clip acquisition after a confirmed
+  conflict. Keep accepted commands fenced until their outcome is known or
+  their existing lease expires.
+- Recognize completed system-busy and camera-busy commands. Keep thumbnail
+  fallback limited to a refused capture rather than a failed status read.
+
+Upgrade the existing child bridge using the exact registry version. This alpha
+retains its configuration and receipt format. Physical acceptance still needs a
+fresh Local Storage clip and HomeKit playback across a Live View session.
+
 ## [2.0.1-alpha.0] - 2026-11-22
 
 ### Fixed
