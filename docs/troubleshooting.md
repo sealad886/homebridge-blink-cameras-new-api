@@ -3,7 +3,7 @@
 [Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
 
 
-Last reviewed: 15 November 2026.
+Last reviewed: 23 November 2026.
 
 Start with the checks below. For safe collection/redaction use the
 [diagnostic specification](debug_logging_spec.md) and the
@@ -70,12 +70,11 @@ credentials, response bodies, and resolved IP addresses are excluded.
 ## Motion arrives but no Home recording appears
 
 First complete the [recording setup checklist](configuration.md#recording-setup-checklist)
-for the affected camera. In Apple Home, open its tile, then **Settings → Recording
-Options**. Check **When Home** and **When Away** separately: the current mode must
-allow **Stream & Allow Recording**. A streaming-only mode, working live view or
-enabled activity notifications does not grant recording permission. For the
-first test, choose **Any Motion** under **More Options** and review any Activity
-Zones; event filters can exclude the motion you are testing.
+for the affected camera. In Home, open the camera's **Recording Options** and
+check that the active **When Home** or **When Away** mode is set to **Stream &
+Allow Recording**. If the camera recorded before you set a specific motion filter
+or Activity Zone, switch to **Any Motion** and test a fresh event. Check
+**Status and Notifications** separately if saved clips play but alerts are missing.
 
 Compare one fresh event across the Blink app's playable **Local Storage** clip,
 the plugin logs and that camera's saved Home timeline. Record timestamps and
@@ -86,8 +85,9 @@ clip must exist before this plugin can offer it to Home.
   recording policy is unavailable or inactive. Check its Home recording mode,
   camera availability and connected home hub; the message alone does not identify
   which setting or readiness condition blocked it.
-- When `catalog-no-eligible-clip` accompanies `acquisition-missing`, the newly
-  fetched catalog yielded no eligible row. `catalog-rows=0` means the response
+- In `2.0.1-alpha.0`, when `catalog-no-eligible-clip` accompanies
+  `acquisition-missing`, the newly fetched catalog yielded no eligible row.
+  `catalog-rows=0` means the response
   was empty. Otherwise, each row contributes to its first exclusion count for
   network, camera name, metadata, event time, or prior consumption. This message
   uses the same temporary flow label as the surrounding events and omits the
@@ -120,7 +120,8 @@ Preparation failures use fixed phase and error codes. `deadline=exceeded` with
 `phase=admission` means the job ran out of time waiting for a local conversion
 slot. The other phases identify FFmpeg setup, input inspection, conversion
 output, result validation, or private file cleanup and handoff. Preserve the
-phase, error code if present, and event time when reporting a failure.
+phase, error code if present, plugin version and event time when reporting a
+failure. Acquisition expiry alone leaves the cause open.
 
 Successful download, preparation or a Home transport acknowledgment still needs
 confirmation by playing the saved clip in Home. Apple's hub decides whether to

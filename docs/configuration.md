@@ -3,7 +3,7 @@
 [Documentation home](README.md) · [How it works](how-it-works.md) · [Troubleshooting](troubleshooting.md)
 
 
-Last reviewed: 15 November 2026.
+Last reviewed: 23 November 2026.
 
 The [UI schema](../config.schema.json) owns selectable settings and validation.
 This guide owns operator explanations and examples; advanced runtime-only fields
@@ -25,10 +25,9 @@ further checks. Testing does not save Homebridge configuration.
 
 Information buttons beside field labels provide help on hover, keyboard focus
 or touch; Escape dismisses it. Unsaved changes have a contrasting warning banner.
-The local clip-cache control displays MiB; JSON retains integer bytes. The temporary
-1.1.0 setup notice links the recording checklist. Dismiss hides it for the current
-settings window only and never changes the configuration or enables Save. It is
-scheduled for removal in the first maintenance release after 1.1.0.
+The local clip-cache control displays MiB; JSON retains integer bytes. The
+HomeKit Secure Video setup notice links the recording checklist. **Dismiss**
+hides it for the current settings window only.
 
 The editor separates five tasks:
 
@@ -208,37 +207,42 @@ Completed Blink clips are offered through their respective existing Home camera
 accessories after download and preparation. No replay accessory or live-feed
 replacement is needed. Existing accessory identities and pairing are retained.
 
-Complete these steps for each camera you want to record:
+For a first recording test, start with one camera. The [published `2.0.1-alpha.0` prerelease](https://github.com/sealad886/homebridge-blink-cameras-new-api/releases/tag/v2.0.1-alpha.0)
+adds recording recovery and diagnostics. If you upgrade from `2.0.0`, keep your
+current configuration and pairing. The settings and defaults are the same.
 
-1. **Blink:** Arm its system, enable camera motion detection, and trigger a new
-   event. Confirm the finished clip plays in the Blink app's **Local Storage**
-   list for its Sync Module.
-2. **Plugin:** Enable the camera's **HomeKit recording** option, Save, then
-   restart the Blink child bridge. Exposing its **Motion Detected** sensor is
-   optional and does not grant Home recording permission.
-3. **Apple Home:** Open that camera's tile, then **Settings → Recording Options**.
-   Review **When Home** and **When Away** individually. Choose **Stream & Allow
-   Recording** in every mode where you want recordings. **Stream** alone permits
-   viewing without recording. Home switches modes using household members'
-   locations, so an Away-only recording choice will not record while someone is
-   considered home.
-4. **Event selection:** Under **More Options**, review what each enabled mode
-   records. Use **Any Motion** for initial verification; specific motion types
-   and Activity Zones can filter an event out. Select **Record Audio** if wanted;
-   audio permission is separate from video recording permission.
-5. **Apple services:** Keep a compatible home hub connected and use an eligible
-   iCloud+ plan with enough camera capacity. See [Apple's HSV requirements](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud)
-   and [camera recording controls](https://support.apple.com/guide/home/hmeb54708fc8/mac).
-6. **Verify:** Trigger fresh motion after setup. Check the new playable Blink
-   Local clip, then the saved clip in the same camera's Home timeline. Motion
-   notifications, a live picture, and successful transport logs do not establish
-   saved Home playback. Open the saved entry and let playback advance beyond its
-   thumbnail. The event duration is determined by Blink’s finished clip, not
-   `motionTimeout`; Home’s timeline position can reflect delivery delay. See [missing-recording checks](troubleshooting.md#motion-arrives-but-no-home-recording-appears).
+1. In Blink, arm the system and enable motion detection for the camera. Trigger
+   a new event and play the finished clip from **Local Storage** in the Blink app.
+2. In **Homebridge → Plugins → Settings → HomeKit recording**, select that camera,
+   click **Save**, and restart the Blink child bridge. The bridge needs a compatible
+   [external FFmpeg installation](streaming.md#packaged-codec-requirements).
+3. In Apple Home, open **⋯ → Home Settings → Home Hubs & Bridges** and confirm the
+   home has an active [compatible hub](https://support.apple.com/en-us/102557).
+   Check your [iCloud+ camera allowance](https://support.apple.com/en-ie/guide/icloud/mme054c72692/icloud)
+   against the number of cameras that record in that home.
+4. In Apple Home on iPhone, open the camera tile, tap the gear, then open
+   **Recording Options**. Set **When Home** and **When Away** individually to
+   **Stream & Allow Recording** wherever you want clips. **Stream** only allows
+   live viewing. Home uses household members' locations to choose the active mode.
+5. Under **More Options**, choose **Any Motion** for your first test. After a clip
+   plays, you can choose specific motion types and add **Activity Zones** to limit
+   which events Home keeps. Test again after changing a filter. If recordings stop,
+   return to **Any Motion** and repeat the test. See [Apple's camera settings guide](https://support.apple.com/en-mide/guide/iphone/iph7bc5df9d9/27/ios/27).
+6. Trigger fresh motion. Play the resulting Blink **Local Storage** clip, then
+   open the saved event in the same camera's Home timeline and let the video
+   advance. At default settings, the first ordinary lookup is eligible 60 seconds
+   after motion. Check the timeline near delivery time as well as capture time. See the
+   [missing-recording checks](troubleshooting.md#motion-arrives-but-no-home-recording-appears)
+   if the saved video is missing or stalls.
 
-Home's **Status and Notifications** controls alert delivery separately. Enabling
-alerts does not enable recording. These settings apply per camera; check each
-camera rather than assuming a change applies to the whole Blink system.
+**Audio.** Video-only recording works with **Record Audio** off. To include camera
+sound, enable both **Camera audio in HomeKit** (`enableAudio`) under **Live viewing
+& sound** in the plugin and **Record Audio** in Home.
+
+**Alerts.** Use **Status and Notifications → Activity Notifications** on the
+camera to manage alerts. The plugin's optional **Motion Detected** sensor is
+independent of both Home's recording permission and its notification filters.
+Verify each camera's recording and alert settings individually.
 
 ### Clip matching and scheduling
 
@@ -295,14 +299,13 @@ value. Existing originals and uncertain command outcomes remain protected.
 Unconfirmed settings retain ordinary clip delay; warnings identify the camera
 and a bounded failure category without including provider payloads or credentials.
 
-Installation migrates old `disableEarlyNotification: true` to `off`, explicit
-`false` to `unmanaged`, and missing overrides to inheritance, then removes the
-legacy keys from the saved file. Explicit canonical choices win. The conversion
+The explicit configuration converter maps old `disableEarlyNotification: true`
+to `off`, explicit `false` to `unmanaged`, and missing overrides to inheritance,
+then removes the legacy keys. Explicit canonical choices win. The conversion
 backs up original bytes before replacement and is a no-op once complete; runtime
 and settings code accept canonical values only. Opening the editor or testing
-connections does not migrate, stage or save config. For installation targeting,
-explicit preview/apply commands for legacy settings, and
-rollback considerations, see [configuration migration](native-recording-config-migration.md).
+connections does not migrate, stage or save config. See [configuration migration](native-recording-config-migration.md)
+for preview, apply and rollback instructions.
 
 Immediate eligibility keeps the same FIFO, missing-clip retries, command admission
 and module catalog cooldown. A notification does not identify a USB clip or prove
