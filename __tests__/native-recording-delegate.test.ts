@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { HDSProtocolError, HDSProtocolSpecificErrorReason } from 'hap-nodejs';
 import type { CameraRecordingConfiguration, RecordingPacket } from 'homebridge';
 import { NativeRecordingDelegate, type NativeRecordingDeliveryMetadata } from '../src/accessories/native-recording-delegate';
 import { NativeRecordingPreparationError, type NativeRecordingSource, type PreparedNativeRecording, type prepareNativeRecording } from '../src/accessories/native-recording-preparation';
@@ -31,7 +32,7 @@ describe('finite native recording delegate', () => {
       const value = bundle(selected, audio); prepared.push(value); return value;
     });
     const readyMotion = jest.fn(), deliveryOutcome = jest.fn(), policyChanged = jest.fn();
-    const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() },
+    const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() }, HDSProtocolError,
       prepare, readyMotion, deliveryOutcome, policyChanged, offerTimeoutMs: 1000, acknowledgementTimeoutMs: 1000, ...overrides });
     delegates.push(delegate);
     const enable = () => { delegate.updateRecordingConfiguration(configuration()); delegate.updateRecordingActive(true); };
@@ -77,7 +78,8 @@ describe('finite native recording delegate', () => {
         const stream = f.delegate.handleRecordingStreamRequest(50);
         if (phase === 'streaming') expect((await stream.next()).value?.data.toString()).toBe('initialization');
         current = false;
-        await expect(stream.next()).rejects.toThrow();
+        if (phase === 'ready') await expect(stream.next()).rejects.toMatchObject({ reason: HDSProtocolSpecificErrorReason.NOT_ALLOWED });
+        else await expect(stream.next()).rejects.toThrow();
         expect(f.readyMotion).toHaveBeenLastCalledWith(false);
       }
       expect(value.disposed).toBe(true);
@@ -100,10 +102,20 @@ describe('finite native recording delegate', () => {
     expect(f.prepared[0].disposed).toBe(true);
   });
 
-  it('reports rejected Home requests even when no clip was offered', async () => {
+  it('reports a rejected Home request and cancels the HDS transfer when no clip was offered', async () => {
     const f = setup(); f.enable();
-    await expect(f.delegate.handleRecordingStreamRequest(1).next()).rejects.toThrow('No permitted prepared');
+    const request = f.delegate.handleRecordingStreamRequest(1).next();
+    await expect(request).rejects.toBeInstanceOf(HDSProtocolError);
+    await expect(request).rejects.toMatchObject({ reason: HDSProtocolSpecificErrorReason.CANCELLED });
     expect(f.deliveryOutcome).toHaveBeenCalledWith({ metadata: undefined, outcome: 'request-rejected' });
+  });
+
+  it('denies Home requests while recording is disabled', async () => {
+    const f = setup();
+    await expect(f.delegate.handleRecordingStreamRequest(1).next()).rejects.toMatchObject({
+      reason: HDSProtocolSpecificErrorReason.NOT_ALLOWED,
+    });
+    expect(f.readyMotion).not.toHaveBeenCalled();
   });
 
   it('streams initialization then paced finite fragments with exactly one final marker; ACK means transport acknowledgement', async () => {
@@ -148,7 +160,7 @@ describe('finite native recording delegate', () => {
     const stream = f.delegate.handleRecordingStreamRequest(1); await stream.next();
     f.delegate.acknowledgeStream(1);
     expect(f.prepared[0].disposed).toBe(false);
-    await expect(f.delegate.handleRecordingStreamRequest(2).next()).rejects.toThrow('No permitted prepared');
+    await expect(f.delegate.handleRecordingStreamRequest(2).next()).rejects.toMatchObject({ reason: HDSProtocolSpecificErrorReason.BUSY });
     f.delegate.closeRecordingStream(1, 0);
     expect((await stream.next()).done).toBe(true);
   });

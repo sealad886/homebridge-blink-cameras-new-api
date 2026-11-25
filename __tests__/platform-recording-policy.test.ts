@@ -251,7 +251,9 @@ describe('platform native recording and ordinary command ownership', () => {
     const log = (platform as unknown as { log: ReturnType<typeof createLogger> }).log;
     const report = createRuntime.mock.calls[0][0].report;
     log.warn.mockClear(); log.debug.mockClear();
-    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'DECODE' } });
+    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'DECODE', outputFailure: 'video-decoder' } });
+    expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=DECODE output-failure=video-decoder');
+    report('delivery-not-offered-preparation-failed', { preparation: { phase: 'output', workerCode: 'DECODE', outputFailure: 'private-codec-output' } } as never);
     expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=output worker=DECODE');
     report('delivery-not-offered-preparation-failed', { preparation: { phase: 'admission', deadlineExceeded: true } });
     expect(log.warn).toHaveBeenLastCalledWith('[NativeRecording] delivery-not-offered-preparation-failed phase=admission deadline=exceeded');

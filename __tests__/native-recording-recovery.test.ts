@@ -43,7 +43,7 @@ function failures(codes: Array<RecordingFailureCode | undefined>, memory: Native
     const index = modes.length; modes.push(audioOutput); late.push(() => collect(Buffer.alloc(16, 65)));
     try {
       collect(Buffer.alloc(16, 65)); await hook?.(index, context.signal);
-      if (codes[index]) throw new ExternalRecordingError(codes[index]!);
+      if (codes[index]) throw new ExternalRecordingError(codes[index]!, codes[index] === 'DECODE' ? 'exit' : undefined);
       throw new Error('private arbitrary external failure');
     } finally { active--; }
   });
@@ -55,7 +55,7 @@ it('admits at most one sequential silence fallback and erases partial output wit
   const file = await input(), original = await fs.readFile(file.filePath), memory = new NativeRecordingMemoryBudget();
   const mock = failures(['AUDIO_DISCONTINUITY', 'DECODE'], memory), admit = jest.fn(work => work());
   await expect(prepareNativeRecording(file, selected(), true, new globalThis.AbortController().signal, { memory, admit }))
-    .rejects.toMatchObject({ diagnostic: { phase: 'output', workerCode: 'DECODE', salvageAttempted: true } });
+    .rejects.toMatchObject({ diagnostic: { phase: 'output', workerCode: 'DECODE', outputFailure: 'exit', salvageAttempted: true } });
   expect(mock.modes).toEqual(['source', 'generated-silence']); expect(admit).toHaveBeenCalledTimes(1); expect(mock.active()).toBe(0);
   expect(memory.bytes).toBe(0); expect(await fs.readFile(file.filePath)).toEqual(original); await cleaned();
 });

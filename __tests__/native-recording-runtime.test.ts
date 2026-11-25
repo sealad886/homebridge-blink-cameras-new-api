@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import process from 'node:process';
 import { setImmediate as realImmediate } from 'node:timers/promises';
+import { HDSProtocolError, HDSProtocolSpecificErrorReason } from 'hap-nodejs';
 import type { CameraRecordingConfiguration } from 'homebridge';
 import { BlinkApi, BlinkEarlyNotificationNotConfirmedError, BlinkOperationNotStartedError, type BlinkEarlyNotificationState, type BlinkRemoteOperationOwnership } from '../src/blink-api/client';
 import type { BlinkAuth } from '../src/blink-api/auth';
@@ -77,14 +78,14 @@ describe('native recording runtime composition', () => {
       expect((await fs.readFile(input.filePath)).length).toBe(input.expectedBytes);
       return prepared(selected, audioActive);
     });
-    const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() },
+    const delegate = new NativeRecordingDelegate({ preparation: { admit: work => work() }, HDSProtocolError,
       prepare: overrides.prepare ?? prepare, readyMotion,
       policyChanged: policy => runtime?.policyChanged('camera:40', policy),
       deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome, 'camera:40', event) });
     delegate.updateRecordingConfiguration(configuration()); delegate.updateRecordingActive(true);
     const cornerReady = jest.fn();
     const cornerDelegate = overrides.secondCamera ? new NativeRecordingDelegate({
-      preparation: { admit: work => work() }, prepare, readyMotion: cornerReady,
+      preparation: { admit: work => work() }, HDSProtocolError, prepare, readyMotion: cornerReady,
       policyChanged: policy => runtime?.policyChanged('camera:41', policy), deliveryOutcome: event => runtime?.deliveryOutcome(event.outcome, 'camera:41', event),
     }) : undefined;
     cornerDelegate?.updateRecordingConfiguration(configuration()); cornerDelegate?.updateRecordingActive(true);
@@ -1638,7 +1639,7 @@ describe('native recording runtime composition', () => {
     expect(f.transport.downloadMedia).not.toHaveBeenCalled();
     expect(f.prepare).not.toHaveBeenCalled(); expect(f.readyMotion).not.toHaveBeenCalledWith(true);
     expect((await f.state()).consumed).toEqual([]);
-    await expect(f.delegate.handleRecordingStreamRequest(72).next()).rejects.toThrow('No permitted prepared');
+    await expect(f.delegate.handleRecordingStreamRequest(72).next()).rejects.toMatchObject({ reason: HDSProtocolSpecificErrorReason.CANCELLED });
   });
 
   it('reports only counts and an opaque flow for a refreshed catalog with no eligible clip', async () => {
@@ -1748,7 +1749,7 @@ describe('native recording runtime composition', () => {
     await f.runtime.stop();
     expect(f.delegate.policy).toEqual({ ...prior, epoch: prior.epoch + 1 });
     expect(f.delegate.available).toBe(true); expect(f.delegate.snapshot().bytes).toBe(0);
-    await expect(f.delegate.handleRecordingStreamRequest(1).next()).rejects.toThrow('No permitted prepared');
+    await expect(f.delegate.handleRecordingStreamRequest(1).next()).rejects.toMatchObject({ reason: HDSProtocolSpecificErrorReason.CANCELLED });
     const nextScope = { ...scope, clientId: 12 };
     f.client.getCachedIdentity.mockReturnValue({ ...nextScope, sharedTier: 'u001' });
     const replacement = await f.rebind({ scope: nextScope });
