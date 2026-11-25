@@ -8,8 +8,8 @@ import type { CameraRecordingConfiguration } from 'homebridge';
 import { loadPackagedProtectionWorker } from './protection-worker-artifact';
 import { probeExternalFfmpeg, resolveExternalFfmpegPath, ExternalFfmpegSetupError } from './external-ffmpeg';
 import { convertExternalRecording, inspectExternalRecording, validateExternalRecording, ExternalRecordingError,
-  isRecordingFailureCode, type RecordingFailureCode } from './external-recording';
-export { isRecordingFailureCode } from './external-recording';
+  isRecordingFailureCode, isRecordingOutputFailure, type RecordingFailureCode, type RecordingOutputFailure } from './external-recording';
+export { isRecordingFailureCode, isRecordingOutputFailure } from './external-recording';
 
 const PREPARATION_PHASES = ['admission', 'configuration', 'input', 'output', 'closure', 'validation'] as const;
 type PreparationPhase = typeof PREPARATION_PHASES[number];
@@ -20,6 +20,7 @@ export function isNativeRecordingPreparationPhase(value: unknown): value is Prep
 export interface NativeRecordingPreparationDiagnostic {
   phase: PreparationPhase;
   workerCode?: RecordingFailureCode;
+  outputFailure?: RecordingOutputFailure;
   salvageAttempted?: true;
   deadlineExceeded?: true;
 }
@@ -33,6 +34,8 @@ export class NativeRecordingPreparationError extends Error {
   constructor(diagnostic: NativeRecordingPreparationDiagnostic) {
     if (!isNativeRecordingPreparationPhase(diagnostic.phase) ||
         (diagnostic.workerCode !== undefined && !isRecordingFailureCode(diagnostic.workerCode)) ||
+        (diagnostic.outputFailure !== undefined && (diagnostic.phase !== 'output' || diagnostic.workerCode !== 'DECODE' ||
+          !isRecordingOutputFailure(diagnostic.outputFailure))) ||
         (diagnostic.salvageAttempted !== undefined && diagnostic.salvageAttempted !== true) ||
         (diagnostic.deadlineExceeded !== undefined && diagnostic.deadlineExceeded !== true)) {
       throw new Error('Invalid recording preparation diagnostic');
@@ -40,6 +43,7 @@ export class NativeRecordingPreparationError extends Error {
     super(`Recording conversion failed during ${diagnostic.phase}`);
     this.diagnostic = Object.freeze({ phase: diagnostic.phase,
       ...(diagnostic.workerCode ? { workerCode: diagnostic.workerCode } : {}),
+      ...(diagnostic.outputFailure ? { outputFailure: diagnostic.outputFailure } : {}),
       ...(diagnostic.salvageAttempted ? { salvageAttempted: true } : {}),
       ...(diagnostic.deadlineExceeded ? { deadlineExceeded: true } : {}) });
   }
@@ -362,7 +366,9 @@ export async function prepareNativeRecording(source: NativeRecordingSource, conf
             if (owner.aborted) throw new Error('Recording conversion cancelled');
             if (outputFailure) throw outputFailure;
             if (error instanceof Error && /Recording (?:output exhausted|source)/.test(error.message)) throw error;
-            throw new NativeRecordingPreparationError({ phase: 'output', workerCode: error instanceof ExternalRecordingError ? error.code : 'EXTERNAL_FFMPEG',
+            const codecError = error instanceof ExternalRecordingError ? error : undefined;
+            throw new NativeRecordingPreparationError({ phase: 'output', workerCode: codecError?.code ?? 'EXTERNAL_FFMPEG',
+              ...(codecError?.outputFailure ? { outputFailure: codecError.outputFailure } : {}),
               ...(attempt === 1 ? { salvageAttempted: true as const } : {}) });
           }
           owner.throwIfAborted();

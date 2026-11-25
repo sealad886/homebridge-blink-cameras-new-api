@@ -7,6 +7,17 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.1-alpha.2] - 2026-11-25
+
+### Fixed
+- Reject oversized video packets promptly during HomeKit recording preparation.
+- Return HomeKit Data Stream denial reasons when a recording request arrives
+  without an available recording or while access is denied.
+
+### Changed
+- Report why FFmpeg conversion rejected a clip using fixed diagnostic labels.
+  These labels keep raw FFmpeg output and clip contents out of the log.
+
 ## [2.0.1-alpha.1] - 2026-11-23
 
 ### Fixed

@@ -13,8 +13,15 @@ export type RecordingFailureCode = typeof codes[number];
 export function isRecordingFailureCode(value: unknown): value is RecordingFailureCode {
   return typeof value === 'string' && (codes as readonly string[]).includes(value);
 }
+const outputFailures = ['interrupted', 'video-decoder', 'diagnostics', 'exit', 'empty-output'] as const;
+export type RecordingOutputFailure = typeof outputFailures[number];
+export function isRecordingOutputFailure(value: unknown): value is RecordingOutputFailure {
+  return outputFailures.some(failure => failure === value);
+}
 export class ExternalRecordingError extends Error {
-  constructor(readonly code: RecordingFailureCode) { super('External recording conversion failed'); }
+  constructor(readonly code: RecordingFailureCode, readonly outputFailure?: RecordingOutputFailure) {
+    super('External recording conversion failed');
+  }
 }
 export interface ExternalRecordingContext {
   ffmpegPath: string; protectionPath: string; signal: globalThis.AbortSignal; deadline: number;
@@ -301,7 +308,8 @@ function audioConversionDiagnostic(line: string): 'audio' | 'related' | undefine
 function observeMetadataErrors(stream: Readable, expected: () => number, videoStreamIndex: number, classifyAudio = false) {
   if (!Number.isInteger(videoStreamIndex) || videoStreamIndex < 0 || videoStreamIndex > 7) failure('MEDIA');
   const submitted = new RegExp(`^\\[vist#0:${videoStreamIndex}/h264 @ (?:0x)?[0-9a-fA-F]+\\](?: \\[dec:h264 @ (?:0x)?[0-9a-fA-F]+\\])? Error submitting packet to decoder: Invalid data found when processing input$`);
-  let tail = '', invalid = false, otherFailure = false, audioFailure = false, noFrame = 0, submission = 0, missing = 0, total = 0;
+  let tail = '', invalid = false, otherFailure = false, audioFailure = false, videoDecoderFailure = false;
+  let noFrame = 0, submission = 0, missing = 0, total = 0;
   stream.on('data', (bytes: Buffer) => {
     if ((total += bytes.length) > MAX_METADATA_DIAGNOSTIC_BYTES) { invalid = otherFailure = true; return; }
     const all = (tail + bytes.toString('utf8')).split('\n'); tail = all.pop()!;
@@ -317,6 +325,7 @@ function observeMetadataErrors(stream: Readable, expected: () => number, videoSt
       else if (submitted.test(line)) submission++;
       else {
         invalid = true;
+        videoDecoderFailure ||= /^\[h264 @ (?:0x)?[0-9a-fA-F]+\] /.test(line);
         const category = classifyAudio ? audioConversionDiagnostic(line) : undefined;
         if (category === 'audio') audioFailure = true; else if (category !== 'related') otherFailure = true;
       }
@@ -324,7 +333,8 @@ function observeMetadataErrors(stream: Readable, expected: () => number, videoSt
     if (tail.length > MAX_METADATA_DIAGNOSTIC_LINE_BYTES) invalid = otherFailure = true;
   });
   const metadataValid = () => !tail && missing <= expected() * 2 && noFrame <= expected() && submission <= expected();
-  return { valid: () => !invalid && metadataValid(), audioFailed: () => audioFailure && !otherFailure && metadataValid() };
+  return { valid: () => !invalid && metadataValid(), audioFailed: () => audioFailure && !otherFailure && metadataValid(),
+    videoDecoderFailed: () => videoDecoderFailure || noFrame > expected() || submission > expected() };
 }
 
 const MAX_AUDIO_OBSERVATION_BYTES = 2 * 1024 * 1024;
@@ -401,8 +411,10 @@ export async function inspectExternalRecording(context: ExternalRecordingContext
   let numerator = 0n, denominator = 0n, header = false, dimensions = false;
   try {
     const source = await sourceVideoInventory(context, input), videoStreamIndex = source.streamIndex;
+    // Publish each packet's size before its bytes. The payload queue cannot
+    // drain an oversized packet before the metadata parser rejects it.
     const child = launch({ ...context, signal: controller.signal }, [...inputArguments, '-map', '0:v:0', '-an', '-c:v', 'copy',
-      '-bsf:v', 'h264_mp4toannexb', '-f', 'tee', '[f=data:flush_packets=1]pipe:1|[f=framecrc:flush_packets=1]pipe:3'], [input.fd, 'pipe', 'pipe', 'pipe']);
+      '-bsf:v', 'h264_mp4toannexb', '-f', 'tee', '[f=framecrc:flush_packets=1]pipe:3|[f=data:flush_packets=1]pipe:1'], [input.fd, 'pipe', 'pipe', 'pipe']);
     const okay = observeMetadataErrors(readable(child.stderr), () => metadata, videoStreamIndex);
     const closed = closure = new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(null)); });
     const raw = async () => { for await (const value of readable(child.stdout)) {
@@ -540,7 +552,12 @@ export async function convertExternalRecording(context: ExternalRecordingContext
     const code = await closed; context.signal.throwIfAborted();
     if (Date.now() >= context.deadline) failure('TIME_LIMIT');
     if (failed) failure('OUTPUT_LIMIT');
-    if (code !== 0 || !okay.valid() || !bytes) failure(code !== null && okay.audioFailed() ? 'AUDIO_DISCONTINUITY' : 'DECODE');
+    if (code !== 0 || !okay.valid() || !bytes) {
+      if (code !== null && okay.audioFailed()) failure('AUDIO_DISCONTINUITY');
+      const reason = code === null ? 'interrupted' : okay.videoDecoderFailed() ? 'video-decoder'
+        : !okay.valid() ? 'diagnostics' : code !== 0 ? 'exit' : 'empty-output';
+      throw new ExternalRecordingError('DECODE', reason);
+    }
   } finally { controller.abort(); await closure; context.signal.removeEventListener('abort', abort); await input.close(); }
 }
 

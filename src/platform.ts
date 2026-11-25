@@ -51,7 +51,7 @@ import { sampleBlinkConnection } from './blink-api/connection-diagnostics';
 import { NativeRecordingRuntime, type NativeRuntimeDevice } from './native-recording-runtime';
 import { nativeRecordingDevicePolicy, resolveNativeRecordingConfig, type NativeRecordingConfigInput,
   type NativeRecordingDeviceOverride, type NativeRecordingPolicyConfig } from './native-recording-config';
-import { NativeRecordingMemoryBudget, isNativeRecordingPreparationPhase, isRecordingFailureCode,
+import { NativeRecordingMemoryBudget, isNativeRecordingPreparationPhase, isRecordingFailureCode, isRecordingOutputFailure,
   type NativeRecordingPreparationOptions } from './accessories/native-recording-preparation';
 import type { NativeRecordingPolicy, NativeRecordingDeliveryEvent } from './accessories/native-recording-delegate';
 import { BLINK_FIREBASE_CLIENT, BLINK_NOTIFICATION_APP_VERSION } from './blink-api/fcm-config';
@@ -596,6 +596,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
         const flow = context?.flow && /^flow-[a-f0-9]{10}$/.test(context.flow) ? context.flow : undefined;
         const phase = context?.preparation?.phase;
         const workerCode = context?.preparation?.workerCode;
+        const outputFailure = context?.preparation?.outputFailure;
         const eligibility = context?.clipEligibility;
         const eligibilityDetails = eligibility ? ([
           ['catalog-rows', eligibility.rows], ['wrong-network', eligibility.wrongNetwork], ['other-name', eligibility.otherName],
@@ -612,6 +613,7 @@ export class BlinkCamerasPlatform implements DynamicPlatformPlugin {
           ...eligibilityDetails,
           isNativeRecordingPreparationPhase(phase) && `phase=${phase}`,
           isRecordingFailureCode(workerCode) && `worker=${workerCode}`,
+          phase === 'output' && workerCode === 'DECODE' && isRecordingOutputFailure(outputFailure) && `output-failure=${outputFailure}`,
           context?.preparation?.deadlineExceeded === true && 'deadline=exceeded',
           context?.preparation?.salvageAttempted === true && 'recovery=exhausted',
           validRecovery && `conversion-attempts=${recovery!.attempts}`, repairs && `recovery=${repairs}`,

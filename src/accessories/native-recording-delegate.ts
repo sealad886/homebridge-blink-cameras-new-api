@@ -1,6 +1,7 @@
 /** HAP0.14 finite-file recording delivery, independent of Blink acquisition. */
 import { Buffer } from 'node:buffer';
-import type { CameraRecordingConfiguration, CameraRecordingDelegate, HDSProtocolSpecificErrorReason, RecordingPacket } from 'homebridge';
+import { HDSProtocolSpecificErrorReason, type CameraRecordingConfiguration, type CameraRecordingDelegate,
+  type HAP, type RecordingPacket } from 'homebridge';
 import { prepareNativeRecording, snapshotNativeRecordingConfiguration, NativeRecordingPreparationError,
   type NativeRecordingPreparationDiagnostic, type NativeRecordingPreparationOptions, type NativeRecordingRecovery,
   type NativeRecordingSource, type PreparedNativeRecording } from './native-recording-preparation';
@@ -28,6 +29,7 @@ export type NativeRecordingDeliveryOutcome = 'request-rejected' | 'requested' | 
 export interface NativeRecordingDeliveryEvent { metadata?: NativeRecordingDeliveryMetadata; outcome: NativeRecordingDeliveryOutcome; }
 export interface NativeRecordingDelegateOptions {
   preparation: NativeRecordingPreparationOptions;
+  HDSProtocolError: HAP['HDSProtocolError'];
   /** Internal HSV trigger only. Do not feed this signal back into provider acquisition. */
   readyMotion(active: boolean): void;
   policyChanged?(policy: NativeRecordingPolicy): void | Promise<void>;
@@ -192,11 +194,20 @@ export class NativeRecordingDelegate implements CameraRecordingDelegate {
   async *handleRecordingStreamRequest(streamId: number): AsyncGenerator<RecordingPacket> {
     const offer = this.ready;
     const current = offer && this.isCurrent(offer.current);
-    if (!this.policy.allowed || !offer || !current || this.stream || offer.epoch !== this.epoch
+    const policyAllowed = this.policy.allowed;
+    const busy = !!this.stream;
+    if (!policyAllowed || !offer || !current || busy || offer.epoch !== this.epoch
       || offer.revision !== this.configurationRevision || offer.prepared.disposed) {
       if (offer && !current) this.cancelPending();
       this.report(offer, 'request-rejected');
-      throw new Error('No permitted prepared native recording is available');
+      const { HDSProtocolError } = this.options;
+      let reason = HDSProtocolSpecificErrorReason.CANCELLED;
+      if (!policyAllowed || (offer && !current)) reason = HDSProtocolSpecificErrorReason.NOT_ALLOWED;
+      else if (busy) reason = HDSProtocolSpecificErrorReason.BUSY;
+      const error = new HDSProtocolError(reason);
+      // HAP 0.14's transpiled Error loses its prototype, but its close handler checks instanceof.
+      Object.setPrototypeOf(error, HDSProtocolError.prototype);
+      throw error;
     }
     this.ready = undefined;
     if (this.offerTimer) globalThis.clearTimeout(this.offerTimer);

@@ -1,11 +1,25 @@
 import * as hap from 'hap-nodejs';
 import { Buffer } from 'node:buffer';
+import { EventEmitter } from 'node:events';
 import type { PlatformAccessory } from 'homebridge';
 import { CameraAccessory } from '../src/accessories/camera';
 import { DoorbellAccessory } from '../src/accessories/doorbell';
 import { snapshotNativeRecordingConfiguration } from '../src/accessories/native-recording-preparation';
 import { resolveStreamingConfig } from '../src/accessories/camera-source';
 import type { BlinkCamerasPlatform } from '../src/platform';
+
+function selectedConfiguration(rate: number): string {
+  const integer = (value: number, bytes = 4) => {
+    const data = Buffer.alloc(bytes);
+    if (bytes === 8) data.writeBigUInt64LE(BigInt(value)); else data.writeUIntLE(value, 0, bytes);
+    return data;
+  };
+  const container = hap.encode(1, integer(4000), 2, integer(1, 8), 3, hap.encode(1, 0, 2, hap.encode(1, integer(4000))));
+  const video = hap.encode(1, 0, 2, hap.encode(1, 0, 2, 0, 3, integer(500), 4, integer(1000)),
+    3, hap.encode(1, integer(1280, 2), 2, integer(720, 2), 3, 15));
+  const audio = hap.encode(1, 0, 2, hap.encode(1, 1, 2, 0, 3, rate, 4, integer(32)));
+  return hap.encode(1, container, 2, video, 3, audio).toString('base64');
+}
 
 describe('native recording HomeKit assembly', () => {
   function setup(exposeMotionDetected: boolean, homeKitSecureVideo: boolean, kind: 'camera' | 'doorbell' = 'camera', enableAudio = true) {
@@ -41,12 +55,40 @@ describe('native recording HomeKit assembly', () => {
       f.handler.triggerMotion(1000);
       expect(publicMotion.getCharacteristic(hap.Characteristic.MotionDetected).value).toBe(true);
       expect(internalMotion.getCharacteristic(hap.Characteristic.MotionDetected).value).toBe(false);
-      await expect(recording.handleRecordingStreamRequest(1).next()).rejects.toThrow('No permitted prepared');
+      await expect(recording.handleRecordingStreamRequest(1).next()).rejects.toMatchObject({
+        reason: hap.HDSProtocolSpecificErrorReason.NOT_ALLOWED,
+      });
       expect(f.apiClient.enableCameraMotion).not.toHaveBeenCalled();
       expect(f.apiClient.disableCameraMotion).not.toHaveBeenCalled();
       await recording.stop();
       jest.advanceTimersByTime(1000);
     } finally { jest.useRealTimers(); }
+  });
+
+  it('sends a cancelled HDS close after a valid open without an offered clip', async () => {
+    const registration = jest.spyOn(hap.DataStreamManagement.prototype, 'onRequestMessage');
+    const f = setup(true, true);
+    try {
+      const recording = f.accessory.getService(hap.Service.CameraRecordingManagement)!;
+      await recording.getCharacteristic(hap.Characteristic.SelectedCameraRecordingConfiguration)
+        .handleSetRequest(selectedConfiguration(hap.AudioRecordingSamplerate.KHZ_16));
+      await recording.getCharacteristic(hap.Characteristic.Active).handleSetRequest(hap.Characteristic.Active.ACTIVE);
+      const open = registration.mock.calls.find(([protocol, topic]) => protocol === 'dataSend' && topic === 'open')![2];
+      const connection = Object.assign(new EventEmitter(), {
+        sendResponse: jest.fn(), sendEvent: jest.fn(),
+        addProtocolHandler: jest.fn(), removeProtocolHandler: jest.fn(), isConsideredClosed: () => false,
+      });
+      open(connection as unknown as hap.DataStreamConnection, 2, { streamId: 1, target: 'controller', type: 'ipcamera.recording' });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(connection.sendResponse).toHaveBeenCalledWith('dataSend', 'open', 2, hap.HDSStatus.SUCCESS, { status: hap.HDSStatus.SUCCESS });
+      expect(connection.sendEvent).toHaveBeenCalledTimes(1);
+      expect(connection.sendEvent).toHaveBeenCalledWith('dataSend', 'close', {
+        streamId: 1, reason: hap.HDSProtocolSpecificErrorReason.CANCELLED,
+      });
+    } finally {
+      registration.mockRestore();
+      await f.handler.shutdown();
+    }
   });
 
   it('permits HSV without public motion exposure, preserving the separate writable motion switch', async () => {
@@ -128,18 +170,9 @@ describe('native recording HomeKit assembly', () => {
     const rates = Array.from(hap.decode(codec[2])[3]);
     expect(rates).toEqual([hap.AudioRecordingSamplerate.KHZ_16, hap.AudioRecordingSamplerate.KHZ_24]);
     const selected = jest.spyOn(delegate, 'updateRecordingConfiguration');
-    const integer = (value: number, bytes = 4) => {
-      const data = Buffer.alloc(bytes);
-      if (bytes === 8) data.writeBigUInt64LE(BigInt(value)); else data.writeUIntLE(value, 0, bytes);
-      return data;
-    };
     for (const rate of rates) {
-      const container = hap.encode(1, integer(4000), 2, integer(1, 8), 3, hap.encode(1, 0, 2, hap.encode(1, integer(4000))));
-      const video = hap.encode(1, 0, 2, hap.encode(1, 0, 2, 0, 3, integer(500), 4, integer(1000)),
-        3, hap.encode(1, integer(1280, 2), 2, integer(720, 2), 3, 15));
-      const audio = hap.encode(1, 0, 2, hap.encode(1, 1, 2, 0, 3, rate, 4, integer(32)));
       await recording.getCharacteristic(hap.Characteristic.SelectedCameraRecordingConfiguration)
-        .handleSetRequest(hap.encode(1, container, 2, video, 3, audio).toString('base64'));
+        .handleSetRequest(selectedConfiguration(rate));
       const configuration = selected.mock.calls.at(-1)![0]!;
       expect(configuration.audioCodec.samplerate).toBe(rate);
       expect(() => snapshotNativeRecordingConfiguration(configuration)).not.toThrow();

@@ -187,6 +187,7 @@ export abstract class MotionDeviceBase<TDevice extends MotionDevice> {
       recordingMotion.setHiddenService(true);
       this.nativeRecording = new NativeRecordingDelegate({
         preparation: this.platform.getNativeRecordingPreparation(),
+        HDSProtocolError: this.platform.api.hap.HDSProtocolError,
         readyMotion: active => recordingMotion.getCharacteristic(this.platform.Characteristic.MotionDetected).updateValue(active),
         policyChanged: policy => this.platform.nativeRecordingPolicyChanged(cameraSourceType, device.id, policy),
         deliveryOutcome: event => this.platform.nativeRecordingDeliveryOutcome(event.outcome, `${cameraSourceType}:${device.id}`, event),

@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
 import type { CameraRecordingConfiguration } from 'homebridge';
 import { convertExternalRecording, inspectExternalRecording, validateExternalRecording,
   type RecordingAudioOutput } from '../src/accessories/external-recording';
-import { resolveExternalFfmpegPath, spawnExternalFfmpeg } from '../src/accessories/external-ffmpeg';
+import { EXTERNAL_FFMPEG_LIMITS, resolveExternalFfmpegPath, spawnExternalFfmpeg } from '../src/accessories/external-ffmpeg';
 import { NativeRecordingMemoryBudget, prepareNativeRecording } from '../src/accessories/native-recording-preparation';
 import { loadPackagedProtectionWorker } from '../src/accessories/protection-worker-artifact';
 
@@ -139,24 +139,24 @@ it.each([
   expect(close).toHaveBeenCalledTimes(1);
 });
 it.each([
-  ['generic failure', '', 1, 'DECODE'], ['empty output', '', 0, 'DECODE'],
-  ['video failure', '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE'],
-  ['6.1 audio failure', audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY'],
-  ['CRLF audio failure', audioFailureDiagnostic.replaceAll('\n', '\r\n'), 1, 'AUDIO_DISCONTINUITY'],
-  ['9 audio failure', '[aac @ 0x123] Error decoding AAC frame header.\n[aist#0:1/aac @ 0x456] [dec:aac @ 0x789] Error submitting packet to decoder: Error number -50531338 occurred\n', 1, 'AUDIO_DISCONTINUITY'],
-  ['AAC channel-element failure', '[aac @ 0x123] channel element 0.0 is not allocated\n[aist#0:1/aac @ 0x456] Error submitting packet to decoder: Invalid data found when processing input\n', 1, 'AUDIO_DISCONTINUITY'],
-  ['missing audio map', "Stream map '0:a:0' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", 1, 'AUDIO_DISCONTINUITY'],
-  ['CRLF missing audio map', "Stream map '0:a:0' matches no streams.\r\nTo ignore this, add a trailing '?' to the map.\r\n", 1, 'AUDIO_DISCONTINUITY'],
-  ['AAC detail with proved decoder failure', '[aac @ 0x123] private decoder diagnostic\n' + audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY'],
-  ['audio plus generic failure', audioFailureDiagnostic + 'private unknown failure\n', 1, 'DECODE'],
-  ['CRLF audio plus generic failure', audioFailureDiagnostic.replaceAll('\n', '\r\n') + 'private unknown failure\r\n', 1, 'DECODE'],
-  ['unknown AAC diagnostic', '[aac @ 0x123] private unknown failure\n', 1, 'DECODE'],
-  ['audio plus video failure', audioFailureDiagnostic + '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE'],
-  ['audio plus excess metadata errors', audioFailureDiagnostic + '[h264 @ 0x123] no frame!\n', 1, 'DECODE'],
-  ['audio plus overlong diagnostic', audioFailureDiagnostic + 'x'.repeat(1025) + '\n', 1, 'DECODE'],
-  ['audio plus abnormal termination', audioFailureDiagnostic, null, 'DECODE'],
-  ['unterminated audio failure', '[aac @ 0x123] Error decoding AAC frame header.', 1, 'DECODE'],
-] as const)('classifies %s from evidence rather than the audio permission', async (_kind, diagnostic, code, expected) => {
+  ['generic failure', '', 1, 'DECODE', 'exit'], ['empty output', '', 0, 'DECODE', 'empty-output'],
+  ['video failure', '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE', 'video-decoder'],
+  ['6.1 audio failure', audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['CRLF audio failure', audioFailureDiagnostic.replaceAll('\n', '\r\n'), 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['9 audio failure', '[aac @ 0x123] Error decoding AAC frame header.\n[aist#0:1/aac @ 0x456] [dec:aac @ 0x789] Error submitting packet to decoder: Error number -50531338 occurred\n', 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['AAC channel-element failure', '[aac @ 0x123] channel element 0.0 is not allocated\n[aist#0:1/aac @ 0x456] Error submitting packet to decoder: Invalid data found when processing input\n', 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['missing audio map', "Stream map '0:a:0' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['CRLF missing audio map', "Stream map '0:a:0' matches no streams.\r\nTo ignore this, add a trailing '?' to the map.\r\n", 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['AAC detail with proved decoder failure', '[aac @ 0x123] private decoder diagnostic\n' + audioFailureDiagnostic, 1, 'AUDIO_DISCONTINUITY', undefined],
+  ['audio plus generic failure', audioFailureDiagnostic + 'private unknown failure\n', 1, 'DECODE', 'diagnostics'],
+  ['CRLF audio plus generic failure', audioFailureDiagnostic.replaceAll('\n', '\r\n') + 'private unknown failure\r\n', 1, 'DECODE', 'diagnostics'],
+  ['unknown AAC diagnostic', '[aac @ 0x123] private unknown failure\n', 1, 'DECODE', 'diagnostics'],
+  ['audio plus video failure', audioFailureDiagnostic + '[h264 @ 0x123] error while decoding MB 0 0, bytestream -3\n', 1, 'DECODE', 'video-decoder'],
+  ['audio plus excess metadata errors', audioFailureDiagnostic + '[h264 @ 0x123] no frame!\n', 1, 'DECODE', 'video-decoder'],
+  ['audio plus overlong diagnostic', audioFailureDiagnostic + 'x'.repeat(1025) + '\n', 1, 'DECODE', 'diagnostics'],
+  ['audio plus abnormal termination', audioFailureDiagnostic, null, 'DECODE', 'interrupted'],
+  ['unterminated audio failure', '[aac @ 0x123] Error decoding AAC frame header.', 1, 'DECODE', 'diagnostics'],
+] as const)('classifies %s from evidence rather than the audio permission', async (_kind, diagnostic, code, expected, outputFailure) => {
   const child = new EventEmitter() as ChildProcess, stdout = new PassThrough(), stderr = new PassThrough();
   Object.assign(child, { stdout, stderr });
   const close = jest.fn(async () => undefined), input = { fd: 42, close } as unknown as FileHandle;
@@ -168,6 +168,7 @@ it.each([
   { pictures: [{ pts: 0, duration: 66667 }], selected: [{ pts: 0, duration: 66667 }], durationUs: 66667,
     originUs: 0, sourceAudio: { kind: 'observed', originUs: 0 }, metadata: 0, corrections: [], videoStreamIndex: 0 }, 'source', () => undefined);
   await expect(pending).rejects.toMatchObject({ code: expected, message: 'External recording conversion failed' });
+  if (outputFailure) await expect(pending).rejects.toMatchObject({ outputFailure });
   expect(close).toHaveBeenCalledTimes(1);
 });
 it('reports an expired conversion deadline before classifying an audio failure', async () => {
@@ -223,6 +224,30 @@ const configuration = (rate = 16000): CameraRecordingConfiguration => ({ prebuff
   mediaContainerConfiguration: { type: 0, fragmentLength: 1000 },
   videoCodec: { type: 0, resolution: [16, 16, 15], parameters: { profile: 0, level: 0, bitRate: 300, iFrameInterval: 1000 } },
   audioCodec: { type: 0, samplerate: rate === 16000 ? 1 : 2, audioChannels: 1, bitrateMode: 0, bitrate: 32 } });
+
+media('rejects an oversized source video packet before the preparation deadline', async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-large-packet-')), file = join(directory, 'source.mp4');
+  try {
+    // Losslessly encode one noisy picture to exceed both the payload queue and pipe capacity.
+    execute(['-f', 'lavfi', '-i', 'nullsrc=size=1920x1080:rate=15,noise=alls=100:allf=u:all_seed=110',
+      '-frames:v', '1', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-threads', '1', '-preset', 'ultrafast', '-qp', '0', '-f', 'mp4', file]);
+    await fs.chmod(file, 0o600);
+    const packets = execute(['-i', file, '-map', '0:v:0', '-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb',
+      '-f', 'framecrc', 'pipe:1']).toString('ascii').split('\n').filter(line => line.startsWith('0,'));
+    expect(packets).toHaveLength(1);
+    expect(Number(packets[0].split(',')[4])).toBeGreaterThan(2 * EXTERNAL_FFMPEG_LIMITS.packetBytes);
+
+    jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
+    const source = await fs.readFile(file), memory = new NativeRecordingMemoryBudget();
+    await expect(prepareNativeRecording({ filePath: file, expectedBytes: source.length, expectedSha256: createHash('sha256').update(source).digest('hex') },
+      configuration(), false, new globalThis.AbortController().signal, { ffmpegPath: ffmpeg!, timeoutMs: 5000, memory, admit: work => work() }))
+      .rejects.toMatchObject({ diagnostic: { phase: 'input', workerCode: 'MEDIA' } });
+    expect(jest.mocked(spawnExternalFfmpeg).mock.calls.some(([, args]) => args.includes('tee'))).toBe(true);
+    expect(memory.bytes).toBe(0);
+    expect(await fs.readdir(directory)).toEqual(['source.mp4']);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}, 15000);
+
 async function recording(source: Buffer, audioOutput: RecordingAudioOutput, rate = 16000, dimensions?: readonly [number, number]) {
   jest.mocked(spawnExternalFfmpeg).mockImplementation(jest.requireActual('../src/accessories/external-ffmpeg').spawnExternalFfmpeg);
   const directory = await fs.mkdtemp(join(tmpdir(), 'blink-recording-clock-')), file = join(directory, 'source.mp4');
