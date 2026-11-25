@@ -26,3 +26,13 @@ Beads is retired from this repository. Do not initialize its database, reinstall
 its hooks, run its migrations, or treat historical tracker IDs as active commands.
 The retained intake in `docs/audits/2026-09-15-auth-token-diagnostics-audit.md`
 records outstanding legacy work for reconciliation with GitHub.
+
+## Pull requests and issue intake
+
+A pull request can stand on its own. When creating a GitHub issue, set the
+applicable available issue fields. When planning from an issue, review its
+fields, description, and comments.
+
+## Code search
+
+Run `codanna mcp -h` to find the indexed code and documentation search interface.
