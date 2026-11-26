@@ -1975,14 +1975,15 @@ export class BlinkApi {
    * Source: API Dossier Section 3.10 - POST /accounts/{account_id}/networks/{network}/commands/{command}/done
    * Note: No version prefix - uses root URL (without /api/)
    *
-   * Android 59.2 declares a Unit response. A missing command (404) is
-   * reported separately from acknowledged completion.
+   * Android 59.2 declares a Unit response. A missing command (404) needs an
+   * authenticated IMMIS termination response before releasing an active owner.
    */
-  async completeCommand(networkId: number, commandId: number, options?: RequestOptions): Promise<void | null> {
+  async completeCommand(networkId: number, commandId: number,
+    options?: RequestOptions & { immisTerminationResponse?: true }): Promise<void | null | 'already-retired'> {
     requireRemoteId(networkId);
     requireRemoteId(commandId);
     checkRequestBudget(options);
-    return this.queueStateCommand('Retirement', async execution => {
+    return this.queueStateCommand<void | null | 'already-retired'>('Retirement', async execution => {
       const accountId = await withinRequestBudget(this.ensureAccountId(), execution);
       execution.beforeDispatch();
       const owned = this.liveViewOwner?.networkId === networkId && this.liveViewOwner.commandId === commandId
@@ -2009,9 +2010,19 @@ export class BlinkApi {
           }
         }
       } catch (error) {
+        const missing = !acknowledged && isBlinkPostRefusal(error) && error.status === 404;
+        if (missing && owned?.phase === 'active' && options?.immisTerminationResponse === true) {
+          current();
+          if (!await this.persistLiveViewOwner(undefined, owned.reservationId, generation)) {
+            throw new BlinkOperationNotStartedError('ownership-unavailable');
+          }
+          execution.beforeDispatch();
+          authority(true);
+          return 'already-retired';
+        }
         if (owned) await this.persistLiveViewOwner({ ...owned, phase: 'unresolved',
           retirementAcknowledged: acknowledged || owned.retirementAcknowledged }, owned.reservationId, generation);
-        if (!acknowledged && isBlinkPostRefusal(error) && error.status === 404) return null;
+        if (missing) return null;
         throw error;
       }
     }, [], undefined, options, { kind: 'retire', networkId, commandId });

@@ -27,6 +27,11 @@ with up to three retries after one, two and four seconds. Closing the viewer
 cancels the wait and prevents a fresh POST. Read a response already in flight
 so any late command ID can still be retired.
 
+An authenticated IMMIS termination response followed by HTTP 404 from
+`/done` releases the matching active Live View reservation after transport
+closure. A socket close, timeout, or HTTP 404 alone leaves the reservation
+unconfirmed.
+
 Blink command status codes 307 and 520 identify a busy system or camera when
 the command completes with a nonzero status. The ordinary command path can
 retry after clearing the completed owner. An acknowledged live-view session

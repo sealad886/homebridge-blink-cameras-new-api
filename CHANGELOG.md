@@ -7,6 +7,12 @@ not current installation instructions. The [release guide](docs/RELEASE.md)
 owns current promotion requirements; the [hardening ledger](docs/plans/security-hardening.md)
 owns subsequent acceptance and finding dispositions.
 
+## [2.0.1-alpha.3] - 2026-11-26
+
+### Fixed
+- Resume clip retrieval after an IMMIS Live View confirms termination and
+  Blink's matching HTTP close reports that the command is already gone.
+
 ## [2.0.1-alpha.2] - 2026-11-25
 
 ### Fixed
