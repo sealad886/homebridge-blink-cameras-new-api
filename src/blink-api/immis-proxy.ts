@@ -184,6 +184,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private receivedMedia = false;
   private authAccepted = false;
   private retiring = false;
+  private bytesBufferedBeforeRetirement = 0;
   private receivedRetirementResponse = false;
   private retirementTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   /** Attached upstream audio source stream (LATM) */
@@ -261,6 +262,8 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   async start(): Promise<string> {
     if (this.isRunning) throw new Error('Proxy server is already running');
     if (this.readinessFailed) throw new Error('Blink command readiness failed');
+    this.retiring = false;
+    this.bytesBufferedBeforeRetirement = 0;
     this.receivedRetirementResponse = false;
     this.isRunning = true;
     this.safeEmit('ready', 'pipe:0');
@@ -644,8 +647,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
       this.incompleteTimer = null;
       // Handle different message types
       if (this.retiring) {
-        // Continue bounded framing for the termination ACK, discarding media.
-        if (msgtype === ImmisMessageType.TERMINATED && payloadLength === 0) this.finishRetirement('response');
+        // Frames already buffered when retirement starts cannot acknowledge TERMINATE.
+        const afterRequest = this.bytesBufferedBeforeRetirement === 0;
+        this.bytesBufferedBeforeRetirement = Math.max(0, this.bytesBufferedBeforeRetirement - 9 - payloadLength);
+        if (afterRequest && msgtype === ImmisMessageType.TERMINATED && payloadLength === 0) this.finishRetirement('response');
       } else if (msgtype === ImmisMessageType.VIDEO) {
         // Skip packets without valid MPEG-TS sync byte
         if (payloadLength > 0 && payload[0] === MPEGTS_SYNC_BYTE) {
@@ -858,6 +863,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     if (!this.isRunning || this.retiring) return;
     const socket = this.targetSocket;
     if (!socket || socket !== this.verifiedSocket || !this.authAccepted || socket.destroyed) { this.stop(); return; }
+    this.bytesBufferedBeforeRetirement = this.receiveBuffer.length;
     this.retiring = true;
     if (this.keepAliveInterval) globalThis.clearInterval(this.keepAliveInterval);
     this.keepAliveInterval = null;

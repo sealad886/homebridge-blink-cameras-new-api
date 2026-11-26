@@ -163,6 +163,29 @@ describe('ImmisProxyServer private consumer', () => {
     socket.emit('close'); await proxy.whenClosed;
   });
 
+  it('ignores a buffered pre-retirement TERMINATED frame and accepts a new fragmented response', async () => {
+    await proxy.start();
+    proxy.attachConsumer(new Writable({ highWaterMark: 1, write() { /* Deliberately blocked. */ } }));
+    await flushResolution();
+    const socket = latestSocket();
+    const terminated = Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]);
+    socket.emit('data', Buffer.from([6, 0, 0, 0, 0, 0, 0, 0, 0]));
+    socket.emit('data', Buffer.concat([packet(Buffer.from([0x47, 1])), terminated]));
+    expect(socket.pause).toHaveBeenCalled();
+
+    proxy.retire();
+    expect(proxy.retirementResponseReceived).toBe(false);
+    expect(socket.destroy).not.toHaveBeenCalled();
+
+    socket.emit('data', terminated.subarray(0, 4));
+    expect(proxy.retirementResponseReceived).toBe(false);
+    socket.emit('data', terminated.subarray(4));
+    expect(proxy.retirementResponseReceived).toBe(true);
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+    socket.emit('close');
+    await proxy.whenClosed;
+  });
+
   it('retirement closes unverified transport immediately without sending protocol commands', async () => {
     const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn(), authorized: true });
     (tls.connect as jest.Mock).mockImplementationOnce(() => socket);
