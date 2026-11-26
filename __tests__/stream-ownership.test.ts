@@ -41,6 +41,7 @@ function ownedTransport(autoClose: () => boolean) {
   const consumers: Writable[] = [];
   const transport = Object.assign(new EventEmitter(), {
     whenClosed: new Promise<void>(resolve => { close = resolve; }),
+    retirementResponseReceived: false,
     start: jest.fn(async () => 'pipe:0'), attachConsumer: jest.fn((consumer: Writable) => { consumers.push(consumer); }),
     retire: jest.fn(() => { if (autoClose()) close(); }), stop: jest.fn(() => { if (autoClose()) close(); }),
     startAudio: jest.fn(), stopAudio: jest.fn(), attachAudioInput: jest.fn(),
@@ -182,6 +183,26 @@ describe('generation-owned streaming', () => {
       await f.stop(); expect(proxy.transport.retire).toHaveBeenCalled();
       expect(proxy.transport.startAudio).not.toHaveBeenCalled(); expect(proxy.transport.stopAudio).not.toHaveBeenCalled();
       expect(proxy.transport.attachAudioInput).not.toHaveBeenCalled(); expect(f.natives[0].session.stop).toHaveBeenCalled();
+    } finally { await f.cleanup(); }
+  });
+
+  it.each([true, false])('waits for STOP transport closure before forwarding IMMIS retirement response %s', async received => {
+    const f = fixture();
+    f.state.closeTransport = false;
+    f.api.startCameraLiveview.mockResolvedValueOnce({ server: immis, command_id: 7 });
+    try {
+      await f.prepare(); expect(await f.start()).toBeUndefined();
+      const proxy = f.transports[0];
+      const stopping = f.stop();
+      await flush();
+      expect(proxy.transport.retire).toHaveBeenCalledTimes(1);
+      proxy.transport.retirementResponseReceived = received;
+      expect(f.api.completeCommand).not.toHaveBeenCalled();
+      proxy.close();
+      await stopping; await flush();
+      expect(f.api.completeCommand.mock.calls).toEqual([[1, 7, {
+        deadline: expect.any(Number), ...(received ? { immisTerminationResponse: true } : {}),
+      }]]);
     } finally { await f.cleanup(); }
   });
 

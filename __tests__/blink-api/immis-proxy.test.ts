@@ -99,6 +99,8 @@ describe('ImmisProxyServer private consumer', () => {
     await proxy.start(); proxy.attachConsumer(consumer()); await flushResolution();
     const socket = latestSocket();
     socket.emit('data', Buffer.from([6, 0, 0, 0, 0, 0, 0, 0, 0]));
+    socket.emit('data', Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]));
+    expect(proxy).toHaveProperty('retirementResponseReceived', false);
     proxy.retire(); proxy.retire();
     const termination = (socket.write as jest.Mock).mock.calls.filter(([value]) => value[0] === 7);
     expect(termination).toEqual([[Buffer.from([7, 0, 0, 0, 1, 0, 0, 0, 0])]]);
@@ -107,8 +109,10 @@ describe('ImmisProxyServer private consumer', () => {
     await flushResolution(); expect(closed).toBe(false);
     if (outcome === 'response') {
       const acknowledgement = Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]);
+      socket.emit('data', Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 1, 1]));
       socket.emit('data', acknowledgement.subarray(0, 4));
       expect(socket.destroy).not.toHaveBeenCalled();
+      expect(proxy).toHaveProperty('retirementResponseReceived', false);
       socket.emit('data', acknowledgement.subarray(4));
     } else if (outcome === 'timeout') {
       jest.advanceTimersByTime(999); expect(socket.destroy).not.toHaveBeenCalled();
@@ -117,9 +121,14 @@ describe('ImmisProxyServer private consumer', () => {
     expect(socket.destroy).toHaveBeenCalledTimes(outcome === 'closed' ? 0 : 1);
     if (outcome !== 'closed') { await flushResolution(); expect(closed).toBe(false); socket.emit('close'); }
     await closure;
+    expect(proxy).toHaveProperty('retirementResponseReceived', outcome === 'response');
     expect(log).toHaveBeenCalledWith(`[ImmisProxy] IMMIS retirement: ${outcome}`);
     jest.advanceTimersByTime(10_000); await flushResolution();
     expect(tls.connect).toHaveBeenCalledTimes(1);
+    if (outcome === 'response') {
+      await proxy.start();
+      expect(proxy).toHaveProperty('retirementResponseReceived', false);
+    }
   });
 
   it('retirement resumes a blocked consumer socket for control without forwarding more media', async () => {
@@ -162,6 +171,7 @@ describe('ImmisProxyServer private consumer', () => {
     expect(socket.write).not.toHaveBeenCalled(); expect(socket.destroy).toHaveBeenCalledTimes(1);
     (tls.connect as jest.Mock).mock.calls[0][1]();
     expect(socket.write).not.toHaveBeenCalled(); socket.emit('close'); await proxy.whenClosed;
+    expect(proxy).toHaveProperty('retirementResponseReceived', false);
   });
 
   it('retirement preserves frame ceilings and immediate fatal shutdown', async () => {

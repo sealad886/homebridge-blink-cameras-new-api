@@ -1739,6 +1739,26 @@ describe('owned native storage SDK', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('releases an active view after a verified IMMIS response and HTTP 404 for the same command', async () => {
+    const f = fixture(live());
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 404));
+    await expect(f.api.completeCommand(20, 707, { immisTerminationResponse: true })).resolves.toBe('already-retired');
+    expect(f.api.getRemoteOperationState().liveView).toBeUndefined();
+    await expect(f.api.withNativeStorageAdmission('event', async () => 'admitted', {}, scope)).resolves.toBe('admitted');
+    expect((fetch as jest.Mock).mock.calls.map(([url, options]) => [options.method, url])).toEqual([
+      ['POST', `${sharedRoot}accounts/10/networks/20/commands/707/done`],
+    ]);
+    expect(f.savedLive).toEqual([expect.objectContaining({ phase: 'retiring', retirementAcknowledged: false }), undefined]);
+  });
+
+  it('keeps an active view fenced after an ambiguous HTTP failure despite the IMMIS response', async () => {
+    const f = fixture(live());
+    (fetch as jest.Mock).mockResolvedValueOnce(json({}, 500));
+    await expect(f.api.completeCommand(20, 707, { immisTerminationResponse: true })).rejects.toMatchObject({ status: 500 });
+    expect(f.api.getRemoteOperationState().liveView).toMatchObject({ phase: 'unresolved', retirementAcknowledged: false });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('requires one verified terminal read after a Unit /done acknowledgement', async () => {
     const f = fixture(live());
     (fetch as jest.Mock).mockResolvedValueOnce(new Response(null, { status: 204 }))

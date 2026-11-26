@@ -742,13 +742,14 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     if (this.ownsSession(sessionId, active)) this.streamFailureCooldownUntil = Date.now() + 30_000;
   }
 
-  private completeLiveview(commandId: number): Promise<void> {
+  private completeLiveview(commandId: number, immisTerminationResponse: boolean): Promise<void> {
     const retirement = this.remoteRetirement.then(async () => {
       let outcome: string;
       try {
         const result = await withResponseBudget(
-          this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000 }), 5000);
-        outcome = result === null ? 'not_found' : 'acknowledged';
+          this.api.completeCommand(this.networkId, commandId, { deadline: Date.now() + 5000,
+            ...(immisTerminationResponse ? { immisTerminationResponse: true } : {}) }), 5000);
+        outcome = result === null ? 'not_found' : result === 'already-retired' ? 'already_retired' : 'acknowledged';
       } catch (error) {
         outcome = error instanceof BlinkHttpError ? `http_${error.status}` : 'timeout_or_failure';
         this.logError('Live view remote cleanup failed or timed out');
@@ -833,7 +834,7 @@ export class BlinkCameraSource implements CameraStreamingDelegate {
     let allocationDuty: Promise<void> | undefined;
     let commandRetirement: Promise<void> | undefined;
     const retireCommand = (): Promise<void> => commandId
-      ? commandRetirement ??= this.completeLiveview(commandId) : Promise.resolve();
+      ? commandRetirement ??= this.completeLiveview(commandId, proxy?.retirementResponseReceived === true) : Promise.resolve();
     let finish!: () => void;
     const whenClosed = new Promise<void>(resolve => { finish = resolve; });
     const stop = (): Promise<void> => {

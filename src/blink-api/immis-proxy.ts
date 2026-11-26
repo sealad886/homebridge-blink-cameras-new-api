@@ -184,6 +184,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   private receivedMedia = false;
   private authAccepted = false;
   private retiring = false;
+  private receivedRetirementResponse = false;
   private retirementTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   /** Attached upstream audio source stream (LATM) */
   private audioInput: Readable | null = null;
@@ -260,6 +261,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
   async start(): Promise<string> {
     if (this.isRunning) throw new Error('Proxy server is already running');
     if (this.readinessFailed) throw new Error('Blink command readiness failed');
+    this.receivedRetirementResponse = false;
     this.isRunning = true;
     this.safeEmit('ready', 'pipe:0');
     return 'pipe:0';
@@ -279,6 +281,10 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
     this.consumerCleanup = () => { consumer.off('close', detach); consumer.off('error', detach); };
     if (this.isCommandReady && !this.targetSocket) this.connectToImmisServer();
     this.resumeConsumerInput();
+  }
+
+  get retirementResponseReceived(): boolean {
+    return this.receivedRetirementResponse;
   }
 
   /** After stop(), resolves only after owned transport handles close. */
@@ -877,6 +883,7 @@ export class ImmisProxyServer extends EventEmitter<ImmisProxyEvents> {
 
   private finishRetirement(outcome: 'response' | 'timeout' | 'closed'): void {
     if (!this.isRunning || !this.retiring) return;
+    this.receivedRetirementResponse = outcome === 'response';
     this.log(`IMMIS retirement: ${outcome}`);
     this.stop();
   }
